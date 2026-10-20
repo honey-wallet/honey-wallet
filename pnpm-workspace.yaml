@@ -1,0 +1,29 @@
+packages:
+  - apps/*
+  - packages/*
+
+# Shared versions for tooling used by several packages. Reference with "catalog:".
+catalog:
+  typescript: ~6.0.3
+  vitest: ^5.0.4
+
+# Only allow dependency install scripts we have reviewed.
+onlyBuiltDependencies:
+  - '@biomejs/biome'
+  - esbuild
+  - turbo
+
+overrides:
+  # Keep Expo's consumers on fixed releases without changing the SDK.
+  query-string>decode-uri-component: 0.5.0
+  xcode>uuid: 11.1.1
+
+patchedDependencies:
+  # braces and node-forge have no fixed release yet; keep their audit warnings visible.
+  braces@3.0.3: patches/braces@3.0.3.patch
+  decode-uri-component@0.5.0: patches/decode-uri-component@0.5.0.patch
+  expo-alternate-app-icons@8.0.0: patches/expo-alternate-app-icons@8.0.0.patch
+  node-forge@1.4.0: patches/node-forge@1.4.0.patch
+  # The web build (Honey for Chrome): Keyframe entrances were left pinned with
+  # position:absolute after they finished, shifting text (see the patch).
+  react-native-reanimated@4.5.1: patches/react-native-reanimated@4.5.1.patch
