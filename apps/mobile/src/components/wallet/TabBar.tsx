@@ -2,7 +2,7 @@
 // pill glides under the active tab in 200ms on ease-in-out (an on-screen move),
 // starting from wherever it is so rapid taps never jump. It snaps into place on first
 // paint and under Reduce Motion; icons crossfade between muted and active in 150ms.
-import type { Tabs } from 'expo-router';
+import { router, type Tabs } from 'expo-router';
 import { type ComponentProps, useEffect, useRef, useState } from 'react';
 import { Pressable, View } from 'react-native';
 import Animated, {
@@ -27,7 +27,10 @@ const PILL_TABS: { name: string; icon: IconName; label: string }[] = [
   { name: 'home', icon: 'home', label: 'Home' },
   // review: no Savings in the extension, like trading; the phone keeps it.
   // { name: 'savings', icon: 'piggyBank', label: 'Savings' },
-  ...(isWeb ? [] : [{ name: 'savings', icon: 'piggyBank' as IconName, label: 'Savings' }]),
+  // ...(isWeb ? [] : [{ name: 'savings', icon: 'piggyBank' as IconName, label: 'Savings' }]),
+  // 2026-11-07: Jars (ideas → tokens, with friends) replace Savings, on the phone and the extension.
+  // Swap swapped places with Jars: Jars is the honey button, Swap a tab.
+  { name: 'trade', icon: 'trade', label: 'Swap' },
   // On the phone it's the browser (review), so a globe; the extension's tab is just search.
   // { name: 'search', icon: 'search', label: 'Search' },
   isWeb
@@ -144,12 +147,15 @@ export function TabBar({ state, navigation }: TabBarProps) {
         {
           <PressableScale
             accessibilityRole="button"
-            accessibilityLabel="Trade"
-            onPress={() => go('trade')}
+            accessibilityLabel="Jars"
+            onPress={() => {
+              tap();
+              router.push('/jars');
+            }}
             scaleTo={0.97}
             style={styles.fab}
           >
-            <Icon name="trade" size={30} color={c.onPrimary} />
+            <Icon name="jar" size={32} color={c.onPrimary} />
           </PressableScale>
         }
       </View>

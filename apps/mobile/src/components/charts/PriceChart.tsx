@@ -223,13 +223,9 @@ function PriceLine({ data, width, height, onScrub }: Props) {
 
   return (
     <GestureDetector gesture={gesture}>
-      <View style={{ width, height }}>
+      <View style={{ width, height, overflow: 'hidden' }}>
         <Svg width={width} height={height}>
           <Defs>
-            <LinearGradient id="chart-fill" x1="0" y1="0" x2="0" y2="1">
-              <Stop offset="0" stopColor={color} stopOpacity={0.22} />
-              <Stop offset="1" stopColor={color} stopOpacity={0} />
-            </LinearGradient>
             <Pattern id="chart-dots" width={22} height={22} patternUnits="userSpaceOnUse">
               <Circle cx={1} cy={1} r={0.9} fill={c.divider} />
             </Pattern>
@@ -239,6 +235,14 @@ function PriceLine({ data, width, height, onScrub }: Props) {
 
         <Animated.View style={[{ position: 'absolute', top: 0, left: 0 }, areaStyle]}>
           <Svg width={width} height={height}>
+            {/* The gradient lives in the same Svg as the area: Android can't reference
+                one defined in a sibling Svg and fills the area black. */}
+            <Defs>
+              <LinearGradient id="chart-fill" x1="0" y1="0" x2="0" y2="1">
+                <Stop offset="0" stopColor={color} stopOpacity={0.22} />
+                <Stop offset="1" stopColor={color} stopOpacity={0} />
+              </LinearGradient>
+            </Defs>
             <Path d={area} fill="url(#chart-fill)" />
           </Svg>
         </Animated.View>

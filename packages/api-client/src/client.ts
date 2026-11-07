@@ -50,8 +50,12 @@ import type {
   PairChannel,
   PairMessage,
   PairSlot,
+  StartThesis,
   SwapIntent,
   SwapQuoteRequest,
+  ThesisArtifact,
+  ThesisRun,
+  ThesisStarted,
   VersionInfo,
   WaitlistResponse,
   WaitlistSource,
@@ -201,6 +205,20 @@ export function createApiClient({ baseUrl, fetch: fetchImpl = fetch }: ApiClient
         authorizedJson(token, projectRelayQuoteRequest(input), init),
       );
     },
+    startThesis: (token: string, input: StartThesis, init?: RequestInit) =>
+      validated('/api/v1/theses', isThesisStarted, authorizedJson(token, input, init)),
+    thesis: (token: string, runId: string, init?: RequestInit) =>
+      validated(
+        `/api/v1/theses/${encodeURIComponent(runId)}`,
+        isThesisRun,
+        authorized(token, init),
+      ),
+    thesisArtifacts: (token: string, runId: string, init?: RequestInit) =>
+      validated(
+        `/api/v1/theses/${encodeURIComponent(runId)}/artifacts`,
+        (v: unknown): v is ThesisArtifact[] => Array.isArray(v),
+        authorized(token, init),
+      ),
     hyperliquidPerpsAccount: async (token: string, init?: RequestInit) =>
       validated(
         '/api/v1/perps/hyperliquid/account',
@@ -613,4 +631,22 @@ export function isFeatureAvailable(
   id: string,
 ): boolean {
   return capabilities?.features.find((feature) => feature.id === id)?.available === true;
+}
+
+function isThesisStarted(value: unknown): value is ThesisStarted {
+  const v = value as ThesisStarted | null;
+  return !!v && typeof v.runId === 'string' && typeof v.dryRun === 'boolean';
+}
+
+const THESIS_STAGES = new Set(['intake', 'understand', 'strategize', 'done', 'failed']);
+
+function isThesisRun(value: unknown): value is ThesisRun {
+  const v = value as ThesisRun | null;
+  return (
+    !!v &&
+    typeof v.runId === 'string' &&
+    THESIS_STAGES.has(v.stage) &&
+    typeof v.dryRun === 'boolean' &&
+    Array.isArray(v.progress)
+  );
 }

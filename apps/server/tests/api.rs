@@ -161,7 +161,7 @@ async fn replaces_untrusted_correlation_and_exposes_safe_headers_to_web_clients(
 
 #[tokio::test]
 async fn enforces_actual_body_size_without_a_content_length_header() {
-    let request = Request::post("/api/v1/accounts")
+    let request = Request::post("/api/v1/waitlist")
         .header("content-type", "application/json")
         .header("origin", "http://localhost:5173")
         .body(Body::from("x".repeat(65_537)))
@@ -257,35 +257,6 @@ async fn readiness_is_separate_from_liveness_and_drain_rejects_new_work() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(response.headers()["retry-after"], "1");
-}
-
-#[tokio::test]
-async fn chains_lists_all_four_with_capabilities() {
-    let (status, _, body) = get("/api/v1/chains").await;
-    assert_eq!(status, StatusCode::OK);
-    let chains: Vec<&str> = body
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|c| c["chain"].as_str().unwrap())
-        .collect();
-    assert_eq!(chains, ["evm", "solana", "tron", "xrpl"]);
-
-    let xrpl = &body[3];
-    assert_eq!(xrpl["commitDelayReveal"], "no");
-    assert_eq!(xrpl["tierB"], "no");
-    assert_eq!(xrpl["sessionAnchor"], "message_key");
-}
-
-#[tokio::test]
-async fn skeleton_endpoints_return_501() {
-    let request = Request::post("/api/v1/session-signatures/verify")
-        .header("content-type", "application/json")
-        .body(Body::from("{"))
-        .unwrap();
-    let (status, _, body) = send(request).await;
-    assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
-    assert_eq!(body["error"]["code"], "not_implemented");
 }
 
 mod pairing {

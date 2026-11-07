@@ -29,10 +29,6 @@ const FAQ: { q: string; a: string }[] = [
     a: 'Every transaction pays a small fee to the blockchain network, not to Honey. Fees rise and fall with demand. Honey picks a fee automatically; you can change this in Settings › Advanced › Network cost.',
   },
   {
-    q: 'Is Honey quantum-safe?',
-    a: "Honey is designed so your wallet can rotate to new keys and signature schemes as post-quantum standards arrive on each network. That's a design for the future, not a guarantee against every attack.",
-  },
-  {
     q: 'What are Honey Jars?',
     a: 'Honey Jars are savings goals. Set a target, add funds whenever you like, and watch the jar fill. Some jars earn a variable yield, which can change and is never guaranteed.',
   },

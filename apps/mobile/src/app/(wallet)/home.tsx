@@ -24,6 +24,7 @@ import {
 import { NftGallery } from '@/components/home/NftGallery';
 import { TradesList, useHasTrades } from '@/components/home/PositionsList';
 import { Icon, type IconName } from '@/components/Icon';
+import { JarList } from '@/components/jars/JarParts';
 import { HoneyJar } from '@/components/logo/HoneyJar';
 import { Accordion, AccordionChevron } from '@/components/motion/Accordion';
 import { ContentSwap } from '@/components/motion/ContentSwap';
@@ -66,6 +67,7 @@ import { useProfile } from '@/lib/profile';
 import { receiveAddresses } from '@/lib/receive';
 import { HIDDEN_AMOUNT, updateSettings, useSettings } from '@/lib/settings';
 import { useTabReselect } from '@/lib/tab-reselect';
+import { useThesisJars } from '@/lib/thesis';
 import { useWalletView } from '@/lib/wallet-view';
 import { isMainWallet, useActiveWallet } from '@/lib/wallets';
 import { makeStyles, radius, useTheme } from '@/theme';
@@ -77,7 +79,11 @@ const ACTIONS: { label: string; icon: IconName; href: Href }[] = [
   { label: 'Sell', icon: 'sell', href: { pathname: '/buy', params: { mode: 'sell' } } },
 ];
 
-const SECTIONS = ['Tokens', 'NFTs', 'Trades'] as const;
+// 2026-11-07: Jars take Trades' place (Perps and Predict are off).
+// const SECTIONS = ['Tokens', 'NFTs', 'Trades'] as const;
+/** Jars lead the app for now: no Earn promo on Home. */
+const JARS_FOCUS = true;
+const SECTIONS = ['Tokens', 'Jars', 'NFTs', 'Trades'] as const;
 
 /** An empty wallet's day: a flat line where the balance chart goes. */
 const FLAT_DAY = [0, 0];
@@ -127,7 +133,9 @@ export default function HomeScreen() {
   // A new wallet has no trades yet, whatever the demo data says.
   // const sections = SECTIONS.filter((s) => s !== 'Trades' || (hasTrades && !empty));
   // review: no trading in the extension, so the browser never shows the Trades tab.
-  const sections = SECTIONS.filter((s) => s !== 'Trades' || (!isWeb && hasTrades && !empty));
+  // const sections = SECTIONS.filter((s) => s !== 'Trades' || (!isWeb && hasTrades && !empty));
+  const sections = SECTIONS.filter((s) => s !== 'Trades' && (s !== 'Jars' || !multisig));
+  void hasTrades;
   // Switching to a shared wallet (which can't trade) hides Trades; fall back to Tokens.
   const shownSection = sections.includes(section) ? section : 'Tokens';
   // The promo lists Honey Jar rates, which come with Savings' Earn rates.
@@ -148,7 +156,9 @@ export default function HomeScreen() {
       !loading && (empty || (isMain && !setupComplete(onboarding))) && 'activation',
       // review: no Savings in the extension, so no Earn promo there.
       // earnPromo && !loading && !ratesLoading && !empty && 'earn',
-      earnPromo && !isWeb && !loading && !ratesLoading && !empty && 'earn',
+      // earnPromo && !isWeb && !loading && !ratesLoading && !empty && 'earn',
+      // 2026-11-07: no Earn promo while Honey focuses on jars.
+      (JARS_FOCUS ? false : earnPromo && !ratesLoading && 'earn') as false | 'earn',
     ] as const
   )
     .filter((card): card is 'approvals' | 'activation' | 'earn' => !!card)
@@ -487,6 +497,7 @@ export default function HomeScreen() {
                 ) : (
                   <NftGallery />
                 ))}
+              {shownSection === 'Jars' && <HomeJars />}
               {/* {shownSection === 'Trades' && <TradesList />} */}
               {/* review: no trading in the extension. */}
               {shownSection === 'Trades' && !isWeb && <TradesList />}
@@ -832,3 +843,18 @@ const useStyles = makeStyles((c) => ({
     paddingBottom: 8,
   },
 }));
+
+/** Home's Jars: the jars you own or share, or a way to start one. */
+function HomeJars() {
+  const mine = useThesisJars().filter((j) => j.mine);
+  if (!mine.length)
+    return (
+      <EmptyState
+        icon="pie"
+        title="No jars yet"
+        hint="Turn an idea into tokens you can buy, alone or with friends."
+        action={{ label: 'Start a jar', onPress: () => router.push('/thesis-new') }}
+      />
+    );
+  return <JarList jars={mine} />;
+}

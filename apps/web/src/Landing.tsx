@@ -65,7 +65,7 @@ export default function Landing({ apiUrl = import.meta.env.VITE_API_URL }: { api
           <img className="landing-mark" src="/honey-mark.svg" alt="" width="32" height="28" />
           Honey Wallet
         </p>
-        <h1 className="landing-title">The only wallet built for a post‑quantum world.</h1>
+        <h1 className="landing-title">Invest in what you believe, with friends.</h1>
 
         {state.kind === 'joined' ? (
           <p className="landing-joined" role="status">

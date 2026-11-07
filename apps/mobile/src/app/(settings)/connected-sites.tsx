@@ -6,9 +6,11 @@ import { Text, View } from 'react-native';
 import { PressableScale } from '@/components/motion/PressableScale';
 import { PillButton } from '@/components/onboarding/PillButton';
 import { SheetRow, SheetRowSkeletons, SheetScreen } from '@/components/sheets/Sheet';
+import { originOf } from '@/lib/browser';
 import { connectedSites, disconnectSite } from '@/lib/dapp';
 import { tap } from '@/lib/haptics';
 import { hostOf } from '@/lib/multisig';
+import { leaveSheetTo } from '@/lib/navigation';
 import { isWeb } from '@/lib/platform';
 import { showErrorToast, showToast } from '@/lib/toast';
 import { isWalletConnectUri, pairWalletConnect } from '@/lib/walletconnect';
@@ -16,7 +18,8 @@ import { makeStyles } from '@/theme';
 
 /**
  * The websites that can see a wallet, and a way to cut them off: Honey for Chrome's, or on
- * the phone the ones connected by WalletConnect (scan a site's code, or paste its link).
+ * the phone the ones connected in the in-app browser or by WalletConnect (scan a site's
+ * code, or paste its link). A browser site opens again from its row.
  */
 export default function ConnectedSitesSheet() {
   const styles = useStyles();
@@ -61,7 +64,7 @@ export default function ConnectedSitesSheet() {
         <Text style={styles.empty}>
           {isWeb
             ? 'No sites yet. When you connect Honey to one, it shows here.'
-            : 'No sites yet. Scan a site’s WalletConnect code with Honey’s scanner to connect.'}
+            : 'No sites yet. Open one from Search, or scan its WalletConnect code with Honey’s scanner.'}
         </Text>
       ) : (
         sites.map((site) => (
@@ -69,6 +72,12 @@ export default function ConnectedSitesSheet() {
             key={site.origin}
             icon="globe"
             title={hostOf(site.origin)}
+            // In-app browser sites are keyed by their bare origin; WalletConnect's aren't.
+            onPress={
+              !isWeb && originOf(site.origin) === site.origin
+                ? () => leaveSheetTo({ pathname: '/browser', params: { url: site.origin } })
+                : undefined
+            }
             subtitle={`${site.walletName} · ${
               site.evm ? (evmNetwork(site.chainId)?.name ?? `Chain ${site.chainId}`) : 'Solana'
             }`}

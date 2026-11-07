@@ -782,6 +782,13 @@ export function startDemoRequests() {
     const s = store.get();
     const m = s.multisigs.family;
     if (!m) return;
+    // Saved between launches: one waiting request is enough (they used to pile up).
+    if (
+      s.proposals.some(
+        (p) => p.walletId === 'family' && p.createdBy === 'maya' && p.status === 'pending',
+      )
+    )
+      return;
     const nonce =
       Math.max(0, ...s.proposals.filter((p) => p.walletId === 'family').map((p) => p.nonce)) + 1;
     const at = Date.now();

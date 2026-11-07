@@ -14,20 +14,17 @@
 
 pub mod aave_service;
 pub mod bridge_monitor;
-pub mod chains;
 pub mod config;
 pub mod database;
 pub mod earn_catalog;
 pub mod earn_service;
 pub mod error;
 pub mod evm_envelope;
-pub mod exposure;
 pub mod http_runtime;
 pub mod hyperliquid_perps;
 pub mod identity;
 pub mod markets;
 pub mod metrics;
-pub mod monitoring;
 pub mod morpho_service;
 pub mod operation_history;
 pub mod pairing_store;
@@ -35,17 +32,15 @@ pub mod preparation;
 pub mod providers;
 pub mod reconciliation;
 pub mod redis_store;
-pub mod relayer;
 pub mod routes;
 pub mod runtime;
-pub mod session_signatures;
 pub mod submissions;
 pub mod supabase_auth;
 pub mod supervision;
 pub mod swap_review;
 pub mod telemetry;
+pub mod thesis;
 pub mod uniswap_service;
-pub mod wallet;
 pub mod work;
 
 use axum::{Router, http::HeaderName, middleware};
@@ -239,6 +234,7 @@ fn router(config: &Config, health: runtime::RuntimeHealth, services: RouterServi
         .merge(routes::bridges::router(identity.clone(), bridges))
         .merge(routes::near_intents::router(identity.clone(), near_intents))
         .merge(routes::relay_quotes::router(identity.clone(), relay_quotes))
+        .merge(theses_router(identity.clone()))
         .merge(routes::aave::router(identity.clone(), aave))
         .merge(routes::morpho::router(identity.clone(), morpho))
         .merge(routes::hyperliquid::router(identity.clone(), redis.clone()))
@@ -272,6 +268,18 @@ fn router(config: &Config, health: runtime::RuntimeHealth, services: RouterServi
         // CORS must decorate overload/body-limit/timeout responses too, so web
         // clients can read their error envelope and diagnostic headers.
         .layer(cors)
+}
+
+/// Thesis runs (agent pipeline). Without NEAR_AI_API_KEY it answers with fixtures
+/// (DRY_RUN); the registry fetches lazily, so building the router stays offline.
+fn theses_router(identity: Option<identity::Identity>) -> Router {
+    match thesis::ThesisService::new(thesis::Settings::from_env()) {
+        Ok(service) => routes::theses::router(identity, std::sync::Arc::new(service)),
+        Err(error) => {
+            tracing::error!(%error, "thesis runs disabled");
+            Router::new()
+        }
+    }
 }
 
 #[cfg(test)]

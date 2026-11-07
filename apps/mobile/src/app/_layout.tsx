@@ -182,11 +182,17 @@ export default function RootLayout() {
               {/* Honey for Chrome: websites' requests, in their own window */}
               <Stack.Screen name="(connect)/approve" />
               <Stack.Screen name="(connect)/wc" />
+              {/* The page's own back swipe goes back a page, not out of the browser. */}
+              <Stack.Screen name="(connect)/browser" options={{ gestureEnabled: false }} />
               <Stack.Screen name="(settings)/connected-sites" options={tray()} />
               <Stack.Screen name="(keys)/restore-backup" options={tray()} />
               <Stack.Screen name="(keys)/watch-wallet" options={tray()} />
               <Stack.Screen name="(keys)/hardware-wallet" options={tray()} />
               <Stack.Screen name="(savings)/jar-new" options={tray()} />
+              <Stack.Screen name="(jars)/thesis-new" options={sheet([1])} />
+              <Stack.Screen name="(jars)/jars" />
+              <Stack.Screen name="(jars)/thesis-chat" />
+              <Stack.Screen name="(jars)/jar/[id]" />
               <Stack.Screen name="(savings)/jar-move" options={sheet([1])} />
               {/* Shared wallets */}
               <Stack.Screen name="(shared)/multisig-new" options={tray()} />
@@ -199,7 +205,6 @@ export default function RootLayout() {
               <Stack.Screen name="(account)/sign-out" options={tray()} />
               <Stack.Screen name="(settings)/app-data" />
               <Stack.Screen name="(settings)/smart-wallet" />
-              <Stack.Screen name="(settings)/bunk-mode" />
               <Stack.Screen name="(keys)/recovery-phrase" />
               <Stack.Screen name="(keys)/icloud-backup" options={tray()} />
               <Stack.Screen name="(settings)/disclosures" />
@@ -216,7 +221,6 @@ export default function RootLayout() {
               <Stack.Screen name="(settings)/settings-permissions" options={tray()} />
               <Stack.Screen name="(settings)/settings-about" options={tray()} />
               <Stack.Screen name="(settings)/smart-wallet-info" options={tray()} />
-              <Stack.Screen name="(settings)/bunk-mode-info" options={tray()} />
               <Stack.Screen name="(settings)/contact" options={tray()} />
             </Stack>
             <ToastHost />

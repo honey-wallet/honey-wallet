@@ -16,6 +16,8 @@ type Props = {
   autoFocus?: boolean;
   /** Called when the field is tapped, e.g. to open a picker instead of typing. */
   onFocus?: () => void;
+  /** The keyboard's Search key. */
+  onSubmitEditing?: () => void;
   style?: StyleProp<ViewStyle>;
 };
 
@@ -30,6 +32,7 @@ export function SearchField({
   trailing,
   autoFocus,
   onFocus,
+  onSubmitEditing,
   style,
 }: Props) {
   const styles = useStyles();
@@ -51,6 +54,7 @@ export function SearchField({
           selectionColor={c.primary}
           autoFocus={autoFocus}
           onFocus={onFocus}
+          onSubmitEditing={onSubmitEditing}
           autoCapitalize="none"
           autoCorrect={false}
           returnKeyType="search"

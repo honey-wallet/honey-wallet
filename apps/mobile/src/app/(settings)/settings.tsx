@@ -13,14 +13,12 @@ import { SheetRow, SheetSection } from '@/components/sheets/Sheet';
 import { PushedScreen } from '@/components/wallet/parts';
 import { api } from '@/lib/api';
 import { lockNow } from '@/lib/app-lock';
-import { BUNK_LIVE, bunkMode } from '@/lib/bunk-mode';
 import { expandView, inPopup } from '@/lib/dapp';
 import { tap } from '@/lib/haptics';
 import { shortAddress } from '@/lib/mock-wallet';
 import { isWeb } from '@/lib/platform';
 import { setProfile, useProfile } from '@/lib/profile';
 import { useSettings } from '@/lib/settings';
-import { TEST_MODE } from '@/lib/test-mode';
 import { useActiveWallet } from '@/lib/wallets';
 // import { showToast } from '@/lib/toast'; (with the other-wallets list)
 import { makeStyles, radius, useTheme } from '@/theme';
@@ -94,9 +92,6 @@ export default function SettingsScreen() {
         ))}
       </Accordion>
       */}
-
-      {/* Leads Settings once it's live; until then it's an ordinary row under Privacy and security. */}
-      {BUNK_LIVE ? <BunkModeCard /> : null}
 
       <View style={styles.gutter}>
         <SheetSection title="Preferences" />
@@ -187,15 +182,6 @@ export default function SettingsScreen() {
           onPress={open('/recovery-phrase')}
           accessory="chevron"
         />
-        {BUNK_LIVE ? null : (
-          <SheetRow
-            icon="shieldLock"
-            title="Bunk mode"
-            value="Coming soon"
-            onPress={open('/bunk-mode')}
-            accessory="chevron"
-          />
-        )}
         {isWeb ? (
           <SheetRow
             icon="qr"
@@ -280,62 +266,7 @@ export default function SettingsScreen() {
   );
 }
 
-/** Bunk mode leads Settings: the wallet's headline protection, one tap from the top. */
-function BunkModeCard() {
-  const styles = useStyles();
-  const c = useTheme();
-  const { enabled: stored } = bunkMode.useValue();
-  const on = BUNK_LIVE && stored && TEST_MODE;
-  return (
-    <PressableScale
-      accessibilityRole="button"
-      accessibilityLabel={`Bunk mode, ${BUNK_LIVE ? (on ? 'on' : 'off') : 'coming soon'}`}
-      scaleTo={0.98}
-      onPress={() => {
-        tap();
-        router.push('/bunk-mode');
-      }}
-      style={styles.bunk}
-    >
-      <View style={styles.bunkIcon}>
-        <Icon name="shieldLock" size={24} color={c.accentText} />
-      </View>
-      <View style={styles.flex}>
-        <Text style={styles.bunkTitle}>Bunk mode</Text>
-        <Text style={styles.bunkSub}>
-          {!BUNK_LIVE
-            ? 'Coming soon'
-            : on
-              ? 'On · a new key signs every transaction'
-              : 'A new key for every transaction'}
-        </Text>
-      </View>
-      <Icon name="chevronRight" size={15} color={c.textSecondary} />
-    </PressableScale>
-  );
-}
-
 const useStyles = makeStyles((c) => ({
-  bunk: {
-    marginHorizontal: 20,
-    marginTop: 12,
-    padding: 16,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 14,
-    ...radius(24),
-    backgroundColor: c.card,
-  },
-  bunkIcon: {
-    width: 44,
-    height: 44,
-    ...radius(14),
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: c.accentSurface,
-  },
-  bunkTitle: { color: c.text, fontSize: 17, fontWeight: '600' },
-  bunkSub: { marginTop: 2, color: c.textSecondary, fontSize: 14 },
   signOut: {
     marginTop: 28,
     height: 52,

@@ -63,146 +63,6 @@ export interface ApiErrorBody {
   };
 }
 
-// Multi-chain wallet (apps/server/src/{chains,wallet,relayer,exposure,monitoring}.rs).
-// Self-custodial: no request or response ever carries key material.
-
-export type Chain = 'evm' | 'solana' | 'tron' | 'xrpl';
-
-/** Security tier: A = hot (curve key + rotation), B = vault (hash-based). */
-export type Tier = 'A' | 'B';
-
-export type Support = 'yes' | 'no' | 'contract_route_only';
-
-export type SessionAnchorKind =
-  | 'erc7579_validator'
-  | 'pda_field'
-  | 'zero_ops_permission'
-  | 'message_key';
-
-/** `public_rpc` today; the private routes are a later upgrade (spec §10). */
-export type SubmissionRoute =
-  | 'public_rpc'
-  | 'private_bundler'
-  | 'flashbots_protect'
-  | 'direct_to_leader'
-  | 'jito_bundle'
-  | 'own_node';
-
-/** GET /api/v1/chains */
-export interface ChainCapabilities {
-  chain: Chain;
-  identifierIsPubkeyHash: boolean;
-  atomicRotation: Support;
-  customContractForTierA: Support;
-  commitDelayReveal: Support;
-  sessionAnchor: SessionAnchorKind;
-  thirdPartySessionVerification: boolean;
-  tierB: Support;
-  confirmationWindowMs: number;
-  privateSubmission: SubmissionRoute[];
-  notes: string;
-}
-
-export type SessionAnchor =
-  | { kind: 'erc7579_validator'; validator: string }
-  | { kind: 'pda_field' }
-  | { kind: 'zero_ops_permission'; permission_id: number }
-  | { kind: 'message_key' };
-
-export interface SessionKey {
-  publicKey: string;
-  expiresAt: number;
-  anchor: SessionAnchor;
-}
-
-export interface VaultState {
-  merkleRoot: string;
-  nextLeafIndex: number;
-  treeHeight: number;
-}
-
-/** POST /api/v1/accounts, GET /api/v1/accounts/:id */
-export interface Account {
-  id: string;
-  chain: Chain;
-  address: string;
-  tier: Tier;
-  ownerKeyIndex: number;
-  ownerCommitment: string | null;
-  session: SessionKey | null;
-  vault: VaultState | null;
-  commitDelay: number | null;
-}
-
-export interface PendingMigration {
-  newOwnerCommitment: string | null;
-  newValidator: string | null;
-  executableAt: number;
-}
-
-/** GET /api/v1/accounts/:id/recovery */
-export interface RecoveryStatus {
-  guardianCommitments: string[];
-  threshold: number;
-  pendingMigration: PendingMigration | null;
-  deadManSwitchMonths: number | null;
-  lastOwnerOperationAt: number | null;
-}
-
-export type ExposureKind =
-  | 'owner_signature'
-  | 'rotation_window'
-  | 'master_key_setup'
-  | 'vault_leaf';
-
-/** GET/POST /api/v1/accounts/:id/exposure-events */
-export interface ExposureEvent {
-  id: string;
-  accountId: string;
-  chain: Chain;
-  kind: ExposureKind;
-  keyIndex: number;
-  txHash: string | null;
-  observedAt: number;
-}
-
-/** POST /api/v1/session-signatures/verify */
-export interface SessionVerdict {
-  valid: boolean;
-  reason: string | null;
-  sessionExpiresAt: number | null;
-}
-
-/** POST /api/v1/relay/commits */
-export interface CommitReceipt {
-  commitId: string;
-  chain: Chain;
-  txHash: string;
-  committedAt: number;
-  revealAfter: number;
-  expiresAt: number;
-}
-
-/** POST /api/v1/relay/submit, POST /api/v1/relay/commits/:id/reveal */
-export interface SubmissionReceipt {
-  txHash: string;
-  route: SubmissionRoute;
-  submittedAt: number;
-}
-
-export type MigrationTrigger =
-  | 'ethereum_pq_signatures'
-  | 'solana_native_pq'
-  | 'xrpl_batch_libraries'
-  | 'quantum_resource_estimate';
-
-/** GET /api/v1/monitoring/triggers */
-export interface TriggerStatus {
-  trigger: MigrationTrigger;
-  fired: boolean;
-  lastCheckedAt: number | null;
-  evidence: string | null;
-}
 /** GET /api/v1/auth/config. Auth availability never enables financial features. */
 export interface AuthConfiguration {
   enabled: boolean;
@@ -775,3 +635,108 @@ export type {
   NearIntentsQuoteRequest,
   NearIntentsToken,
 } from './near-intents';
+
+// Thesis agent (apps/server/src/thesis, routes/theses.rs)
+
+export type ThesisRisk = 'low' | 'medium' | 'high';
+export type ThesisStage = 'intake' | 'understand' | 'strategize' | 'done' | 'failed';
+
+/** POST /api/v1/theses */
+export interface StartThesis {
+  text?: string;
+  links?: string[];
+  params?: { amountUsd?: number; risk?: ThesisRisk };
+}
+
+export interface ThesisStarted {
+  runId: string;
+  /** No NEAR AI key on the server: fixed fixture theses. */
+  dryRun: boolean;
+}
+
+export interface ThesisProgress {
+  stage: ThesisStage;
+  message: string;
+  at: string;
+}
+
+export interface LinkContent {
+  url: string;
+  finalUrl: string;
+  title: string | null;
+  text: string;
+  author: string | null;
+  publishedAt: string | null;
+  fetchedVia: 'fxtwitter' | 'x_oembed' | 'jina_reader' | 'open_graph';
+}
+
+export type LinkResult =
+  | ({ status: 'Read' } & LinkContent)
+  | { status: 'Unreadable'; url: string; reason: string };
+
+/** IntentRecord/1 */
+export interface IntentRecord {
+  version: 'IntentRecord/1';
+  text: string;
+  links: LinkResult[];
+  amountUsd: number;
+  risk: ThesisRisk;
+  horizon: string;
+  assumed: string[];
+  hash: string;
+}
+
+/** Thesis/1 */
+export interface Thesis {
+  theme: string;
+  direction: string;
+  rationale: string;
+  horizon: string;
+  conviction: string;
+  exposures: { label: string; instruments: string[] }[];
+}
+
+export interface RegistryAsset {
+  assetId: string;
+  chain: string;
+  symbol: string;
+  decimals: number;
+  address: string | null;
+  priceUsd: number | null;
+  instrumentType: 'stablecoin' | 'tokenized_stock' | 'token';
+  issuer: string | null;
+}
+
+/** Strategy/1 */
+export interface Strategy {
+  version: 'Strategy/1';
+  picks: {
+    asset: RegistryAsset;
+    exposure: string;
+    weightPct: number;
+    amountUsd: number;
+    match: 'direct' | 'proxy';
+  }[];
+  unmatched: { idea: string; note: string }[];
+  ignored: string[];
+  quoted: boolean;
+}
+
+/** GET /api/v1/theses/:id */
+export interface ThesisRun {
+  runId: string;
+  stage: ThesisStage;
+  dryRun: boolean;
+  progress: ThesisProgress[];
+  intent: IntentRecord | null;
+  thesis: Thesis | null;
+  proposal: Strategy | null;
+}
+
+/** GET /api/v1/theses/:id/artifacts */
+export interface ThesisArtifact {
+  kind: string;
+  version: number;
+  body: unknown;
+  createdAt: string;
+}

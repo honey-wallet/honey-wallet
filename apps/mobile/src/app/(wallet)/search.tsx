@@ -17,6 +17,7 @@ import { HeaderActions } from '@/components/wallet/HeaderActions';
 import { Change, EmptyState, NetworkGrid, TokenIcon } from '@/components/wallet/parts';
 import { SearchField } from '@/components/wallet/SearchField';
 import { TabScreen } from '@/components/wallet/TabScreen';
+import { hostOfUrl, toUrl } from '@/lib/browser';
 import { POSITIONS } from '@/lib/collectibles';
 import { reorderFavorites, toggleFavorite, useFavorites } from '@/lib/favorites';
 import { tap } from '@/lib/haptics';
@@ -127,6 +128,8 @@ export default function SearchScreen() {
   useEffect(() => setChain(prefs.searchNetwork ?? 'All'), [prefs.searchNetwork]);
   useEffect(() => setSort(prefs.searchSort), [prefs.searchSort]);
   const q = query.trim().toLowerCase();
+  // A website address opens the in-app browser (Chrome is already a browser).
+  const site = isWeb ? null : toUrl(query);
   // Prices, volumes and APYs come from the market feed.
   const loading = useFirstLoad(LOADS.market);
   // Earn rates are their own feed, shared with Savings and Home's promo.
@@ -145,7 +148,12 @@ export default function SearchScreen() {
       <Sticky id="search">
         <View style={styles.top}>
           <View style={styles.flex}>
-            <SearchField value={query} onChangeText={setQuery} placeholder="Search tokens" />
+            <SearchField
+              value={query}
+              onChangeText={setQuery}
+              placeholder={isWeb ? 'Search tokens' : 'Search tokens or sites'}
+              onSubmitEditing={() => site && openSite(site)}
+            />
           </View>
           <HeaderActions
             settingsLabel="Search settings"
@@ -160,10 +168,11 @@ export default function SearchScreen() {
         {q ? (
           <View style={styles.section}>
             <SkeletonReveal loading={loading} skeleton={<MarketRowsSkeleton count={4} />}>
+              {site && <SiteRow url={site} />}
               {results.map((token) => (
                 <MarketRow key={token.symbol} token={token} />
               ))}
-              {results.length === 0 && (
+              {results.length === 0 && !site && (
                 <EmptyState
                   icon="search"
                   title="No matches"
@@ -334,6 +343,34 @@ export default function SearchScreen() {
         )}
       </ContentSwap>
     </TabScreen>
+  );
+}
+
+const openSite = (url: string) => router.push({ pathname: '/browser', params: { url } });
+
+/** What you typed is a website: open it in the in-app browser. */
+function SiteRow({ url }: { url: string }) {
+  const styles = useStyles();
+  const c = useTheme();
+  return (
+    <PressableRow
+      onPress={() => {
+        tap();
+        openSite(url);
+      }}
+      style={styles.row}
+    >
+      <View style={styles.siteIcon}>
+        <Icon name="globe" size={20} color={c.accentText} />
+      </View>
+      <View style={styles.flex}>
+        <Text style={styles.rowTitle} numberOfLines={1}>
+          {hostOfUrl(url)}
+        </Text>
+        <Text style={styles.rowMeta}>Open website</Text>
+      </View>
+      <Icon name="chevronRight" size={16} color={c.textSecondary} />
+    </PressableRow>
   );
 }
 
@@ -530,6 +567,14 @@ const useStyles = makeStyles((c) => ({
     paddingVertical: 10,
     marginHorizontal: -18,
     paddingHorizontal: 18,
+  },
+  siteIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: c.accentSurface,
   },
   rank: {
     width: 18,

@@ -6,7 +6,15 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["**", "!**/dist", "!**/.expo", "!**/expo-env.d.ts", "!**/target", "!**/*.svg"]
+    "includes": [
+      "**",
+      "!**/dist",
+      "!**/.expo",
+      "!**/expo-env.d.ts",
+      "!**/target",
+      "!**/*.svg",
+      "!**/*.generated.ts"
+    ]
   },
   "formatter": {
     "indentStyle": "space",

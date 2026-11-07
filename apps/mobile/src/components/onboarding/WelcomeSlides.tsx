@@ -48,8 +48,8 @@ const SLIDES: Slide[] = [
   {
     key: 'honey',
     art: 'logo',
-    title: ['All your crypto,\n', 'one wallet.'],
-    subtitle: 'Ethereum, Solana,\nTron and XRP, side by side.',
+    title: ['Invest in what\n', 'you believe.'],
+    subtitle: 'Share an idea or a link.\nHoney finds what you can buy.',
   },
   {
     key: 'protected',
@@ -60,8 +60,8 @@ const SLIDES: Slide[] = [
   {
     key: 'anytime',
     art: require('@/assets/images/onboarding/anytime.png'),
-    title: ['The only quantum-\n', 'secure wallet.'],
-    subtitle: "Quantum computers could break wallets\nsooner than you think. Honey won't.",
+    title: ['Better with\n', 'friends.'],
+    subtitle: 'Pool money in a jar, own your share,\nand copy the jars that work.',
   },
 ];
 

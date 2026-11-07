@@ -30,3 +30,10 @@ pnpm-debug.log*
 !.vscode/settings.json
 .DS_Store
 *.swp
+
+# Local design reference screenshots (large; not part of the app)
+inspiration/
+
+# Python bytecode caches
+__pycache__/
+*.pyc

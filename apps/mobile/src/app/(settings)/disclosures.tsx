@@ -64,14 +64,6 @@ export default function DisclosuresScreen() {
         up.
       </Text>
 
-      <Text style={styles.heading}>Quantum resistance</Text>
-      <Text style={styles.body}>
-        When Honey describes itself as quantum-resistant, it refers to a key-rotation design that
-        lets your wallet move to new signature schemes as they become available. It doesn't
-        guarantee security against every current or future attack, and the underlying blockchains
-        may not yet support post-quantum signatures.
-      </Text>
-
       <Text style={styles.heading}>More</Text>
       <Text style={styles.body}>
         For the full terms, read our {link('Terms of Service', () => Linking.openURL(TERMS_URL))}{' '}

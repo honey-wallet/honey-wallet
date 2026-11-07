@@ -7,11 +7,13 @@
   "type": "module",
   "exports": {
     "./protocol": "./src/worker/protocol.ts",
-    "./router": "./src/worker/router.ts"
+    "./router": "./src/worker/router.ts",
+    "./phone": "./src/worker/phone.generated.ts"
   },
   "scripts": {
     "dev": "pnpm --filter @honey-wallet/mobile exec expo start --web",
     "build": "node scripts/build.mjs",
+    "build:phone": "node scripts/build-phone.mjs",
     "typecheck": "tsc -b",
     "test": "vitest run",
     "clean": "rm -rf dist node_modules/.tmp"
@@ -25,13 +27,13 @@
     "react-dom": "19.2.3"
   },
   "devDependencies": {
-    "@types/chrome": "0.3.4",
+    "@types/chrome": "0.3.6",
     "@types/node": "^24.13.3",
     "@types/react": "~19.2.2",
     "@types/react-dom": "~19.2.7",
     "@vitejs/plugin-react": "^6.1.1",
     "typescript": "catalog:",
-    "vite": "^8.3.0",
+    "vite": "^8.3.5",
     "vitest": "catalog:"
   }
 }

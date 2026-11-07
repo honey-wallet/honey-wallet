@@ -1,4 +1,4 @@
-import { Appearance, Platform } from 'react-native';
+import { Appearance } from 'react-native';
 import type { IconName } from '@/components/Icon';
 import { createStore } from '@/lib/store';
 
@@ -21,8 +21,10 @@ export type TradeMode = (typeof TRADE_MODES)[number];
 // export const AVAILABLE_TRADE_MODES: readonly TradeMode[] =
 //   Platform.OS === 'web' ? [] : ['Swap', 'Perps', 'Predict'];
 // review: Swap is back in the extension; Perps and Predict stay phone-only.
-export const AVAILABLE_TRADE_MODES: readonly TradeMode[] =
-  Platform.OS === 'web' ? ['Swap'] : ['Swap', 'Perps', 'Predict'];
+// export const AVAILABLE_TRADE_MODES: readonly TradeMode[] =
+//   Platform.OS === 'web' ? ['Swap'] : ['Swap', 'Perps', 'Predict'];
+// 2026-11-07: Perps and Predict are off while Honey focuses on thesis jars; Swap only.
+export const AVAILABLE_TRADE_MODES: readonly TradeMode[] = ['Swap'];
 // export const AVAILABLE_TRADE_MODES: readonly TradeMode[] = TRADE_MODES;
 
 /** Each Trade product's symbol and one-line description (Trade's tabs and the tabs editor). */

@@ -24,7 +24,6 @@ const FAMILIES: Record<ChainFamily, Omit<ReceiveAddress, 'family' | 'address' | 
 };
 
 // XRP and Tron aren't offered for receiving (review); their addresses still derive.
-// Bitcoin was removed (2026-10-22): Bunk needs addresses that survive key rotation.
 // NEAR: phrase wallets derive an implicit account (docs/NEAR.md); watched/imported-key wallets don't.
 const ORDER: ChainFamily[] = ['evm', 'solana', 'near'];
 

@@ -186,54 +186,6 @@ function concat(a: Uint8Array, b: Uint8Array) {
 }
 
 export * from './backup';
-export * from './bunk';
-export * from './bunk-backup';
-export * from './bunk-evm';
-export * from './bunk-evm-observe';
-export * from './bunk-evm-sign';
-export * from './bunk-evm-v2';
-export * from './bunk-evm-v2-journal';
-export * from './bunk-evm-v2-sign';
-export * from './bunk-evm-v2-store';
-export * from './bunk-evm-v3';
-export * from './bunk-evm-v3-account';
-export * from './bunk-evm-v3-discovery';
-export * from './bunk-evm-v3-sign';
-export * from './bunk-indexeddb-store';
-export * from './bunk-journal-key';
-export * from './bunk-recovery-hints';
-export * from './bunk-recovery-resolve';
-export * from './bunk-release-registry';
-export {
-  BUNK_SOLANA_DERIVATION_VERSION,
-  BUNK_SOLANA_ED25519,
-  BUNK_SOLANA_INSTRUCTIONS,
-  BUNK_SOLANA_SYSTEM,
-  type BunkSolanaAccount,
-  type BunkSolanaAction,
-  type BunkSolanaHash,
-  type BunkSolanaInstruction,
-  type BunkSolanaKey,
-  type BunkSolanaKeyRef,
-  type BunkSolanaMeta,
-  type BunkSolanaPrepared,
-  type BunkSolanaScope,
-  type BunkSolanaState,
-  bunkSolanaAddressBytes,
-  bunkSolanaDigest,
-  bunkSolanaKeyPath,
-  bunkSolanaPrecompile,
-  bunkSolanaSpent,
-  bunkSolanaWallet,
-  decodeBunkSolanaState,
-  deriveBunkSolanaKey,
-  prepareBunkSolanaExecution,
-  prepareBunkSolanaInitialization,
-  prepareBunkSolanaRecovery,
-} from './bunk-solana';
-export * from './bunk-solana-discovery';
-export * from './bunk-solana-journal';
-export * from './bunk-solana-observe';
 export * from './local-vault';
 export * from './near';
 export * from './networks';

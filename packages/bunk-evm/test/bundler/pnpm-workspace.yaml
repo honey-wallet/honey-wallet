@@ -1,2 +1,0 @@
-# Isolated test tooling; never changes the application's workspace or lockfile.
-packages: []

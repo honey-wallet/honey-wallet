@@ -8,6 +8,7 @@ import { Core } from '@walletconnect/core';
 import { buildApprovedNamespaces, getSdkError } from '@walletconnect/utils';
 import { getRandomBytes } from 'expo-crypto';
 import { router as nav } from 'expo-router';
+import { emitToBrowsers } from '@/lib/browser';
 import { requestJsonRpc } from '@/lib/json-rpc';
 import { showErrorToast, showToast } from '@/lib/toast';
 import { wallets } from '@/lib/wallets';
@@ -131,8 +132,9 @@ const router = createRouter({
     if (!showing) nav.push('/approve');
   },
   rpc: requestRpc,
-  // WalletConnect sends its own events (accountsChanged) through the session.
-  emit: () => {},
+  // WalletConnect sends its own events (accountsChanged) through the session; sites in
+  // the in-app browser get theirs here (lib/browser.ts).
+  emit: emitToBrowsers,
   badge: () => {},
   newId: () => Array.from(getRandomBytes(12), (b) => b.toString(16).padStart(2, '0')).join(''),
   now: () => Date.now(),

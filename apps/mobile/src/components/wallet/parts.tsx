@@ -1,6 +1,7 @@
 import type { Href } from 'expo-router';
 import { type ReactNode, useEffect, useId, useMemo } from 'react';
 import {
+  Image,
   Pressable,
   type StyleProp,
   StyleSheet,
@@ -32,6 +33,7 @@ import { useEntrancePlaying } from '@/components/motion/Rise';
 import { StickyArea } from '@/components/motion/Sticky';
 import { TextsReveal } from '@/components/motion/TextsReveal';
 import { NETWORK_LOGOS } from '@/components/wallet/network-logos';
+import { TOKEN_IMAGES } from '@/components/wallet/token-images';
 import { TOKEN_LOGOS } from '@/components/wallet/token-logos';
 import { tap } from '@/lib/haptics';
 import { CHAINS, type Chain, chainSymbol, formatUsd, type Token } from '@/lib/mock-wallet';
@@ -61,8 +63,11 @@ export function TokenIcon({
   const c = useTheme();
   const xml = TOKEN_LOGOS[symbol] ?? NETWORK_LOGOS[symbol];
   // A token without a logo gets its initial in a grey well, so rows still tell apart.
+  const image = TOKEN_IMAGES[symbol];
   const logo = xml ? (
     <SvgXml xml={xml} width={size} height={size} />
+  ) : image ? (
+    <Image source={image} style={{ width: size, height: size, borderRadius: size / 2 }} />
   ) : (
     <View
       accessible={false}
