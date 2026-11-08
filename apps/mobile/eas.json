@@ -12,7 +12,11 @@
       "pnpm": "10.26.0",
       "env": {
         "HONEY_UPDATE_CHANNEL": "preview",
-        "EXPO_PUBLIC_TEST_MODE": "0"
+        "EXPO_PUBLIC_TEST_MODE": "0",
+        "EXPO_PUBLIC_FIREBASE_API_KEY": "AIzaSyCVDbM50qpktlUpDx-R8oLXGO8pFGAWa4c",
+        "EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN": "honey-wallet-92ea2.firebaseapp.com",
+        "EXPO_PUBLIC_FIREBASE_PROJECT_ID": "honey-wallet-92ea2",
+        "EXPO_PUBLIC_FIREBASE_APP_ID": "1:466723419259:web:e2f92c5050c00aa86f1ede"
       },
       "android": {
         "buildType": "apk"
@@ -33,7 +37,11 @@
       "autoIncrement": true,
       "env": {
         "HONEY_UPDATE_CHANNEL": "production",
-        "EXPO_PUBLIC_TEST_MODE": "0"
+        "EXPO_PUBLIC_TEST_MODE": "0",
+        "EXPO_PUBLIC_FIREBASE_API_KEY": "AIzaSyCVDbM50qpktlUpDx-R8oLXGO8pFGAWa4c",
+        "EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN": "honey-wallet-92ea2.firebaseapp.com",
+        "EXPO_PUBLIC_FIREBASE_PROJECT_ID": "honey-wallet-92ea2",
+        "EXPO_PUBLIC_FIREBASE_APP_ID": "1:466723419259:web:e2f92c5050c00aa86f1ede"
       }
     },
     "demo": {
@@ -41,7 +49,11 @@
       "node": "22.22.3",
       "pnpm": "10.26.0",
       "env": {
-        "EXPO_PUBLIC_TEST_MODE": "1"
+        "EXPO_PUBLIC_TEST_MODE": "1",
+        "EXPO_PUBLIC_FIREBASE_API_KEY": "AIzaSyCVDbM50qpktlUpDx-R8oLXGO8pFGAWa4c",
+        "EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN": "honey-wallet-92ea2.firebaseapp.com",
+        "EXPO_PUBLIC_FIREBASE_PROJECT_ID": "honey-wallet-92ea2",
+        "EXPO_PUBLIC_FIREBASE_APP_ID": "1:466723419259:web:e2f92c5050c00aa86f1ede"
       },
       "android": {
         "buildType": "apk"
