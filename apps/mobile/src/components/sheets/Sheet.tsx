@@ -147,7 +147,8 @@ export function SheetScreen({
         styles.root,
         styles.gutter,
         fill && styles.fill,
-        { paddingTop: top, paddingBottom: inTray ? TRAY_BOTTOM : bottom },
+        // A tray now sits on the screen edge, so it clears the home indicator itself.
+        { paddingTop: top, paddingBottom: inTray ? TRAY_BOTTOM + insets.bottom : bottom },
       ]}
     >
       {header}
