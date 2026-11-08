@@ -10,6 +10,7 @@ import { applyKey, Keypad, PercentChips, TypedAmount } from '@/components/wallet
 import { LiveProposedPage } from '@/components/wallet/MultisigParts';
 import { EmptyState, TokenIcon } from '@/components/wallet/parts';
 import { success, tap } from '@/lib/haptics';
+import { memberValue, useDaoJar, useMyNearUsdc } from '@/lib/jar-dao';
 import { moveJar, usdValue, useJars } from '@/lib/jars';
 import { formatUsd } from '@/lib/mock-wallet';
 import { type ProposalAction, propose, useSigner } from '@/lib/multisig';
@@ -36,6 +37,8 @@ function JarMoveSheetContent() {
   const styles = useStyles();
   const jar = useJars().find((j) => j.id === id);
   const signer = useSigner();
+  const jarLedger = useDaoJar(signer.multisig?.walletId);
+  const myNearUsdc = useMyNearUsdc(!!jarLedger);
   const [amount, setAmount] = useState('');
   const outcome = useFailure('jar');
   const [done, setDone] = useState(false);
@@ -50,13 +53,20 @@ function JarMoveSheetContent() {
   }
 
   const adding = mode === 'add';
-  const wallet = signer.multisig
-    ? signer.multisig.holdings
-        .filter((h) => h.symbol === jar.symbol)
-        .reduce((sum, h) => sum + h.amount, 0)
-    : (view.tokens.find((t) => t.symbol === jar.symbol)?.amount ?? 0);
+  // Shared jar on NEAR: you add from your own NEAR USDC and withdraw up to your share.
+  const share =
+    jarLedger?.navMicro != null
+      ? memberValue(jarLedger.myUnits, jarLedger.navMicro, jarLedger.totalUnits)
+      : 0;
+  const wallet = jarLedger
+    ? (myNearUsdc ?? 0)
+    : signer.multisig
+      ? signer.multisig.holdings
+          .filter((h) => h.symbol === jar.symbol)
+          .reduce((sum, h) => sum + h.amount, 0)
+      : (view.tokens.find((t) => t.symbol === jar.symbol)?.amount ?? 0);
   // Adding draws on the wallet; withdrawing, on what's in the jar.
-  const available = adding ? wallet : jar.saved;
+  const available = adding ? wallet : jarLedger ? share : jar.saved;
   const value = Number(amount) || 0;
   const tooMuch = value > available + 1e-9;
   const action: ProposalAction = {

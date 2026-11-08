@@ -279,8 +279,8 @@ export default function App() {
         title="9. What we built for the hackathon."
         source={
           <>
-            <b>Figure 9.</b> Built during the hackathon window, from the README. No users yet;
-            not launched {cite(4)}.
+            <b>Figure 9.</b> Built during the hackathon window, from the README. No users yet; not
+            launched {cite(4)}.
           </>
         }
       >

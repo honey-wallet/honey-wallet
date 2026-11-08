@@ -17,6 +17,9 @@ const MAX_LEGS: usize = 8;
 const MAX_SLIPPAGE_BPS: u16 = 300;
 /// Quotes must be used within this window; the deposit address expires after it.
 const DEADLINE_MINUTES: i64 = 15;
+/// Jar DAO buys wait for votes (24h voting period); the app re-quotes at the final vote
+/// if this has passed. Verify the longest deadline 1Click honours before launch.
+const INTENTS_DEADLINE_MINUTES: i64 = 24 * 60;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -27,6 +30,10 @@ pub struct BuyRequest {
     pub refund_to: String,
     pub slippage_bps: u16,
     pub legs: Vec<BuyLeg>,
+    /// Shared jars: pay from and deliver to NEAR Intents balances (the jar DAO's), with a
+    /// deadline long enough for members to vote. Refunds return to the DAO's Intents balance.
+    #[serde(default)]
+    pub intents: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -204,7 +211,12 @@ impl JarBuys {
             )));
         }
         let now = OffsetDateTime::now_utc();
-        let deadline = (now + time::Duration::minutes(DEADLINE_MINUTES))
+        let minutes = if input.intents {
+            INTENTS_DEADLINE_MINUTES
+        } else {
+            DEADLINE_MINUTES
+        };
+        let deadline = (now + time::Duration::minutes(minutes))
             .replace_nanosecond(0)
             .map_err(|_| AppError::Busy)?
             .format(&Rfc3339)
@@ -265,9 +277,14 @@ fn safe_message(m: &str) -> bool {
 }
 
 fn payload(input: &BuyRequest, leg: &BuyLeg, deadline: &str) -> Value {
+    let (deposit, recipient, refund) = if input.intents {
+        ("INTENTS", "INTENTS", "INTENTS")
+    } else {
+        ("ORIGIN_CHAIN", "DESTINATION_CHAIN", "ORIGIN_CHAIN")
+    };
     json!({
-        "dry": false, "swapType": "EXACT_INPUT", "depositType": "ORIGIN_CHAIN",
-        "recipientType": "DESTINATION_CHAIN", "refundType": "ORIGIN_CHAIN",
+        "dry": false, "swapType": "EXACT_INPUT", "depositType": deposit,
+        "recipientType": recipient, "refundType": refund,
         "originAsset": input.origin_asset, "destinationAsset": leg.destination_asset,
         "amount": leg.amount, "recipient": leg.recipient, "refundTo": input.refund_to,
         "slippageTolerance": input.slippage_bps, "deadline": deadline,
@@ -286,6 +303,8 @@ fn check_quote(body: &Value, payload: &Value) -> Result<LegQuote, AppError> {
         "refundTo",
         "slippageTolerance",
         "dry",
+        "depositType",
+        "recipientType",
     ] {
         if request.get(field) != payload.get(field) {
             return Err(AppError::Busy);
@@ -380,7 +399,21 @@ mod tests {
                 amount: "5000000".into(),
                 recipient: "alice.near".into(),
             }],
+            intents: false,
         }
+    }
+
+    #[test]
+    fn intents_mode_pays_and_refunds_on_intents() {
+        let mut r = request();
+        r.intents = true;
+        let p = payload(&r, &r.legs[0], "2026-11-09T12:00:00Z");
+        assert_eq!(p["depositType"], "INTENTS");
+        assert_eq!(p["recipientType"], "INTENTS");
+        assert_eq!(p["refundType"], "INTENTS");
+        let mut changed = reply(&p, "1336500000000000000000000");
+        changed["quoteRequest"]["depositType"] = json!("ORIGIN_CHAIN");
+        assert!(check_quote(&changed, &p).is_err());
     }
 
     fn reply(payload: &Value, min_out: &str) -> Value {

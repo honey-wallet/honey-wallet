@@ -10,6 +10,7 @@ import { PillButton } from '@/components/onboarding/PillButton';
 import { EmptyState, PushedScreen } from '@/components/wallet/parts';
 import { tap } from '@/lib/haptics';
 import { refreshJarBuy } from '@/lib/jar-buy';
+import { useDaoJar } from '@/lib/jar-dao';
 import { formatUsd } from '@/lib/mock-wallet';
 import { approvalsLeft, useMultisig, useProposal } from '@/lib/multisig';
 import { copyJar, jarReturn, jarValue, updateJarBuy, useThesisJars } from '@/lib/thesis';
@@ -48,6 +49,8 @@ export default function JarScreen() {
   const [width, setWidth] = useState(0);
   // A shared wallet's jar: its buy waits on members' approvals.
   const shared = useMultisig(jar?.sharedWallet?.walletId);
+  // A shared jar on NEAR follows the chain while it's open.
+  useDaoJar(jar?.sharedWallet?.walletId);
   const approval = useProposal(jar?.sharedWallet?.proposalId ?? '');
   // While any real swap is still moving, check on it every 10 seconds.
   const moving = jar?.buy?.some((l) => !FINAL.has(l.status)) ?? false;

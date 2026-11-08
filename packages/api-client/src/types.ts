@@ -800,6 +800,47 @@ export interface JarBuyRequest {
   refundTo: string;
   slippageBps: number;
   legs: { destinationAsset: string; amount: string; recipient: string }[];
+  /** Shared jars: INTENTS in and out (server sets this for `/jar-dao/buy-quote`). */
+  intents?: boolean;
+}
+
+/** A shared jar's Sputnik DAO, read from NEAR (`GET /api/v1/jar-dao/state`). */
+export interface JarDaoState {
+  dao: string;
+  members: string[];
+  threshold: number;
+  /** Raw Sputnik proposals (newest page), including `honey:` unit records. */
+  proposals: JarDaoProposal[];
+  balances: { tokenId: string; amount: string }[];
+  /** Server's reference jar value now (micro-USD), or null when a held token has no price. */
+  navMicroUsd: string | null;
+  /** Whether the NEP-366 gas relayer is on (members pay their own gas when false). */
+  relayer: boolean;
+}
+
+export interface JarDaoProposal {
+  id: number;
+  proposer: string;
+  description: string;
+  kind: unknown;
+  status: 'InProgress' | 'Approved' | 'Rejected' | 'Removed' | 'Expired' | 'Moved' | 'Failed';
+  votes: Record<string, 'Approve' | 'Reject' | 'Remove'>;
+  submission_time: string;
+}
+
+/** `POST /api/v1/jar-dao/buy-quote`: spends NEAR USDC from the jar's Intents balance. */
+export interface JarDaoBuyRequest {
+  dao: string;
+  slippageBps: number;
+  legs: { destinationAsset: string; amount: string }[];
+}
+
+/** `GET /api/v1/jar-dao/verify-deposit`: a member's USDC deposit into the jar, checked on chain. */
+export interface JarDaoDepositCheck {
+  txHash: string;
+  member: string;
+  dao: string;
+  amount: string;
 }
 
 export interface JarBuyLeg {
