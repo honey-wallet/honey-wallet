@@ -14,9 +14,9 @@ export type SignInOutcome =
   | { ok: true; identity: Identity }
   | { ok: false; cancelled: boolean; message: string };
 
-export type CodeOutcome =
-  | { ok: true; identity: Identity }
-  | { ok: false; reason: 'wrong' | 'expired' | 'other'; message: string };
+export type LinkOutcome =
+  | { ok: true; identity: Identity; restore: boolean }
+  | { ok: false; reason: 'expired' | 'needs-email' | 'other'; message: string };
 
 const UNAVAILABLE = 'Sign-in isn’t available in the browser.';
 
@@ -24,7 +24,7 @@ export function useIdentity() {
   return {
     loaded: true,
     signedIn: false,
-    method: 'google' as 'apple' | 'google',
+    method: 'google' as 'apple' | 'google' | 'email',
     email: undefined as string | undefined,
     name: undefined as string | undefined,
     signOut: async () => {},
@@ -40,17 +40,20 @@ export function useSocialSignIn() {
   return { apple: unavailable, google: unavailable };
 }
 
-export function useEmailCode() {
-  const unavailable = async (
-    _email: string,
-  ): Promise<{ ok: true } | { ok: false; message: string }> => ({
-    ok: false,
-    message: UNAVAILABLE,
-  });
+export const takeEmailLink = (_url: string) => false;
+
+export function useEmailLinkArrival(_onLink: (url: string) => void) {}
+
+export function useEmailLink() {
   return {
-    start: unavailable,
-    resend: unavailable,
-    verify: async (_email: string, _code: string): Promise<CodeOutcome> => ({
+    send: async (
+      _email: string,
+      _restore: boolean,
+    ): Promise<{ ok: true } | { ok: false; message: string }> => ({
+      ok: false,
+      message: UNAVAILABLE,
+    }),
+    finishLink: async (_url: string, _email?: string): Promise<LinkOutcome> => ({
       ok: false,
       reason: 'other',
       message: UNAVAILABLE,

@@ -115,20 +115,60 @@ describe('Firebase sign-in', () => {
     expect(errorMessage(new Error('boom'), 'fallback')).toBe('fallback');
   });
 
-  it('keeps email sign-in switched off', async () => {
-    const { EMAIL_SIGN_IN, useEmailCode } = await flows();
-    expect(EMAIL_SIGN_IN).toBe(false);
-    await expect(useEmailCode().start('maya@example.com')).resolves.toMatchObject({ ok: false });
+  it('emails a one-time link that opens the app, and remembers the address here', async () => {
+    const { useEmailLink } = await flows();
+    const auth = await import('firebase/auth');
+    vi.mocked(auth.sendSignInLinkToEmail).mockResolvedValue(undefined);
+    await expect(useEmailLink().send('maya@example.com', true)).resolves.toEqual({ ok: true });
+    const settings = vi.mocked(auth.sendSignInLinkToEmail).mock.calls[0]?.[2];
+    expect(settings).toMatchObject({
+      handleCodeInApp: true,
+      iOS: { bundleId: 'com.honeywallet.app' },
+      android: { packageName: 'com.honeywallet.app', installApp: true },
+    });
+    expect(JSON.parse(store.get('honey.email-link.address') ?? '{}')).toEqual({
+      email: 'maya@example.com',
+      restore: true,
+    });
+  });
+
+  it('signs in with the remembered address, then forgets it; asks when it is missing', async () => {
+    const { useEmailLink } = await flows();
+    const auth = await import('firebase/auth');
+    expect(await useEmailLink().finishLink('https://x/link')).toMatchObject({
+      ok: false,
+      reason: 'needs-email',
+    });
+    store.set('honey.email-link.address', JSON.stringify({ email: 'maya@example.com' }));
+    vi.mocked(auth.signInWithEmailLink).mockResolvedValue({
+      user: { email: 'maya@example.com', providerData: [] },
+    } as never);
+    const done = await useEmailLink().finishLink('https://x/link');
+    expect(done).toMatchObject({ ok: true, restore: false });
+    expect(vi.mocked(auth.signInWithEmailLink).mock.calls[0]?.[1]).toBe('maya@example.com');
+    expect(store.has('honey.email-link.address')).toBe(false);
   });
 });
 
+const store = new Map<string, string>();
+
 /** identity-flows with its native and Firebase pieces stubbed (no React Native in node). */
 async function flows() {
+  store.clear();
+  vi.resetModules();
   vi.doMock('firebase/auth', () => ({
     GoogleAuthProvider: { credential: vi.fn() },
     OAuthProvider: vi.fn(),
+    isSignInWithEmailLink: vi.fn(),
+    sendSignInLinkToEmail: vi.fn(),
     signInWithCredential: vi.fn(),
+    signInWithEmailLink: vi.fn(),
     signOut: vi.fn(),
+  }));
+  vi.doMock('@/lib/secure-store', () => ({
+    getItemAsync: async (k: string) => store.get(k) ?? null,
+    setItemAsync: async (k: string, v: string) => void store.set(k, v),
+    deleteItemAsync: async (k: string) => void store.delete(k),
   }));
   vi.doMock('react-native', () => ({ Platform: { OS: 'ios' } }));
   vi.doMock('expo-apple-authentication', () => ({}));

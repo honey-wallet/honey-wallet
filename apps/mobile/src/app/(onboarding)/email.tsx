@@ -5,15 +5,14 @@ import Animated, { FadeIn } from 'react-native-reanimated';
 import { PillButton } from '@/components/onboarding/PillButton';
 import { StepScreen, useStepStyles } from '@/components/onboarding/StepScreen';
 import { failure, tap } from '@/lib/haptics';
-import { EMAIL_SIGN_IN, useEmailCode } from '@/lib/identity-flows';
+import { EMAIL_SIGN_IN, useEmailLink } from '@/lib/identity-flows';
 import { makeStyles, useTheme } from '@/theme';
 import { DURATION } from '@/theme/motion';
 
 const EMAIL = /^\S+@\S+\.\S+$/;
 
-/** Email sign-in, step one: a 6-digit code is emailed (the next screen checks it). */
+/** Email sign-in, step one: Firebase emails a one-time sign-in link. */
 export default function EmailScreen() {
-  // Email sign-in is off until Firebase email-link sign-in is built; nothing links here.
   if (!EMAIL_SIGN_IN) return <Redirect href="/welcome" />;
   return <EmailStep />;
 }
@@ -27,7 +26,7 @@ function EmailStep() {
   const stepStyles = useStepStyles();
   const styles = useStyles();
   const c = useTheme();
-  const emailCode = useEmailCode();
+  const emailLink = useEmailLink();
   const email = value.trim();
   const valid = EMAIL.test(email);
 
@@ -37,7 +36,7 @@ function EmailStep() {
     setSending(true);
     setError(null);
     try {
-      const sent = await emailCode.start(email);
+      const sent = await emailLink.send(email, params.intent === 'restore');
       if (!sent.ok) {
         failure();
         setError(sent.message);
@@ -48,9 +47,9 @@ function EmailStep() {
         params: { to: email, intent: params.intent },
       });
     } catch (cause) {
-      console.warn('Couldn’t send the email code', cause);
+      console.warn('Couldn’t send the sign-in link', cause);
       failure();
-      setError('Couldn’t send a code. Check your connection and try again.');
+      setError('Couldn’t send a link. Check your connection and try again.');
     } finally {
       setSending(false);
     }
@@ -63,7 +62,7 @@ function EmailStep() {
       title="Enter your email address"
       footer={
         <PillButton
-          label={sending ? 'Sending code…' : 'Continue'}
+          label={sending ? 'Sending link…' : 'Continue'}
           disabled={!valid || sending}
           onPress={send}
         />
