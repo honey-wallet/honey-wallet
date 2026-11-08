@@ -10,6 +10,8 @@ import {
   addMemberKind,
   addProposalCall,
   buyKind,
+  buyLegsOf,
+  checkThreshold,
   createDaoCall,
   DAO_CREATE_DEPOSIT,
   type DepositFact,
@@ -19,6 +21,7 @@ import {
   encodeRecord,
   type FunctionCall,
   INTENTS_CONTRACT,
+  JAR_ROLE,
   NAV_TOLERANCE_BPS,
   type NearCallTx,
   navDeviationBps,
@@ -214,6 +217,8 @@ export function buyExpired(p: JarDaoProposal, now = Date.now()) {
  * deposit is subtracted before comparing. Refuse to approve beyond 2%.
  */
 export function mintNavCheck(p: JarDaoProposal, referenceNavMicro: string | null) {
+  // Only a Vote proposal is a unit record; any other kind with a mint-like description isn't.
+  if (p.kind !== 'Vote') return null;
   const r = decodeRecord(p.description);
   if (r?.t !== 'mint') return null;
   if (referenceNavMicro === null) return { ok: false, deviationBps: null, record: r };
@@ -308,6 +313,76 @@ export function withdrawCheck(
   if (w.amount * 10_000n > worth * (10_000n + NAV_TOLERANCE_BPS))
     return fail('it takes more than their share is worth');
   return { ok: true as const, why: '', receiver: w.receiver, amount: w.amount };
+}
+
+/**
+ * The approve gate. Dispatches on the on-chain `kind`, never on the description
+ * (which the proposer writes): Vote must be a unit record whose jar value checks
+ * out; FunctionCall must be a 1Click-verified buy or a withdrawal bound to its
+ * burner; membership changes pass; a threshold change must keep k >= 2 when n >= 2.
+ * Anything else is refused.
+ */
+export async function checkApproval(
+  raw: JarDaoProposal,
+  ctx: {
+    dao: string;
+    members: number;
+    navMicroUsd: string | null;
+    totalUnits: bigint;
+    unitsOf: (member: string) => bigint;
+    fetcher: Fetch;
+    now?: number;
+  },
+): Promise<void> {
+  const kind = raw.kind;
+  if (kind === 'Vote') {
+    const nav = mintNavCheck(raw, ctx.navMicroUsd);
+    if (!nav) throw new Error("This isn't a share record Honey recognises. Reject it.");
+    if (!nav.ok)
+      throw new Error(
+        nav.deviationBps === null
+          ? "Honey can't price this jar right now, so this share can't be checked. Try later."
+          : `This share states a jar value ${Number(nav.deviationBps) / 100}% off today's. Reject it.`,
+      );
+    return;
+  }
+  if (typeof kind !== 'object' || kind === null)
+    throw new Error("Honey doesn't recognise this proposal. Reject it.");
+  const k = kind as Record<string, unknown>;
+  const keys = Object.keys(k);
+  if (keys.length !== 1) throw new Error("Honey doesn't recognise this proposal. Reject it.");
+  switch (keys[0]) {
+    case 'FunctionCall': {
+      const legs = buyLegsOf(kind);
+      if (legs) {
+        await verifyBuyWith1Click(ctx.fetcher, ctx.dao, legs, ctx.now);
+        return;
+      }
+      const w = withdrawCheck(raw, ctx.navMicroUsd, ctx.totalUnits, ctx.unitsOf(raw.proposer));
+      if (w) {
+        if (!w.ok) throw new Error(`Don't approve this withdrawal: ${w.why}.`);
+        return;
+      }
+      throw new Error("Honey doesn't recognise this contract call. Reject it.");
+    }
+    case 'AddMemberToRole':
+    case 'RemoveMemberFromRole': {
+      const role = (k[keys[0]] as { role?: unknown })?.role;
+      if (role !== JAR_ROLE) throw new Error('This changes a role Honey does not use. Reject it.');
+      return;
+    }
+    case 'ChangePolicyUpdateDefaultVotePolicy': {
+      const vp = (
+        k.ChangePolicyUpdateDefaultVotePolicy as { vote_policy?: Record<string, unknown> }
+      )?.vote_policy;
+      if (vp?.weight_kind !== 'RoleWeight' || vp.quorum !== '0' || typeof vp.threshold !== 'string')
+        throw new Error('This voting rule is not one Honey sets. Reject it.');
+      checkThreshold(Number(vp.threshold), ctx.members);
+      return;
+    }
+    default:
+      throw new Error("Honey doesn't recognise this proposal. Reject it.");
+  }
 }
 
 export const isFinalVote = (p: JarDaoProposal, threshold: number) =>

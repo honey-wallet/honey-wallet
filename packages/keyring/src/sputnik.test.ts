@@ -268,6 +268,13 @@ describe('fund-style units', () => {
       (tx) => facts[tx],
     );
     expect(under.units.get(signer)).toBe(50n);
+    // A FunctionCall with a mint description never mints.
+    const disguised = unitLedger(
+      [p(0, signer, mint(signer, '100', 'tx1'), A, withdrawKind(USDC_NEAR, signer, '1'))],
+      DAO,
+      (tx) => facts[tx],
+    );
+    expect(disguised.total).toBe(0n);
     expect(navDeviationBps(98n, 100n)).toBe(200n);
     expect(navDeviationBps(97n, 100n) > NAV_TOLERANCE_BPS).toBe(true);
     expect(decodeRecord('honey:{"v":1,"t":"mint","member":"x","units":"-1"}')).toBeNull();

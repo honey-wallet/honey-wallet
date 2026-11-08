@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   buyExpired,
   buyProposalTx,
+  checkApproval,
   configProposalTx,
   createJarTx,
   fromChain,
@@ -332,5 +333,78 @@ describe('audit checks', () => {
     });
     expect(view.proposals[0]?.action).toMatchObject({ type: 'appCall' });
     expect(JSON.stringify(view.proposals[0]?.action)).toContain('do not approve');
+  });
+});
+
+describe('the approve gate dispatches on the on-chain kind', () => {
+  const ctx = {
+    dao: DAO,
+    members: 2,
+    navMicroUsd: '110000000',
+    totalUnits: 100n,
+    unitsOf: () => 60n,
+    fetcher: vi.fn(async () => ({ ok: false, json: async () => ({}) })),
+  };
+  const mintText = encodeRecord({
+    v: 1,
+    t: 'mint',
+    member: ME,
+    units: '1',
+    usd: '10000000',
+    nav: '100000000',
+    tx: 'h',
+  });
+
+  it('refuses a FunctionCall dressed up as a share record', async () => {
+    const drain = withdrawKind(USDC_NEAR, 'thief.near', '110000000');
+    await expect(
+      checkApproval(proposal({ kind: drain, description: mintText }), ctx),
+    ).rejects.toThrow('withdrawal');
+    const transfer = buyProposalTx(
+      DAO,
+      [{ depositAddress: 'thief.near', amountIn: '1', deadline: '2030-01-01T00:00:00Z' }],
+      'x',
+    ).kind;
+    await expect(
+      checkApproval(proposal({ kind: transfer, description: mintText }), ctx),
+    ).rejects.toThrow("doesn't know");
+    expect(mintNavCheck(proposal({ kind: drain, description: mintText }), '1')).toBeNull();
+  });
+
+  it('accepts a genuine share record and refuses a Vote with a buy description', async () => {
+    await expect(checkApproval(proposal({ description: mintText }), ctx)).resolves.toBeUndefined();
+    const buyText = text(
+      buyProposalTx(
+        DAO,
+        [{ depositAddress: 'd.near', amountIn: '1', deadline: '2030-01-01T00:00:00Z' }],
+        't',
+      ).actions[0]!.args,
+    ).proposal.description;
+    await expect(checkApproval(proposal({ description: buyText }), ctx)).rejects.toThrow(
+      "isn't a share record",
+    );
+  });
+
+  it('refuses unknown kinds, other roles and k = 1', async () => {
+    for (const kind of [
+      { Transfer: { receiver_id: 'thief.near', amount: '1' } },
+      { UpgradeSelf: { hash: 'x' } },
+      { ChangePolicy: { policy: {} } },
+      { AddMemberToRole: { member_id: 'x.near', role: 'council' } },
+      {
+        ChangePolicyUpdateDefaultVotePolicy: {
+          vote_policy: { weight_kind: 'RoleWeight', quorum: '0', threshold: '1' },
+        },
+      },
+      { FunctionCall: { receiver_id: 'usdc.near', actions: [] } },
+      'UnknownThing',
+    ])
+      await expect(checkApproval(proposal({ kind }), ctx)).rejects.toThrow();
+    await expect(
+      checkApproval(
+        proposal({ kind: { AddMemberToRole: { member_id: 'x.near', role: 'members' } } }),
+        ctx,
+      ),
+    ).resolves.toBeUndefined();
   });
 });

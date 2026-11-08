@@ -391,7 +391,8 @@ export function unitLedger(
     const r = decodeRecord(p.description);
     if (!r || r.t === 'buy') continue;
     if (r.t === 'mint') {
-      if (r.member !== p.proposer || seen.has(r.tx)) continue;
+      // A unit record is a Vote proposal; a mint-like description on any other kind is not.
+      if (p.kind !== 'Vote' || r.member !== p.proposer || seen.has(r.tx)) continue;
       const fact = deposit(r.tx);
       if (!fact || fact.member !== r.member || fact.dao !== dao) continue;
       if (!/^\d{1,38}$/.test(fact.amount) || BigInt(fact.amount) !== BigInt(r.usd)) continue;

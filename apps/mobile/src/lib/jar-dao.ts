@@ -8,8 +8,6 @@
 
 import type { JarDaoProposal, JarDaoState } from '@honey-wallet/api-client';
 import {
-  buyLegsOf,
-  checkThreshold,
   createNearRpc,
   type DepositFact,
   type FunctionCall,
@@ -26,6 +24,7 @@ import { backendSessionToken } from '@/lib/backend-session';
 import {
   buyExpired,
   buyProposalTx,
+  checkApproval,
   configProposalTx,
   createJarTx,
   depositTx,
@@ -40,7 +39,6 @@ import {
   verifyBuyWith1Click,
   viewFtBalance,
   voteTx,
-  withdrawCheck,
   withdrawProposalTx,
 } from '@/lib/jar-dao-core';
 import {
@@ -401,45 +399,6 @@ async function proposeOnChain(m: Multisig, action: ProposalAction) {
   return proposeAndApprove(m, tx, 'Propose change');
 }
 
-/** Refuses to approve anything the app can't check is safe for the jar. */
-async function approvable(raw: JarDaoProposal, view: Awaited<ReturnType<typeof refreshJar>>) {
-  const nav = mintNavCheck(raw, view.raw.navMicroUsd);
-  if (nav) {
-    if (!nav.ok)
-      throw new Error(
-        nav.deviationBps === null
-          ? "Honey can't price this jar right now, so this share can't be checked. Try later."
-          : `This share states a jar value ${Number(nav.deviationBps) / 100}% off today's. Reject it.`,
-      );
-    return;
-  }
-  const legs = buyLegsOf(raw.kind);
-  if (legs) {
-    await verifyBuyWith1Click(fetch, view.raw.dao, legs);
-    return;
-  }
-  const w = withdrawCheck(
-    raw,
-    view.raw.navMicroUsd,
-    view.ledger.total,
-    view.ledger.units.get(raw.proposer) ?? 0n,
-  );
-  if (w) {
-    if (!w.ok) throw new Error(`Don't approve this withdrawal: ${w.why}.`);
-    return;
-  }
-  const k = raw.kind as Record<string, { vote_policy?: { threshold?: string } }> | string;
-  if (typeof k === 'object' && k) {
-    if ('AddMemberToRole' in k || 'RemoveMemberFromRole' in k) return;
-    const t = k.ChangePolicyUpdateDefaultVotePolicy?.vote_policy?.threshold;
-    if (t !== undefined) {
-      checkThreshold(Number(t), view.raw.members.length);
-      return;
-    }
-  }
-  throw new Error("Honey doesn't recognise this proposal. Reject it.");
-}
-
 async function voteOnChain(m: Multisig, p: Proposal, kind: 'approve' | 'reject') {
   const ref = parseProposalId(p.id);
   if (!ref) throw new Error('Unknown jar proposal');
@@ -449,7 +408,15 @@ async function voteOnChain(m: Multisig, p: Proposal, kind: 'approve' | 'reject')
   // The executing vote of an expired buy would only refund; reject it and re-quote instead.
   if (kind === 'approve' && isFinalVote(raw, view.raw.threshold) && buyExpired(raw))
     throw new Error('The quote expired. Reject this buy and propose it again for a fresh price.');
-  if (kind === 'approve') await approvable(raw, view);
+  if (kind === 'approve')
+    await checkApproval(raw, {
+      dao: ref.dao,
+      members: view.raw.members.length,
+      navMicroUsd: view.raw.navMicroUsd,
+      totalUnits: view.ledger.total,
+      unitsOf: (m) => view.ledger.units.get(m) ?? 0n,
+      fetcher: fetch,
+    });
   const action = kind === 'approve' ? 'VoteApprove' : 'VoteReject';
   const tx = voteTx(ref.dao, ref.id, action, raw.kind as never);
   await send(kind === 'approve' ? 'Approve' : 'Reject', tx.receiverId, tx.actions);
