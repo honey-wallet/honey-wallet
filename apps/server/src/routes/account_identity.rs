@@ -7,7 +7,7 @@
 use axum::{Json, Router, routing::get};
 use serde::Serialize;
 
-use crate::supabase_auth::{SupabaseUser, SupabaseVerifier};
+use crate::firebase_auth::{FirebaseUser, FirebaseVerifier};
 
 /// Response shape mirrored in `packages/api-client/src/types.ts` (`AccountIdentity`).
 #[derive(Debug, Serialize)]
@@ -16,13 +16,13 @@ pub struct AccountIdentity {
     pub user_id: String,
 }
 
-pub fn router(verifier: Option<SupabaseVerifier>) -> Router {
+pub fn router(verifier: Option<FirebaseVerifier>) -> Router {
     Router::new()
         .route("/me/identity", get(me))
         .with_state(verifier)
 }
 
-async fn me(SupabaseUser(session): SupabaseUser) -> Json<AccountIdentity> {
+async fn me(FirebaseUser(session): FirebaseUser) -> Json<AccountIdentity> {
     Json(AccountIdentity {
         user_id: session.user_id,
     })
@@ -38,7 +38,7 @@ mod tests {
     use tower::ServiceExt;
 
     use super::*;
-    use crate::supabase_auth::test_support;
+    use crate::firebase_auth::test_support;
 
     async fn call(app: Router, authorization: Option<&str>) -> (StatusCode, serde_json::Value) {
         let mut request = Request::builder().uri("/me/identity");
@@ -56,7 +56,7 @@ mod tests {
 
     fn enabled() -> Router {
         router(Some(
-            SupabaseVerifier::from_jwks(test_support::config(), &test_support::jwks()).unwrap(),
+            FirebaseVerifier::from_jwks(test_support::config(), &test_support::jwks()).unwrap(),
         ))
     }
 
@@ -68,7 +68,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn returns_the_supabase_user_id_for_a_valid_token() {
+    async fn returns_the_firebase_user_id_for_a_valid_token() {
         let token = test_support::sign(&test_support::claims(now()));
         let (status, body) = call(enabled(), Some(&format!("Bearer {token}"))).await;
         assert_eq!(status, StatusCode::OK);
@@ -90,7 +90,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn is_unsupported_while_supabase_auth_is_off() {
+    async fn is_unsupported_while_firebase_auth_is_off() {
         let token = test_support::sign(&test_support::claims(now()));
         let (status, body) = call(router(None), Some(&format!("Bearer {token}"))).await;
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);

@@ -557,7 +557,7 @@ export function createApiClient({ baseUrl, fetch: fetchImpl = fetch }: ApiClient
       validated('/api/v1/me', isProfile, authorized(token, init)),
     wallets: (token: string, init?: RequestInit) =>
       validated('/api/v1/me/wallets', isWalletList, authorized(token, init)),
-    /** `accessToken` is a Supabase Auth access token (`session.access_token`), not a SIWE token. */
+    /** `accessToken` is a Firebase Auth ID token (`user.getIdToken()`), not a SIWE token. */
     accountIdentity: (accessToken: string, init?: RequestInit) =>
       validated('/api/v1/me/identity', isAccountIdentity, authorized(accessToken, init)),
     createWalletLinkChallenge: (token: string, address: string, init?: RequestInit) =>

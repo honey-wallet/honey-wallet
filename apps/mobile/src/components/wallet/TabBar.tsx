@@ -16,7 +16,7 @@ import Svg, { Defs, LinearGradient, Rect, Stop } from 'react-native-svg';
 import { Icon, type IconName } from '@/components/Icon';
 import { PressableScale } from '@/components/motion/PressableScale';
 import { tap } from '@/lib/haptics';
-import { isWeb } from '@/lib/platform';
+// import { isWeb } from '@/lib/platform'; // used by the hidden Search tab
 import { reselectTab } from '@/lib/tab-reselect';
 import { makeStyles, type Palette, radius, useTheme } from '@/theme';
 import { DURATION, EASE } from '@/theme/motion';
@@ -33,9 +33,10 @@ const PILL_TABS: { name: string; icon: IconName; label: string }[] = [
   { name: 'trade', icon: 'trade', label: 'Swap' },
   // On the phone it's the browser (review), so a globe; the extension's tab is just search.
   // { name: 'search', icon: 'search', label: 'Search' },
-  isWeb
-    ? { name: 'search', icon: 'search', label: 'Search' }
-    : { name: 'search', icon: 'globe', label: 'Browse' },
+  // 2026-11-08: Search and Browse are hidden while Honey focuses on jars.
+  // isWeb
+  //   ? { name: 'search', icon: 'search', label: 'Search' }
+  //   : { name: 'search', icon: 'globe', label: 'Browse' },
   { name: 'activity', icon: 'history', label: 'Activity' },
 ];
 

@@ -5,17 +5,16 @@ import Animated, { FadeIn } from 'react-native-reanimated';
 import { PillButton } from '@/components/onboarding/PillButton';
 import { StepScreen, useStepStyles } from '@/components/onboarding/StepScreen';
 import { failure, tap } from '@/lib/haptics';
-import { IDENTITY_ENABLED } from '@/lib/identity';
-import { useEmailCode } from '@/lib/identity-flows';
+import { EMAIL_SIGN_IN, useEmailCode } from '@/lib/identity-flows';
 import { makeStyles, useTheme } from '@/theme';
 import { DURATION } from '@/theme/motion';
 
 const EMAIL = /^\S+@\S+\.\S+$/;
 
-/** Email sign-in, step one: Supabase emails a 6-digit code (the next screen checks it). */
+/** Email sign-in, step one: a 6-digit code is emailed (the next screen checks it). */
 export default function EmailScreen() {
-  // No sign-in configured in this build: there's no email sign-in to offer.
-  if (!IDENTITY_ENABLED) return <Redirect href="/welcome" />;
+  // Email sign-in is off until Firebase email-link sign-in is built; nothing links here.
+  if (!EMAIL_SIGN_IN) return <Redirect href="/welcome" />;
   return <EmailStep />;
 }
 

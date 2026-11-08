@@ -138,12 +138,10 @@ export function isProfile(value: unknown): value is WalletProfile {
   );
 }
 
-/** Supabase user ids are UUIDs, as the server prints them (lowercase, hyphenated). */
+/** Firebase user ids: 1–128 ASCII letters and digits, as the server checks them. */
 export function isAccountIdentity(value: unknown): value is AccountIdentity {
   return (
-    object(value) &&
-    typeof value.userId === 'string' &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value.userId)
+    object(value) && typeof value.userId === 'string' && /^[A-Za-z0-9]{1,128}$/.test(value.userId)
   );
 }
 

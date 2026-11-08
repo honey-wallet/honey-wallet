@@ -49,7 +49,7 @@ scale. **[Later]** = fine after launch.
 13. **What fees does Honey charge?** This means swap fee, builder fee (Honey's cut of trades) on Hyperliquid and Polymarket, and where fees are paid to. Nothing is configured until you decide. Source: docs/backend/ARCHITECTURE.md:1190, :852-870.
 14. **Bridge provider.** *Answered:* Across removed 2026-10-21; bridging via NEAR Intents. *Still open:* Relay is a second bridge provider that can only preview quotes today. Keep it, or remove it so NEAR Intents is the only bridge? Source: docs/backend/NEAR-INTENTS.md:1-6, docs/backend/DECISIONS.md (D152).
 15. **Which Savings products?** Pick the exact Aave markets and Morpho vaults, and name who owns the risk call for each. The docs say an example address being present doesn't mean it's approved. Source: docs/backend/ARCHITECTURE.md:1187, docs/backend/EARN-READERS.md:163-164.
-16. **Apple / Google / email sign-in: decided, Supabase Auth.** Identity only; keys stay on the device. The buttons stay hidden until `EXPO_PUBLIC_SUPABASE_URL` and `EXPO_PUBLIC_SUPABASE_ANON_KEY` are set. Remaining: create the Supabase project and providers. Source: docs/launch/SUPABASE-SETUP.md; checked in apps/mobile/src/lib/identity.ts, apps/mobile/src/app/(account)/get-started.tsx.
+16. **Apple / Google / email sign-in: decided, Supabase Auth.** Identity only; keys stay on the device. The buttons stay hidden until `EXPO_PUBLIC_SUPABASE_URL` and `EXPO_PUBLIC_SUPABASE_ANON_KEY` are set. Remaining: create the Supabase project and providers. Source: docs/launch/GOOGLE-CLOUD-SETUP.md; checked in apps/mobile/src/lib/identity.ts, apps/mobile/src/app/(account)/get-started.tsx.
 17. **Which on-ramp (card/Apple Pay "Buy") provider?** Buy and Add-to-Savings use placeholder payment methods. Source: docs/backend/ARCHITECTURE.md:1193; checked in apps/mobile/src/app/(money)/buy-cash.tsx:38, apps/mobile/src/app/(savings)/savings-add.tsx:29.
 18. **Jars: labels only, money held for you (escrow), or separate addresses?** Source: docs/backend/ARCHITECTURE.md:1192.
 19. **Data policy: what you keep, for how long, who can see it for support, and who handles incidents.** Your privacy policy needs these answers. Source: docs/backend/ARCHITECTURE.md:1194.
@@ -70,7 +70,7 @@ scale. **[Later]** = fine after launch.
 - [ ] **[Blocker]** Server sign-in settings: `AUTH_ORIGIN`, `AUTH_CHAIN_ID`, `CORS_ALLOWED_ORIGINS`, and `AUTH_ADDITIONAL_ORIGINS` for the extension. Source: apps/server/.env.example:49-57, docs/backend/DEPLOYMENT-READINESS.md:65
 - [ ] **[Blocker]** `TRUSTED_PROXY_CIDRS` (your load balancer's IP range). Source: docs/backend/DEPLOYMENT-READINESS.md:60
 - [ ] **[Blocker]** Expo account: run `pnpm eas login`, link the project, set `EAS_PROJECT_ID`. Source: CONTRIBUTING.md:104-106
-- [ ] **[Blocker]** EAS preview and production environments: `HONEY_UPDATE_CHANNEL`, `EXPO_PUBLIC_TEST_MODE=0`, `EXPO_PUBLIC_API_URL`, `EXPO_PUBLIC_AUTH_ORIGIN`, `EXPO_PUBLIC_AUTH_CHAIN_ID`, `EXPO_PUBLIC_SUPABASE_URL`, `EXPO_PUBLIC_SUPABASE_ANON_KEY`. Source: CONTRIBUTING.md:107-115, docs/launch/SUPABASE-SETUP.md
+- [ ] **[Blocker]** EAS preview and production environments: `HONEY_UPDATE_CHANNEL`, `EXPO_PUBLIC_TEST_MODE=0`, `EXPO_PUBLIC_API_URL`, `EXPO_PUBLIC_AUTH_ORIGIN`, `EXPO_PUBLIC_AUTH_CHAIN_ID`, `EXPO_PUBLIC_SUPABASE_URL`, `EXPO_PUBLIC_SUPABASE_ANON_KEY`. Source: CONTRIBUTING.md:107-115, docs/launch/GOOGLE-CLOUD-SETUP.md
 - [ ] **[Blocker]** Apple Developer account, App Store Connect and signing. Source: docs/launch/REVIEW.md:26, :106
 - [ ] **[Blocker]** Google Play Console account and signing. Source: docs/launch/REVIEW.md:26, :106
 - [ ] **[Blocker]** Chrome Web Store developer account, plus the stable extension ID in `EXPO_PUBLIC_AUTH_ORIGIN`. Source: apps/extension/.env.example:5-8
@@ -83,7 +83,7 @@ scale. **[Later]** = fine after launch.
 - [ ] **[Blocker]** NEAR Intents partner key (`NEAR_INTENTS_API_KEY`) and Relay API key. Source: docs/backend/NEAR-INTENTS.md:12, apps/server/.env.example:121-131
 - [ ] **[Blocker]** Hyperliquid builder account, funded (your trading-fee account). Source: docs/backend/ARCHITECTURE.md:784-787
 - [ ] **[Blocker]** Polymarket builder account and agreement. Source: docs/backend/ARCHITECTURE.md:850, :1189
-- [ ] **[Before public]** Supabase Auth project with Email (code template), Apple and Google set up (decision 16; docs/launch/SUPABASE-SETUP.md), and on-ramp provider (decision 17). Source: docs/backend/ARCHITECTURE.md:1191, :1193
+- [ ] **[Before public]** Supabase Auth project with Email (code template), Apple and Google set up (decision 16; docs/launch/GOOGLE-CLOUD-SETUP.md), and on-ramp provider (decision 17). Source: docs/backend/ARCHITECTURE.md:1191, :1193
 - [ ] **[Before public]** Monitoring: a private metrics and traces collector, plus paging (alerts to your phone). Source: docs/backend/DEPLOYMENT-READINESS.md:67
 
 ---
@@ -108,7 +108,7 @@ scale. **[Later]** = fine after launch.
 ## Mobile app (iOS / Android)
 
 - [ ] **[Blocker]** Build the in-app browser. There's no `react-native-webview` and no browser screen. Source: docs/launch/RELEASE-HANDOFF.md:69; checked in apps/mobile/package.json, apps/mobile/src/app/
-- [ ] **[Blocker]** Configure Supabase Auth and test Apple, Google and email codes on a real iPhone and Android build, or leave the Supabase variables unset to hide them (decision 16). Source: docs/launch/SUPABASE-SETUP.md
+- [ ] **[Blocker]** Configure Supabase Auth and test Apple, Google and email codes on a real iPhone and Android build, or leave the Supabase variables unset to hide them (decision 16). Source: docs/launch/GOOGLE-CLOUD-SETUP.md
 - [ ] **[Blocker]** Wire up Bunk mode: activation, funding, signing, restore. Today the app only derives keys and shows sample data. Source: docs/launch/RELEASE-HANDOFF.md:66, docs/launch/REVIEW.md:99; checked in apps/mobile/src/lib/bunk-mode.ts:43, :74
 - [x] **[Blocker]** Never show Bunk as "on" just because a toggle is saved; it must be deployed and verified first. Done 2026-10-21: the switch is off and disabled until `BUNK_LIVE` (apps/mobile/src/lib/bunk-mode.ts:28). Source: docs/launch/REVIEW.md:55-58
 - [ ] **[Blocker]** Turn Perps and Predict order buttons on once the backend supports real orders. They're disabled today. Source: docs/backend/IMPLEMENTATION.md:89-92

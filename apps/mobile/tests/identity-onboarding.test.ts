@@ -19,7 +19,7 @@ vi.mock('@/lib/onboarding', () => ({
 }));
 
 import { isAuthCallback } from '@/lib/auth-callback';
-import { IDENTITY_ENABLED } from '@/lib/identity';
+import { IDENTITY_ENABLED, identityToken, signOutIdentity } from '@/lib/identity';
 import { continueAfterSignIn } from '@/lib/identity-onboarding';
 
 beforeEach(() => {
@@ -28,7 +28,7 @@ beforeEach(() => {
   mocks.createAccount.mockImplementation(async (label: string) => ({ id: 'seed-0', label }));
 });
 
-describe('after Apple / Google / email sign-in', () => {
+describe('after Apple / Google sign-in', () => {
   it('creates the wallet on this device; the account only supplies a name', async () => {
     const next = await continueAfterSignIn('google', {
       restore: false,
@@ -52,29 +52,90 @@ describe('after Apple / Google / email sign-in', () => {
 
   it('opens wallets already on this device without making another', async () => {
     mocks.accounts = [{ id: 'existing' }];
-    const next = await continueAfterSignIn('email', {
+    const next = await continueAfterSignIn('google', {
       restore: true,
       identity: { email: 'maya@example.com' },
     });
     expect(next).toBe('opened');
     expect(mocks.createAccount).not.toHaveBeenCalled();
-    expect(mocks.finishOnboarding).toHaveBeenCalledWith('email', {
+    expect(mocks.finishOnboarding).toHaveBeenCalledWith('google', {
       restored: true,
       name: 'from:maya@example.com',
     });
   });
 });
 
-it('is off unless both the Supabase URL and anon key are set', () => {
-  expect(process.env.EXPO_PUBLIC_SUPABASE_URL ?? '').toBe('');
-  expect(process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? '').toBe('');
-  expect(IDENTITY_ENABLED).toBe(false);
+describe('without Firebase configured', () => {
+  it('is off, sends no token and signs out of nothing', async () => {
+    expect(process.env.EXPO_PUBLIC_FIREBASE_API_KEY ?? '').toBe('');
+    expect(IDENTITY_ENABLED).toBe(false);
+    await expect(identityToken()).resolves.toBeNull();
+    await expect(signOutIdentity()).resolves.toBeUndefined();
+  });
 });
 
 it('recognises only the sign-in redirect as the auth callback', () => {
+  expect(isAuthCallback('com.honeywallet.app:/oauthredirect?code=x')).toBe(true);
+  expect(isAuthCallback('/oauthredirect')).toBe(true);
   expect(isAuthCallback('honeywallet://auth-callback?code=x')).toBe(true);
-  expect(isAuthCallback('/auth-callback')).toBe(true);
-  expect(isAuthCallback('honeywallet:///auth-callback')).toBe(true);
   expect(isAuthCallback('/home')).toBe(false);
   expect(isAuthCallback('honeywallet://wc?uri=auth-callback-ish')).toBe(false);
 });
+
+describe('Firebase sign-in', () => {
+  it('reads the provider, email and first name from the Firebase user', async () => {
+    const { describe: who, methodOf } = await flows();
+    const apple = {
+      email: null,
+      displayName: null,
+      providerData: [{ providerId: 'apple.com', email: 'x@privaterelay.appleid.com' }],
+    };
+    expect(methodOf(apple as never)).toBe('apple');
+    expect(who(apple as never, 'Maya')).toEqual({
+      email: 'x@privaterelay.appleid.com',
+      name: 'Maya',
+    });
+    const google = {
+      email: 'maya@example.com',
+      displayName: 'Maya Lin',
+      providerData: [{ providerId: 'google.com' }],
+    };
+    expect(methodOf(google as never)).toBe('google');
+    expect(who(google as never)).toEqual({ email: 'maya@example.com', name: 'Maya' });
+  });
+
+  it('turns Firebase error codes into the same friendly messages', async () => {
+    const { errorMessage } = await flows();
+    const { FirebaseError } = await import('firebase/app');
+    const err = (code: string) => new FirebaseError(code, code);
+    expect(errorMessage(err('auth/too-many-requests'), 'x')).toMatch(/Too many tries/);
+    expect(errorMessage(err('auth/operation-not-allowed'), 'x')).toMatch(/isn’t available/);
+    expect(errorMessage(err('auth/user-disabled'), 'x')).toBe('This account can’t sign in.');
+    expect(errorMessage(err('auth/network-request-failed'), 'fallback')).toBe('fallback');
+    expect(errorMessage(new Error('boom'), 'fallback')).toBe('fallback');
+  });
+
+  it('keeps email sign-in switched off', async () => {
+    const { EMAIL_SIGN_IN, useEmailCode } = await flows();
+    expect(EMAIL_SIGN_IN).toBe(false);
+    await expect(useEmailCode().start('maya@example.com')).resolves.toMatchObject({ ok: false });
+  });
+});
+
+/** identity-flows with its native and Firebase pieces stubbed (no React Native in node). */
+async function flows() {
+  vi.doMock('firebase/auth', () => ({
+    GoogleAuthProvider: { credential: vi.fn() },
+    OAuthProvider: vi.fn(),
+    signInWithCredential: vi.fn(),
+    signOut: vi.fn(),
+  }));
+  vi.doMock('react-native', () => ({ Platform: { OS: 'ios' } }));
+  vi.doMock('expo-apple-authentication', () => ({}));
+  vi.doMock('expo-auth-session/providers/google', () => ({ useIdTokenAuthRequest: vi.fn() }));
+  vi.doMock('expo-crypto', () => ({}));
+  vi.doMock('expo-web-browser', () => ({ maybeCompleteAuthSession: vi.fn() }));
+  vi.doMock('@/components/IdentityProvider', () => ({ useIdentityState: vi.fn() }));
+  vi.doMock('@/lib/identity-client', () => ({ identityAuth: vi.fn() }));
+  return import('@/lib/identity-flows');
+}

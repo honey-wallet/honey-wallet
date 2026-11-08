@@ -1,15 +1,12 @@
-//! Supabase Auth access tokens (Sign in with Apple / Google / email in the apps).
+//! Firebase Authentication ID tokens (Sign in with Apple / Google in the apps).
 //!
-//! Identity only. A verified token says which Supabase user is calling; it grants no
+//! Identity only. A verified token says which Firebase user is calling; it grants no
 //! wallet authority and is unrelated to SIWE sessions. Keys and recovery phrases never
-//! pass through Supabase or this module (see the custody model in `lib.rs`).
+//! pass through Firebase or this module (see the custody model in `lib.rs`).
 //!
-//! Off unless `SUPABASE_URL` is set. The issuer is `<SUPABASE_URL>/auth/v1` and the keys
-//! come from `<issuer>/.well-known/jwks.json`, so the project must use asymmetric JWT
-//! signing keys (ES256 or RS256). Tokens signed with the legacy shared secret (HS256)
-//! are rejected: that secret is never published and this server never holds it.
-//! Tokens must be issued by that issuer for `aud: authenticated`, be inside `nbf..exp`,
-//! and belong to a signed-in, non-anonymous user (`role: authenticated`).
+//! Off unless `FIREBASE_PROJECT_ID` is set. Tokens are RS256, issued by
+//! `https://securetoken.google.com/<project id>` for `aud: <project id>`, signed with
+//! Google's published keys, inside `iat..exp`, and never for an anonymous user.
 
 use std::{
     collections::HashMap,
@@ -36,65 +33,84 @@ const MAX_TOKEN_BYTES: usize = 8 * 1024;
 const MAX_JWKS_BYTES: usize = 64 * 1024;
 const MAX_KEYS: usize = 16;
 const CLOCK_LEEWAY_SECS: i64 = 5;
-/// The audience and role of a signed-in user's access token.
-const AUTHENTICATED: &str = "authenticated";
-/// Fetched keys are used for this long before a refresh on next use. Supabase caches the
-/// JWKS at its edge for 10 minutes, so a new standby key shows up within 20.
+/// Google's public keys for Firebase ID tokens, in JWKS form. They rotate every few
+/// hours and the response's cache headers say for how long; refreshing well inside that
+/// keeps new keys usable.
+const FIREBASE_JWKS_URL: &str =
+    "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com";
 const KEYS_TTL: Duration = Duration::from_secs(10 * 60);
 /// At most one JWKS fetch per interval, however many unknown `kid`s arrive.
 const MIN_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 
-/// Where the project's keys live and who issues its tokens, from `SUPABASE_URL`.
+/// Which Firebase project's tokens count, from `FIREBASE_PROJECT_ID`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SupabaseAuthConfig {
-    /// `<project url>/auth/v1/.well-known/jwks.json`
+pub struct FirebaseAuthConfig {
+    pub project_id: String,
     pub jwks_url: String,
-    /// `<project url>/auth/v1`, exactly as the `iss` claim carries it.
+    /// `https://securetoken.google.com/<project id>`, exactly as the `iss` claim carries it.
     pub issuer: String,
 }
 
-impl SupabaseAuthConfig {
-    /// From the project URL (`https://<ref>.supabase.co`, or a custom auth domain).
-    pub fn from_project_url(url: &str) -> Result<Self, ConfigError> {
-        let url = url.trim().trim_end_matches('/');
-        validate_origin(url).map_err(|()| ConfigError::Invalid {
-            name: "SUPABASE_URL",
-        })?;
-        let issuer = format!("{url}/auth/v1");
+/// Firebase project ids: 6–30 lowercase letters, digits and hyphens.
+fn valid_project_id(id: &str) -> bool {
+    (6..=30).contains(&id.len())
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        && !id.starts_with('-')
+        && !id.ends_with('-')
+}
+
+impl FirebaseAuthConfig {
+    pub fn from_project_id(id: &str) -> Result<Self, ConfigError> {
+        let id = id.trim();
+        if !valid_project_id(id) {
+            return Err(ConfigError::Invalid {
+                name: "FIREBASE_PROJECT_ID",
+            });
+        }
         Ok(Self {
-            jwks_url: format!("{issuer}/.well-known/jwks.json"),
-            issuer,
+            project_id: id.into(),
+            jwks_url: FIREBASE_JWKS_URL.into(),
+            issuer: format!("https://securetoken.google.com/{id}"),
         })
     }
 
-    /// `None` when Supabase Auth isn't configured.
+    /// Same project, keys from another URL (tests serve them locally).
+    pub fn with_jwks_url(mut self, url: &str) -> Result<Self, ConfigError> {
+        validate_origin_url(url).map_err(|()| ConfigError::Invalid {
+            name: "FIREBASE_PROJECT_ID",
+        })?;
+        self.jwks_url = url.into();
+        Ok(self)
+    }
+
+    /// `None` when Firebase Auth isn't configured.
     pub fn from_env() -> Result<Option<Self>, ConfigError> {
-        match env::var("SUPABASE_URL") {
+        match env::var("FIREBASE_PROJECT_ID") {
             Ok(value) if value.trim().is_empty() => Ok(None),
-            Ok(value) => Self::from_project_url(&value).map(Some),
+            Ok(value) => Self::from_project_id(&value).map(Some),
             Err(env::VarError::NotPresent) => Ok(None),
             Err(_) => Err(ConfigError::Invalid {
-                name: "SUPABASE_URL",
+                name: "FIREBASE_PROJECT_ID",
             }),
         }
     }
 
     pub fn validate(&self) -> Result<(), ConfigError> {
-        let derived = self
-            .issuer
-            .strip_suffix("/auth/v1")
-            .map(Self::from_project_url);
-        match derived {
-            Some(Ok(derived)) if derived == *self => Ok(()),
-            _ => Err(ConfigError::Invalid {
-                name: "SUPABASE_URL",
-            }),
+        let invalid = ConfigError::Invalid {
+            name: "FIREBASE_PROJECT_ID",
+        };
+        let derived = Self::from_project_id(&self.project_id)?;
+        if derived.issuer != self.issuer || validate_origin_url(&self.jwks_url).is_err() {
+            return Err(invalid);
         }
+        Ok(())
     }
 }
 
-/// HTTPS (plain HTTP only on loopback), no credentials, path, query or fragment.
-fn validate_origin(raw: &str) -> Result<(), ()> {
+/// An HTTPS URL (plain HTTP only on loopback) with no credentials, query or fragment.
+fn validate_origin_url(raw: &str) -> Result<(), ()> {
     let uri: axum::http::Uri = raw.parse().map_err(|_| ())?;
     let local = matches!(uri.host(), Some("localhost" | "127.0.0.1" | "[::1]"));
     let scheme_ok =
@@ -102,24 +118,23 @@ fn validate_origin(raw: &str) -> Result<(), ()> {
     if !scheme_ok
         || uri.host().is_none_or(str::is_empty)
         || raw.len() > 256
-        || raw.contains(['@', '#', '?'])
-        || uri.path() != "/"
-        || raw.ends_with('/')
+        || raw.contains(['#', '?'])
+        || uri.authority().is_some_and(|a| a.as_str().contains('@'))
     {
         return Err(());
     }
     Ok(())
 }
 
-/// A verified Supabase session: the ids only. No profile data and nothing key-related.
+/// A verified Firebase user: the id only. No profile data and nothing key-related.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SupabaseSession {
+pub struct FirebaseSession {
     pub user_id: String,
     pub session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub enum SupabaseAuthError {
+pub enum FirebaseAuthError {
     #[error("malformed token")]
     Malformed,
     #[error("unsupported token algorithm")]
@@ -142,11 +157,11 @@ pub enum SupabaseAuthError {
     KeysUnavailable,
 }
 
-impl From<SupabaseAuthError> for AppError {
-    fn from(error: SupabaseAuthError) -> Self {
+impl From<FirebaseAuthError> for AppError {
+    fn from(error: FirebaseAuthError) -> Self {
         match error {
             // Our side (JWKS unreachable and nothing cached): retryable, not the caller's fault.
-            SupabaseAuthError::KeysUnavailable => AppError::Busy,
+            FirebaseAuthError::KeysUnavailable => AppError::Busy,
             _ => AppError::Unauthorized,
         }
     }
@@ -175,29 +190,29 @@ enum KeySource {
 }
 
 struct Inner {
-    config: SupabaseAuthConfig,
+    config: FirebaseAuthConfig,
     source: KeySource,
     keys: RwLock<KeySet>,
     refresh: Mutex<()>,
 }
 
-/// Verifies Supabase access tokens against the project JWKS (fetched lazily, cached).
+/// Verifies Firebase ID tokens against Google's JWKS (fetched lazily, cached).
 #[derive(Clone)]
-pub struct SupabaseVerifier {
+pub struct FirebaseVerifier {
     inner: Arc<Inner>,
 }
 
-impl std::fmt::Debug for SupabaseVerifier {
+impl std::fmt::Debug for FirebaseVerifier {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SupabaseVerifier")
+        f.debug_struct("FirebaseVerifier")
             .field("issuer", &self.inner.config.issuer)
             .finish_non_exhaustive()
     }
 }
 
-impl SupabaseVerifier {
+impl FirebaseVerifier {
     /// Fetches keys from `config.jwks_url` on first use. No network at construction.
-    pub fn new(config: SupabaseAuthConfig) -> Result<Self, ConfigError> {
+    pub fn new(config: FirebaseAuthConfig) -> Result<Self, ConfigError> {
         config.validate()?;
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(2))
@@ -216,7 +231,7 @@ impl SupabaseVerifier {
     }
 
     /// Uses a fixed JWKS document and never fetches (tests and networkless setups).
-    pub fn from_jwks(config: SupabaseAuthConfig, jwks: &[u8]) -> Result<Self, SupabaseAuthError> {
+    pub fn from_jwks(config: FirebaseAuthConfig, jwks: &[u8]) -> Result<Self, FirebaseAuthError> {
         let keys = parse_jwks(jwks)?;
         Ok(Self::with_source(
             config,
@@ -229,7 +244,7 @@ impl SupabaseVerifier {
         ))
     }
 
-    fn with_source(config: SupabaseAuthConfig, source: KeySource, keys: KeySet) -> Self {
+    fn with_source(config: FirebaseAuthConfig, source: KeySource, keys: KeySet) -> Self {
         Self {
             inner: Arc::new(Inner {
                 config,
@@ -242,16 +257,16 @@ impl SupabaseVerifier {
 
     /// Optional verifier from the server configuration.
     pub fn from_config(config: &crate::Config) -> Result<Option<Self>, ConfigError> {
-        config.supabase_auth.clone().map(Self::new).transpose()
+        config.firebase_auth.clone().map(Self::new).transpose()
     }
 
-    pub async fn verify(&self, token: &str) -> Result<SupabaseSession, SupabaseAuthError> {
+    pub async fn verify(&self, token: &str) -> Result<FirebaseSession, FirebaseAuthError> {
         let parsed = ParsedToken::parse(token)?;
         let key = self.key(&parsed.kid).await?;
         parsed.verify(&key, &self.inner.config, unix_now())
     }
 
-    async fn key(&self, kid: &str) -> Result<PublicKey, SupabaseAuthError> {
+    async fn key(&self, kid: &str) -> Result<PublicKey, FirebaseAuthError> {
         {
             let set = self.inner.keys.read().await;
             if let Some(key) = set.keys.get(kid)
@@ -261,7 +276,7 @@ impl SupabaseVerifier {
             }
         }
         let KeySource::Remote(client) = &self.inner.source else {
-            return Err(SupabaseAuthError::UnknownKey);
+            return Err(FirebaseAuthError::UnknownKey);
         };
         // One fetch at a time; waiters re-check what it brought.
         let _refreshing = self.inner.refresh.lock().await;
@@ -285,14 +300,14 @@ impl SupabaseVerifier {
                     set.fetched_at = Some(Instant::now());
                 }
                 // Keep serving the last good keys; rotation keeps old keys valid for a while.
-                Err(error) => tracing::warn!(%error, "Supabase JWKS refresh failed"),
+                Err(error) => tracing::warn!(%error, "Firebase JWKS refresh failed"),
             }
         }
         let set = self.inner.keys.read().await;
         match set.keys.get(kid) {
             Some(key) => Ok(key.clone()),
-            None if set.keys.is_empty() => Err(SupabaseAuthError::KeysUnavailable),
-            None => Err(SupabaseAuthError::UnknownKey),
+            None if set.keys.is_empty() => Err(FirebaseAuthError::KeysUnavailable),
+            None => Err(FirebaseAuthError::UnknownKey),
         }
     }
 }
@@ -312,30 +327,30 @@ fn unix_now() -> i64 {
 async fn fetch_jwks(
     client: &reqwest::Client,
     url: &str,
-) -> Result<HashMap<String, PublicKey>, SupabaseAuthError> {
+) -> Result<HashMap<String, PublicKey>, FirebaseAuthError> {
     let response = client
         .get(url)
         .header(reqwest::header::ACCEPT, "application/json")
         .send()
         .await
-        .map_err(|_| SupabaseAuthError::KeysUnavailable)?;
+        .map_err(|_| FirebaseAuthError::KeysUnavailable)?;
     if !response.status().is_success()
         || response
             .content_length()
             .is_some_and(|length| length > MAX_JWKS_BYTES as u64)
     {
-        return Err(SupabaseAuthError::KeysUnavailable);
+        return Err(FirebaseAuthError::KeysUnavailable);
     }
     let mut body = Vec::new();
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|_| SupabaseAuthError::KeysUnavailable)?;
+        let chunk = chunk.map_err(|_| FirebaseAuthError::KeysUnavailable)?;
         if body.len() + chunk.len() > MAX_JWKS_BYTES {
-            return Err(SupabaseAuthError::KeysUnavailable);
+            return Err(FirebaseAuthError::KeysUnavailable);
         }
         body.extend_from_slice(&chunk);
     }
-    parse_jwks(&body).map_err(|_| SupabaseAuthError::KeysUnavailable)
+    parse_jwks(&body).map_err(|_| FirebaseAuthError::KeysUnavailable)
 }
 
 #[derive(Deserialize)]
@@ -385,8 +400,8 @@ impl Jwk {
 }
 
 /// Signing keys by `kid`: RSA (RS256) and P-256 (ES256). Anything else is ignored.
-fn parse_jwks(bytes: &[u8]) -> Result<HashMap<String, PublicKey>, SupabaseAuthError> {
-    let jwks: Jwks = serde_json::from_slice(bytes).map_err(|_| SupabaseAuthError::Malformed)?;
+fn parse_jwks(bytes: &[u8]) -> Result<HashMap<String, PublicKey>, FirebaseAuthError> {
+    let jwks: Jwks = serde_json::from_slice(bytes).map_err(|_| FirebaseAuthError::Malformed)?;
     let keys: HashMap<_, _> = jwks
         .keys
         .into_iter()
@@ -394,7 +409,7 @@ fn parse_jwks(bytes: &[u8]) -> Result<HashMap<String, PublicKey>, SupabaseAuthEr
         .take(MAX_KEYS)
         .collect();
     if keys.is_empty() {
-        return Err(SupabaseAuthError::Malformed);
+        return Err(FirebaseAuthError::Malformed);
     }
     Ok(keys)
 }
@@ -434,11 +449,15 @@ struct Claims {
     sub: String,
     aud: Audience,
     exp: i64,
+    iat: i64,
     nbf: Option<i64>,
-    role: Option<String>,
-    session_id: Option<String>,
     #[serde(default)]
-    is_anonymous: bool,
+    firebase: FirebaseClaim,
+}
+
+#[derive(Deserialize, Default)]
+struct FirebaseClaim {
+    sign_in_provider: Option<String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -456,36 +475,36 @@ struct ParsedToken<'a> {
 }
 
 impl<'a> ParsedToken<'a> {
-    fn parse(token: &'a str) -> Result<Self, SupabaseAuthError> {
+    fn parse(token: &'a str) -> Result<Self, FirebaseAuthError> {
         if token.is_empty() || token.len() > MAX_TOKEN_BYTES {
-            return Err(SupabaseAuthError::Malformed);
+            return Err(FirebaseAuthError::Malformed);
         }
         let mut parts = token.split('.');
         let (Some(header), Some(payload), Some(signature), None) =
             (parts.next(), parts.next(), parts.next(), parts.next())
         else {
-            return Err(SupabaseAuthError::Malformed);
+            return Err(FirebaseAuthError::Malformed);
         };
         let decode = |part: &str| {
             URL_SAFE_NO_PAD
                 .decode(part)
-                .map_err(|_| SupabaseAuthError::Malformed)
+                .map_err(|_| FirebaseAuthError::Malformed)
         };
         let header: Header =
-            serde_json::from_slice(&decode(header)?).map_err(|_| SupabaseAuthError::Malformed)?;
-        // Only the asymmetric algorithms Supabase signs with. Never `none`, never HMAC.
+            serde_json::from_slice(&decode(header)?).map_err(|_| FirebaseAuthError::Malformed)?;
+        // Only asymmetric algorithms (Firebase signs RS256). Never `none`, never HMAC.
         let alg = match header.alg.as_str() {
             "RS256" => Algorithm::Rs256,
             "ES256" => Algorithm::Es256,
-            _ => return Err(SupabaseAuthError::UnsupportedAlgorithm),
+            _ => return Err(FirebaseAuthError::UnsupportedAlgorithm),
         };
         if header.crit.is_some() {
-            return Err(SupabaseAuthError::UnsupportedAlgorithm);
+            return Err(FirebaseAuthError::UnsupportedAlgorithm);
         }
         let kid = header
             .kid
             .filter(|kid| !kid.is_empty())
-            .ok_or(SupabaseAuthError::Malformed)?;
+            .ok_or(FirebaseAuthError::Malformed)?;
         let signing_input_len = token.len() - signature.len() - 1;
         Ok(Self {
             alg,
@@ -499,9 +518,9 @@ impl<'a> ParsedToken<'a> {
     fn verify(
         &self,
         key: &PublicKey,
-        config: &SupabaseAuthConfig,
+        config: &FirebaseAuthConfig,
         now: i64,
-    ) -> Result<SupabaseSession, SupabaseAuthError> {
+    ) -> Result<FirebaseSession, FirebaseAuthError> {
         // The header's algorithm must be the one the key is for.
         let verified = match (self.alg, key) {
             (Algorithm::Rs256, PublicKey::Rsa(key)) => key.verify(
@@ -513,64 +532,68 @@ impl<'a> ParsedToken<'a> {
                 UnparsedPublicKey::new(&ECDSA_P256_SHA256_FIXED, point)
                     .verify(self.signing_input, &self.signature)
             }
-            _ => return Err(SupabaseAuthError::UnsupportedAlgorithm),
+            _ => return Err(FirebaseAuthError::UnsupportedAlgorithm),
         };
-        verified.map_err(|_| SupabaseAuthError::BadSignature)?;
+        verified.map_err(|_| FirebaseAuthError::BadSignature)?;
         let claims: Claims =
-            serde_json::from_slice(&self.payload).map_err(|_| SupabaseAuthError::Malformed)?;
+            serde_json::from_slice(&self.payload).map_err(|_| FirebaseAuthError::Malformed)?;
         if claims.iss != config.issuer {
-            return Err(SupabaseAuthError::WrongIssuer);
+            return Err(FirebaseAuthError::WrongIssuer);
         }
-        if !claims.aud.contains(AUTHENTICATED) {
-            return Err(SupabaseAuthError::WrongAudience);
+        if !claims.aud.contains(&config.project_id) {
+            return Err(FirebaseAuthError::WrongAudience);
         }
         if now >= claims.exp.saturating_add(CLOCK_LEEWAY_SECS) {
-            return Err(SupabaseAuthError::Expired);
+            return Err(FirebaseAuthError::Expired);
         }
         if claims
             .nbf
             .is_some_and(|nbf| now < nbf.saturating_sub(CLOCK_LEEWAY_SECS))
         {
-            return Err(SupabaseAuthError::NotYetValid);
+            return Err(FirebaseAuthError::NotYetValid);
         }
-        // Anon and service-role keys are JWTs too; only a signed-in person's token counts.
-        if claims.role.as_deref() != Some(AUTHENTICATED) || claims.is_anonymous {
-            return Err(SupabaseAuthError::NotAUser);
+        if now < claims.iat.saturating_sub(CLOCK_LEEWAY_SECS) {
+            return Err(FirebaseAuthError::NotYetValid);
         }
-        let user_id = uuid::Uuid::try_parse(&claims.sub)
-            .map_err(|_| SupabaseAuthError::Malformed)?
-            .hyphenated()
-            .to_string();
-        Ok(SupabaseSession {
-            user_id,
-            session_id: claims
-                .session_id
-                .filter(|id| !id.is_empty() && id.len() <= 128),
+        // Anonymous Firebase users are guests, not signed-in people.
+        if claims.firebase.sign_in_provider.as_deref() == Some("anonymous") {
+            return Err(FirebaseAuthError::NotAUser);
+        }
+        // Firebase user ids are up to 128 ASCII letters and digits.
+        if claims.sub.is_empty()
+            || claims.sub.len() > 128
+            || !claims.sub.bytes().all(|b| b.is_ascii_alphanumeric())
+        {
+            return Err(FirebaseAuthError::Malformed);
+        }
+        Ok(FirebaseSession {
+            user_id: claims.sub,
+            session_id: None,
         })
     }
 }
 
-/// `Authorization: Bearer <Supabase access token>`, verified. Use it in any handler whose
-/// router state provides `Option<SupabaseVerifier>`; with Supabase Auth off it rejects
+/// `Authorization: Bearer <Firebase ID token>`, verified. Use it in any handler whose
+/// router state provides `Option<FirebaseVerifier>`; with Firebase Auth off it rejects
 /// with `unsupported`, and a bad or expired token with `unauthorized`.
 #[derive(Debug, Clone)]
-pub struct SupabaseUser(pub SupabaseSession);
+pub struct FirebaseUser(pub FirebaseSession);
 
-impl<S> FromRequestParts<S> for SupabaseUser
+impl<S> FromRequestParts<S> for FirebaseUser
 where
     S: Send + Sync,
-    Option<SupabaseVerifier>: FromRef<S>,
+    Option<FirebaseVerifier>: FromRef<S>,
 {
     type Rejection = AppError;
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
-        let verifier = Option::<SupabaseVerifier>::from_ref(state)
+        let verifier = Option::<FirebaseVerifier>::from_ref(state)
             .ok_or_else(|| AppError::Unsupported("Account sign-in not configured".into()))?;
         let token = crate::routes::identity::bearer(&parts.headers)?;
         match verifier.verify(token).await {
             Ok(session) => Ok(Self(session)),
             Err(error) => {
-                tracing::debug!(%error, "Supabase access token rejected");
+                tracing::debug!(%error, "Firebase ID token rejected");
                 Err(error.into())
             }
         }
@@ -590,18 +613,18 @@ pub(crate) mod test_support {
         },
     };
 
-    use super::SupabaseAuthConfig;
+    use super::FirebaseAuthConfig;
 
-    /// A 2048-bit key generated locally for these tests only (never a Supabase key).
-    const TEST_RSA_KEY: &[u8] = include_bytes!("../tests/fixtures/supabase-test-rsa2048.pk8");
+    /// A 2048-bit key generated locally for these tests only (never a real key).
+    const TEST_RSA_KEY: &[u8] = include_bytes!("../tests/fixtures/test-rsa2048.pk8");
     pub const RSA_KID: &str = "rsa-test-key";
     pub const EC_KID: &str = "ec-test-key";
-    pub const PROJECT_URL: &str = "https://honeytest.supabase.co";
-    pub const ISSUER: &str = "https://honeytest.supabase.co/auth/v1";
-    pub const USER_ID: &str = "8d0f8c9e-2b7a-4e55-9a51-3f0f6b2c9d11";
+    pub const PROJECT_ID: &str = "honey-test";
+    pub const ISSUER: &str = "https://securetoken.google.com/honey-test";
+    pub const USER_ID: &str = "Xy7Qm2LkP0aBcDeFgHiJkLmNoPq1";
 
-    pub fn config() -> SupabaseAuthConfig {
-        SupabaseAuthConfig::from_project_url(PROJECT_URL).unwrap()
+    pub fn config() -> FirebaseAuthConfig {
+        FirebaseAuthConfig::from_project_id(PROJECT_ID).unwrap()
     }
 
     fn rsa() -> RsaKeyPair {
@@ -669,7 +692,7 @@ pub(crate) mod test_support {
         format!("{input}.{}", URL_SAFE_NO_PAD.encode(signature))
     }
 
-    /// ES256, as Supabase signs by default with asymmetric keys.
+    /// ES256 (also accepted; Firebase itself signs RS256).
     pub fn sign(claims: &serde_json::Value) -> String {
         sign_with(
             &serde_json::json!({ "alg": "ES256", "kid": EC_KID, "typ": "JWT" }),
@@ -684,21 +707,18 @@ pub(crate) mod test_support {
         )
     }
 
-    /// The claims of a Supabase access token for a signed-in user.
+    /// The claims of a Firebase ID token for a Google sign-in.
     pub fn claims(now: i64) -> serde_json::Value {
         serde_json::json!({
             "iss": ISSUER,
             "sub": USER_ID,
-            "aud": "authenticated",
+            "aud": PROJECT_ID,
             "exp": now + 60,
             "iat": now - 10,
+            "auth_time": now - 10,
+            "user_id": USER_ID,
             "email": "maya@example.com",
-            "phone": "",
-            "role": "authenticated",
-            "aal": "aal1",
-            "amr": [{ "method": "otp", "timestamp": now - 10 }],
-            "session_id": "0b3c1f4e-7d1a-4c2b-8e6f-5a4d3c2b1a09",
-            "is_anonymous": false,
+            "firebase": { "sign_in_provider": "google.com", "identities": {} },
         })
     }
 }
@@ -710,15 +730,15 @@ mod tests {
 
     use super::{test_support::*, *};
 
-    fn verifier() -> SupabaseVerifier {
-        SupabaseVerifier::from_jwks(config(), &jwks()).unwrap()
+    fn verifier() -> FirebaseVerifier {
+        FirebaseVerifier::from_jwks(config(), &jwks()).unwrap()
     }
 
     #[tokio::test]
-    async fn accepts_es256_and_rs256_access_tokens() {
-        let expected = SupabaseSession {
+    async fn accepts_rs256_and_es256_id_tokens() {
+        let expected = FirebaseSession {
             user_id: USER_ID.into(),
-            session_id: Some("0b3c1f4e-7d1a-4c2b-8e6f-5a4d3c2b1a09".into()),
+            session_id: None,
         };
         let now = unix_now();
         assert_eq!(
@@ -730,7 +750,7 @@ mod tests {
             Ok(expected.clone())
         );
         let mut listed = claims(now);
-        listed["aud"] = json!(["authenticated", "other"]);
+        listed["aud"] = json!([PROJECT_ID, "other"]);
         assert_eq!(verifier().verify(&sign(&listed)).await, Ok(expected));
     }
 
@@ -743,27 +763,35 @@ mod tests {
         let (input, _) = token.rsplit_once('.').unwrap();
         let (header, _) = input.split_once('.').unwrap();
         let mut forged = claims(now);
-        forged["sub"] = json!("00000000-0000-4000-8000-000000000000");
+        forged["sub"] = json!("SomeoneElse0000000000000000a");
         let forged = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&forged).unwrap());
         let tampered = format!("{header}.{forged}.{}", token.rsplit_once('.').unwrap().1);
         assert_eq!(
             verifier.verify(&tampered).await,
-            Err(SupabaseAuthError::BadSignature)
+            Err(FirebaseAuthError::BadSignature)
         );
 
         let cases = [
-            ("exp", json!(now - 60), SupabaseAuthError::Expired),
-            ("nbf", json!(now + 120), SupabaseAuthError::NotYetValid),
+            ("exp", json!(now - 60), FirebaseAuthError::Expired),
+            ("nbf", json!(now + 120), FirebaseAuthError::NotYetValid),
             (
                 "iss",
-                json!("https://other.supabase.co/auth/v1"),
-                SupabaseAuthError::WrongIssuer,
+                json!("https://securetoken.google.com/other-project"),
+                FirebaseAuthError::WrongIssuer,
             ),
-            ("aud", json!("anon"), SupabaseAuthError::WrongAudience),
-            ("role", json!("service_role"), SupabaseAuthError::NotAUser),
-            ("role", json!("anon"), SupabaseAuthError::NotAUser),
-            ("is_anonymous", json!(true), SupabaseAuthError::NotAUser),
-            ("sub", json!("not-a-uuid"), SupabaseAuthError::Malformed),
+            (
+                "aud",
+                json!("other-project"),
+                FirebaseAuthError::WrongAudience,
+            ),
+            ("iat", json!(now + 120), FirebaseAuthError::NotYetValid),
+            (
+                "firebase",
+                json!({ "sign_in_provider": "anonymous" }),
+                FirebaseAuthError::NotAUser,
+            ),
+            ("sub", json!(""), FirebaseAuthError::Malformed),
+            ("sub", json!("has spaces"), FirebaseAuthError::Malformed),
         ];
         for (claim, value, error) in cases {
             let mut changed = claims(now);
@@ -774,17 +802,11 @@ mod tests {
                 "{claim}"
             );
         }
-        let mut no_role = claims(now);
-        no_role.as_object_mut().unwrap().remove("role");
-        assert_eq!(
-            verifier.verify(&sign(&no_role)).await,
-            Err(SupabaseAuthError::NotAUser)
-        );
 
         let unknown = sign_with(&json!({ "alg": "ES256", "kid": "other" }), &claims(now));
         assert_eq!(
             verifier.verify(&unknown).await,
-            Err(SupabaseAuthError::UnknownKey)
+            Err(FirebaseAuthError::UnknownKey)
         );
 
         // HS256 (the legacy shared secret), `none` and anything else never verify.
@@ -792,7 +814,7 @@ mod tests {
             let token = sign_with(&json!({ "alg": alg, "kid": EC_KID }), &claims(now));
             assert_eq!(
                 verifier.verify(&token).await,
-                Err(SupabaseAuthError::UnsupportedAlgorithm),
+                Err(FirebaseAuthError::UnsupportedAlgorithm),
                 "{alg}"
             );
         }
@@ -800,7 +822,7 @@ mod tests {
         let confused = sign_with(&json!({ "alg": "RS256", "kid": EC_KID }), &claims(now));
         assert_eq!(
             verifier.verify(&confused).await,
-            Err(SupabaseAuthError::UnsupportedAlgorithm)
+            Err(FirebaseAuthError::UnsupportedAlgorithm)
         );
         let critical = sign_with(
             &json!({ "alg": "ES256", "kid": EC_KID, "crit": ["exp"] }),
@@ -808,7 +830,7 @@ mod tests {
         );
         assert_eq!(
             verifier.verify(&critical).await,
-            Err(SupabaseAuthError::UnsupportedAlgorithm)
+            Err(FirebaseAuthError::UnsupportedAlgorithm)
         );
 
         for malformed in [
@@ -820,7 +842,7 @@ mod tests {
         ] {
             assert_eq!(
                 verifier.verify(malformed).await,
-                Err(SupabaseAuthError::Malformed)
+                Err(FirebaseAuthError::Malformed)
             );
         }
     }
@@ -834,7 +856,7 @@ mod tests {
         let fetches = Arc::new(AtomicUsize::new(0));
         let counter = fetches.clone();
         let app = axum::Router::new().route(
-            "/auth/v1/.well-known/jwks.json",
+            "/jwks",
             axum::routing::get(move || {
                 counter.fetch_add(1, Ordering::SeqCst);
                 async { jwks() }
@@ -843,28 +865,29 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await });
-        let local = SupabaseAuthConfig::from_project_url(&format!("http://{address}")).unwrap();
-        let verifier = SupabaseVerifier::new(local.clone()).unwrap();
+        let local = config()
+            .with_jwks_url(&format!("http://{address}/jwks"))
+            .unwrap();
+        let verifier = FirebaseVerifier::new(local.clone()).unwrap();
 
         let now = unix_now();
-        let mut local_claims = claims(now);
-        local_claims["iss"] = json!(local.issuer);
+        let local_claims = claims(now);
         assert!(verifier.verify(&sign(&local_claims)).await.is_ok());
         assert!(verifier.verify(&sign_rs256(&local_claims)).await.is_ok());
         let unknown = sign_with(&json!({ "alg": "ES256", "kid": "rotated" }), &local_claims);
         assert_eq!(
             verifier.verify(&unknown).await,
-            Err(SupabaseAuthError::UnknownKey)
+            Err(FirebaseAuthError::UnknownKey)
         );
         assert_eq!(fetches.load(Ordering::SeqCst), 1);
         server.abort();
 
         // Nothing cached and nothing reachable: retryable on our side, not a 401.
-        let offline = SupabaseVerifier::new(local).unwrap();
+        let offline = FirebaseVerifier::new(local).unwrap();
         let _ = server.await;
         assert_eq!(
             offline.verify(&sign(&local_claims)).await,
-            Err(SupabaseAuthError::KeysUnavailable)
+            Err(FirebaseAuthError::KeysUnavailable)
         );
     }
 
@@ -881,36 +904,38 @@ mod tests {
         ]});
         assert_eq!(
             parse_jwks(&serde_json::to_vec(&others).unwrap()).err(),
-            Some(SupabaseAuthError::Malformed)
+            Some(FirebaseAuthError::Malformed)
         );
         assert_eq!(
             parse_jwks(b"not json").err(),
-            Some(SupabaseAuthError::Malformed)
+            Some(FirebaseAuthError::Malformed)
         );
     }
 
     #[test]
-    fn derives_issuer_and_jwks_from_the_project_url() {
+    fn derives_issuer_from_the_project_id() {
         assert_eq!(
-            SupabaseAuthConfig::from_project_url("https://abc.supabase.co/").unwrap(),
-            SupabaseAuthConfig {
-                issuer: "https://abc.supabase.co/auth/v1".into(),
-                jwks_url: "https://abc.supabase.co/auth/v1/.well-known/jwks.json".into(),
+            FirebaseAuthConfig::from_project_id(" honey-wallet-prod ").unwrap(),
+            FirebaseAuthConfig {
+                project_id: "honey-wallet-prod".into(),
+                issuer: "https://securetoken.google.com/honey-wallet-prod".into(),
+                jwks_url: FIREBASE_JWKS_URL.into(),
             }
         );
         assert!(config().validate().is_ok());
-        assert!(SupabaseAuthConfig::from_project_url("http://127.0.0.1:54321").is_ok());
         for bad in [
-            "http://abc.supabase.co",
-            "https://abc.supabase.co/auth/v1",
-            "https://user@abc.supabase.co",
-            "https://abc.supabase.co?x=1",
-            "abc.supabase.co",
+            "",
+            "abc",
+            "Honey-Wallet",
+            "-honey-wallet",
+            "honey_wallet",
+            "honey/../x",
         ] {
-            assert!(SupabaseAuthConfig::from_project_url(bad).is_err(), "{bad}");
+            assert!(FirebaseAuthConfig::from_project_id(bad).is_err(), "{bad}");
         }
-        let tampered = SupabaseAuthConfig {
-            jwks_url: "https://evil.example/auth/v1/.well-known/jwks.json".into(),
+        assert!(config().with_jwks_url("http://evil.example/keys").is_err());
+        let tampered = FirebaseAuthConfig {
+            issuer: "https://securetoken.google.com/other-project".into(),
             ..config()
         };
         assert!(tampered.validate().is_err());

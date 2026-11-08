@@ -1,8 +1,12 @@
 /**
  * Honey for Chrome has no account sign-in (see identity.web.ts), so nothing here is ever
- * rendered; these keep the shared screens compiling without bundling Supabase.
+ * rendered; these keep the shared screens compiling without bundling Firebase.
  */
 export const APPLE_SIGN_IN = false;
+
+export const GOOGLE_SIGN_IN = false;
+
+export const EMAIL_SIGN_IN = false;
 
 export type Identity = { email?: string; name?: string };
 
@@ -20,7 +24,7 @@ export function useIdentity() {
   return {
     loaded: true,
     signedIn: false,
-    method: 'email' as 'apple' | 'google' | 'email',
+    method: 'google' as 'apple' | 'google',
     email: undefined as string | undefined,
     name: undefined as string | undefined,
     signOut: async () => {},
