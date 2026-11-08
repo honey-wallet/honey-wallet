@@ -7,7 +7,6 @@ const require = createRequire(import.meta.url);
 const expoRequire = createRequire(require.resolve('expo/package.json'));
 const cliRequire = createRequire(expoRequire.resolve('@expo/cli/package.json'));
 const configRequire = createRequire(expoRequire.resolve('@expo/config-plugins/package.json'));
-const xcodeRequire = createRequire(configRequire.resolve('xcode/package.json'));
 const routerRequire = createRequire(require.resolve('expo-router/package.json'));
 const queryString = routerRequire('query-string');
 const metroRequire = createRequire(require.resolve('@react-native/metro-config/package.json'));
@@ -19,18 +18,11 @@ const braces = micromatchRequire('braces');
 const forge = cliRequire('node-forge');
 
 describe('dependency security fixes', () => {
-  it('keeps Xcode UUID generation working and rejects truncated UUID buffers', () => {
-    const uuid = xcodeRequire('uuid');
+  // xcode 4 generates UUIDs itself, without the vulnerable uuid package.
+  it('keeps Xcode UUID generation working', () => {
     const project = configRequire('xcode').project('unused');
     project.hash = { project: { objects: {} } };
     expect(project.generateUuid()).toMatch(/^[A-F0-9]{24}$/);
-    for (const name of ['v3', 'v5']) {
-      for (const offset of [-1, 4]) {
-        expect(() => uuid[name]('honey', uuid[name].DNS, new Uint8Array(8), offset)).toThrow(
-          RangeError,
-        );
-      }
-    }
   });
 
   it('preserves query decoding and handles long malformed percent-encoded input', () => {

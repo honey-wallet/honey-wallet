@@ -7,11 +7,9 @@ Built for **NEAR Hackathon** (19 Oct – 14 Nov 2026).
 [![CI](https://github.com/honey-wallet/honey-wallet/actions/workflows/ci.yml/badge.svg)](https://github.com/honey-wallet/honey-wallet/actions/workflows/ci.yml)
 [![License: PolyForm Noncommercial](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-blue.svg)](LICENSE)
 
-| | |
-| --- | --- |
-| Tracks | `defi` (Unstoppable DeFi), `agents` (Agent Economy) |
-| Demo video | _X post link added before submission_ |
-| License | [PolyForm Noncommercial 1.0.0](LICENSE) |
+- **Tracks:** `defi` (Unstoppable DeFi), `agents` (Agent Economy)
+- **Demo video:** _X post link added before submission_
+- **License:** [PolyForm Noncommercial 1.0.0](LICENSE)
 
 ## The problem
 
@@ -153,7 +151,7 @@ docker build -f apps/server/Dockerfile -t honey-server .   # image for this mach
 docker run --rm -p 8080:8080 --read-only honey-server
 ```
 
-Configuration is environment variables only (see `apps/server/.env.example`). Point platform health probes at `GET /health`. On every push to `main` and every `v*` tag, CI publishes a multi-arch image to `ghcr.io/honey-wallet/honey-server`, tagged with the branch, version and commit.
+Configuration is environment variables only (see `apps/server/.env.example`). Point platform health probes at `GET /health`. On every push to `main` and every `v*` tag, CI publishes a multi-arch image to `ghcr.io/honey-wallet/honey-wallet-server`, tagged with the branch, version and commit.
 
 ## Contributing
 
