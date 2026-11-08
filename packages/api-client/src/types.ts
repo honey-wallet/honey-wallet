@@ -84,7 +84,7 @@ export interface WalletProfile {
 }
 
 /**
- * GET /api/v1/me/identity with a Supabase access token: the Supabase user id (a UUID)
+ * GET /api/v1/me/identity with a Firebase ID token: the Firebase user id
  * only. Identity, not wallet authority; unrelated to SIWE sessions.
  */
 export interface AccountIdentity {

@@ -17,9 +17,9 @@ import { wallets } from '@/lib/wallets';
  * someone stays), so everything before it is kept as short as possible and
  * everything after it nudges towards finishing setup.
  *
- *   welcome  → Create a new wallet (Apple, Google, email, or a recovery phrase)
- *            → I already have a wallet (Apple, Google, email, or import a phrase)
- *   (Apple, Google and email are a Supabase account: identity only. The keys are always
+ *   welcome  → Create a new wallet (Apple, Google, or a recovery phrase)
+ *            → I already have a wallet (Apple, Google, or import a phrase)
+ *   (Apple and Google are a Firebase account: identity only. The keys are always
  *   made or restored on this device; see identity-onboarding.ts.)
  *   home     → no money yet: the empty state is all about adding money
  *            → money, setup unfinished: "Finish setting up, get $5 off network fees"

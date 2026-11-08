@@ -6,23 +6,22 @@ import { useErrorShake } from '@/components/motion/ErrorShake';
 import { PillButton } from '@/components/onboarding/PillButton';
 import { StepScreen } from '@/components/onboarding/StepScreen';
 import { failure, tap } from '@/lib/haptics';
-import { IDENTITY_ENABLED } from '@/lib/identity';
-import { useEmailCode } from '@/lib/identity-flows';
+import { EMAIL_SIGN_IN, useEmailCode } from '@/lib/identity-flows';
 import { continueAfterSignIn } from '@/lib/identity-onboarding';
 import { makeStyles, radius } from '@/theme';
 import { DURATION } from '@/theme/motion';
 
 const LENGTH = 6;
-/** Supabase lets an address ask for a new code once a minute. */
+/** An address may ask for a new code once a minute. */
 const RESEND_SECONDS = 60;
 /** Wrong codes allowed before a new one has to be sent. */
 const TRIES = 3;
 
-/** Email sign-in, step two: the code Supabase emailed, checked by Supabase. */
+/** Email sign-in, step two: the emailed code, checked by the identity service. */
 export default function VerifyScreen() {
   const { to } = useLocalSearchParams<{ to?: string }>();
-  // Only reachable after the email step sent a code (and only with sign-in configured).
-  if (!IDENTITY_ENABLED || !to) return <Redirect href="/welcome" />;
+  // Email sign-in is off until Firebase email-link sign-in is built; nothing links here.
+  if (!EMAIL_SIGN_IN || !to) return <Redirect href="/welcome" />;
   return <VerifyCode to={to} />;
 }
 
@@ -49,7 +48,7 @@ function VerifyCode({ to }: { to: string }) {
   const locked = wrong >= TRIES;
 
   // A wrong code shakes the boxes, turns them red and clears them; three in a row (or a
-  // code Supabase won't take any more) need a new code.
+  // code the server won't take any more) need a new code.
   const reject = (tries: number, message: string) => {
     failure();
     shake();

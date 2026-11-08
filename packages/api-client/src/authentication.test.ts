@@ -116,19 +116,19 @@ describe('wallet authentication contract', () => {
     ).toThrow();
   });
 
-  it('reads the account identity with the Supabase token and validates its shape', async () => {
-    const userId = '8d0f8c9e-2b7a-4e55-9a51-3f0f6b2c9d11';
+  it('reads the account identity with the Firebase token and validates its shape', async () => {
+    const userId = 'Xy7Qm2LkP0aBcDeFgHiJkLmNoPq1';
     const fetch = vi
       .fn<typeof globalThis.fetch>()
       .mockResolvedValueOnce(new Response(JSON.stringify({ userId })))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ userId: 'user_2abcDEF' })));
+      .mockResolvedValueOnce(new Response(JSON.stringify({ userId: 'not a/valid id' })));
     const api = createApiClient({ baseUrl: 'http://api.test', fetch });
-    await expect(api.accountIdentity('supabase.jwt.token')).resolves.toEqual({ userId });
+    await expect(api.accountIdentity('firebase.jwt.token')).resolves.toEqual({ userId });
     expect(fetch.mock.calls[0]?.[0]).toBe('http://api.test/api/v1/me/identity');
     expect(new Headers(fetch.mock.calls[0]?.[1]?.headers).get('authorization')).toBe(
-      'Bearer supabase.jwt.token',
+      'Bearer firebase.jwt.token',
     );
-    await expect(api.accountIdentity('supabase.jwt.token')).rejects.toThrow();
+    await expect(api.accountIdentity('firebase.jwt.token')).rejects.toThrow();
   });
 
   it('keeps authentication credentials in bound headers and never retries proofs', async () => {

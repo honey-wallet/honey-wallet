@@ -55,7 +55,7 @@ Development started on 13 Oct 2026. Before the window opened on 19 Oct the proje
 - NEAR Intents for quotes, swaps and bridging (replacing Across)
 - NEAR chain support across the app
 - The cross-chain route planner with max slippage
-- Supabase sign-in and the landing page
+- Google and Apple sign-in (Firebase Auth) and the landing page
 
 Main libraries: Expo / React Native, React, Vite, axum and tokio (Rust), viem, WalletConnect, `@noble` crypto. Full lists are in each `package.json` and `Cargo.toml`. No templates.
 

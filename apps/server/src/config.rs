@@ -33,7 +33,7 @@ pub struct Config {
     /// Explicit relying-party origin and chain. Absent means auth is disabled.
     pub auth: Option<AuthConfig>,
     /// Supabase Auth access-token verification (identity only). Absent means it is off.
-    pub supabase_auth: Option<crate::supabase_auth::SupabaseAuthConfig>,
+    pub firebase_auth: Option<crate::firebase_auth::FirebaseAuthConfig>,
     pub metrics_addr: Option<SocketAddr>,
     pub otlp_traces_endpoint: Option<SecretUrl>,
     pub trace_sample_per_mille: u16,
@@ -259,7 +259,7 @@ impl Default for Config {
             dependency_timeout_ms: 1_000,
             shutdown_timeout_secs: 15,
             auth: None,
-            supabase_auth: None,
+            firebase_auth: None,
             metrics_addr: None,
             otlp_traces_endpoint: None,
             trace_sample_per_mille: 100,
@@ -349,7 +349,7 @@ impl Config {
                     });
                 }
             },
-            supabase_auth: crate::supabase_auth::SupabaseAuthConfig::from_env()?,
+            firebase_auth: crate::firebase_auth::FirebaseAuthConfig::from_env()?,
             metrics_addr: parse_var("METRICS_ADDR")?,
             otlp_traces_endpoint: secret_var("HONEY_OTLP_TRACES_ENDPOINT")?,
             trace_sample_per_mille: parse_var("TRACE_SAMPLE_PER_MILLE")?
@@ -440,8 +440,8 @@ impl Config {
             });
         }
 
-        if let Some(supabase_auth) = &self.supabase_auth {
-            supabase_auth.validate()?;
+        if let Some(firebase_auth) = &self.firebase_auth {
+            firebase_auth.validate()?;
         }
         if self
             .database_url

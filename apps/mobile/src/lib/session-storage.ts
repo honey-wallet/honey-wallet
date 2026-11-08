@@ -5,7 +5,7 @@ import { getRandomBytes } from 'expo-crypto';
 import * as SecureStore from 'expo-secure-store';
 
 /**
- * Where the Supabase session lives on a phone (Supabase's "LargeSecureStore" pattern).
+ * Where the Firebase Auth session lives on a phone (the "LargeSecureStore" pattern).
  * A session is larger than the Keychain / Keystore item limit (about 2 KB), so the
  * session JSON is AES-256-GCM encrypted into AsyncStorage and only its 32-byte key
  * goes into SecureStore, on this device only. The session is an account login, never

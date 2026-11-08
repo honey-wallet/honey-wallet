@@ -176,7 +176,11 @@ export function WelcomeSlides() {
             <View key={slide.key} style={[styles.dot, i === index && styles.dotActive]} />
           ))}
         </View>
-        <PillButton label="Get Started" onPress={() => router.push('/email')} style={styles.cta} />
+        <PillButton
+          label="Get Started"
+          onPress={() => router.push('/get-started')}
+          style={styles.cta}
+        />
         <Text style={styles.terms}>
           By using this app, you agree to accept our{'\n'}
           <Text style={styles.termsLink}>Terms of Use</Text> and{' '}

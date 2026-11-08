@@ -12,7 +12,7 @@ import { SheetScreen, SheetText } from '@/components/sheets/Sheet';
 import { LabeledRule } from '@/components/wallet/parts';
 import { failure, tap } from '@/lib/haptics';
 import { IDENTITY_ENABLED } from '@/lib/identity';
-import { APPLE_SIGN_IN, useIdentity, useSocialSignIn } from '@/lib/identity-flows';
+import { APPLE_SIGN_IN, GOOGLE_SIGN_IN, useIdentity, useSocialSignIn } from '@/lib/identity-flows';
 import { continueAfterSignIn, type IdentityMethod } from '@/lib/identity-onboarding';
 import { leaveSheetTo } from '@/lib/navigation';
 import { HERE, isWeb } from '@/lib/platform';
@@ -22,16 +22,16 @@ import { DURATION } from '@/theme/motion';
 type Busy = IdentityMethod | 'continue' | null;
 
 /**
- * The two ways in, after Phantom: Apple, Google or email first (no recovery phrase to
+ * The two ways in, after Phantom: Apple or Google first (no recovery phrase to
  * write down and no password, so nothing to lose people on before the wallet exists),
  * with a recovery phrase or an import tucked under them for people who want it.
  *
- *   create  → Continue with Apple / Google / email, or create with a recovery phrase
- *   restore → Continue with Apple / Google / email, then bring the keys back (backup,
+ *   create  → Continue with Apple / Google, or create with a recovery phrase
+ *   restore → Continue with Apple / Google, then bring the keys back (backup,
  *             phrase, key or the other device), or go straight to those
  *
- * Apple, Google and email are a Supabase account (identity only): the keys are made or
- * restored on this device either way (lib/identity-onboarding.ts). Without Supabase
+ * Apple and Google are a Firebase account (identity only): the keys are made or
+ * restored on this device either way (lib/identity-onboarding.ts). Without Firebase
  * configured (and always in the browser) only the phrase and import ways are shown.
  */
 export default function GetStartedSheet() {
@@ -59,8 +59,8 @@ export default function GetStartedSheet() {
         {restore ? 'Use an existing wallet' : 'Create a new wallet'}
       </Text>
 
-      {IDENTITY_ENABLED ? (
-        <IdentityWays restore={restore} busy={busy} setBusy={setBusy} go={go} />
+      {IDENTITY_ENABLED && (APPLE_SIGN_IN || GOOGLE_SIGN_IN) ? (
+        <IdentityWays restore={restore} busy={busy} setBusy={setBusy} />
       ) : (
         <SheetText center>
           {restore
@@ -172,19 +172,17 @@ export default function GetStartedSheet() {
 }
 
 /**
- * Apple (iOS), Google and email, through Supabase Auth. Once signed in: Continue (create), or
+ * Apple (iOS) and Google, through Firebase Auth. Once signed in: Continue (create), or
  * the account's name over the restore ways, since the account can't bring keys back.
  */
 function IdentityWays({
   restore,
   busy,
   setBusy,
-  go,
 }: {
   restore: boolean;
   busy: Busy;
   setBusy: (busy: Busy) => void;
-  go: (href: Href) => void;
 }) {
   const styles = useStyles();
   const compact = useCompact();
@@ -290,21 +288,17 @@ function IdentityWays({
             onPress={() => signIn('apple')}
           />
         ) : null}
-        <AuthButton
-          label="Continue with Google"
-          icon={<GoogleGlyph />}
-          busy={busy === 'google'}
-          disabled={!!busy}
-          onPress={() => signIn('google')}
-        />
-        <AuthButton
-          label="Continue with email"
-          icon={<Icon name="mail" size={18} color={c.text} />}
-          disabled={!!busy}
-          onPress={() =>
-            go({ pathname: '/email', params: { intent: restore ? 'restore' : 'create' } })
-          }
-        />
+        {GOOGLE_SIGN_IN ? (
+          <AuthButton
+            label="Continue with Google"
+            icon={<GoogleGlyph />}
+            busy={busy === 'google'}
+            disabled={!!busy}
+            onPress={() => signIn('google')}
+          />
+        ) : null}
+        {/* No email way in for now: Firebase has no emailed code like the old flow, and
+            its email-link sign-in is a later step. The email and verify screens stay. */}
       </Animated.View>
       {/* Why sign-in didn't work, under the buttons, until the next try. */}
       {error ? (
