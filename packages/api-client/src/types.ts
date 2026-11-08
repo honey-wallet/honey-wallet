@@ -978,6 +978,15 @@ export interface AccountDeletion {
   waitlistEntries: number;
 }
 
+/** `GET /market/tokens` entry. Mirrors `market_data::MarketListToken`. */
+export interface MarketListToken {
+  symbol: string;
+  /** 1Click's live price (median across the symbol's assets). */
+  priceUsd: number;
+  /** Honey chain names it can be delivered on. */
+  chains: string[];
+}
+
 /** `GET /market/token`. Mirrors `market_data::TokenMarket`. */
 export interface TokenMarket {
   symbol: string;

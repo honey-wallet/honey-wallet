@@ -2,6 +2,7 @@ import type {
   AccountDeletion,
   ChainActivity,
   ChainActivityItem,
+  MarketListToken,
   Portfolio,
   PortfolioAddresses,
   PortfolioHolding,
@@ -85,5 +86,19 @@ export function isTokenMarket(v: unknown): v is TokenMarket {
       (k) => nullable(v[k], isNumber),
     ) &&
     (v.chart === null || (isRecord(v.chart) && isString(v.chart.chain) && isString(v.chart.pool)))
+  );
+}
+
+export function isMarketListTokens(v: unknown): v is MarketListToken[] {
+  return (
+    Array.isArray(v) &&
+    v.every(
+      (t) =>
+        isRecord(t) &&
+        isString(t.symbol) &&
+        isNumber(t.priceUsd) &&
+        Array.isArray(t.chains) &&
+        t.chains.every(isString),
+    )
   );
 }

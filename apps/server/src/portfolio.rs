@@ -1,7 +1,8 @@
 //! What a wallet holds and what it did, read straight from public chain nodes and
 //! keyless explorers: native ETH/USDC on Ethereum, Base and Arbitrum, SOL and USDC on
-//! Solana, and NEAR. Prices come from the 1Click token list (`market_data`). Answers
-//! are cached briefly per address so the free endpoints stay well under their limits.
+//! Solana, and NEAR and USDC (NEP-141) on NEAR. Prices come from the 1Click token list
+//! (`market_data`). Answers are cached briefly per address so the free endpoints stay
+//! well under their limits.
 //!
 //! Read-only and public: addresses are public data and nothing here needs a key.
 
@@ -281,22 +282,10 @@ impl PortfolioService {
     }
 
     async fn rpc(&self, url: &str, method: &str, params: Value) -> Option<Value> {
-        let body = json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params });
-        let response = self
-            .client
-            .post(url)
-            .json(&body)
-            .send()
+        crate::json_rpc::call(&self.client, url, method, params)
             .await
-            .and_then(|r| r.error_for_status())
             .map_err(|error| tracing::warn!(%error, method, "portfolio rpc failed"))
-            .ok()?;
-        let mut value: Value = response.json().await.ok()?;
-        if value.get("error").is_some_and(|e| !e.is_null()) {
-            tracing::warn!(method, error = %value["error"], "portfolio rpc error");
-            return None;
-        }
-        Some(value["result"].take())
+            .ok()
     }
 
     async fn get(&self, url: &str) -> Option<Value> {
@@ -442,47 +431,76 @@ impl PortfolioService {
     }
 
     async fn near_balances(&self, account: &str) -> Option<Vec<Raw>> {
+        let (result, usdc) = tokio::join!(
+            self.rpc(
+                &self.endpoints.near_rpc,
+                "query",
+                json!({ "request_type": "view_account", "finality": "final", "account_id": account }),
+            ),
+            self.near_ft_balance(crate::jar_dao::USDC_NEAR, account),
+        );
+        // An implicit account that has never received anything doesn't exist yet: that's
+        // an empty wallet, not an outage. The node answers with an UNKNOWN_ACCOUNT error.
+        // USDC storage can still be registered for it, so its USDC is read either way.
+        let mut out = match result {
+            Some(result) => {
+                let yocto: u128 = result["amount"].as_str()?.parse().ok()?;
+                vec![Raw::new(
+                    "NEAR",
+                    "near",
+                    "NEAR",
+                    "NEAR",
+                    yocto as f64 / 1e24,
+                )]
+            }
+            None if self.near_account_missing(account).await => Vec::new(),
+            None => return None,
+        };
+        // Native Circle USDC on NEAR (NEP-141, 6 decimals).
+        if let Some(atomic) = usdc.filter(|a| *a > 0) {
+            out.push(Raw::new(
+                "NEAR",
+                "near",
+                "USDC",
+                "USD Coin",
+                atomic as f64 / 1e6,
+            ));
+        }
+        Some(out)
+    }
+
+    /// `ft_balance_of` on a NEP-141 contract, in atomic units; None when unreadable.
+    async fn near_ft_balance(&self, token: &str, account: &str) -> Option<u128> {
+        use base64::Engine as _;
+        let args = base64::engine::general_purpose::STANDARD
+            .encode(json!({ "account_id": account }).to_string());
         let result = self
             .rpc(
                 &self.endpoints.near_rpc,
                 "query",
-                json!({ "request_type": "view_account", "finality": "final", "account_id": account }),
+                json!({
+                    "request_type": "call_function", "finality": "final",
+                    "account_id": token, "method_name": "ft_balance_of", "args_base64": args,
+                }),
             )
-            .await;
-        // An implicit account that has never received anything doesn't exist yet: that's
-        // an empty wallet, not an outage. The node answers with an UNKNOWN_ACCOUNT error.
-        let Some(result) = result else {
-            return self.near_account_missing(account).await.then(Vec::new);
-        };
-        let yocto: u128 = result["amount"].as_str()?.parse().ok()?;
-        Some(vec![Raw::new(
-            "NEAR",
-            "near",
-            "NEAR",
-            "NEAR",
-            yocto as f64 / 1e24,
-        )])
+            .await?;
+        let bytes: Vec<u8> = result["result"]
+            .as_array()?
+            .iter()
+            .map(|b| b.as_u64().and_then(|b| u8::try_from(b).ok()))
+            .collect::<Option<_>>()?;
+        serde_json::from_slice::<String>(&bytes).ok()?.parse().ok()
     }
 
     async fn near_account_missing(&self, account: &str) -> bool {
-        let body = json!({
-            "jsonrpc": "2.0", "id": 1, "method": "query",
-            "params": { "request_type": "view_account", "finality": "final", "account_id": account },
-        });
-        let Ok(response) = self
-            .client
-            .post(&self.endpoints.near_rpc)
-            .json(&body)
-            .send()
-            .await
-        else {
-            return false;
-        };
-        let Ok(value) = response.json::<Value>().await else {
-            return false;
-        };
-        let text = value["error"].to_string();
-        text.contains("UNKNOWN_ACCOUNT") || text.contains("does not exist")
+        crate::json_rpc::call(
+            &self.client,
+            &self.endpoints.near_rpc,
+            "query",
+            json!({ "request_type": "view_account", "finality": "final", "account_id": account }),
+        )
+        .await
+        .is_err_and(|error| error.is_unknown_account())
     }
 
     /// Recent transfers and transactions for these addresses, newest first. EVM reads

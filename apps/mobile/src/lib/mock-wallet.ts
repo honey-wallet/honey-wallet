@@ -67,7 +67,7 @@ export type MarketToken = {
   marketCap: number;
 };
 
-/** Market prices for search. TODO: replace with the market data API. */
+/** Sample market rows for test mode; outside it their names and order seed the live list. */
 export const MARKET: MarketToken[] = [
   {
     symbol: 'ETH',

@@ -11,8 +11,6 @@ import {
   createNearRpc,
   type DepositFact,
   type FunctionCall,
-  nearTransferOutcome,
-  signNearCall,
   USDC_INTENTS,
   USDC_NEAR,
   valueOfUnits,
@@ -51,9 +49,9 @@ import {
   walletName,
   YOU,
 } from '@/lib/multisig';
+import { signAndSendNearCall } from '@/lib/near-call';
 import { createStore } from '@/lib/store';
 import { TEST_MODE } from '@/lib/test-mode';
-import { privateKeyOf } from '@/lib/vault';
 import { addWallet, wallets } from '@/lib/wallets';
 
 const rpc = createNearRpc('mainnet');
@@ -84,20 +82,7 @@ async function send(reason: string, receiverId: string, actions: FunctionCall[])
   const me = member();
   const tx = await prepare(rpc, me.account, receiverId, actions);
   if (!(await confirmOwner(reason, true))) throw new Error('Cancelled');
-  const key = await privateKeyOf(me.walletId, 'near');
-  let signed: ReturnType<typeof signNearCall>;
-  try {
-    signed = signNearCall(key, tx);
-  } finally {
-    key.fill(0);
-  }
-  const result = await rpc('send_tx', {
-    signed_tx_base64: signed.signedTransaction,
-    wait_until: 'FINAL',
-  });
-  if (nearTransferOutcome(result, signed.hash, me.account) !== 'success')
-    throw new Error('The NEAR transaction failed');
-  return signed.hash;
+  return signAndSendNearCall(rpc, me.walletId, tx);
 }
 
 // ---------- Reading ----------

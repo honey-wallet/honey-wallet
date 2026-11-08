@@ -107,19 +107,14 @@ impl JarDao {
     }
 
     async fn rpc(&self, method: &str, params: Value) -> Result<Value, AppError> {
-        let body = json!({ "jsonrpc": "2.0", "id": "honey", "method": method, "params": params });
-        let response = self
-            .client
-            .post(&self.rpc)
-            .json(&body)
-            .send()
+        crate::json_rpc::call(&self.client, &self.rpc, method, params)
             .await
-            .map_err(|_| AppError::Busy)?;
-        let envelope: Value = response.json().await.map_err(|_| AppError::Busy)?;
-        if envelope.get("error").is_some() {
-            return Err(AppError::BadRequest("NEAR RPC refused this request".into()));
-        }
-        Ok(envelope["result"].clone())
+            .map_err(|error| match error {
+                crate::json_rpc::RpcError::Rpc(_) => {
+                    AppError::BadRequest("NEAR RPC refused this request".into())
+                }
+                crate::json_rpc::RpcError::Transport(_) => AppError::Busy,
+            })
     }
 
     async fn view(&self, account: &str, method: &str, args: Value) -> Result<Value, AppError> {

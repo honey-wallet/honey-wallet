@@ -8,7 +8,12 @@
  * (amounts, payout and refund addresses, slippage, deadline, cap) and each deposit
  * address is confirmed with 1Click directly before anything is signed.
  */
-import type { JarBuyLeg, JarBuyQuote, JarBuyState } from '@honey-wallet/api-client';
+import {
+  fetchOneClickStatus,
+  type JarBuyLeg,
+  type JarBuyQuote,
+  type JarBuyState,
+} from '@honey-wallet/api-client';
 import { evmAddressOfKey, evmNetwork, signEvmTransaction } from '@honey-wallet/keyring';
 import { createPublicClient, encodeFunctionData, erc20Abi, type Hex, http, isAddress } from 'viem';
 import { api } from '@/lib/api';
@@ -34,7 +39,6 @@ const DEADLINE_MARGIN_MS = 60_000;
 const MAX_DEADLINE_MS = 30 * 60_000;
 /** Hard client-side ceiling, whatever cap the server reports. */
 export const MAX_BUY_USD = 1_000;
-const ONE_CLICK = 'https://1click.chaindefuser.com/v0';
 
 export type BuyLeg = {
   symbol: string;
@@ -202,19 +206,10 @@ export async function verifyWithOneClick(
   refundTo: string,
   fetcher: typeof fetch = fetch,
 ) {
-  const res = await fetcher(
-    `${ONE_CLICK}/status?depositAddress=${encodeURIComponent(leg.depositAddress)}`,
-    { headers: { accept: 'application/json' } },
-  ).catch(() => null);
-  if (!res?.ok) throw new Error("Couldn't confirm the swap with NEAR Intents. Try again.");
-  const body = (await res.json().catch(() => null)) as {
-    quoteResponse?: { quoteRequest?: Record<string, unknown>; quote?: Record<string, unknown> };
-  } | null;
-  const req = body?.quoteResponse?.quoteRequest;
-  const q = body?.quoteResponse?.quote;
+  const record = await fetchOneClickStatus(leg.depositAddress, fetcher);
+  if (!record) throw new Error("Couldn't confirm the swap with NEAR Intents. Try again.");
+  const { quoteRequest: req, quote: q } = record;
   if (
-    !req ||
-    !q ||
     !sameAddress(q.depositAddress, leg.depositAddress) ||
     !sameAddress(req.recipient, leg.recipient) ||
     !sameAddress(req.refundTo, refundTo) ||

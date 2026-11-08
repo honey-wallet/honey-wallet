@@ -2,6 +2,7 @@ import {
   broadcastEvm,
   broadcastSolana,
   createNearClient,
+  createNearRpc,
   EVM_NETWORKS,
   EVM_USDC,
   evmAddressOfKey,
@@ -16,12 +17,15 @@ import {
   signSolanaTransfer,
   solanaAddressOfKey,
   toBaseUnits,
+  USDC_NEAR,
   waitForEvmReceipt,
   waitForSolana,
 } from '@honey-wallet/keyring';
 import { isAddress } from 'viem';
 import { confirmOwner } from '@/lib/auth';
+import { prepare, usdcTransferTx, viewFtBalance, viewStorageRegistered } from '@/lib/jar-dao-core';
 import type { Chain } from '@/lib/mock-wallet';
+import { signAndSendNearCall } from '@/lib/near-call';
 import { sendNear } from '@/lib/near-execution';
 import { TEST_MODE } from '@/lib/test-mode';
 import { privateKeyOf } from '@/lib/vault';
@@ -29,7 +33,7 @@ import { type AddedWallet, wallets } from '@/lib/wallets';
 
 /**
  * Real sends from a wallet whose keys are on this device: ETH and USDC on Ethereum and
- * Base, SOL and USDC on Solana, and NEAR. `prepareSend` reads the chain (nonce, fees,
+ * Base, SOL and USDC on Solana, and NEAR and USDC (NEP-141) on NEAR. `prepareSend` reads the chain (nonce, fees,
  * blockhash, balance) for the review; `execute` asks for Face ID / the device lock,
  * signs with the vault key, broadcasts and waits for confirmation.
  */
@@ -91,6 +95,9 @@ export type SendDeps = {
   confirm: (reason: string) => Promise<boolean>;
   sendNear: typeof sendNear;
   nearClient: typeof createNearClient;
+  /** NEAR JSON-RPC for USDC (NEP-141) sends. */
+  nearRpc: () => Rpc;
+  sendNearCall: typeof signAndSendNearCall;
 };
 
 const evmRpc = (chainId: number) => {
@@ -106,6 +113,8 @@ const defaults: SendDeps = {
   confirm: (reason) => confirmOwner(reason, true),
   sendNear,
   nearClient: createNearClient,
+  nearRpc: () => createNearRpc('mainnet'),
+  sendNearCall: signAndSendNearCall,
 };
 
 /** Throws unless `wallet` is still the active, key-backed, real wallet. */
@@ -237,6 +246,7 @@ export async function prepareSend(
   if (chain === 'NEAR') {
     const from = wallet.addresses.near;
     if (!from) throw new Error('No NEAR account');
+    if (symbol === 'USDC') return prepareNearUsdc(wallet, from, to, units, amount, d);
     if (symbol !== 'NEAR') throw new Error(`Sending ${symbol} on NEAR isn’t supported yet`);
     const review = await d.nearClient('mainnet').prepare(from, to, amount);
     return Object.freeze({
@@ -264,4 +274,60 @@ export async function prepareSend(
     });
   }
   throw new Error(`Sending on ${chain} isn’t supported yet`);
+}
+
+/** The NEAR a sender needs for a USDC send: gas, plus the receiver's storage when unregistered. */
+const NEAR_GAS_RESERVE = 10n ** 21n; // 0.001 NEAR
+const USDC_STORAGE = 1_250_000_000_000_000_000_000n; // 0.00125 NEAR
+
+/**
+ * USDC on NEAR (native Circle USDC, NEP-141): `ft_transfer` with one yoctoNEAR, and a
+ * `storage_deposit` first when the receiver isn't registered on the USDC contract yet
+ * (otherwise the transfer would fail and the amount bounce back).
+ */
+async function prepareNearUsdc(
+  wallet: AddedWallet,
+  from: string,
+  to: string,
+  units: bigint,
+  amount: string,
+  d: SendDeps,
+): Promise<SendPlan> {
+  const rpc = d.nearRpc();
+  const [balance, registered, account] = await Promise.all([
+    viewFtBalance(rpc, USDC_NEAR, from),
+    viewStorageRegistered(rpc, USDC_NEAR, to),
+    d.nearClient('mainnet', rpc).balance(from),
+  ]);
+  if (units > balance) throw new Error('Not enough USDC on NEAR');
+  const nearNeeded = NEAR_GAS_RESERVE + (registered ? 0n : USDC_STORAGE);
+  if (account.available < nearNeeded)
+    throw new Error(
+      registered
+        ? 'You need a little NEAR (0.001) to pay the network fee'
+        : 'You need about 0.0023 NEAR: 0.00125 registers them for USDC, plus the fee',
+    );
+  const tx = usdcTransferTx(to, units, !registered);
+  return Object.freeze({
+    chain: 'NEAR' as Chain,
+    symbol: 'USDC',
+    from,
+    to,
+    amount,
+    fee: registered ? '<0.001 NEAR' : '0.00125 NEAR + <0.001 NEAR',
+    feeAmount: registered ? 0.001 : 0.00225,
+    feeSymbol: 'NEAR',
+    note: registered
+      ? undefined
+      : 'Their account isn’t set up for USDC yet, so 0.00125 NEAR registers it first.',
+    execute: async (isCurrent) => {
+      assertWallet(wallet, isCurrent);
+      if (!(await d.confirm(`Send ${amount} USDC to ${to}`))) throw new Error('Send cancelled');
+      assertWallet(wallet, isCurrent);
+      // Fresh nonce and block hash after the prompt, then sign and wait for finality.
+      const prepared = await prepare(rpc, from, tx.receiverId, tx.actions);
+      const hash = await d.sendNearCall(rpc, wallet.id, prepared, d.keyOf);
+      return { hash, explorerUrl: `https://nearblocks.io/txns/${hash}`, state: 'success' };
+    },
+  });
 }

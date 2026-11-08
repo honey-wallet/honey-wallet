@@ -26,6 +26,7 @@ pub mod hyperliquid_perps;
 pub mod identity;
 pub mod jar_buys;
 pub mod jar_dao;
+pub mod json_rpc;
 pub mod market_data;
 pub mod markets;
 pub mod metrics;

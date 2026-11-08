@@ -9,7 +9,7 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tokio::sync::Semaphore;
 use zeroize::Zeroizing;
 
-const ORIGIN: &str = "https://1click.chaindefuser.com/v0";
+use crate::json_rpc::ONE_CLICK_ORIGIN as ORIGIN;
 const MAX_BODY: usize = 2 * 1024 * 1024;
 // Pinned to the official 1Click SDK's production manager key (quote-signature.ts).
 const MANAGER_KEY: &str = "reYaWhvwu8Jzo3WUM3zhn6VrhuMEF4eADL17qtRVifc";

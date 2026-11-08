@@ -17,29 +17,9 @@ import {
  * Every network call goes through an injected `Rpc`, so tests never touch a chain.
  */
 
-export type Rpc = (method: string, params: unknown) => Promise<unknown>;
+import { jsonRpc, type Rpc } from './rpc';
 
-/** A JSON-RPC 2.0 caller for one endpoint. */
-export function jsonRpc(url: string, fetcher: typeof fetch = fetch, timeoutMs = 20_000): Rpc {
-  return async (method, params) => {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      const response = await fetcher(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
-        signal: controller.signal,
-      });
-      if (!response.ok) throw new Error(`RPC unavailable (${response.status})`);
-      const body = (await response.json()) as { result?: unknown; error?: { message?: string } };
-      if (body.error) throw new Error(body.error.message ?? 'RPC error');
-      return body.result;
-    } finally {
-      clearTimeout(timeout);
-    }
-  };
-}
+export { jsonRpc, type Rpc };
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 

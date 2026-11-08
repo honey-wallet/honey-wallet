@@ -147,6 +147,84 @@ it('sends NEAR through the vault-backed NEAR executor', async () => {
   expect(sendNear).toHaveBeenCalledWith('seed-0', review, expect.any(Function));
 });
 
+function nearUsdcRpc(registered: boolean, usdc = 5_000_000n) {
+  const view = (v: unknown) => ({ result: [...new TextEncoder().encode(JSON.stringify(v))] });
+  return async (method: string, params: unknown) => {
+    const p = params as { request_type?: string; method_name?: string };
+    if (method === 'query' && p.request_type === 'view_access_key')
+      return { nonce: 7, block_hash: '11111111111111111111111111111111', permission: 'FullAccess' };
+    if (p.method_name === 'ft_balance_of') return view(usdc.toString());
+    if (p.method_name === 'storage_balance_of')
+      return view(registered ? { total: '1', available: '0' } : null);
+    throw new Error(`unexpected ${method}`);
+  };
+}
+
+const nearAccount = (available: bigint) =>
+  (() => ({ balance: async () => ({ amount: available, available, exists: true }) })) as never;
+
+it('sends USDC on NEAR, registering an unregistered receiver first', async () => {
+  const sendNearCall = vi.fn(async () => 'uh');
+  const plan = await prepareSend(
+    wallet,
+    { chain: 'NEAR', symbol: 'USDC', to: 'bob.near', amount: '2.5' },
+    {
+      nearRpc: () => nearUsdcRpc(false),
+      nearClient: nearAccount(10n ** 23n),
+      sendNearCall: sendNearCall as never,
+      confirm: async () => true,
+    },
+  );
+  expect(plan).toMatchObject({ symbol: 'USDC', amount: '2.5', feeSymbol: 'NEAR' });
+  expect(plan.note).toMatch(/registers/);
+  expect(await plan.execute(() => true)).toEqual({
+    hash: 'uh',
+    explorerUrl: 'https://nearblocks.io/txns/uh',
+    state: 'success',
+  });
+  const tx = (sendNearCall.mock.calls[0] as unknown[])[2] as {
+    receiverId: string;
+    nonce: bigint;
+    actions: { methodName: string; deposit: bigint; args: Uint8Array }[];
+  };
+  expect(tx.nonce).toBe(8n);
+  expect(tx.actions.map((a) => a.methodName)).toEqual(['storage_deposit', 'ft_transfer']);
+  expect(tx.actions[1].deposit).toBe(1n);
+  expect(JSON.parse(new TextDecoder().decode(tx.actions[1].args))).toEqual({
+    receiver_id: 'bob.near',
+    amount: '2500000',
+  });
+});
+
+it('skips registration for registered receivers and refuses overdrafts', async () => {
+  const sendNearCall = vi.fn(async () => 'uh');
+  const deps = {
+    nearRpc: () => nearUsdcRpc(true),
+    nearClient: nearAccount(10n ** 23n),
+    sendNearCall: sendNearCall as never,
+    confirm: async () => true,
+  };
+  const plan = await prepareSend(
+    wallet,
+    { chain: 'NEAR', symbol: 'USDC', to: 'bob.near', amount: '1' },
+    deps,
+  );
+  expect(plan.note).toBeUndefined();
+  await plan.execute(() => true);
+  const tx = (sendNearCall.mock.calls[0] as unknown[])[2] as { actions: { methodName: string }[] };
+  expect(tx.actions.map((a) => a.methodName)).toEqual(['ft_transfer']);
+  await expect(
+    prepareSend(wallet, { chain: 'NEAR', symbol: 'USDC', to: 'bob.near', amount: '6' }, deps),
+  ).rejects.toThrow('Not enough USDC');
+  await expect(
+    prepareSend(
+      wallet,
+      { chain: 'NEAR', symbol: 'USDC', to: 'bob.near', amount: '1' },
+      { ...deps, nearRpc: () => nearUsdcRpc(false), nearClient: nearAccount(10n ** 21n) },
+    ),
+  ).rejects.toThrow('0.0023 NEAR');
+});
+
 it('refuses sample, watched and wrong-network sends', async () => {
   await expect(
     prepareSend({ ...wallet, demo: true }, { chain: 'Base', symbol: 'ETH', to: TO, amount: '1' }),

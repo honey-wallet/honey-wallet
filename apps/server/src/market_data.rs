@@ -39,7 +39,7 @@ const CHAINS: &[(&str, &str, &str, &str)] = &[
     ("NEAR", "near", "near", "near"),
 ];
 
-const ONECLICK: &str = "https://1click.chaindefuser.com/v0";
+use crate::json_rpc::ONE_CLICK_ORIGIN as ONECLICK;
 const TOKENS_TTL: Duration = Duration::from_secs(300);
 /// Native SOL trades on Solana DEXes as wrapped SOL.
 const WRAPPED_SOL: &str = "So11111111111111111111111111111111111111112";
@@ -113,6 +113,62 @@ pub struct OneClickToken {
     pub price: Option<f64>,
     pub contract_address: Option<String>,
     pub coingecko_id: Option<String>,
+}
+
+/// One symbol in Search's market list: every asset 1Click can deliver on Honey's chains,
+/// grouped by symbol, with 1Click's live price. Mirrored in `packages/api-client/src/types.ts`
+/// (`MarketListToken`).
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketListToken {
+    pub symbol: String,
+    pub price_usd: f64,
+    /// Honey chain names it can be delivered on, in Honey's chain order.
+    pub chains: Vec<&'static str>,
+}
+
+/// Groups the 1Click list by symbol (case-insensitive), keeping only priced assets on
+/// Honey's chains. A symbol's price is the median of its assets' prices, so one stale
+/// or look-alike entry can't move it.
+pub fn market_list(tokens: &[OneClickToken]) -> Vec<MarketListToken> {
+    let mut by_symbol: std::collections::BTreeMap<String, (String, Vec<f64>, Vec<usize>)> =
+        Default::default();
+    for t in tokens {
+        let Some(price) = t.price.filter(|p| p.is_finite() && *p > 0.0) else {
+            continue;
+        };
+        let Some(index) = CHAINS.iter().position(|c| c.3 == t.blockchain) else {
+            continue;
+        };
+        if t.symbol.is_empty()
+            || t.symbol.len() > 20
+            || !t
+                .symbol
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+        {
+            continue;
+        }
+        let entry = by_symbol
+            .entry(t.symbol.to_ascii_uppercase())
+            .or_insert_with(|| (t.symbol.clone(), Vec::new(), Vec::new()));
+        entry.1.push(price);
+        if !entry.2.contains(&index) {
+            entry.2.push(index);
+        }
+    }
+    by_symbol
+        .into_values()
+        .map(|(symbol, mut prices, mut chains)| {
+            prices.sort_by(f64::total_cmp);
+            chains.sort_unstable();
+            MarketListToken {
+                symbol,
+                price_usd: prices[prices.len() / 2],
+                chains: chains.into_iter().map(|i| CHAINS[i].0).collect(),
+            }
+        })
+        .collect()
 }
 
 /// A token's market numbers for its detail screen, Search and share cards. Response
@@ -628,6 +684,26 @@ mod tests {
             .map(|t| t.asset_id.as_str())
             .collect();
         assert_eq!(wrapped, ["a", "b", "e"]);
+    }
+
+    #[test]
+    fn market_list_groups_priced_assets_on_honey_chains() {
+        let mut unpriced = token("x", "eth", "ZZZ", "zzz");
+        unpriced.price = None;
+        let mut cheap = token("f", "base", "near", "near");
+        cheap.price = Some(1.0);
+        let tokens = vec![
+            token("b", "bsc", "NEAR", "near"),
+            token("c", "aptos", "APT", "aptos"),
+            token("e", "eth", "NEAR", "near"),
+            cheap,
+            unpriced,
+        ];
+        let list = market_list(&tokens);
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].symbol, "NEAR");
+        assert_eq!(list[0].price_usd, 3.7);
+        assert_eq!(list[0].chains, ["Ethereum", "Base", "BSC"]);
     }
 
     #[test]

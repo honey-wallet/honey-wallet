@@ -3,6 +3,7 @@ import { sha256 } from '@noble/hashes/sha2.js';
 import { bytesToHex, concatBytes, hexToBytes, utf8ToBytes } from '@noble/hashes/utils.js';
 import { base58, base64 } from '@scure/base';
 import { NEAR_NETWORKS, type NearNetwork } from './networks';
+import { jsonRpc, type Rpc } from './rpc';
 
 export const NEAR_DECIMALS = 24;
 const U128_MAX = (1n << 128n) - 1n;
@@ -118,7 +119,6 @@ export class NearRpcError extends Error {
   }
 }
 
-type Rpc = (method: string, params: unknown) => Promise<unknown>;
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value))
     throw new Error('Invalid NEAR response');
@@ -132,25 +132,11 @@ function integer(value: unknown): bigint {
 }
 
 export function createNearRpc(network: NearNetwork, fetcher: typeof fetch = fetch): Rpc {
-  return async (method, params) => {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 20_000);
-    try {
-      const response = await fetcher(NEAR_NETWORKS[network].rpc, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jsonrpc: '2.0', id: 'honey-near', method, params }),
-        signal: controller.signal,
-      });
-      if (!response.ok) throw new Error(`NEAR RPC unavailable (${response.status})`);
-      const envelope = object(await response.json());
-      if (envelope.error) throw new NearRpcError(envelope.error);
-      if (!('result' in envelope)) throw new Error('Invalid NEAR RPC response');
-      return envelope.result;
-    } finally {
-      clearTimeout(timeout);
-    }
-  };
+  return jsonRpc(NEAR_NETWORKS[network].rpc, fetcher, {
+    id: 'honey-near',
+    label: 'NEAR RPC',
+    onError: (error) => new NearRpcError(error),
+  });
 }
 
 export type NearBalance = { amount: bigint; available: bigint; exists: boolean };

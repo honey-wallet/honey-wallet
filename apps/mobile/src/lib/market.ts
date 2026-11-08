@@ -1,7 +1,7 @@
-import type { TokenMarket } from '@honey-wallet/api-client';
+import type { MarketListToken, TokenMarket } from '@honey-wallet/api-client';
 import { useEffect } from 'react';
 import { api } from '@/lib/api';
-import { MARKET, type MarketToken } from '@/lib/mock-wallet';
+import { CHAINS, type Chain, MARKET, type MarketToken } from '@/lib/mock-wallet';
 import { createStore } from '@/lib/store';
 import { TEST_MODE } from '@/lib/test-mode';
 
@@ -86,31 +86,78 @@ export function rangeSeries(
   return out.length > 1 ? out : [price, price];
 }
 
-/**
- * Search's market list: the listed tokens with live price, 24h change, volume and
- * market cap (test mode keeps the samples). Tokens with no live price are left out.
- */
-export function useMarketList(): MarketToken[] {
-  const all = useTokenMarkets(
-    MARKET.map((t) => t.symbol),
-    !TEST_MODE,
-  );
-  if (TEST_MODE) return MARKET;
-  return liveMarketList(all);
+/** Search's list from `GET /market/tokens`: every symbol 1Click delivers, live prices. */
+const LIST_STALE_MS = 5 * 60_000;
+/** 24h numbers (change, volume, caps) are fetched per symbol for this many tokens. */
+const ENRICHED = 40;
+type Listing = { tokens?: MarketListToken[]; at: number; loading: boolean };
+const listing = createStore<Listing>({ at: 0, loading: false });
+
+async function loadListing() {
+  const now = listing.get();
+  if (now.loading || (now.tokens && Date.now() - now.at < LIST_STALE_MS)) return;
+  listing.set((prev) => ({ ...prev, at: Date.now(), loading: true }));
+  let tokens: MarketListToken[] | undefined;
+  try {
+    tokens = await api.marketTokens();
+  } catch {
+    // Missing stays missing: Search shows its empty state, never sample prices.
+  }
+  listing.set((prev) => ({ tokens: tokens ?? prev.tokens, at: Date.now(), loading: false }));
 }
 
-export function liveMarketList(all: Record<string, { market?: TokenMarket }>): MarketToken[] {
-  return MARKET.flatMap((t) => {
-    const m = all[t.symbol]?.market;
-    if (m?.priceUsd == null) return [];
-    return [
-      {
-        ...t,
-        price: m.priceUsd,
-        change: m.change24h ?? 0,
-        volume: m.volume24h ?? 0,
-        marketCap: m.marketCap ?? m.fdv ?? 0,
-      },
-    ];
-  });
+const HONEY_CHAINS = new Set<string>(CHAINS.map((ch) => ch.name));
+const NAMES = new Map(MARKET.map((t) => [t.symbol.toUpperCase(), t.name]));
+/** Well-known symbols first (so their 24h numbers load first), then the rest A-Z. */
+const RANK = new Map(MARKET.map((t, i) => [t.symbol.toUpperCase(), i]));
+
+/** Symbols whose 24h numbers Search fetches: the best-known first. */
+export function enrichedSymbols(tokens: MarketListToken[], limit = ENRICHED) {
+  return liveMarketList(tokens, {})
+    .slice(0, limit)
+    .map((t) => t.symbol);
+}
+
+/**
+ * Search's market list: every token NEAR Intents can deliver on a Honey chain, priced
+ * live by 1Click, with 24h change, volume and market cap where they have loaded
+ * (test mode keeps the samples).
+ */
+export function useMarketList(): MarketToken[] {
+  const list = listing.useValue();
+  useEffect(() => {
+    if (!TEST_MODE) void loadListing();
+  }, []);
+  const tokens = list.tokens ?? [];
+  const all = useTokenMarkets(enrichedSymbols(tokens), !TEST_MODE);
+  if (TEST_MODE) return MARKET;
+  return liveMarketList(tokens, all);
+}
+
+export function liveMarketList(
+  tokens: MarketListToken[],
+  all: Record<string, { market?: TokenMarket }>,
+): MarketToken[] {
+  return tokens
+    .flatMap((t) => {
+      const chain = t.chains.find((ch) => HONEY_CHAINS.has(ch)) as Chain | undefined;
+      if (!chain) return [];
+      const m = all[t.symbol]?.market;
+      return [
+        {
+          symbol: t.symbol,
+          name: NAMES.get(t.symbol.toUpperCase()) ?? t.symbol,
+          chain,
+          price: m?.priceUsd ?? t.priceUsd,
+          change: m?.change24h ?? 0,
+          volume: m?.volume24h ?? 0,
+          marketCap: m?.marketCap ?? m?.fdv ?? 0,
+        },
+      ];
+    })
+    .sort(
+      (a, b) =>
+        (RANK.get(a.symbol.toUpperCase()) ?? Infinity) -
+          (RANK.get(b.symbol.toUpperCase()) ?? Infinity) || a.symbol.localeCompare(b.symbol),
+    );
 }

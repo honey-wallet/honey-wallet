@@ -4,7 +4,11 @@
  * transactions a member's device signs. No keys or app stores here, so it is testable
  * with a mocked RPC; `jar-dao.ts` adds signing and the app glue.
  */
-import type { JarDaoProposal, JarDaoState } from '@honey-wallet/api-client';
+import {
+  fetchOneClickStatus,
+  type JarDaoProposal,
+  type JarDaoState,
+} from '@honey-wallet/api-client';
 import {
   actProposalCall,
   addMemberKind,
@@ -60,7 +64,8 @@ export async function prepare(
     public_key: nearPublicKey(signerId),
     finality: 'final',
   })) as { nonce?: number | string; block_hash?: string; permission?: unknown };
-  if (access.permission !== 'FullAccess') throw new Error('Jar votes need a full access key');
+  if (access.permission !== 'FullAccess')
+    throw new Error('This needs a full access key on this device');
   if (access.nonce === undefined || typeof access.block_hash !== 'string')
     throw new Error('Invalid NEAR access key response');
   return {
@@ -229,8 +234,7 @@ export function mintNavCheck(p: JarDaoProposal, referenceNavMicro: string | null
 
 // ---------- Checks before proposing or approving ----------
 
-export const ONECLICK = 'https://1click.chaindefuser.com/v0';
-type Fetch = (url: string) => Promise<{ ok: boolean; json(): Promise<unknown> }>;
+type Fetch = Parameters<typeof fetchOneClickStatus>[1] & {};
 
 /**
  * Asks 1Click itself (not Honey's server) what each deposit address is for, and
@@ -247,19 +251,9 @@ export async function verifyBuyWith1Click(
   const out: { depositAddress: string; destinationAsset: string; amount: bigint }[] = [];
   for (const leg of legs) {
     if (leg.tokenId !== USDC_INTENTS) throw new Error('This buy spends something other than USDC');
-    const res = await fetcher(
-      `${ONECLICK}/status?depositAddress=${encodeURIComponent(leg.receiver)}`,
-    );
-    if (!res.ok) throw new Error(`1Click doesn't know ${leg.receiver}. Don't approve this buy.`);
-    const body = (await res.json()) as {
-      status?: string;
-      quoteResponse?: {
-        quoteRequest?: Record<string, unknown>;
-        quote?: Record<string, unknown>;
-      };
-    };
-    const req = body.quoteResponse?.quoteRequest ?? {};
-    const quote = body.quoteResponse?.quote ?? {};
+    const record = await fetchOneClickStatus(leg.receiver, fetcher);
+    if (!record) throw new Error(`1Click doesn't know ${leg.receiver}. Don't approve this buy.`);
+    const { quoteRequest: req, quote } = record;
     const deadline = Date.parse(String(quote.deadline ?? req.deadline ?? ''));
     const problems = [
       quote.depositAddress !== leg.receiver && 'deposit address',
@@ -270,7 +264,7 @@ export async function verifyBuyWith1Click(
       req.recipientType !== 'INTENTS' && 'recipient type',
       String(quote.amountIn ?? req.amount) !== leg.amount.toString() && 'amount',
       !(deadline > now) && 'deadline',
-      body.status !== undefined && body.status !== 'PENDING_DEPOSIT' && 'status',
+      record.status !== undefined && record.status !== 'PENDING_DEPOSIT' && 'status',
     ].filter(Boolean);
     if (problems.length)
       throw new Error(`This buy doesn't match its 1Click quote (${problems.join(', ')}).`);
@@ -398,17 +392,54 @@ const ARGS = (a: { args: string }) => {
   }
 };
 
-/** `ft_balance_of` as a view call; atomic units. */
-export async function viewFtBalance(rpc: Rpc, token: string, account: string) {
+/** One NEP-141 view call, JSON-decoded. */
+async function viewFt(rpc: Rpc, token: string, method: string, args: unknown) {
   const res = (await rpc('query', {
     request_type: 'call_function',
     finality: 'final',
     account_id: token,
-    method_name: 'ft_balance_of',
-    args_base64: btoa(JSON.stringify({ account_id: account })),
+    method_name: method,
+    args_base64: btoa(JSON.stringify(args)),
   })) as { result?: number[] };
   if (!Array.isArray(res.result)) throw new Error('Invalid NEAR view response');
-  const value = JSON.parse(new TextDecoder().decode(Uint8Array.from(res.result)));
+  return JSON.parse(new TextDecoder().decode(Uint8Array.from(res.result))) as unknown;
+}
+
+/** Whether `account` has storage on `token` (NEP-145); an unregistered receiver can't hold it. */
+export async function viewStorageRegistered(rpc: Rpc, token: string, account: string) {
+  const value = await viewFt(rpc, token, 'storage_balance_of', { account_id: account });
+  return value !== null;
+}
+
+/** NEP-141 transfers need exactly one yoctoNEAR attached. */
+const ONE_YOCTO = 1n;
+
+/**
+ * Sends USDC on NEAR: `ft_transfer` to `to`, preceded by a `storage_deposit` that
+ * registers them (0.00125 NEAR, paid by the sender) when they aren't registered yet.
+ */
+export function usdcTransferTx(to: string, amount: bigint, registerReceiver: boolean) {
+  const encode = (v: unknown) => new TextEncoder().encode(JSON.stringify(v));
+  const actions: FunctionCall[] = [];
+  if (registerReceiver)
+    actions.push({
+      methodName: 'storage_deposit',
+      args: encode({ account_id: to, registration_only: true }),
+      gas: 30n * TGAS,
+      deposit: 1_250_000_000_000_000_000_000n,
+    });
+  actions.push({
+    methodName: 'ft_transfer',
+    args: encode({ receiver_id: to, amount: amount.toString() }),
+    gas: 30n * TGAS,
+    deposit: ONE_YOCTO,
+  });
+  return { receiverId: USDC_NEAR, actions };
+}
+
+/** `ft_balance_of` as a view call; atomic units. */
+export async function viewFtBalance(rpc: Rpc, token: string, account: string) {
+  const value = await viewFt(rpc, token, 'ft_balance_of', { account_id: account });
   if (typeof value !== 'string' || !/^\d{1,38}$/.test(value)) throw new Error('Invalid balance');
   return BigInt(value);
 }

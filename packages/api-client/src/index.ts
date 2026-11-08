@@ -35,6 +35,13 @@ export {
   type NearIntentsQuoteRequest,
   type NearIntentsToken,
 } from './near-intents';
+export {
+  fetchOneClickStatus,
+  ONE_CLICK_BASE,
+  type OneClickStatus,
+  oneClickStatusUrl,
+  parseOneClickStatus,
+} from './one-click-status';
 export { isOperationPage, isOperationRecovery } from './operations';
 export { permit2TypedData, validateEmbeddedPermit, validatePermit2Quote } from './permit2';
 export { isPolymarketCatalog, isPolymarketOrderBook } from './polymarket';
@@ -42,6 +49,7 @@ export {
   isAccountDeletion,
   isChainActivity,
   isChainActivityItem,
+  isMarketListTokens,
   isPortfolio,
   isPortfolioHolding,
   isTokenMarket,

@@ -15,7 +15,7 @@ use std::{
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use zeroize::Zeroizing;
 
-const ORIGIN: &str = "https://1click.chaindefuser.com/v0";
+use crate::json_rpc::ONE_CLICK_ORIGIN as ORIGIN;
 pub const DEFAULT_CAP_USD: f64 = 25.0;
 const MAX_LEGS: usize = 8;
 const MAX_SLIPPAGE_BPS: u16 = 300;

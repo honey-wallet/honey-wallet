@@ -12,7 +12,7 @@
  * wraps them with an injectable fetch.
  */
 
-export const ONE_CLICK_BASE = 'https://1click.chaindefuser.com';
+import { ONE_CLICK_BASE, parseOneClickStatus } from './one-click-status';
 
 export type Confidentiality = 'public' | 'basic' | 'advanced';
 export type DepositType = 'ORIGIN_CHAIN' | 'INTENTS' | 'CONFIDENTIAL_INTENTS';
@@ -267,11 +267,9 @@ export function checkQuoteStatus(
   quote: ConfidentialQuoteRequest,
   depositAddress: string,
 ) {
-  check(!!status && typeof status === 'object', 'Invalid 1Click status');
-  const response = (status as { quoteResponse?: unknown }).quoteResponse as
-    | { quoteRequest?: Record<string, unknown>; quote?: Record<string, unknown> }
-    | undefined;
-  check(!!response?.quoteRequest && !!response.quote, '1Click has no quote for this address');
+  const response = parseOneClickStatus(status);
+  check(!!response, '1Click has no quote for this address');
+  if (!response) return;
   check(response.quote.depositAddress === depositAddress, 'Deposit address mismatch');
   const fields: (keyof ConfidentialQuoteRequest)[] = [
     'originAsset',

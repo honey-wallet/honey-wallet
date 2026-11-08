@@ -28,6 +28,7 @@ import { isPolymarketCatalog, isPolymarketOrderBook } from './polymarket';
 import {
   isAccountDeletion,
   isChainActivity,
+  isMarketListTokens,
   isPortfolio,
   isTokenMarket,
   portfolioQuery,
@@ -237,6 +238,9 @@ export function createApiClient({ baseUrl, fetch: fetchImpl = fetch }: ApiClient
         `/api/v1/market/new-pools${chain ? `?chain=${encodeURIComponent(chain)}` : ''}`,
         init,
       ),
+    /** Every symbol NEAR Intents can deliver on Honey's chains, with its live price. Public. */
+    marketTokens: (init?: RequestInit) =>
+      validated('/api/v1/market/tokens', isMarketListTokens, init),
     /** Price, 24h change, volume, liquidity and caps for a symbol. Public. */
     tokenMarket: (symbol: string, init?: RequestInit) =>
       validated(`/api/v1/market/token?symbol=${encodeURIComponent(symbol)}`, isTokenMarket, init),

@@ -36,14 +36,30 @@ it('charts ranges from daily closes, ending at the live price', () => {
   expect(rangeSeries(undefined, 9, '1M', null)).toEqual([9, 9]);
 });
 
-it('lists only tokens with a live price, using live numbers', () => {
-  const list = liveMarketList({ ETH: m(-2, 3000) });
-  expect(list).toHaveLength(1);
+it('lists every 1Click token on a Honey chain, with live numbers where loaded', () => {
+  const list = liveMarketList(
+    [
+      { symbol: 'ZEC', priceUsd: 40, chains: ['NEAR'] },
+      { symbol: 'ETH', priceUsd: 2999, chains: ['Ethereum', 'Base'] },
+      { symbol: 'ARB', priceUsd: 0.5, chains: ['Arbitrum'] },
+    ],
+    { ETH: m(-2, 3000) },
+  );
+  expect(list.map((t) => t.symbol)).toEqual(['ETH', 'ZEC']);
   expect(list[0]).toMatchObject({
     symbol: 'ETH',
+    name: 'Ethereum',
+    chain: 'Ethereum',
     price: 3000,
     change: -2,
     volume: 10,
     marketCap: 99,
+  });
+  expect(list[1]).toMatchObject({
+    symbol: 'ZEC',
+    name: 'ZEC',
+    chain: 'NEAR',
+    price: 40,
+    change: 0,
   });
 });

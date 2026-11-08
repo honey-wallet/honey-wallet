@@ -3,7 +3,9 @@
 
 use crate::{
     error::AppError,
-    market_data::{History, MarketData, NewPool, TokenMarket, Venues},
+    market_data::{
+        History, MarketData, MarketListToken, NewPool, TokenMarket, Venues, market_list,
+    },
 };
 use axum::{
     Json, Router,
@@ -17,6 +19,7 @@ pub fn router(market: Arc<MarketData>) -> Router {
     Router::new()
         .route("/market/venues", get(venues))
         .route("/market/token", get(token))
+        .route("/market/tokens", get(tokens))
         .route("/market/new-pools", get(new_pools))
         .route("/market/history", get(history))
         .with_state(market)
@@ -40,6 +43,18 @@ struct PoolQuery {
 
 fn bad(message: &str) -> AppError {
     AppError::BadRequest(message.into())
+}
+
+/// `GET /market/tokens`: every symbol 1Click can deliver on Honey's chains, with its
+/// live 1Click price (Search's list; 24h numbers come from `/market/token`).
+async fn tokens(
+    State(market): State<Arc<MarketData>>,
+) -> Result<Json<Vec<MarketListToken>>, AppError> {
+    market
+        .tokens()
+        .await
+        .map(|t| Json(market_list(&t)))
+        .map_err(|_| AppError::Busy)
 }
 
 /// `GET /market/token?symbol=ETH`: price, 24h change, volume, liquidity and caps.
