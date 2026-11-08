@@ -5,6 +5,8 @@
  * state and prepares 1Click quotes; it never holds keys or funds. Members pay their
  * own gas until the NEP-366 relayer is switched on.
  */
+
+import type { JarDaoProposal, JarDaoState } from '@honey-wallet/api-client';
 import {
   createNearRpc,
   type DepositFact,
@@ -14,6 +16,7 @@ import {
   USDC_INTENTS,
   valueOfUnits,
 } from '@honey-wallet/keyring';
+import { useEffect } from 'react';
 import { api } from '@/lib/api';
 import { confirmOwner } from '@/lib/auth';
 import { backendSessionToken } from '@/lib/backend-session';
@@ -28,6 +31,7 @@ import {
   mintNavCheck,
   parseProposalId,
   prepare,
+  proposalId,
   type QuotedLeg,
   unitRecordTx,
   voteTx,
@@ -39,9 +43,11 @@ import {
   type ProposalAction,
   setDaoBackend,
   syncDaoJar,
+  useMultisig,
   walletName,
   YOU,
 } from '@/lib/multisig';
+import { createStore } from '@/lib/store';
 import { TEST_MODE } from '@/lib/test-mode';
 import { privateKeyOf } from '@/lib/vault';
 import { addWallet, wallets } from '@/lib/wallets';
@@ -54,15 +60,19 @@ function token() {
   return t;
 }
 
-/** The active wallet's NEAR implicit account, if its keys are on this device. */
+/**
+ * This device's NEAR implicit account: the active wallet's when it has a NEAR key,
+ * else the first wallet on this device that does (the active one is often the jar).
+ */
 function member() {
   if (TEST_MODE) throw new Error('Test mode uses sample jars.');
   const state = wallets.get();
-  const wallet = state.added.find((w) => w.id === state.activeId);
-  const account = wallet?.addresses?.near;
-  if (!wallet || wallet.watchOnly || wallet.demo || !account || !/^[0-9a-f]{64}$/.test(account))
-    throw new Error('Pick a wallet with a NEAR key on this device.');
-  return { walletId: wallet.id, account };
+  const usable = (w: (typeof state.added)[number] | undefined) =>
+    !!w && !w.watchOnly && !w.demo && /^[0-9a-f]{64}$/.test(w.addresses?.near ?? '');
+  const active = state.added.find((w) => w.id === state.activeId);
+  const wallet = usable(active) ? active : state.added.find(usable);
+  if (!wallet) throw new Error('Add a wallet with a NEAR key on this device.');
+  return { walletId: wallet.id, account: wallet.addresses?.near as string };
 }
 
 /** Prepares, confirms, signs on device and sends one transaction. Returns its hash. */
@@ -90,10 +100,58 @@ async function send(reason: string, receiverId: string, actions: FunctionCall[])
 
 const verifiedDeposits = new Map<string, DepositFact | null>();
 
+/** What this device knows of each DAO jar's ownership, from the last chain read. */
+export type DaoLedger = {
+  dao: string;
+  /** Jar value now, micro-USD (server reference); null when unpriced. */
+  navMicro: bigint | null;
+  totalUnits: bigint;
+  myUnits: bigint;
+  /** Units in your deposits that members haven't approved yet. */
+  myPendingUnits: bigint;
+  usdcAtomic: bigint;
+  updatedAt: number;
+};
+export const daoLedgers = createStore<Record<string, DaoLedger>>({});
+/** The last raw chain read per DAO, for checks shown on the vote screen. */
+const daoStates = createStore<Record<string, JarDaoState>>({});
+
+/**
+ * For a deposit's unit record: the jar value it states vs the server's reference
+ * (net of the deposit), so members can compare before approving. Null otherwise.
+ */
+export function useMintCheck(proposalIdValue: string | undefined) {
+  const states = daoStates.useValue();
+  const ref = proposalIdValue ? parseProposalId(proposalIdValue) : null;
+  const state = ref ? states[ref.dao] : undefined;
+  const raw = state?.proposals.find((p) => p.id === ref?.id);
+  if (!state || !raw) return null;
+  const check = mintNavCheck(raw, state.navMicroUsd);
+  if (!check) return null;
+  const reference =
+    state.navMicroUsd === null
+      ? null
+      : Number(BigInt(state.navMicroUsd) - BigInt(check.record.usd)) / 1e6;
+  return { ...check, statedUsd: Number(check.record.nav) / 1e6, referenceUsd: reference };
+}
+
+/** Assets a jar's buys delivered, read from buy proposals (`assets:` line). */
+function heldAssets(descriptions: string[]) {
+  const set = new Set<string>([USDC_INTENTS]);
+  for (const d of descriptions) {
+    const line = d.split('\n').find((l) => l.startsWith('assets:'));
+    for (const a of line?.slice(7).split(',') ?? [])
+      if (/^nep\d+:[\w.:-]{1,190}$/.test(a)) set.add(a);
+  }
+  return [...set].slice(0, 16);
+}
+
 /** Reads the jar from the chain (via the server's view calls) into the app store. */
 export async function refreshJar(walletId: string, dao: string, jarName: string) {
   const t = token();
-  const state = await api.jarDaoState(t, dao, [USDC_INTENTS]);
+  const first = await api.jarDaoState(t, dao, [USDC_INTENTS]);
+  const assets = heldAssets(first.proposals.map((p) => p.description));
+  const state = assets.length > 1 ? await api.jarDaoState(t, dao, assets) : first;
   const me = member().account;
   // Verify each unit record's deposit on chain once; unverified mints don't count.
   await Promise.all(
@@ -117,12 +175,55 @@ export async function refreshJar(walletId: string, dao: string, jarName: string)
     deposit: (tx) => verifiedDeposits.get(tx) ?? undefined,
   });
   syncDaoJar(view.multisig, view.proposals);
+  daoStates.set((all) => ({ ...all, [dao]: state }));
+  let myPendingUnits = 0n;
+  for (const p of view.ledger.pending.values()) if (p.member === me) myPendingUnits += p.units;
+  daoLedgers.set((all) => ({
+    ...all,
+    [walletId]: {
+      dao,
+      navMicro: state.navMicroUsd === null ? null : BigInt(state.navMicroUsd),
+      totalUnits: view.ledger.total,
+      myUnits: view.ledger.units.get(me) ?? 0n,
+      myPendingUnits,
+      usdcAtomic: view.usdcAtomic,
+      updatedAt: Date.now(),
+    },
+  }));
   return { ...view, raw: state };
 }
 
-/** Jar value per unit: only USDC is priced for now; picks bought are priced by the caller. */
+/** Value of units at the jar's current reference value, in dollars. */
 export function memberValue(units: bigint, navMicro: bigint, totalUnits: bigint) {
   return Number(valueOfUnits(units, navMicro, totalUnits)) / 1e6;
+}
+
+const POLL_MS = 15_000;
+
+/**
+ * Keeps a shared jar's wallet in sync with the chain while a screen shows it, and
+ * returns this device's view of its ownership. Does nothing in TEST_MODE or for
+ * wallets without a DAO.
+ */
+export function useDaoJar(walletId: string | undefined) {
+  const multisig = useMultisig(walletId);
+  const dao = TEST_MODE ? undefined : multisig?.dao;
+  const ledger = daoLedgers.useValue()[walletId ?? ''];
+  useEffect(() => {
+    if (!walletId || !dao) return;
+    let live = true;
+    const tick = () =>
+      refreshJar(walletId, dao, walletName(walletId)).catch(() => {
+        // Keep the last chain view; the next poll retries.
+      });
+    void tick();
+    const timer = setInterval(() => live && void tick(), POLL_MS);
+    return () => {
+      live = false;
+      clearInterval(timer);
+    };
+  }, [walletId, dao]);
+  return dao ? (ledger ?? null) : null;
 }
 
 // ---------- Writing ----------
@@ -156,92 +257,110 @@ export async function createSharedJar(input: {
   return { walletId, dao: tx.dao };
 }
 
-/** Deposit USDC (NEAR) and record its units. NAV is the jar's value before the deposit. */
-export async function depositToJar(input: {
-  dao: string;
-  usdcAtomic: bigint;
-  navMicro: bigint;
-  totalUnits: bigint;
-}) {
-  const me = member();
-  const deposit = depositTx(input.dao, input.usdcAtomic, me.account);
-  const hash = await send('Add to shared jar', deposit.receiverId, deposit.actions);
-  const record = unitRecordTx({
-    dao: input.dao,
-    member: me.account,
-    usdMicro: input.usdcAtomic, // USDC has 6 decimals: atomic = micro-USD
-    navMicro: input.navMicro,
-    totalUnits: input.totalUnits,
-    depositTx: hash,
-  });
-  await send('Record your share', record.receiverId, record.actions);
-  // Your approval counts toward k; the units stay pending until the others approve.
-  const state = await api.jarDaoState(token(), input.dao, [USDC_INTENTS]);
-  const mine = state.proposals
-    .filter((p) => p.proposer === me.account && p.description.includes(`"tx":"${hash}"`))
+/** Sends an add_proposal, then approves it as its proposer (Sputnik doesn't auto-vote). */
+async function proposeAndApprove(
+  m: Multisig,
+  tx: { receiverId: string; actions: FunctionCall[] },
+  reason: string,
+) {
+  const dao = m.dao as string;
+  const sent = JSON.parse(new TextDecoder().decode(tx.actions[0]?.args)) as {
+    proposal: { description: string };
+  };
+  const matches = (p: JarDaoProposal) => p.description === sent.proposal.description;
+  await send(reason, tx.receiverId, tx.actions);
+  const view = await refreshJar(m.walletId, dao, walletName(m.walletId));
+  const mine = view.raw.proposals
+    .filter((p) => p.proposer === member().account && p.status === 'InProgress' && matches(p))
     .sort((a, b) => b.id - a.id)[0];
-  if (mine)
-    await send(
-      'Approve your share',
-      input.dao,
-      voteTx(input.dao, mine.id, 'VoteApprove', 'Vote').actions,
-    );
-  return { hash, units: record.units, pending: true };
+  if (!mine) return undefined;
+  await send('Approve', dao, voteTx(dao, mine.id, 'VoteApprove', mine.kind as never).actions);
+  await refreshJar(m.walletId, dao, walletName(m.walletId));
+  return proposalId(dao, mine.id);
 }
 
-/** Quote a buy from the jar's Intents USDC and propose paying the 1Click deposit addresses. */
-export async function proposeJarBuy(input: {
-  dao: string;
-  title: string;
-  slippageBps: number;
-  legs: { destinationAsset: string; usdcAtomic: bigint }[];
-}) {
+const toAtomic = (usd: number) => BigInt(Math.round(usd * 1e6));
+
+/** Latest chain read for this wallet, fetching one if there is none yet. */
+async function ledgerOf(m: Multisig) {
+  const known = daoLedgers.get()[m.walletId];
+  if (known && Date.now() - known.updatedAt < POLL_MS) return known;
+  await refreshJar(m.walletId, m.dao as string, walletName(m.walletId));
+  const fresh = daoLedgers.get()[m.walletId];
+  if (!fresh) throw new Error('Could not read the jar');
+  return fresh;
+}
+
+/** Deposit USDC (NEAR) and record its units at the jar's value before the deposit. */
+async function deposit(m: Multisig, usd: number) {
+  const ledger = await ledgerOf(m);
+  if (ledger.navMicro === null)
+    throw new Error("Honey can't price this jar right now. Try again in a moment.");
+  const dao = m.dao as string;
+  const me = member();
+  const amount = toAtomic(usd);
+  const d = depositTx(dao, amount, me.account);
+  const hash = await send('Add to shared jar', d.receiverId, d.actions);
+  const record = unitRecordTx({
+    dao,
+    member: me.account,
+    usdMicro: amount, // USDC has 6 decimals: atomic = micro-USD
+    navMicro: ledger.navMicro,
+    totalUnits: ledger.totalUnits,
+    depositTx: hash,
+  });
+  // Your approval counts toward k; the units stay pending until the others approve.
+  return proposeAndApprove(m, record, 'Record your share');
+}
+
+/** Proposes withdrawing `usd` of your share; burns the units it's worth. */
+async function withdraw(m: Multisig, usd: number) {
+  const ledger = await ledgerOf(m);
+  if (ledger.navMicro === null || ledger.navMicro <= 0n || ledger.totalUnits <= 0n)
+    throw new Error("Honey can't price this jar right now. Try again in a moment.");
+  const amount = toAtomic(usd);
+  // Round the units burned up, so a withdrawal never takes more than its share.
+  const units = (amount * ledger.totalUnits + ledger.navMicro - 1n) / ledger.navMicro;
+  if (units > ledger.myUnits) throw new Error('That is more than your share of the jar.');
+  if (amount > ledger.usdcAtomic)
+    throw new Error('The jar holds less USDC than that. Sell some picks first.');
+  const tx = withdrawProposalTx({
+    dao: m.dao as string,
+    member: member().account,
+    amount,
+    units,
+    navMicro: ledger.navMicro,
+  });
+  return proposeAndApprove(m, tx, 'Propose withdrawal');
+}
+
+/** Quotes the buy from the jar's Intents USDC and proposes paying the 1Click addresses. */
+async function buy(m: Multisig, action: Extract<ProposalAction, { type: 'jarBuy' }>) {
+  const merged = new Map<string, number>();
+  for (const l of action.legs ?? [])
+    if (l.usd > 0) merged.set(l.destinationAsset, (merged.get(l.destinationAsset) ?? 0) + l.usd);
+  if (!merged.size) throw new Error('No live routes yet. Try again in a moment.');
   const quote = await api.jarDaoBuyQuote(token(), {
-    dao: input.dao,
-    slippageBps: input.slippageBps,
-    legs: input.legs.map((l) => ({
-      destinationAsset: l.destinationAsset,
-      amount: l.usdcAtomic.toString(),
+    dao: m.dao as string,
+    slippageBps: 100,
+    legs: [...merged].map(([destinationAsset, usd]) => ({
+      destinationAsset,
+      amount: toAtomic(usd).toString(),
     })),
   });
   const legs: QuotedLeg[] = quote.legs;
-  const tx = buyProposalTx(input.dao, legs, input.title);
-  await send('Propose jar buy', tx.receiverId, tx.actions);
-  return quote;
+  // Record the assets the buy delivers so the jar's value includes them.
+  const title = `Buy ${action.jar}\nassets:${[...merged.keys()].join(',')}`;
+  const withAssets = buyProposalTx(m.dao as string, legs, title);
+  return proposeAndApprove(m, withAssets, 'Propose jar buy');
 }
 
 async function proposeOnChain(m: Multisig, action: ProposalAction) {
-  const dao = m.dao as string;
-  if (action.type === 'jarWithdraw')
-    throw new Error('Use withdrawFromJar, which records the units it burns.');
-  if (action.type === 'jarBuy') throw new Error('Use proposeJarBuy, which fetches a quote.');
-  const tx = configProposalTx(dao, action);
-  await send('Propose change', tx.receiverId, tx.actions);
-  // add_proposal doesn't vote; approve the newest proposal as its proposer.
-  const view = await refreshJar(m.walletId, dao, walletName(m.walletId));
-  const mine = view.raw.proposals
-    .filter((p) => p.proposer === member().account && p.status === 'InProgress')
-    .sort((a, b) => b.id - a.id)[0];
-  if (mine)
-    await send('Approve', dao, voteTx(dao, mine.id, 'VoteApprove', mine.kind as never).actions);
-  await refreshJar(m.walletId, dao, walletName(m.walletId));
-}
-
-export async function withdrawFromJar(input: {
-  dao: string;
-  usdcAtomic: bigint;
-  units: bigint;
-  navMicro: bigint;
-}) {
-  const me = member();
-  const tx = withdrawProposalTx({
-    dao: input.dao,
-    member: me.account,
-    amount: input.usdcAtomic,
-    units: input.units,
-    navMicro: input.navMicro,
-  });
-  return send('Propose withdrawal', tx.receiverId, tx.actions);
+  if (action.type === 'jarAdd') return deposit(m, action.usd);
+  if (action.type === 'jarWithdraw') return withdraw(m, action.usd);
+  if (action.type === 'jarBuy') return buy(m, action);
+  const tx = configProposalTx(m.dao as string, action);
+  return proposeAndApprove(m, tx, 'Propose change');
 }
 
 async function voteOnChain(m: Multisig, p: Proposal, kind: 'approve' | 'reject') {

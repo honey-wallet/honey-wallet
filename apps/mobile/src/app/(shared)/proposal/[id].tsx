@@ -29,6 +29,7 @@ import { MoreDetails } from '@/components/wallet/MoreDetails';
 import { MemberAvatar, NetworkBadge } from '@/components/wallet/MultisigParts';
 import { EmptyState, TokenIcon } from '@/components/wallet/parts';
 import { failure, success, tap } from '@/lib/haptics';
+import { useDaoJar, useMintCheck } from '@/lib/jar-dao';
 import { LOADS } from '@/lib/loads';
 import { formatUsd, shortAddress } from '@/lib/mock-wallet';
 import {
@@ -75,6 +76,9 @@ export default function ProposalSheet() {
   const c = useTheme();
   const proposal = useProposal(id);
   const multisig = useMultisig(proposal?.walletId);
+  // Shared jars on NEAR: follow the chain, and compare a deposit's stated jar value.
+  useDaoJar(proposal?.walletId);
+  const mintCheck = useMintCheck(proposal?.id);
   // After you sign, the page stays and shows what changed (rather than swapping to a
   // separate success page): the pill, your tick, the bar and the transaction.
   const [justSigned, setJustSigned] = useState(false);
@@ -265,7 +269,24 @@ export default function ProposalSheet() {
       </Accordion>
     </>
   );
-  const protocolRow = <StatRow label="Protocol" value={protocolName(multisig.protocol)} />;
+  const protocolRow = (
+    <>
+      <StatRow label="Protocol" value={protocolName(multisig.protocol)} />
+      {mintCheck ? (
+        <>
+          <StatRow label="Jar value stated" value={formatUsd(mintCheck.statedUsd)} />
+          <StatRow
+            label="Jar value today"
+            value={
+              mintCheck.referenceUsd === null
+                ? "Can't price yet"
+                : `${formatUsd(mintCheck.referenceUsd)}${mintCheck.ok ? '' : ' · over 2% off, reject'}`
+            }
+          />
+        </>
+      ) : null}
+    </>
+  );
 
   return (
     <SheetScreen

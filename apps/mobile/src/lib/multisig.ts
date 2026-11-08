@@ -88,7 +88,15 @@ export type ProposalAction =
     }
   | { type: 'sell'; symbol: string; amount: number; usd: number }
   /** Buy a thesis jar's picks with the shared wallet's money. */
-  | { type: 'jarBuy'; jarId: string; jar: string; picks: string[]; usd: number }
+  | {
+      type: 'jarBuy';
+      jarId: string;
+      jar: string;
+      picks: string[];
+      usd: number;
+      /** Live routes (NEAR Intents asset ids and dollars) for a shared jar's real buy. */
+      legs?: { destinationAsset: string; usd: number }[];
+    }
   | { type: 'addMember'; member: Member }
   | { type: 'removeMember'; memberId: string; name: string }
   | { type: 'changeThreshold'; threshold: number }
@@ -218,6 +226,8 @@ type State = {
   multisigs: Record<string, Multisig>;
   proposals: Proposal[];
   events: MultisigEvent[];
+  /** Placeholder proposal id → the DAO proposal it became on chain (shared jars). */
+  aliases?: Record<string, string>;
 };
 
 const store = createStore<State>(
@@ -423,10 +433,17 @@ export function useActiveMultisig() {
 }
 
 /** A proposal by id, outside React. */
-export const proposalById = (id: string) => store.get().proposals.find((p) => p.id === id);
+const resolve = (s: State, id: string) => s.aliases?.[id] ?? id;
+export const proposalById = (id: string) => {
+  const s = store.get();
+  const key = resolve(s, id);
+  return s.proposals.find((p) => p.id === key);
+};
 
 export function useProposal(id: string) {
-  return store.useValue().proposals.find((p) => p.id === id);
+  const s = store.useValue();
+  const key = resolve(s, id);
+  return s.proposals.find((p) => p.id === key);
 }
 
 /** A wallet's proposals: pending ones first (in queue order), then history, newest first. */
@@ -600,7 +617,8 @@ const trim = (n: number) => (n >= 1 ? Number(n.toFixed(4)) : Number(n.toPrecisio
  * registers itself here (it imports this module, so the hook avoids a cycle).
  */
 export type DaoBackend = {
-  propose(m: Multisig, action: ProposalAction): Promise<void>;
+  /** Resolves to the chain's proposal id (`<dao>#<n>`), when it created one. */
+  propose(m: Multisig, action: ProposalAction): Promise<string | undefined>;
   vote(m: Multisig, p: Proposal, kind: 'approve' | 'reject'): Promise<void>;
 };
 let daoBackend: DaoBackend | null = null;
@@ -765,7 +783,21 @@ export function propose(walletId: string, action: ProposalAction) {
       rejections: [],
       status: 'pending',
     };
-    daoBackend.propose(m, action).catch(daoFailed);
+    store.set((s) => ({ ...s, proposals: [...s.proposals, pending] }));
+    daoBackend
+      .propose(m, action)
+      .then((chainId) =>
+        store.set((s) => ({
+          ...s,
+          // Screens that kept the placeholder id (a jar's buy) follow it to the chain's.
+          aliases: chainId ? { ...s.aliases, [pending.id]: chainId } : s.aliases,
+          proposals: s.proposals.filter((p) => p.id !== pending.id),
+        })),
+      )
+      .catch((error) => {
+        store.set((s) => ({ ...s, proposals: s.proposals.filter((p) => p.id !== pending.id) }));
+        daoFailed(error);
+      });
     return { proposal: pending, executed: false };
   }
   const at = Date.now();

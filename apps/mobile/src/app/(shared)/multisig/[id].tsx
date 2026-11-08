@@ -17,6 +17,7 @@ import {
 import { EmptyState, PushedScreen, TokenIcon } from '@/components/wallet/parts';
 import { useCopy } from '@/lib/copy';
 import { tap } from '@/lib/haptics';
+import { memberValue, useDaoJar } from '@/lib/jar-dao';
 import { LOADS } from '@/lib/loads';
 import { formatAmount, formatUsd, shortAddress } from '@/lib/mock-wallet';
 import {
@@ -49,6 +50,8 @@ export default function MultisigScreen() {
   const { added } = useWallets();
   const wallet = allWallets(name, added).find((w) => w.id === id);
   const multisig = useMultisig(id);
+  // Shared jars on NEAR: live state from the chain, polled while this screen is open.
+  const jarLedger = useDaoJar(id);
   const { pending, history } = useProposals(id);
   const address = wallet ? receiveAddresses(wallet)[0]?.address : undefined;
   const { copied, copy } = useCopy(address ?? '', 'Address copied');
@@ -100,7 +103,10 @@ export default function MultisigScreen() {
     Linking.openURL(url).catch(() => {});
   };
 
-  const total = multisig.holdings.reduce((s, h) => s + h.usd, 0) || wallet.usd;
+  const total =
+    jarLedger?.navMicro != null
+      ? Number(jarLedger.navMicro) / 1e6
+      : multisig.holdings.reduce((s, h) => s + h.usd, 0) || wallet.usd;
 
   return (
     <PushedScreen title={wallet.label} contentStyle={styles.content}>
@@ -157,7 +163,22 @@ export default function MultisigScreen() {
             <Text style={styles.holdingUsd}>{formatUsd(h.usd)}</Text>
           </View>
         ))}
-        {multisig.holdings.length === 0 ? (
+        {jarLedger ? (
+          <View style={styles.holding}>
+            <Text style={[styles.flex, styles.holdingName]}>Your share</Text>
+            <Text style={styles.holdingAmount}>
+              {jarLedger.myPendingUnits > 0n ? 'Some pending approval' : ''}
+            </Text>
+            <Text style={styles.holdingUsd}>
+              {jarLedger.navMicro !== null
+                ? formatUsd(
+                    memberValue(jarLedger.myUnits, jarLedger.navMicro, jarLedger.totalUnits),
+                  )
+                : '—'}
+            </Text>
+          </View>
+        ) : null}
+        {multisig.holdings.length === 0 && !jarLedger ? (
           <EmptyState
             compact
             icon="receive"
@@ -223,14 +244,16 @@ export default function MultisigScreen() {
         onPress={() => edit('rule')}
         accessory="chevron"
       />
-      <SheetRow
-        icon="clock"
-        title="Daily spending limit"
-        subtitle="Any member can spend up to this alone each day"
-        value={multisig.dailyLimit ? formatUsd(multisig.dailyLimit) : 'None'}
-        onPress={() => edit('limit')}
-        accessory="chevron"
-      />
+      {multisig.dao ? null : (
+        <SheetRow
+          icon="clock"
+          title="Daily spending limit"
+          subtitle="Any member can spend up to this alone each day"
+          value={multisig.dailyLimit ? formatUsd(multisig.dailyLimit) : 'None'}
+          onPress={() => edit('limit')}
+          accessory="chevron"
+        />
+      )}
 
       {/* History */}
       <Sticky id="history" style={styles.sectionGap}>

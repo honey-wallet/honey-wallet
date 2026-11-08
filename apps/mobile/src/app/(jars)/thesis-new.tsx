@@ -139,6 +139,12 @@ export default function NewThesisSheet() {
         jar: jarName,
         picks: proposal.picks.map((x) => x.symbol),
         usd: proposal.amount,
+        // A shared jar on NEAR quotes and proposes these live routes.
+        legs: routes.flatMap((r) =>
+          r.legs
+            .filter((l) => l.assetId && l.usd > 0)
+            .map((l) => ({ destinationAsset: l.assetId as string, usd: l.usd })),
+        ),
       });
       createThesisJar(proposal, {
         id,
