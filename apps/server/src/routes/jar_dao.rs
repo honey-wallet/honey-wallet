@@ -37,12 +37,13 @@ pub fn router(identity: Option<Identity>, dao: Arc<JarDao>, buys: Option<Arc<Jar
         })
 }
 
-async fn signed_in(state: &StateData, headers: &HeaderMap) -> Result<(), AppError> {
+/// The signed-in user's id.
+async fn signed_in(state: &StateData, headers: &HeaderMap) -> Result<String, AppError> {
     let identity = state.identity.as_ref().ok_or(AppError::Unauthorized)?;
-    identity
+    let profile = identity
         .authenticate(super::identity::bearer(headers)?)
         .await?;
-    Ok(())
+    Ok(profile.user_id.to_string())
 }
 
 #[derive(Deserialize)]
@@ -110,27 +111,36 @@ async fn buy_quote(
     headers: HeaderMap,
     input: Result<Json<DaoBuyRequest>, JsonRejection>,
 ) -> Result<Json<BuyQuote>, AppError> {
-    signed_in(&s, &headers).await?;
+    let user = signed_in(&s, &headers).await?;
+    // Same per-user budget as /jar-buys/quote: each quote mints live 1Click deposit addresses.
+    if let Some(identity) = s.identity.as_ref() {
+        identity
+            .rate_limit_scoped("jar-buy-quote", &user, super::jar_buys::QUOTES_PER_MINUTE)
+            .await?;
+    }
     let Json(input) = input.map_err(|e| AppError::BadRequest(e.body_text()))?;
     if !is_jar_dao(&input.dao) {
         return Err(AppError::BadRequest("not a sputnik-dao.near jar".into()));
     }
     let buys = s.buys.as_ref().ok_or(AppError::Busy)?;
-    buys.quote(BuyRequest {
-        origin_asset: format!("nep141:{USDC_NEAR}"),
-        refund_to: input.dao.clone(),
-        slippage_bps: input.slippage_bps,
-        intents: true,
-        legs: input
-            .legs
-            .into_iter()
-            .map(|l| BuyLeg {
-                destination_asset: l.destination_asset,
-                amount: l.amount,
-                recipient: input.dao.clone(),
-            })
-            .collect(),
-    })
+    buys.quote(
+        &user,
+        BuyRequest {
+            origin_asset: format!("nep141:{USDC_NEAR}"),
+            refund_to: input.dao.clone(),
+            slippage_bps: input.slippage_bps,
+            intents: true,
+            legs: input
+                .legs
+                .into_iter()
+                .map(|l| BuyLeg {
+                    destination_asset: l.destination_asset,
+                    amount: l.amount,
+                    recipient: input.dao.clone(),
+                })
+                .collect(),
+        },
+    )
     .await
     .map(Json)
 }

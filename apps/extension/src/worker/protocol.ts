@@ -38,6 +38,26 @@ export const ERR = {
   internal: { code: -32603, message: 'Something went wrong in Honey.' },
 } satisfies Record<string, ProviderError>;
 
+/**
+ * Pages Honey talks to: HTTPS, plus plain HTTP only on this machine for local dapp
+ * development. Anything on plain HTTP over a network can be rewritten in transit, so
+ * it never gets a provider, a connection or a signature.
+ */
+export function isSecureOrigin(origin: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(origin);
+  } catch {
+    return false;
+  }
+  if (url.origin !== origin) return false;
+  if (url.protocol === 'https:') return true;
+  return (
+    url.protocol === 'http:' &&
+    (url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '[::1]')
+  );
+}
+
 /** A connected site: which wallet it sees, and the EVM network it's on. */
 export type Site = {
   origin: string;

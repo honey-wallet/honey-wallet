@@ -895,6 +895,12 @@ export interface JarBuyLeg {
   minAmountOut: string;
   amountOutUsd: string | null;
   deadline: string;
+  /** Echoed from the signed 1Click quote: where the swap pays out and refunds. */
+  recipient: string;
+  refundTo: string;
+  slippageBps: number;
+  /** 1Click's signature over the quote, passed through. */
+  signature: string | null;
 }
 
 export interface JarBuyQuote {

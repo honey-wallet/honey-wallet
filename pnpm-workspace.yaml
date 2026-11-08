@@ -20,6 +20,9 @@ overrides:
   node-forge: 1.4.1
   # Firebase pulls in Firestore's gRPC client; the app never uses Firestore.
   '@grpc/grpc-js': ^1.13.6
+  # abitype (via WalletConnect/ox) validates untrusted typed data with zod; <4.6.6 can
+  # exhaust memory on crafted input.
+  zod@<4.6.6: ^4.6.6
 
 patchedDependencies:
   # braces has no fixed release; decode-uri-component 0.5.1 is ESM-only and breaks

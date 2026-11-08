@@ -203,6 +203,22 @@ fn router(config: &Config, health: runtime::RuntimeHealth, services: RouterServi
     };
 
     let market = market_data();
+    let market_data_router = market
+        .clone()
+        .map(routes::market::router)
+        .unwrap_or_default();
+    let market_data_router = if let (Some(_), Some(redis)) = (market.as_ref(), redis.clone()) {
+        market_data_router.route_layer(middleware::from_fn_with_state(
+            routes::identity::AuthenticatedApiAdmission::new(
+                redis,
+                config.trust_proxy_headers,
+                config.trusted_proxy_cidrs.clone(),
+            ),
+            routes::identity::limit_market_data_reads_by_ip,
+        ))
+    } else {
+        market_data_router
+    };
     let mut api = routes::v1::router(config)
         .merge(routes::earn::router(earn))
         .merge(public_markets)
@@ -211,12 +227,7 @@ fn router(config: &Config, health: runtime::RuntimeHealth, services: RouterServi
             capability_adapters,
         ))
         .merge(routes::prices::router(markets, health.clone(), config))
-        .merge(
-            market
-                .clone()
-                .map(routes::market::router)
-                .unwrap_or_default(),
-        )
+        .merge(market_data_router)
         .merge(routes::pairing::router_with_proxies(
             config.trust_proxy_headers,
             config.trusted_proxy_cidrs.clone(),
@@ -245,7 +256,11 @@ fn router(config: &Config, health: runtime::RuntimeHealth, services: RouterServi
         .merge(routes::near_intents::router(identity.clone(), near_intents))
         .merge(routes::relay_quotes::router(identity.clone(), relay_quotes))
         .merge(theses_router(identity.clone()))
-        .merge(jar_buys_router(identity.clone(), market.clone()))
+        .merge(jar_buys_router(
+            identity.clone(),
+            market.clone(),
+            redis.clone(),
+        ))
         .merge(routes::aave::router(identity.clone(), aave))
         .merge(routes::morpho::router(identity.clone(), morpho))
         .merge(routes::hyperliquid::router(identity.clone(), redis.clone()))
@@ -300,11 +315,12 @@ fn market_data() -> Option<std::sync::Arc<market_data::MarketData>> {
 fn jar_buys_router(
     identity: Option<identity::Identity>,
     market: Option<std::sync::Arc<market_data::MarketData>>,
+    redis: Option<redis_store::RedisStore>,
 ) -> Router {
     let buys = market
         .clone()
         .and_then(|market| match jar_buys::JarBuys::from_env(market) {
-            Ok(buys) => Some(std::sync::Arc::new(buys)),
+            Ok(buys) => Some(std::sync::Arc::new(buys.with_redis(redis.clone()))),
             Err(error) => {
                 tracing::error!(%error, "jar buys disabled");
                 None
