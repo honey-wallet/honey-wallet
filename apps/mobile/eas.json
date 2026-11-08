@@ -19,7 +19,10 @@
         "EXPO_PUBLIC_FIREBASE_APP_ID": "1:466723419259:web:e2f92c5050c00aa86f1ede",
         "EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID": "466723419259-mo8s1gu589p5qpmsbfrk2f1bk3gpqoi8.apps.googleusercontent.com",
         "EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID": "466723419259-5lej46reuk5sg464ifg5n9k756g95qbp.apps.googleusercontent.com",
-        "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "466723419259-v0c9favnkoadjms79i6c4lfnb52ec335.apps.googleusercontent.com"
+        "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "466723419259-v0c9favnkoadjms79i6c4lfnb52ec335.apps.googleusercontent.com",
+        "EXPO_PUBLIC_API_URL": "https://api.honeywallet.org",
+        "EXPO_PUBLIC_AUTH_ORIGIN": "https://honeywallet.org",
+        "EXPO_PUBLIC_AUTH_CHAIN_ID": "1"
       },
       "android": {
         "buildType": "apk"
@@ -47,7 +50,10 @@
         "EXPO_PUBLIC_FIREBASE_APP_ID": "1:466723419259:web:e2f92c5050c00aa86f1ede",
         "EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID": "466723419259-mo8s1gu589p5qpmsbfrk2f1bk3gpqoi8.apps.googleusercontent.com",
         "EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID": "466723419259-5lej46reuk5sg464ifg5n9k756g95qbp.apps.googleusercontent.com",
-        "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "466723419259-v0c9favnkoadjms79i6c4lfnb52ec335.apps.googleusercontent.com"
+        "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "466723419259-v0c9favnkoadjms79i6c4lfnb52ec335.apps.googleusercontent.com",
+        "EXPO_PUBLIC_API_URL": "https://api.honeywallet.org",
+        "EXPO_PUBLIC_AUTH_ORIGIN": "https://honeywallet.org",
+        "EXPO_PUBLIC_AUTH_CHAIN_ID": "1"
       }
     },
     "demo": {

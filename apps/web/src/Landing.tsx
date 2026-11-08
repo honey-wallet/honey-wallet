@@ -10,8 +10,8 @@ type FormState =
   | { kind: 'joined' }
   | { kind: 'error'; message: string };
 
-// Production API, proxied by Vercel (vercel.json /api rewrite); an explicitly empty VITE_API_URL still closes the form.
-const DEFAULT_API_URL = 'https://www.honeywallet.org';
+// Production API; an explicitly empty VITE_API_URL still closes the form.
+const DEFAULT_API_URL = 'https://api.honeywallet.org';
 
 // TODO: replace with Honey's real X profile link.
 const X_URL = 'https://x.com/';
