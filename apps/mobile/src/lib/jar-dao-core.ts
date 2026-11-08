@@ -12,6 +12,7 @@ import {
   buyKind,
   createDaoCall,
   DAO_CREATE_DEPOSIT,
+  type DepositFact,
   daoAccountId,
   decodeRecord,
   depositCall,
@@ -291,7 +292,7 @@ export function parseProposalId(id: string) {
 
 /**
  * Maps chain state into the app's shapes. `me` is this device's implicit account,
- * shown as YOU; `verified` says which unit-record deposit txs checked out on chain.
+ * shown as YOU; `deposit` returns the server's on-chain check of a unit record's deposit tx.
  */
 export function fromChain(input: {
   walletId: string;
@@ -299,7 +300,7 @@ export function fromChain(input: {
   state: JarDaoState;
   me: string;
   you: string;
-  verified: (r: { tx: string; member: string }) => boolean;
+  deposit: (tx: string) => DepositFact | undefined;
 }) {
   const { state, me, you } = input;
   const idOf = (account: string) => (account === me ? you : account);
@@ -343,6 +344,6 @@ export function fromChain(input: {
       status: STATUS[p.status],
     });
   }
-  const ledger = unitLedger(state.proposals as never, input.verified);
+  const ledger = unitLedger(state.proposals as never, state.dao, input.deposit);
   return { multisig, proposals, ledger, usdcAtomic: BigInt(balance) };
 }

@@ -172,23 +172,37 @@ describe('fund-style units', () => {
         votes: {},
         submission_time: '0',
       }) as DaoProposal;
-    const mint = (member: string, units: string, tx: string) =>
-      encodeRecord({ v: 1, t: 'mint', member, units, usd: units, nav: '0', tx });
+    const DAO = 'jar.sputnik-dao.near';
+    const mint = (member: string, usd: string, tx: string, nav = '0', units = usd) =>
+      encodeRecord({ v: 1, t: 'mint', member, units, usd, nav, tx });
+    const facts: Record<string, { member: string; dao: string; amount: string }> = {
+      tx1: { member: signer, dao: DAO, amount: '100' },
+      tx2: { member: other, dao: DAO, amount: '50' },
+      small: { member: other, dao: DAO, amount: '1' },
+      bySigner: { member: signer, dao: DAO, amount: '30' },
+      elsewhere: { member: other, dao: 'other.sputnik-dao.near', amount: '30' },
+    };
     const ledger = unitLedger(
       [
         p(0, signer, mint(signer, '100', 'tx1')),
-        p(1, other, mint(other, '50', 'tx2')),
+        // Jar worth 100 with 100 units: 50 buys 50, whatever units the record claims.
+        p(1, other, mint(other, '50', 'tx2', '100', '5000')),
         p(2, other, mint(signer, '999', 'tx3')), // proposer is not the member
         p(3, other, mint(other, '70', 'fake')), // unverified tx
+        p(4, other, mint(other, '1000', 'small', '150')), // inflated: chain says 1
+        p(6, other, mint(other, '50', 'tx2', '150')), // reused tx hash
+        p(7, other, mint(other, '30', 'bySigner', '150')), // wrong sender
+        p(8, other, mint(other, '30', 'elsewhere', '150')), // deposited into another DAO
         p(
-          4,
+          9,
           signer,
           encodeRecord({ v: 1, t: 'burn', member: signer, units: '40', nav: '1' }),
           'Approved',
         ),
-        p(5, signer, encodeRecord({ v: 1, t: 'burn', member: signer, units: '40', nav: '1' })),
+        p(10, signer, encodeRecord({ v: 1, t: 'burn', member: signer, units: '40', nav: '1' })),
       ],
-      (r) => r.tx !== 'fake',
+      DAO,
+      (tx) => facts[tx],
     );
     expect(ledger.units.get(signer)).toBe(60n);
     expect(ledger.units.get(other)).toBe(50n);

@@ -339,21 +339,45 @@ export type DaoProposal = {
  * tx is confirmed by `verified` (the reader checks it on chain). A burn counts once
  * its withdraw proposal is Approved (executed).
  */
+export type DepositFact = { member: string; dao: string; amount: string };
+
+/**
+ * Units per member, rebuilt from the chain in proposal order. A mint counts only when:
+ * the proposer is the member; `deposit(tx)` (the server's on-chain check) says that tx
+ * was sent by that member into this DAO for exactly `usd` USDC base units; and the tx
+ * hash wasn't cited by an earlier record. Its units are recomputed from the verified
+ * amount and the ledger's own running total, never taken from the record. A burn
+ * counts once its withdraw proposal executed, capped at the member's units.
+ * The record's `nav` is still self-reported until jar NAV snapshots exist on chain.
+ */
 export function unitLedger(
   proposals: DaoProposal[],
-  verified: (r: { tx: string; member: string }) => boolean,
+  dao: string,
+  deposit: (tx: string) => DepositFact | undefined,
 ) {
   const units = new Map<string, bigint>();
-  for (const p of proposals) {
+  const seen = new Set<string>();
+  let total = 0n;
+  for (const p of [...proposals].sort((a, b) => a.id - b.id)) {
     const r = decodeRecord(p.description);
     if (!r || r.t === 'buy') continue;
-    if (r.t === 'mint' && r.member === p.proposer && verified(r))
-      units.set(r.member, (units.get(r.member) ?? 0n) + BigInt(r.units));
-    if (r.t === 'burn' && p.status === 'Approved')
-      units.set(r.member, (units.get(r.member) ?? 0n) - BigInt(r.units));
+    if (r.t === 'mint') {
+      if (r.member !== p.proposer || seen.has(r.tx)) continue;
+      seen.add(r.tx);
+      const fact = deposit(r.tx);
+      if (!fact || fact.member !== r.member || fact.dao !== dao) continue;
+      if (!/^\d{1,38}$/.test(fact.amount) || BigInt(fact.amount) !== BigInt(r.usd)) continue;
+      const minted = unitsFor(BigInt(fact.amount), BigInt(r.nav), total);
+      units.set(r.member, (units.get(r.member) ?? 0n) + minted);
+      total += minted;
+    }
+    if (r.t === 'burn' && p.status === 'Approved') {
+      const held = units.get(r.member) ?? 0n;
+      const burned = BigInt(r.units) > held ? held : BigInt(r.units);
+      units.set(r.member, held - burned);
+      total -= burned;
+    }
   }
-  let total = 0n;
-  for (const v of units.values()) total += v;
   return { units, total };
 }
 

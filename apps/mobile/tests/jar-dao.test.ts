@@ -142,7 +142,7 @@ describe('reading a jar back from the chain', () => {
       state,
       me: ME,
       you: 'you',
-      verified: (r) => r.tx === 'h1',
+      deposit: (tx) => (tx === 'h1' ? { member: ME, dao: DAO, amount: '10000000' } : undefined),
     });
     expect(view.multisig.members.map((m) => m.id)).toEqual(['you', BOB]);
     expect(view.multisig.protocol).toBe('sputnik');

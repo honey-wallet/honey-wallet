@@ -7,6 +7,7 @@
  */
 import {
   createNearRpc,
+  type DepositFact,
   type FunctionCall,
   nearTransferOutcome,
   signNearCall,
@@ -86,7 +87,7 @@ async function send(reason: string, receiverId: string, actions: FunctionCall[])
 
 // ---------- Reading ----------
 
-const verifiedDeposits = new Map<string, boolean>();
+const verifiedDeposits = new Map<string, DepositFact | null>();
 
 /** Reads the jar from the chain (via the server's view calls) into the app store. */
 export async function refreshJar(walletId: string, dao: string, jarName: string) {
@@ -101,8 +102,8 @@ export async function refreshJar(walletId: string, dao: string, jarName: string)
       if (!tx || verifiedDeposits.has(tx)) return;
       const ok = await api
         .jarDaoVerifyDeposit(t, { txHash: tx, member: p.proposer, dao })
-        .then(() => true)
-        .catch(() => false);
+        .then((c) => ({ member: c.member, dao: c.dao, amount: c.amount }))
+        .catch(() => null);
       verifiedDeposits.set(tx, ok);
     }),
   );
@@ -112,7 +113,7 @@ export async function refreshJar(walletId: string, dao: string, jarName: string)
     state,
     me,
     you: YOU,
-    verified: (r) => verifiedDeposits.get(r.tx) === true,
+    deposit: (tx) => verifiedDeposits.get(tx) ?? undefined,
   });
   syncDaoJar(view.multisig, view.proposals);
   return { ...view, raw: state };
