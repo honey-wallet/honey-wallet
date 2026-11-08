@@ -1,4 +1,4 @@
-import { Redirect } from 'expo-router';
+import { Redirect, router } from 'expo-router';
 import { useState } from 'react';
 import { Keyboard, Text, TextInput, View } from 'react-native';
 import { PressableScale } from '@/components/motion/PressableScale';
@@ -12,6 +12,7 @@ import { addJar, JAR_TOKENS, usdValue } from '@/lib/jars';
 import { formatUsd } from '@/lib/mock-wallet';
 import { isWeb } from '@/lib/platform';
 import { useSectionPrefs } from '@/lib/section-prefs';
+import { stealthJarsEnabled } from '@/lib/stealth-jar';
 import { showToast } from '@/lib/toast';
 import { makeStyles, radius, useTheme } from '@/theme';
 
@@ -46,6 +47,13 @@ function NewJarSheetContent() {
     <SheetScreen
       title="New Honey Jar"
       size="fill"
+      right={
+        stealthJarsEnabled ? (
+          <PressableScale accessibilityRole="button" onPress={() => router.push('/stealth-jar')}>
+            <Text style={styles.privateLink}>Private</Text>
+          </PressableScale>
+        ) : undefined
+      }
       footer={<PillButton label={label} disabled={!name.trim() || !value} onPress={create} />}
     >
       <View style={styles.field}>
@@ -168,5 +176,10 @@ const useStyles = makeStyles((c) => ({
   convert: {
     color: c.textSecondary,
     fontSize: 15,
+  },
+  privateLink: {
+    color: c.primary,
+    fontSize: 15,
+    fontWeight: '600',
   },
 }));

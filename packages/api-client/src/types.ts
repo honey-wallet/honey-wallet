@@ -73,6 +73,21 @@ export interface StealthJarRelayMessage {
   to: number;
   data: string;
 }
+/** Mirrors `Ledger` in apps/server/src/routes/stealth_jar_boxes.rs. `data` is ciphertext. */
+export interface StealthJarLedger {
+  version: number;
+  data: string;
+}
+/** Mirrors `BoxRequest`. `data` is a sealed, member-signed signing request. */
+export interface StealthJarBoxRequest {
+  id: string;
+  data: string;
+}
+/** Derived on device from the jar's ledger key (keyring `jarBox`). */
+export interface StealthJarBoxAccess {
+  boxId: string;
+  boxToken: string;
+}
 export interface StealthJarInvite {
   sessionId: string;
   inviteToken: string;

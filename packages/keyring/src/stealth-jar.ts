@@ -21,7 +21,6 @@ import { nearPublicKey } from './near';
 
 const FROST = ed25519_FROST;
 const ROUND2_INFO = utf8ToBytes('honey/stealth-jar/dkg-round2/v1');
-const LEDGER_AAD = 'honey/stealth-jar/ledger/v1:';
 
 type Bytes = Uint8Array;
 export type Random = (bytes: number) => Uint8Array;
@@ -107,8 +106,6 @@ export type StealthJarKey = {
   nearPublicKey: string;
   /** Symmetric key for the encrypted unit ledger; never sent to the server in clear. */
   ledgerKey: string;
-  /** Hash of all round-1 messages; members compare it out of band to rule out a relay MITM. */
-  transcript: string;
 };
 
 export function dkgStart(index: number, threshold: Threshold, random: Random) {
@@ -178,11 +175,6 @@ export function dkgRound2(
   });
 }
 
-export function dkgTranscript(round1: DkgRound1Message[]): string {
-  const sorted = [...round1].sort((a, b) => a.from - b.from);
-  return bytesToHex(sha256(utf8ToBytes(JSON.stringify(sorted)))).slice(0, 24);
-}
-
 export function dkgFinish(
   state: DkgState,
   round1: DkgRound1Message[],
@@ -229,7 +221,6 @@ export function dkgFinish(
     accountId,
     nearPublicKey: nearPublicKey(accountId),
     ledgerKey: bytesToHex(ledgerKey),
-    transcript: dkgTranscript(round1),
   };
 }
 
@@ -289,37 +280,4 @@ export function signAggregate(
   if (!ed25519.verify(signature, message, hexToBytes(jar.groupPublicKey)))
     throw new Error('Aggregated signature does not verify');
   return signature;
-}
-
-// ---------- encrypted unit ledger ----------
-
-/** Units each member owns in the jar. Only ciphertext ever reaches the server. */
-export type StealthLedger = {
-  version: number;
-  units: Record<string, string>;
-};
-
-export function sealLedger(jar: StealthJarKey, ledger: StealthLedger, random: Random): string {
-  if (!Number.isSafeInteger(ledger.version) || ledger.version < 0)
-    throw new Error('Invalid ledger version');
-  for (const v of Object.values(ledger.units))
-    if (!/^(0|[1-9]\d*)$/.test(v)) throw new Error('Invalid unit amount');
-  const nonce = random(24);
-  const box = xchacha20poly1305(
-    hexToBytes(jar.ledgerKey),
-    nonce,
-    utf8ToBytes(LEDGER_AAD + jar.accountId),
-  ).encrypt(utf8ToBytes(JSON.stringify(ledger)));
-  return base64.encode(concatBytes(nonce, box));
-}
-
-export function openLedger(jar: StealthJarKey, sealed: string): StealthLedger {
-  const bytes = base64.decode(sealed);
-  if (bytes.length < 24 + 16) throw new Error('Ledger ciphertext is too short');
-  const plain = xchacha20poly1305(
-    hexToBytes(jar.ledgerKey),
-    bytes.subarray(0, 24),
-    utf8ToBytes(LEDGER_AAD + jar.accountId),
-  ).decrypt(bytes.subarray(24));
-  return JSON.parse(new TextDecoder().decode(plain)) as StealthLedger;
 }

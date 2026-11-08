@@ -252,6 +252,10 @@ fn router(config: &Config, health: runtime::RuntimeHealth, services: RouterServi
             identity.clone(),
             redis.clone(),
         ))
+        .merge(routes::stealth_jar_boxes::router(
+            identity.clone(),
+            redis.clone(),
+        ))
         .merge(routes::swaps::router_with_execution(
             identity.clone(),
             swaps,

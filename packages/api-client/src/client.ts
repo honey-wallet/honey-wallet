@@ -55,7 +55,10 @@ import type {
   PairMessage,
   PairSlot,
   StartThesis,
+  StealthJarBoxAccess,
+  StealthJarBoxRequest,
   StealthJarInvite,
+  StealthJarLedger,
   StealthJarMember,
   StealthJarRelayMessage,
   StealthJarSession,
@@ -621,6 +624,40 @@ export function createApiClient({ baseUrl, fetch: fetchImpl = fetch }: ApiClient
       request<StealthJarRelayMessage[]>(
         `/api/v1/stealth-jars/sessions/${encodeURIComponent(invite.sessionId)}/rounds/${round}`,
         authorized(accessToken, { headers: { 'X-Jar-Invite': invite.inviteToken } }),
+      ),
+    /** The jar's encrypted ledger, or null before it is first written. */
+    stealthJarLedger: async (accessToken: string, box: StealthJarBoxAccess) => {
+      try {
+        return await request<StealthJarLedger>(
+          `/api/v1/stealth-jars/boxes/${encodeURIComponent(box.boxId)}/ledger`,
+          authorized(accessToken, { headers: { 'X-Jar-Box': box.boxToken } }),
+        );
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 404) return null;
+        throw error;
+      }
+    },
+    /** Compare-and-swap: `ledger.version` must be the stored version + 1 (1 claims the box). */
+    stealthJarWriteLedger: (
+      accessToken: string,
+      box: StealthJarBoxAccess,
+      ledger: StealthJarLedger,
+    ) => {
+      const init = authorizedJson(accessToken, ledger, undefined, { 'X-Jar-Box': box.boxToken });
+      return request<StealthJarLedger>(
+        `/api/v1/stealth-jars/boxes/${encodeURIComponent(box.boxId)}/ledger`,
+        { ...init, method: 'PUT' },
+      );
+    },
+    stealthJarRequests: (accessToken: string, box: StealthJarBoxAccess) =>
+      request<StealthJarBoxRequest[]>(
+        `/api/v1/stealth-jars/boxes/${encodeURIComponent(box.boxId)}/requests`,
+        authorized(accessToken, { headers: { 'X-Jar-Box': box.boxToken } }),
+      ),
+    stealthJarPostRequest: (accessToken: string, box: StealthJarBoxAccess, data: string) =>
+      request<StealthJarBoxRequest>(
+        `/api/v1/stealth-jars/boxes/${encodeURIComponent(box.boxId)}/requests`,
+        authorizedJson(accessToken, { data }, undefined, { 'X-Jar-Box': box.boxToken }),
       ),
     /** Leaves a pairing message for the other device. */
     pairSend: async (pair: PairChannel, slot: PairSlot, message: PairMessage) => {

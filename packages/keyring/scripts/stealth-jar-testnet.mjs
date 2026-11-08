@@ -46,7 +46,6 @@ assert.equal(new Set(jars.map((j) => j.accountId)).size, 1);
 const jar = jars[0];
 console.log('group implicit account:', jar.accountId);
 console.log('group public key      :', jar.nearPublicKey);
-console.log('DKG transcript        :', jar.transcript);
 
 // 2. Live testnet reads: chain id, a recent block hash, and the account's key (if funded).
 const status = await rpc('status', []);

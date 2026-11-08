@@ -43,9 +43,14 @@ export interface ConfidentialQuoteRequest {
   confidentiality: Confidentiality;
 }
 
-export interface Nep413SignedData {
-  standard: 'nep413';
-  payload: { message: string; nonce: string; recipient: string; callbackUrl?: string | null };
+/**
+ * The jar signs as `raw_ed25519`: `payload` is the JSON string itself and `signer_id` is
+ * the hex public key, i.e. the implicit account id, so no `add_public_key` registration
+ * is needed (`nep413` would require it for NEAR accounts).
+ */
+export interface RawEd25519SignedData {
+  standard: 'raw_ed25519';
+  payload: string;
   public_key: string;
   signature: string;
 }
@@ -163,30 +168,42 @@ export function confidentialWithdrawQuote(
 export function generateIntentRequest(depositAddress: string, signerId: string) {
   check(depositAddress.length > 0 && depositAddress.length <= 256, 'Invalid deposit address');
   check(NEAR_IMPLICIT.test(signerId), 'Stealth jar must be a NEAR implicit account');
-  return { type: 'swap_transfer' as const, standard: 'nep413' as const, signerId, depositAddress };
+  return {
+    type: 'swap_transfer' as const,
+    standard: 'raw_ed25519' as const,
+    signerId,
+    depositAddress,
+  };
 }
 
-/** Checks the generated payload names our signer before the group spends a signing round on it. */
+/**
+ * Shape check on `/v0/generate-intent` output before members are asked to sign it.
+ * Members still run keyring's `inspectIntentPayload` on the payload before approving.
+ */
 export function validateGeneratedIntent(intent: unknown, signerId: string) {
   check(!!intent && typeof intent === 'object', 'Invalid generated intent');
-  const value = intent as { standard?: unknown; payload?: Record<string, unknown> };
-  check(value.standard === 'nep413', 'Expected a nep413 intent');
-  const payload = value.payload;
-  check(!!payload && typeof payload.message === 'string', 'Intent has no message');
-  check(typeof payload.nonce === 'string' && typeof payload.recipient === 'string', 'Bad intent');
-  const message = JSON.parse(payload.message as string) as { signer_id?: unknown };
+  const value = intent as { standard?: unknown; payload?: unknown };
+  check(value.standard === 'raw_ed25519', 'Expected a raw_ed25519 intent');
+  check(typeof value.payload === 'string' && value.payload.length <= 16_384, 'Bad payload');
+  const message = JSON.parse(value.payload as string) as { signer_id?: unknown };
   check(message.signer_id === signerId, 'Intent is for a different signer');
-  return value as { standard: 'nep413'; payload: Nep413SignedData['payload'] };
+  return { standard: 'raw_ed25519' as const, payload: value.payload as string };
 }
 
-export function submitIntentRequest(signedData: Nep413SignedData) {
+function checkSigned(signedData: RawEd25519SignedData) {
+  check(signedData.standard === 'raw_ed25519', 'Expected raw_ed25519');
   check(/^ed25519:[1-9A-HJ-NP-Za-km-z]{43,44}$/.test(signedData.public_key), 'Bad public key');
   check(/^ed25519:[1-9A-HJ-NP-Za-km-z]{86,88}$/.test(signedData.signature), 'Bad signature');
+}
+
+export function submitIntentRequest(signedData: RawEd25519SignedData) {
+  checkSigned(signedData);
   return { type: 'swap_transfer' as const, signedData };
 }
 
-export function authenticateRequest(signedData: Nep413SignedData) {
-  const message = JSON.parse(signedData.payload.message) as { intents?: unknown[] };
+export function authenticateRequest(signedData: RawEd25519SignedData) {
+  checkSigned(signedData);
+  const message = JSON.parse(signedData.payload) as { intents?: unknown[] };
   check(
     Array.isArray(message.intents) && message.intents.length === 0,
     'Auth must sign no intents',
@@ -200,11 +217,15 @@ export interface ConfidentialBalance {
   source: 'private';
 }
 
-export function createConfidentialIntents(apiKey: string, fetcher: typeof fetch = fetch) {
+export function createConfidentialIntents(
+  apiKey: string | undefined,
+  fetcher: typeof fetch = fetch,
+) {
   async function call<T>(path: string, init: RequestInit & { bearer?: string } = {}) {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (init.bearer) headers.Authorization = `Bearer ${init.bearer}`;
-    else headers['X-API-Key'] = apiKey;
+    // Without a partner key 1Click still works, with an extra 0.25% platform fee.
+    else if (apiKey) headers['X-API-Key'] = apiKey;
     const response = await fetcher(`${ONE_CLICK_BASE}${path}`, { ...init, headers });
     if (!response.ok) throw new Error(`1Click ${path} failed (${response.status})`);
     return (await response.json()) as T;
@@ -219,14 +240,14 @@ export function createConfidentialIntents(apiKey: string, fetcher: typeof fetch 
         '/v0/generate-intent',
         generateIntentRequest(depositAddress, signerId),
       ),
-    submitIntent: (signed: Nep413SignedData) =>
+    submitIntent: (signed: RawEd25519SignedData) =>
       post<{ intentHash: string; correlationId: string }>(
         '/v0/submit-intent',
         submitIntentRequest(signed),
       ),
     status: (depositAddress: string) =>
       call<{ status: string }>(`/v0/status?depositAddress=${encodeURIComponent(depositAddress)}`),
-    authenticate: (signed: Nep413SignedData) =>
+    authenticate: (signed: RawEd25519SignedData) =>
       post<{ accessToken: string; refreshToken: string; expiresIn: number }>(
         '/v0/auth/authenticate',
         authenticateRequest(signed),
@@ -234,4 +255,37 @@ export function createConfidentialIntents(apiKey: string, fetcher: typeof fetch 
     balances: (accessToken: string) =>
       call<{ balances: ConfidentialBalance[] }>('/v0/account/balances', { bearer: accessToken }),
   };
+}
+
+/**
+ * An approving member's independent check of the deposit address the initiator asked
+ * the group to pay: 1Click's own record for that address must carry exactly the quote
+ * request the member is approving (asset, amount, recipient, types).
+ */
+export function checkQuoteStatus(
+  status: unknown,
+  quote: ConfidentialQuoteRequest,
+  depositAddress: string,
+) {
+  check(!!status && typeof status === 'object', 'Invalid 1Click status');
+  const response = (status as { quoteResponse?: unknown }).quoteResponse as
+    | { quoteRequest?: Record<string, unknown>; quote?: Record<string, unknown> }
+    | undefined;
+  check(!!response?.quoteRequest && !!response.quote, '1Click has no quote for this address');
+  check(response.quote.depositAddress === depositAddress, 'Deposit address mismatch');
+  const fields: (keyof ConfidentialQuoteRequest)[] = [
+    'originAsset',
+    'destinationAsset',
+    'amount',
+    'recipient',
+    'recipientType',
+    'depositType',
+    'refundTo',
+    'swapType',
+  ];
+  for (const field of fields)
+    check(
+      response.quoteRequest[field] === quote[field],
+      `1Click quote ${field} differs from the approval`,
+    );
 }

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   authenticateRequest,
+  checkQuoteStatus,
   confidentialDepositQuote,
   confidentialTransferQuote,
   confidentialWithdrawQuote,
@@ -13,12 +14,14 @@ const jar = 'a'.repeat(64);
 const now = Date.parse('2026-11-09T00:00:00Z');
 const usdc = 'nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1';
 const payload = (signer: string, intents: unknown[] = []) => ({
-  standard: 'nep413',
-  payload: {
-    message: JSON.stringify({ signer_id: signer, deadline: '2026-11-09T00:10:00Z', intents }),
-    nonce: 'A'.repeat(43) + '=',
-    recipient: 'intents.near',
-  },
+  standard: 'raw_ed25519' as const,
+  payload: JSON.stringify({
+    signer_id: signer,
+    verifying_contract: 'intents.near',
+    deadline: '2026-11-09T00:10:00Z',
+    nonce: `${'A'.repeat(43)}=`,
+    intents,
+  }),
 });
 const sig = {
   public_key: `ed25519:${'1'.repeat(44)}`,
@@ -96,7 +99,10 @@ describe('confidential quote builders', () => {
   });
 
   it('validates generated intents and auth payloads', () => {
-    expect(validateGeneratedIntent(payload(jar), jar).standard).toBe('nep413');
+    expect(validateGeneratedIntent(payload(jar), jar).standard).toBe('raw_ed25519');
+    expect(authenticateRequest({ ...payload(jar), ...sig }).signedData.standard).toBe(
+      'raw_ed25519',
+    );
     expect(() => validateGeneratedIntent(payload('other.near'), jar)).toThrow(/different signer/);
     expect(() =>
       authenticateRequest({ ...payload(jar, [{ intent: 'transfer' }]), ...sig } as never),
@@ -117,7 +123,7 @@ describe('createConfidentialIntents', () => {
     expect(genInit.headers).toMatchObject({ 'X-API-Key': 'partner-jwt' });
     expect(JSON.parse(genInit.body as string)).toEqual({
       type: 'swap_transfer',
-      standard: 'nep413',
+      standard: 'raw_ed25519',
       signerId: jar,
       depositAddress: 'dep-addr',
     });
@@ -129,5 +135,35 @@ describe('createConfidentialIntents', () => {
       (async () => new Response('', { status: 401 })) as typeof fetch,
     );
     await expect(api.status('x')).rejects.toThrow(/401/);
+  });
+});
+
+describe('checkQuoteStatus', () => {
+  const quote = confidentialWithdrawQuote({
+    asset: usdc,
+    destinationAsset: usdc,
+    amount: '1000',
+    jarAccount: jar,
+    recipient: 'bob.near',
+    now,
+  });
+  const status = (overrides: Record<string, unknown> = {}, address = 'dep') => ({
+    status: 'PENDING_DEPOSIT',
+    quoteResponse: { quoteRequest: { ...quote, ...overrides }, quote: { depositAddress: address } },
+  });
+
+  it('accepts 1Click record matching the approval', () => {
+    expect(() => checkQuoteStatus(status(), quote, 'dep')).not.toThrow();
+  });
+  it('rejects a swapped recipient, amount, asset or address', () => {
+    expect(() => checkQuoteStatus(status({ recipient: 'evil.near' }), quote, 'dep')).toThrow(
+      /recipient/,
+    );
+    expect(() => checkQuoteStatus(status({ amount: '1' }), quote, 'dep')).toThrow(/amount/);
+    expect(() =>
+      checkQuoteStatus(status({ destinationAsset: 'nep141:x.near' }), quote, 'dep'),
+    ).toThrow();
+    expect(() => checkQuoteStatus(status({}, 'other'), quote, 'dep')).toThrow(/address/);
+    expect(() => checkQuoteStatus({}, quote, 'dep')).toThrow(/no quote/);
   });
 });

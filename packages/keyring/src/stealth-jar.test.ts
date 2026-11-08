@@ -8,9 +8,7 @@ import {
   dkgRound2,
   dkgStart,
   implicitAccountOf,
-  openLedger,
   type StealthJarKey,
-  sealLedger,
   signAggregate,
   signCommit,
   signRound,
@@ -48,7 +46,6 @@ describe('stealth jar 2-of-3', () => {
     expect(b!.accountId).toBe(a!.accountId);
     expect(c!.accountId).toBe(a!.accountId);
     expect(new Set(jars.map((j) => j.ledgerKey)).size).toBe(1);
-    expect(new Set(jars.map((j) => j.transcript)).size).toBe(1);
     expect(a!.nearPublicKey).toBe(`ed25519:${base58.encode(hexToBytes(a!.accountId))}`);
     expect(implicitAccountOf(hexToBytes(a!.groupPublicKey))).toBe(a!.accountId);
   });
@@ -109,14 +106,6 @@ describe('stealth jar 2-of-3', () => {
     const toThree = swapped.filter((m) => m.to === 3);
     expect(toThree.length).toBe(3);
     expect(() => dkgFinish(starts[2]!.state, round1, swapped)).toThrow();
-  });
-
-  it('seals the unit ledger', () => {
-    const sealed = sealLedger(jars[0]!, { version: 1, units: { '1': '500', '2': '250' } }, random);
-    expect(sealed).not.toContain('500');
-    expect(openLedger(jars[2]!, sealed).units['2']).toBe('250');
-    const other = runDkg({ min: 2, max: 2 })[0]!;
-    expect(() => openLedger(other, sealed)).toThrow();
   });
 });
 

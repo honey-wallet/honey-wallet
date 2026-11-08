@@ -192,3 +192,4 @@ export * from './networks';
 export * from './pairing';
 export * from './sign';
 export * from './stealth-jar';
+export * from './stealth-session';
