@@ -47,6 +47,7 @@ import type {
   Health,
   HyperliquidPerpsAccountState,
   MorphoIntent,
+  NewPool,
   PairChannel,
   PairMessage,
   PairSlot,
@@ -60,6 +61,7 @@ import type {
   WaitlistResponse,
   WaitlistSource,
 } from './types';
+import { isMarketVenues } from './types';
 
 export class ApiError extends Error {
   readonly status: number;
@@ -205,6 +207,21 @@ export function createApiClient({ baseUrl, fetch: fetchImpl = fetch }: ApiClient
         authorizedJson(token, projectRelayQuoteRequest(input), init),
       );
     },
+    /** Where a token trades, for splitting a jar buy across chains. Public. */
+    marketVenues: (symbol: string, init?: RequestInit) =>
+      validated(`/api/v1/market/venues?symbol=${encodeURIComponent(symbol)}`, isMarketVenues, init),
+    /** The newest pools with real liquidity, on one chain or all. Public. */
+    newPools: (chain?: string, init?: RequestInit) =>
+      request<NewPool[]>(
+        `/api/v1/market/new-pools${chain ? `?chain=${encodeURIComponent(chain)}` : ''}`,
+        init,
+      ),
+    /** Up to 90 daily closes for one pool. Public. */
+    poolHistory: (chain: string, pool: string, init?: RequestInit) =>
+      request<{ closes: number[] }>(
+        `/api/v1/market/history?chain=${encodeURIComponent(chain)}&pool=${encodeURIComponent(pool)}`,
+        init,
+      ),
     startThesis: (token: string, input: StartThesis, init?: RequestInit) =>
       validated('/api/v1/theses', isThesisStarted, authorizedJson(token, input, init)),
     thesis: (token: string, runId: string, init?: RequestInit) =>

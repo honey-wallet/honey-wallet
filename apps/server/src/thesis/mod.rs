@@ -7,6 +7,7 @@
 pub mod intake;
 pub mod near_ai;
 pub mod registry;
+pub mod research;
 
 use intake::{Intake, LinkResult};
 use near_ai::{NearAi, RunBudget};
@@ -182,6 +183,7 @@ pub struct ThesisService {
     registry: Arc<Registry>,
     intake: Arc<Intake>,
     ai: NearAi,
+    search: research::Linkup,
     runs: RwLock<HashMap<Uuid, Run>>,
 }
 
@@ -189,6 +191,8 @@ pub struct Settings {
     pub oneclick_base_url: String,
     pub near_ai_base_url: String,
     pub near_ai_api_key: Option<String>,
+    pub linkup_base_url: String,
+    pub linkup_api_key: Option<String>,
 }
 
 impl Settings {
@@ -200,6 +204,9 @@ impl Settings {
             near_ai_base_url: var("NEAR_AI_BASE_URL")
                 .unwrap_or_else(|| near_ai::DEFAULT_BASE_URL.into()),
             near_ai_api_key: var("NEAR_AI_API_KEY"),
+            linkup_base_url: var("LINKUP_BASE_URL")
+                .unwrap_or_else(|| research::DEFAULT_BASE_URL.into()),
+            linkup_api_key: var("LINKUP_API_KEY"),
         }
     }
 }
@@ -216,11 +223,17 @@ impl ThesisService {
             .connect_timeout(Duration::from_secs(5))
             .redirect(reqwest::redirect::Policy::limited(5))
             .build()?;
+        let search = research::Linkup::new(
+            client.clone(),
+            settings.linkup_base_url,
+            settings.linkup_api_key,
+        );
         Ok(Self::with_parts(
             Registry::new(client.clone(), settings.oneclick_base_url),
             Intake::new()?,
             NearAi::new(client, settings.near_ai_base_url, settings.near_ai_api_key),
-        ))
+        )
+        .with_search(search))
     }
 
     pub fn with_parts(registry: Registry, intake: Intake, ai: NearAi) -> Self {
@@ -228,8 +241,18 @@ impl ThesisService {
             registry: Arc::new(registry),
             intake: Arc::new(intake),
             ai,
+            search: research::Linkup::new(
+                reqwest::Client::new(),
+                research::DEFAULT_BASE_URL.into(),
+                None,
+            ),
             runs: RwLock::new(HashMap::new()),
         }
+    }
+
+    pub fn with_search(mut self, search: research::Linkup) -> Self {
+        self.search = search;
+        self
     }
 
     pub fn dry_run(&self) -> bool {
@@ -353,8 +376,19 @@ impl ThesisService {
         // Stage 1: intake.
         self.progress(id, Stage::Intake, "Reading what you shared")
             .await;
-        let fetched =
+        let mut fetched =
             futures_util::future::join_all(links.iter().map(|url| self.intake.fetch(url))).await;
+        // Research: recent news on the idea, read as untrusted sources like pasted links.
+        if self.search.enabled() && !text.is_empty() {
+            self.progress(id, Stage::Intake, "Searching the news").await;
+            fetched.extend(
+                self.search
+                    .search(&text)
+                    .await
+                    .into_iter()
+                    .map(LinkResult::Read),
+            );
+        }
         let intent = build_intent(&text, fetched, &params);
         self.record(id, "IntentRecord", json!(intent)).await;
 

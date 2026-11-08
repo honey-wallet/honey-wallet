@@ -69,6 +69,7 @@ export {
   validateSwapQuote,
 } from './swaps';
 export type * from './types';
+export { isMarketVenues } from './types';
 export { swapAuthorityFromQuote, validateSwapEconomics } from './uniswap-economics';
 export {
   decodeUniswapRouterCall,
