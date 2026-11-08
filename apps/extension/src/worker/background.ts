@@ -1,6 +1,7 @@
 import {
   type AppMessage,
   ERR,
+  isSecureOrigin,
   type PageReply,
   type PageRequest,
   PORT_NAME,
@@ -141,7 +142,7 @@ chrome.runtime.onConnect.addListener((port) => {
     sender?.id !== chrome.runtime.id ||
     !sender.tab ||
     sender.frameId !== 0 ||
-    !/^https?:\/\//.test(origin)
+    !isSecureOrigin(origin)
   ) {
     port.disconnect();
     return;

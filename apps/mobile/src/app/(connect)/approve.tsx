@@ -26,6 +26,7 @@ import {
   fromBase64,
   inspectEvmCall,
   isPermit,
+  needsOwnerConfirm,
   performApproval,
   prepareEvmSend,
   readableMessage,
@@ -246,10 +247,11 @@ function Request({ approval, onAnswered }: { approval: Approval; onAnswered: () 
     setBusy(true);
     setError(null);
     try {
-      // Connecting reveals wallet addresses. Require the same owner confirmation on
-      // native and web, where the password prompt is the browser vault's re-auth gate.
+      // Every connect and signature needs a second, explicit owner step (Face ID, or
+      // the browser vault's password) even while unlocked, so one stray click on a
+      // queued request can never sign.
       if (
-        (approval.kind === 'connect' || (!isWeb && approval.kind !== 'switchChain')) &&
+        needsOwnerConfirm(approval.kind) &&
         !(await confirmOwner(`Approve for ${hostOf(approval.origin)}`))
       ) {
         setBusy(false);

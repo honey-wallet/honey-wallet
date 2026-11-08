@@ -104,29 +104,20 @@ impl Mailbox {
 
     /// Who to count a message against: the socket's IP, or behind a trusted proxy
     /// (`TRUST_PROXY_HEADERS=true`) and the TCP peer is in `TRUSTED_PROXY_CIDRS`, the
-    /// last `X-Forwarded-For` entry across every header line, which the proxy appended.
+    /// rightmost `X-Forwarded-For` entry that is not itself a trusted proxy.
     /// An untrusted socket peer is always keyed by its actual IP and cannot select a
     /// quota bucket by forging this header.
     fn client(&self, headers: &HeaderMap, extensions: &Extensions) -> Result<IpAddr, AppError> {
         let peer = extensions
             .get::<ConnectInfo<SocketAddr>>()
             .map_or(IpAddr::from([0, 0, 0, 0]), |info| info.0.ip());
-        let trust_forwarded = self.trust_proxy_headers
-            && self
-                .trusted_proxy_cidrs
-                .iter()
-                .any(|cidr| cidr.contains(peer));
-        let ip = if trust_forwarded {
-            headers
-                .get_all("x-forwarded-for")
-                .iter()
-                .next_back()
-                .and_then(|value| value.to_str().ok())
-                .and_then(|value| value.rsplit(',').next()?.trim().parse().ok())
-                .ok_or_else(|| AppError::BadRequest("missing client address".into()))?
-        } else {
-            peer
-        };
+        let ip = crate::config::forwarded_client_ip(
+            peer,
+            headers,
+            self.trust_proxy_headers,
+            &self.trusted_proxy_cidrs,
+        )
+        .ok_or_else(|| AppError::BadRequest("missing client address".into()))?;
         Ok(client_bucket(ip))
     }
 }

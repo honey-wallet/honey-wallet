@@ -109,25 +109,16 @@ async fn upgrade(
         hub.metrics.socket_handshake_rejected("local_limit");
         AppError::Busy
     })?;
-    let trust_forwarded = state.trust_proxy
-        && state
-            .trusted_proxy_cidrs
-            .iter()
-            .any(|cidr| cidr.contains(peer.ip()));
-    let ip: IpAddr = if trust_forwarded {
-        headers
-            .get_all("x-forwarded-for")
-            .iter()
-            .next_back()
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.rsplit(',').next()?.trim().parse().ok())
-            .ok_or_else(|| {
-                hub.metrics.socket_handshake_rejected("client_ip_missing");
-                AppError::BadRequest("missing client address".into())
-            })?
-    } else {
-        peer.ip()
-    };
+    let ip = crate::config::forwarded_client_ip(
+        peer.ip(),
+        &headers,
+        state.trust_proxy,
+        &state.trusted_proxy_cidrs,
+    )
+    .ok_or_else(|| {
+        hub.metrics.socket_handshake_rejected("client_ip_missing");
+        AppError::BadRequest("missing client address".into())
+    })?;
     let ip = match ip.to_canonical() {
         IpAddr::V6(v) => {
             let mut segments = v.segments();

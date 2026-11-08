@@ -390,6 +390,9 @@ function escapeReviewText(value: string): string {
   );
 }
 
+/** Every request but a network switch needs Face ID or the vault password, on every platform. */
+export const needsOwnerConfirm = (kind: Approval['kind']) => kind !== 'switchChain';
+
 /** Shared fail-closed review gate used both by the screen and the signing boundary. */
 export function approvalReviewError(approval: Approval): string | null {
   try {
@@ -401,9 +404,16 @@ export function approvalReviewError(approval: Approval): string | null {
         : (call.reason ?? 'Honey cannot safely decode this contract call.');
     }
     if (approval.kind === 'evmTypedData') {
-      return typedDataReview(params.data as string).complete
-        ? null
-        : 'This typed-data request has fields Honey cannot show exactly as signed. Signing is blocked.';
+      const review = typedDataReview(params.data as string);
+      if (!review.complete)
+        return 'This typed-data request has fields Honey cannot show exactly as signed. Signing is blocked.';
+      // Typed data without a chain, or for another chain, can be replayed where the
+      // funds are (Permit/Permit2 on mainnet while connected on Base).
+      if (!review.hasChainBinding || review.chainId === undefined)
+        return 'This signature names no chain, so it could be used on any network. Signing is blocked.';
+      if (approval.site && review.chainId !== approval.site.chainId)
+        return 'This signature is for a different network than the site is connected to. Signing is blocked.';
+      return null;
     }
     if (approval.kind === 'solanaSignTransaction' || approval.kind === 'solanaSend') {
       const review = reviewSolanaTransaction(fromBase64(params.transaction as string));

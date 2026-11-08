@@ -7,7 +7,11 @@ use crate::{error::AppError, market_data::MarketData};
 use reqwest::header;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use zeroize::Zeroizing;
 
@@ -50,6 +54,13 @@ pub struct LegQuote {
     pub min_amount_out: String,
     pub amount_out_usd: Option<String>,
     pub deadline: String,
+    /// Echoed from 1Click's signed quote so the app can check payout and refund
+    /// addresses are its own before it signs.
+    pub recipient: String,
+    pub refund_to: String,
+    pub slippage_bps: u16,
+    /// 1Click's signature over the quote, passed through untouched.
+    pub signature: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -78,7 +89,71 @@ pub struct LegStatus {
     pub refunded_amount: Option<String>,
 }
 
+/// How long a quoted deposit address stays tied to the user who asked for it.
+const OWNER_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+const MAX_LOCAL_OWNERS: usize = 50_000;
+
+/// Which user asked for each deposit address, so only they can submit a deposit
+/// hash or read its status. Redis keeps this shared across replicas; the in-memory
+/// map is for single-process and test runs.
+enum Owners {
+    Redis(crate::redis_store::RedisStore),
+    Memory(Mutex<HashMap<String, (String, Instant)>>),
+}
+
+impl Owners {
+    async fn record(&self, deposit_address: &str, owner: &str) -> Result<(), AppError> {
+        match self {
+            Owners::Redis(redis) => {
+                let key = redis.key("jar-buy-owner", deposit_address);
+                let _: () = redis
+                    .query(
+                        redis::cmd("SET")
+                            .arg(key)
+                            .arg(owner)
+                            .arg("EX")
+                            .arg(OWNER_TTL.as_secs()),
+                    )
+                    .await?;
+                Ok(())
+            }
+            Owners::Memory(map) => {
+                let mut map = map.lock().unwrap_or_else(|p| p.into_inner());
+                map.retain(|_, (_, at)| at.elapsed() < OWNER_TTL);
+                if map.len() >= MAX_LOCAL_OWNERS {
+                    return Err(AppError::Busy);
+                }
+                map.insert(deposit_address.into(), (owner.into(), Instant::now()));
+                Ok(())
+            }
+        }
+    }
+
+    async fn check(&self, deposit_address: &str, owner: &str) -> Result<(), AppError> {
+        let found = match self {
+            Owners::Redis(redis) => {
+                let key = redis.key("jar-buy-owner", deposit_address);
+                let v: Option<String> = redis.query(redis::cmd("GET").arg(key)).await?;
+                v
+            }
+            Owners::Memory(map) => map
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .get(deposit_address)
+                .filter(|(_, at)| at.elapsed() < OWNER_TTL)
+                .map(|(o, _)| o.clone()),
+        };
+        // Unknown and someone else's addresses look the same to the caller.
+        if found.as_deref() == Some(owner) {
+            Ok(())
+        } else {
+            Err(AppError::NotFound)
+        }
+    }
+}
+
 pub struct JarBuys {
+    owners: Owners,
     client: reqwest::Client,
     origin: String,
     api_key: Option<Zeroizing<String>>,
@@ -123,6 +198,7 @@ impl JarBuys {
         cap_usd: f64,
     ) -> anyhow::Result<Self> {
         Ok(Self {
+            owners: Owners::Memory(Mutex::default()),
             client: reqwest::Client::builder()
                 .connect_timeout(Duration::from_secs(3))
                 .timeout(Duration::from_secs(15))
@@ -134,6 +210,14 @@ impl JarBuys {
             market,
             cap_usd,
         })
+    }
+
+    /// Keep deposit-address ownership in Redis so every replica agrees.
+    pub fn with_redis(mut self, redis: Option<crate::redis_store::RedisStore>) -> Self {
+        if let Some(redis) = redis {
+            self.owners = Owners::Redis(redis);
+        }
+        self
     }
 
     async fn call(&self, request: reqwest::RequestBuilder) -> Result<Value, AppError> {
@@ -158,7 +242,7 @@ impl JarBuys {
     }
 
     /// Live quotes for every leg, each with its own one-time deposit address.
-    pub async fn quote(&self, input: BuyRequest) -> Result<BuyQuote, AppError> {
+    pub async fn quote(&self, owner: &str, input: BuyRequest) -> Result<BuyQuote, AppError> {
         if input.legs.is_empty() || input.legs.len() > MAX_LEGS {
             return Err(AppError::BadRequest(format!(
                 "a buy has 1 to {MAX_LEGS} legs"
@@ -223,6 +307,9 @@ impl JarBuys {
             }
         });
         let legs = futures_util::future::try_join_all(quotes).await?;
+        for leg in &legs {
+            self.owners.record(&leg.deposit_address, owner).await?;
+        }
         Ok(BuyQuote {
             origin_asset: input.origin_asset,
             total_usd,
@@ -232,12 +319,13 @@ impl JarBuys {
     }
 
     /// Tells 1Click which transaction paid a deposit address, so it starts sooner.
-    pub async fn deposit(&self, input: DepositRequest) -> Result<(), AppError> {
+    pub async fn deposit(&self, owner: &str, input: DepositRequest) -> Result<(), AppError> {
         if !safe(&input.deposit_address, 128) || !safe(&input.tx_hash, 128) {
             return Err(AppError::BadRequest(
                 "invalid deposit address or transaction".into(),
             ));
         }
+        self.owners.check(&input.deposit_address, owner).await?;
         self.call(
             self.client
                 .post(format!("{}/deposit/submit", self.origin))
@@ -247,10 +335,11 @@ impl JarBuys {
         .map(|_| ())
     }
 
-    pub async fn status(&self, deposit_address: &str) -> Result<LegStatus, AppError> {
+    pub async fn status(&self, owner: &str, deposit_address: &str) -> Result<LegStatus, AppError> {
         if !safe(deposit_address, 128) {
             return Err(AppError::BadRequest("invalid deposit address".into()));
         }
+        self.owners.check(deposit_address, owner).await?;
         let mut url =
             reqwest::Url::parse(&format!("{}/status", self.origin)).map_err(|_| AppError::Busy)?;
         url.query_pairs_mut()
@@ -324,6 +413,13 @@ fn check_quote(body: &Value, payload: &Value) -> Result<LegQuote, AppError> {
         amount_out_usd: text("amountOutUsd"),
         deadline: text("deadline")
             .unwrap_or_else(|| payload["deadline"].as_str().unwrap_or_default().into()),
+        recipient: payload["recipient"].as_str().unwrap_or_default().into(),
+        refund_to: payload["refundTo"].as_str().unwrap_or_default().into(),
+        slippage_bps: bps as u16,
+        signature: body["signature"]
+            .as_str()
+            .filter(|s| safe(s, 512))
+            .map(String::from),
     })
 }
 
@@ -401,6 +497,9 @@ mod tests {
         let q = check_quote(&reply(&p, "1336500000000000000000000"), &p).unwrap();
         assert_eq!(q.deposit_address, "0xdeposit");
         assert_eq!(q.min_amount_out, "1336500000000000000000000");
+        assert_eq!(q.recipient, "alice.near");
+        assert_eq!(q.refund_to, "0xabc");
+        assert_eq!(q.slippage_bps, 100);
         assert_eq!(p["dry"], false);
     }
 
@@ -425,6 +524,21 @@ mod tests {
         let s = parse_status("0xdeposit", &body).unwrap();
         assert_eq!(s.destination_tx_hashes, vec!["abc"]);
         assert!(parse_status("0xdeposit", &json!({ "status": "WEIRD" })).is_err());
+    }
+
+    #[tokio::test]
+    async fn deposit_addresses_are_scoped_to_the_user_who_quoted_them() {
+        let owners = Owners::Memory(Mutex::default());
+        owners.record("0xdeposit", "alice").await.unwrap();
+        assert!(owners.check("0xdeposit", "alice").await.is_ok());
+        assert!(matches!(
+            owners.check("0xdeposit", "mallory").await,
+            Err(AppError::NotFound)
+        ));
+        assert!(matches!(
+            owners.check("0xother", "alice").await,
+            Err(AppError::NotFound)
+        ));
     }
 
     #[test]

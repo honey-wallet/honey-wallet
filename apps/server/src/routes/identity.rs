@@ -150,6 +150,29 @@ pub(crate) async fn limit_public_market_reads_by_ip(
     Ok(next.run(request).await)
 }
 
+/// `/market/*` (pools, tokens, search) can miss the cache and call GeckoTerminal and
+/// DexScreener, so one client gets far less room than cached reads.
+const MARKET_DATA_GLOBAL_LIMIT: i32 = 6_000;
+const MARKET_DATA_PEER_LIMIT: i32 = 120;
+
+pub(crate) async fn limit_market_data_reads_by_ip(
+    State(state): State<AuthenticatedApiAdmission>,
+    request: Request<axum::body::Body>,
+    next: Next,
+) -> Result<Response, AppError> {
+    let ip = client_ip_from_request(state.trust_proxy, &state.trusted_proxy_cidrs, &request)?;
+    state
+        .redis
+        .rate_limit_pair(
+            "market_data_public_read",
+            &client_bucket(ip).to_string(),
+            state.global_limit.min(MARKET_DATA_GLOBAL_LIMIT),
+            state.peer_limit.min(MARKET_DATA_PEER_LIMIT),
+        )
+        .await?;
+    Ok(next.run(request).await)
+}
+
 async fn configuration(
     State(state): State<AuthState>,
     headers: HeaderMap,
@@ -195,18 +218,8 @@ pub(crate) fn client_ip_from_request(
         .get::<ConnectInfo<SocketAddr>>()
         .map(|info| info.0.ip())
         .ok_or(AppError::Busy)?;
-    if trust_proxy && trusted_proxy_cidrs.iter().any(|cidr| cidr.contains(peer)) {
-        request
-            .headers()
-            .get_all("x-forwarded-for")
-            .iter()
-            .next_back()
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.rsplit(',').next()?.trim().parse().ok())
-            .ok_or_else(|| AppError::BadRequest("missing client address".into()))
-    } else {
-        Ok(peer)
-    }
+    crate::config::forwarded_client_ip(peer, request.headers(), trust_proxy, trusted_proxy_cidrs)
+        .ok_or_else(|| AppError::BadRequest("missing client address".into()))
 }
 
 pub(crate) fn client_bucket(ip: IpAddr) -> IpAddr {

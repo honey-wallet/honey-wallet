@@ -82,6 +82,39 @@ impl std::str::FromStr for ServerRole {
     }
 }
 
+/// The client address for quota keys. When `trust` is on and the TCP peer is a
+/// trusted proxy, walk every `X-Forwarded-For` entry from the right and return the
+/// first one that is not itself a trusted proxy (rightmost-untrusted). Entries to its
+/// left were written by the client and are never used, so a forged header cannot pick
+/// a quota bucket. Returns `None` when the header is missing or malformed.
+///
+/// Cloud Run: Google's front end appends the real client IP, so `XFF` arrives as
+/// `<anything the client sent>, <client>` (plus `, <load balancer IP>` behind an
+/// external HTTPS load balancer). With the Cloud Run peer range and any load balancer
+/// IP listed as trusted, this returns `<client>`.
+pub fn forwarded_client_ip(
+    peer: IpAddr,
+    headers: &axum::http::HeaderMap,
+    trust: bool,
+    trusted: &[TrustedProxyCidr],
+) -> Option<IpAddr> {
+    let is_trusted = |ip: IpAddr| trusted.iter().any(|cidr| cidr.contains(ip));
+    if !trust || !is_trusted(peer) {
+        return Some(peer);
+    }
+    let mut entries = Vec::new();
+    for value in headers.get_all("x-forwarded-for") {
+        entries.extend(value.to_str().ok()?.split(',').map(str::trim));
+    }
+    for entry in entries.into_iter().rev() {
+        let ip: IpAddr = entry.parse().ok()?;
+        if !is_trusted(ip) {
+            return Some(ip.to_canonical());
+        }
+    }
+    None
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TrustedProxyCidr {
     network: IpAddr,
@@ -768,6 +801,66 @@ mod tests {
         );
         assert!(parse_trusted_proxy_cidrs("10.0.0.0/33").is_err());
         assert!(parse_trusted_proxy_cidrs("not-an-ip").is_err());
+    }
+
+    #[test]
+    fn forwarded_client_is_the_rightmost_untrusted_entry() {
+        use axum::http::{HeaderMap, HeaderValue};
+        let trusted: Vec<_> = ["169.254.0.0/16", "34.120.1.2"]
+            .iter()
+            .map(|c| TrustedProxyCidr::parse(c).unwrap())
+            .collect();
+        let peer: IpAddr = "169.254.1.1".parse().unwrap();
+        let headers = |lines: &[&str]| {
+            let mut h = HeaderMap::new();
+            for l in lines {
+                h.append("x-forwarded-for", HeaderValue::from_str(l).unwrap());
+            }
+            h
+        };
+        let ip = |s: &str| s.parse::<IpAddr>().unwrap();
+        // Cloud Run direct: the client's forged prefix is ignored.
+        assert_eq!(
+            forwarded_client_ip(peer, &headers(&["6.6.6.6, 198.51.100.7"]), true, &trusted),
+            Some(ip("198.51.100.7"))
+        );
+        // Behind an HTTPS load balancer: skip the trusted load balancer hop.
+        assert_eq!(
+            forwarded_client_ip(
+                peer,
+                &headers(&["6.6.6.6", "198.51.100.7, 34.120.1.2"]),
+                true,
+                &trusted
+            ),
+            Some(ip("198.51.100.7"))
+        );
+        // Untrusted peers, or trust off, are keyed by the socket.
+        assert_eq!(
+            forwarded_client_ip(
+                ip("203.0.113.9"),
+                &headers(&["198.51.100.7"]),
+                true,
+                &trusted
+            ),
+            Some(ip("203.0.113.9"))
+        );
+        assert_eq!(
+            forwarded_client_ip(peer, &headers(&["198.51.100.7"]), false, &trusted),
+            Some(peer)
+        );
+        // Missing, malformed or all-trusted chains are rejected.
+        assert_eq!(
+            forwarded_client_ip(peer, &headers(&[]), true, &trusted),
+            None
+        );
+        assert_eq!(
+            forwarded_client_ip(peer, &headers(&["junk"]), true, &trusted),
+            None
+        );
+        assert_eq!(
+            forwarded_client_ip(peer, &headers(&["34.120.1.2"]), true, &trusted),
+            None
+        );
     }
 
     #[test]

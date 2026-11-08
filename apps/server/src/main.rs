@@ -93,6 +93,13 @@ async fn main() -> anyhow::Result<()> {
         .with_context(|| format!("failed to bind {}", config.socket_addr()))?;
 
     tracing::info!(addr = %listener.local_addr()?, role = ?config.server_role, "server listening");
+    if std::env::var_os("K_SERVICE").is_some() && !config.trust_proxy_headers {
+        // On Cloud Run every request arrives from Google's front end, so without
+        // trusted proxy headers all per-IP quotas collapse into one shared bucket.
+        tracing::warn!(
+            "running on Cloud Run with TRUST_PROXY_HEADERS=false: per-IP rate limits see one client; see .env.example"
+        );
+    }
 
     // Connect info gives handlers the client's IP (the pairing mailbox limits per IP).
     let app = build_router_with_infrastructure(&config, health.clone(), &infrastructure)?

@@ -29,12 +29,25 @@ pub fn router(identity: Option<Identity>, buys: Arc<JarBuys>) -> Router {
         .with_state(StateData { identity, buys })
 }
 
-async fn signed_in(state: &StateData, headers: &HeaderMap) -> Result<(), AppError> {
+/// Quotes create live 1Click deposit addresses under the partner key, so each user
+/// gets a small budget per minute; status polling gets a larger one.
+const QUOTES_PER_MINUTE: i32 = 6;
+const LOOKUPS_PER_MINUTE: i32 = 120;
+
+/// The signed-in user's id, after charging `domain`'s per-user quota.
+async fn signed_in(
+    state: &StateData,
+    headers: &HeaderMap,
+    domain: &'static str,
+    limit: i32,
+) -> Result<String, AppError> {
     let identity = state.identity.as_ref().ok_or(AppError::Unauthorized)?;
-    identity
+    let profile = identity
         .authenticate(super::identity::bearer(headers)?)
         .await?;
-    Ok(())
+    let user = profile.user_id.to_string();
+    identity.rate_limit_scoped(domain, &user, limit).await?;
+    Ok(user)
 }
 
 fn body<T>(body: Result<Json<T>, JsonRejection>) -> Result<T, AppError> {
@@ -47,8 +60,8 @@ async fn quote(
     headers: HeaderMap,
     input: Result<Json<BuyRequest>, JsonRejection>,
 ) -> Result<Json<BuyQuote>, AppError> {
-    signed_in(&state, &headers).await?;
-    state.buys.quote(body(input)?).await.map(Json)
+    let user = signed_in(&state, &headers, "jar-buy-quote", QUOTES_PER_MINUTE).await?;
+    state.buys.quote(&user, body(input)?).await.map(Json)
 }
 
 async fn deposit(
@@ -56,8 +69,8 @@ async fn deposit(
     headers: HeaderMap,
     input: Result<Json<DepositRequest>, JsonRejection>,
 ) -> Result<StatusCode, AppError> {
-    signed_in(&state, &headers).await?;
-    state.buys.deposit(body(input)?).await?;
+    let user = signed_in(&state, &headers, "jar-buy-lookup", LOOKUPS_PER_MINUTE).await?;
+    state.buys.deposit(&user, body(input)?).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -72,6 +85,6 @@ async fn status(
     headers: HeaderMap,
     Query(q): Query<StatusQuery>,
 ) -> Result<Json<LegStatus>, AppError> {
-    signed_in(&state, &headers).await?;
-    state.buys.status(&q.deposit_address).await.map(Json)
+    let user = signed_in(&state, &headers, "jar-buy-lookup", LOOKUPS_PER_MINUTE).await?;
+    state.buys.status(&user, &q.deposit_address).await.map(Json)
 }

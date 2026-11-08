@@ -6,6 +6,7 @@ vi.mock('@/lib/vault', () => ({ privateKeyOf: vi.fn() }));
 import {
   approvalReviewError,
   inspectEvmCall,
+  needsOwnerConfirm,
   performApproval,
   readableMessage,
   requestSolanaRpc,
@@ -134,6 +135,29 @@ describe('dApp signing review gates', () => {
     expect(unbound.hasChainBinding).toBe(false);
     expect(unbound.domainRows).toContainEqual(['chainId', '(not set; not signed)']);
     expect(unbound.domainRows).toContainEqual(['purpose', 'looks important (not signed)']);
+  });
+
+  it('asks for Face ID or the password before every signature, not just connect', () => {
+    for (const kind of ['connect', 'evmSend', 'evmSign', 'evmTypedData', 'solanaSend'] as const)
+      expect(needsOwnerConfirm(kind)).toBe(true);
+    expect(needsOwnerConfirm('switchChain')).toBe(false);
+  });
+
+  it('blocks typed data for another chain or with no chain at all', async () => {
+    const site = { chainId: 8453 } as NonNullable<Approval['site']>;
+    const signed = (domain: Record<string, unknown>) =>
+      ({ ...approval('evmTypedData', { data: typed(domain) }), site }) as Approval;
+    expect(approvalReviewError(signed({ name: 'Permit2', chainId: 8453 }))).toBeNull();
+    expect(approvalReviewError(signed({ name: 'Permit2', chainId: 1 }))).toMatch(
+      /different network/i,
+    );
+    expect(approvalReviewError(signed({ name: 'Permit2', verifyingContract: address }))).toMatch(
+      /names no chain/i,
+    );
+    await expect(
+      performApproval(signed({ name: 'Permit2', chainId: 1 }), 'wallet'),
+    ).rejects.toThrow(/different network/i);
+    expect(privateKeyOf).not.toHaveBeenCalled();
   });
 
   it('blocks opaque Solana and EVM requests before reading private key material', async () => {

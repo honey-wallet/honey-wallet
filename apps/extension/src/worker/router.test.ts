@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   type Approval,
   ERR,
+  isSecureOrigin,
   type PageReply,
   type Site,
   STORAGE,
@@ -474,4 +475,26 @@ it('does not install a new permission for an unbacked address', async () => {
   const t = setup({ canUseSite: async () => false });
   await expect(t.connect()).rejects.toMatchObject(ERR.unauthorized);
   expect(await t.call('eth_accounts')).toEqual([]);
+});
+
+describe('isSecureOrigin', () => {
+  it('allows HTTPS and local HTTP only', () => {
+    for (const o of [
+      'https://app.example',
+      'http://localhost:5173',
+      'http://127.0.0.1:3000',
+      'http://[::1]:8080',
+    ])
+      expect(isSecureOrigin(o)).toBe(true);
+    for (const o of [
+      'http://app.example',
+      'http://localhost.evil.com',
+      'http://10.0.0.1',
+      'file://x',
+      'chrome-extension://abc',
+      'https://a.example/path',
+      '',
+    ])
+      expect(isSecureOrigin(o)).toBe(false);
+  });
 });
