@@ -3,7 +3,7 @@
 
 use crate::{
     error::AppError,
-    market_data::{History, MarketData, NewPool, Venues},
+    market_data::{History, MarketData, NewPool, TokenMarket, Venues},
 };
 use axum::{
     Json, Router,
@@ -16,6 +16,7 @@ use std::sync::Arc;
 pub fn router(market: Arc<MarketData>) -> Router {
     Router::new()
         .route("/market/venues", get(venues))
+        .route("/market/token", get(token))
         .route("/market/new-pools", get(new_pools))
         .route("/market/history", get(history))
         .with_state(market)
@@ -39,6 +40,27 @@ struct PoolQuery {
 
 fn bad(message: &str) -> AppError {
     AppError::BadRequest(message.into())
+}
+
+/// `GET /market/token?symbol=ETH`: price, 24h change, volume, liquidity and caps.
+async fn token(
+    State(market): State<Arc<MarketData>>,
+    Query(q): Query<SymbolQuery>,
+) -> Result<Json<TokenMarket>, AppError> {
+    let symbol = q.symbol.trim();
+    if symbol.is_empty()
+        || symbol.len() > 20
+        || !symbol
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+    {
+        return Err(bad("symbol must be 1-20 letters or digits"));
+    }
+    market
+        .token_market(symbol)
+        .await
+        .map(Json)
+        .map_err(|_| AppError::Unsupported("no market data for this token".into()))
 }
 
 async fn venues(

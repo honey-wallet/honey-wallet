@@ -52,12 +52,23 @@ export default function SharePortfolioSheet() {
   const view = useWalletView();
   const loading = useFirstLoad(LOADS.history(view.wallet.id));
 
-  const todayPct = (BALANCE_CHANGE / (BALANCE - BALANCE_CHANGE)) * 100;
-  const data = series('portfolio', range, BALANCE, range === '1D' ? todayPct : undefined);
-  const delta = BALANCE - data[0];
-  const pct = (delta / data[0]) * 100;
+  // A real wallet has no balance history yet: its card shows today's move (from live
+  // 24h prices) at any range, ending at the live total.
+  const live = 'live' in view;
+  const total = live ? view.usd : BALANCE;
+  const todayPct = live
+    ? view.usd - view.change > 0
+      ? (view.change / (view.usd - view.change)) * 100
+      : 0
+    : (BALANCE_CHANGE / (BALANCE - BALANCE_CHANGE)) * 100;
+  const data = live
+    ? [total - view.change, total]
+    : series('portfolio', range, BALANCE, range === '1D' ? todayPct : undefined);
+  const delta = total - data[0];
+  const pct = data[0] ? (delta / data[0]) * 100 : 0;
   const down = delta < 0;
-  const period = RANGE_LABEL[range][0].toUpperCase() + RANGE_LABEL[range].slice(1);
+  const label = live ? RANGE_LABEL['1D'] : RANGE_LABEL[range];
+  const period = label[0].toUpperCase() + label.slice(1);
 
   const share = async () => {
     tap();
@@ -148,7 +159,7 @@ export default function SharePortfolioSheet() {
           {showAmounts && (
             <Text style={styles.amounts}>
               {down ? '−' : '+'}
-              {formatUsd(Math.abs(delta))} · {formatUsd(BALANCE)} total
+              {formatUsd(Math.abs(delta))} · {formatUsd(total)} total
             </Text>
           )}
           <View style={styles.chart}>

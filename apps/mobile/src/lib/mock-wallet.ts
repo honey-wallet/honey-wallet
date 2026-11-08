@@ -183,7 +183,8 @@ export function otherWallets(name: string): Wallet[] {
 
 export type Activity = {
   id: string;
-  kind: 'sent' | 'received' | 'swapped' | 'approved';
+  /** `other`: an on-chain transaction that moved nothing Honey reads (contract calls). */
+  kind: 'sent' | 'received' | 'swapped' | 'approved' | 'other';
   /** Token whose logo leads the row. */
   symbol: string;
   /** e.g. "0.300 USDC to 0x41CD…eEE3". Swaps use `swap` instead. */
@@ -191,6 +192,8 @@ export type Activity = {
   swap?: { from: [string, string]; to: [string, string] };
   month: string;
   date: string;
+  /** Live rows: the transaction on the chain's explorer, opened instead of the fixture detail. */
+  url?: string;
 };
 
 export const ACTIVITY: Activity[] = [

@@ -925,3 +925,69 @@ export interface JarBuyStatus {
   destinationTxHashes: string[];
   refundedAmount: string | null;
 }
+
+/** Addresses whose public balances and activity are read. Mirrors `portfolio::Addresses`. */
+export interface PortfolioAddresses {
+  evm?: string;
+  solana?: string;
+  near?: string;
+}
+
+/** One balance on one chain. Mirrors `portfolio::Holding`. */
+export interface PortfolioHolding {
+  chain: string;
+  symbol: string;
+  name: string;
+  amount: number;
+  /** 1Click price; null when the asset has none. */
+  priceUsd: number | null;
+  usd: number;
+}
+
+/** `GET /portfolio/balances`. Mirrors `portfolio::Portfolio`. */
+export interface Portfolio {
+  holdings: PortfolioHolding[];
+  totalUsd: number;
+  /** Chains whose node didn't answer: missing, not zero. */
+  unavailable: string[];
+}
+
+/** One on-chain transaction. Mirrors `portfolio::ActivityItem`. */
+export interface ChainActivityItem {
+  chain: string;
+  hash: string;
+  direction: 'sent' | 'received' | 'other';
+  symbol: string | null;
+  amount: number | null;
+  counterparty: string | null;
+  /** Unix seconds. */
+  timestamp: number;
+  failed: boolean;
+  explorerUrl: string;
+}
+
+/** `GET /portfolio/activity`. Mirrors `portfolio::Activity`. */
+export interface ChainActivity {
+  items: ChainActivityItem[];
+  unavailable: string[];
+}
+
+/** `DELETE /me/account`. Mirrors `account_identity::AccountDeletion`. */
+export interface AccountDeletion {
+  status: 'deleted';
+  waitlistEntries: number;
+}
+
+/** `GET /market/token`. Mirrors `market_data::TokenMarket`. */
+export interface TokenMarket {
+  symbol: string;
+  priceUsd: number | null;
+  /** Percent, from the deepest pool. */
+  change24h: number | null;
+  volume24h: number | null;
+  liquidityUsd: number | null;
+  marketCap: number | null;
+  fdv: number | null;
+  /** The deepest pool, for `poolHistory(chain, pool)`. */
+  chart: { chain: string; pool: string } | null;
+}

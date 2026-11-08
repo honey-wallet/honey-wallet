@@ -16,7 +16,13 @@ import { ACTIVITY, ACTIVITY_DETAILS, type Chain, chainSymbol, formatUsd } from '
 import { showToast } from '@/lib/toast';
 import { makeStyles } from '@/theme';
 
-const TITLE = { sent: 'Sent', received: 'Received', swapped: 'Swapped', approved: 'Approved' };
+const TITLE = {
+  sent: 'Sent',
+  received: 'Received',
+  swapped: 'Swapped',
+  approved: 'Approved',
+  other: 'Transaction',
+};
 
 /** Where each chain's transactions are looked up. */
 const EXPLORER: Record<Chain, { name: string; tx: (hash: string) => string }> = {

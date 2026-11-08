@@ -205,6 +205,7 @@ export default function RootLayout() {
               <Stack.Screen name="(account)/get-started" options={tray()} />
               <Stack.Screen name="(account)/setup" options={tray()} />
               <Stack.Screen name="(account)/sign-out" options={tray()} />
+              <Stack.Screen name="(account)/delete-account" options={tray()} />
               <Stack.Screen name="(settings)/app-data" />
               <Stack.Screen name="(settings)/smart-wallet" />
               <Stack.Screen name="(keys)/recovery-phrase" />

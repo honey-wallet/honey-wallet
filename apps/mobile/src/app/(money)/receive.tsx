@@ -16,6 +16,7 @@ import { demoLabel } from '@/lib/demo-money-copy';
 import { tap } from '@/lib/haptics';
 import { shortAddress } from '@/lib/mock-wallet';
 import { isWeb } from '@/lib/platform';
+import { useArrivalToast } from '@/lib/portfolio-arrival';
 import { useProfile } from '@/lib/profile';
 import { receiveAddresses } from '@/lib/receive';
 import { isMainWallet, useActiveWallet } from '@/lib/wallets';
@@ -27,6 +28,8 @@ export default function ReceiveSheet() {
   const c = useTheme();
   const profile = useProfile();
   const wallet = useActiveWallet();
+  // While this is open, watch the chain and say when a deposit lands.
+  useArrivalToast(wallet);
   const isMain = isMainWallet(wallet);
   const [showExchange, setShowExchange] = useState(false);
   // Wallets with keys here have an address per chain; list them all, labelled.

@@ -28,6 +28,7 @@ import { Change, EmptyState, PushedScreen, TokenIcon } from '@/components/wallet
 import { toggleFavorite, useFavorites } from '@/lib/favorites';
 import { tap } from '@/lib/haptics';
 import { LOADS } from '@/lib/loads';
+import { rangeSeries, useTokenMarkets } from '@/lib/market';
 import {
   CHAINS,
   chainSymbol,
@@ -43,12 +44,17 @@ import {
   VAULTS,
 } from '@/lib/mock-wallet';
 import { isWeb } from '@/lib/platform';
+import { TEST_MODE } from '@/lib/test-mode';
 import { showToast } from '@/lib/toast';
 import { useWalletView } from '@/lib/wallet-view';
 import { makeStyles, radius, useTheme } from '@/theme';
 import { LAYOUT_MOVE } from '@/theme/motion';
 
 const CHART_HEIGHT = 230;
+
+/** A dollar figure, or a dash when the source doesn't have it (never a made-up number). */
+const compactOrDash = (v: number | null | undefined) =>
+  v == null || !Number.isFinite(v) ? '—' : formatCompactUsd(v);
 
 export default function TokenScreen() {
   const { symbol = 'ETH' } = useLocalSearchParams<{ symbol: string }>();
@@ -58,19 +64,49 @@ export default function TokenScreen() {
   const c = useTheme();
   const favorites = useFavorites();
 
-  const market = MARKET.find((t) => t.symbol === symbol);
+  // Outside test mode every number here is live (see lib/market); the fixture keeps only
+  // the token's name, network and static About/links text.
+  const liveMarkets = useTokenMarkets([symbol], !TEST_MODE);
+  const live = TEST_MODE ? undefined : liveMarkets[symbol];
+  const fixture = MARKET.find((t) => t.symbol === symbol);
+  const market = TEST_MODE
+    ? fixture
+    : live?.market?.priceUsd != null
+      ? {
+          symbol,
+          name: fixture?.name ?? symbol,
+          chain: fixture?.chain ?? 'Ethereum',
+          price: live.market.priceUsd,
+          change: live.market.change24h ?? 0,
+          volume: live.market.volume24h ?? Number.NaN,
+          marketCap: live.market.marketCap ?? Number.NaN,
+        }
+      : undefined;
   const info = TOKEN_INFO[symbol];
   // What the wallet in use holds: none for a new wallet, its own for a shared one.
   const view = useWalletView();
   const held = view.tokens.find((t) => t.symbol === symbol && t.amount > 0);
   const vault = Object.hasOwn(VAULTS, symbol) ? VAULTS[symbol] : undefined;
+  // Per-network balances: live for a real wallet, the fixture's for sample ones.
+  const breakdown =
+    'live' in view
+      ? (view.holdings ?? []).filter((h) => h.symbol === symbol)
+      : (info?.holdings ?? []);
 
   const [range, setRange] = useState<Range>('1D');
   const [scrub, setScrub] = useState<number | null>(null);
-  const loading = useFirstLoad(LOADS.token(symbol));
+  const firstLoad = useFirstLoad(LOADS.token(symbol));
+  const loading = firstLoad || (!TEST_MODE && !live?.market && live?.loading !== false);
   const [showBreakdown, setShowBreakdown] = useState(true);
   // const [menuOpen, setMenuOpen] = useState(false);
 
+  if (!market && loading) {
+    return (
+      <PushedScreen title={symbol} contentStyle={styles.gutter}>
+        <SkeletonChart height={CHART_HEIGHT} />
+      </PushedScreen>
+    );
+  }
   if (!market) {
     return (
       <PushedScreen title={held?.name ?? symbol} contentStyle={styles.gutter}>
@@ -94,7 +130,9 @@ export default function TokenScreen() {
     );
   }
 
-  const data = series(symbol, range, market.price, range === '1D' ? market.change : undefined);
+  const data = TEST_MODE
+    ? series(symbol, range, market.price, range === '1D' ? market.change : undefined)
+    : rangeSeries(live?.closes, market.price, range, live?.market?.change24h);
   const shown = scrub === null ? market.price : data[scrub];
   const change = ((shown - data[0]) / data[0]) * 100;
 
@@ -217,7 +255,7 @@ export default function TokenScreen() {
           </Text>
           {/* One chain would only repeat the balance above. A shared wallet lives on one
               network, and these per-chain figures are your own wallet's. */}
-          {info.holdings.length > 1 && !view.multisig && (
+          {breakdown.length > 1 && !view.multisig && (
             <>
               <Pressable
                 accessibilityRole="button"
@@ -232,7 +270,7 @@ export default function TokenScreen() {
                 <AccordionChevron open={showBreakdown} size={12} color={c.textSecondary} />
               </Pressable>
               <Accordion open={showBreakdown}>
-                {info.holdings.map((h) => (
+                {breakdown.map((h) => (
                   <View key={h.chain} style={styles.holding}>
                     <TokenIcon symbol={chainSymbol(h.chain)} size={22} />
                     <Text style={styles.holdingUsd}>{formatUsd(h.usd)}</Text>
@@ -273,8 +311,8 @@ export default function TokenScreen() {
         </Animated.View>
       )}
 
-      {/* Performance */}
-      {held && info && !view.multisig && (
+      {/* Performance: needs a cost basis, which only the sample data has. */}
+      {held && info && !view.multisig && TEST_MODE && (
         <Animated.View layout={RESIZE} style={[styles.section, styles.gutter]}>
           <Text style={styles.heading}>Performance (all time)</Text>
           {/* The labels are ours; only the values wait, so the rows keep their height. */}
@@ -320,15 +358,25 @@ export default function TokenScreen() {
               />
             ))}
           >
-            <Stat icon="pie" label="Market cap" value={formatCompactUsd(market.marketCap)} />
+            <Stat icon="pie" label="Market cap" value={compactOrDash(market.marketCap)} />
             <Stat
               icon="layers"
               label="Fully diluted valuation"
-              value={formatCompactUsd(info.fdv)}
+              value={TEST_MODE ? formatCompactUsd(info.fdv) : compactOrDash(live?.market?.fdv)}
             />
-            <Stat icon="chart" label="24h volume" value={formatCompactUsd(market.volume)} />
-            <Stat icon="trendUp" label="52W high" value={formatPrice(info.high52)} />
-            <Stat icon="trendDown" label="52W low" value={formatPrice(info.low52)} />
+            <Stat icon="chart" label="24h volume" value={compactOrDash(market.volume)} />
+            {TEST_MODE ? (
+              <>
+                <Stat icon="trendUp" label="52W high" value={formatPrice(info.high52)} />
+                <Stat icon="trendDown" label="52W low" value={formatPrice(info.low52)} />
+              </>
+            ) : (
+              <Stat
+                icon="layers"
+                label="Liquidity"
+                value={compactOrDash(live?.market?.liquidityUsd)}
+              />
+            )}
             <Stat
               icon="globe"
               label="Network"

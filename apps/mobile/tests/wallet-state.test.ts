@@ -11,6 +11,12 @@ vi.mock('@/lib/profile', () => ({
   getProfile: () => ({ name: 'Owner' }),
 }));
 vi.mock('@/lib/multisig', () => ({ useMultisig: () => null }));
+vi.mock('@/lib/market', () => ({ useTokenMarkets: () => ({}), dayChange: () => 0 }));
+vi.mock('@/lib/portfolio', () => ({
+  usePortfolio: () => ({ portfolio: undefined, loading: false }),
+  toTokens: () => [],
+  toHoldings: () => [],
+}));
 vi.mock('@/lib/onboarding', () => ({ useOnboarding: () => ({ funded: true }) }));
 vi.mock('react', () => ({
   useSyncExternalStore: (_subscribe: unknown, snapshot: () => unknown) => snapshot(),
@@ -54,7 +60,13 @@ it('does not expose a fallback wallet when secure storage fails', async () => {
   expect(walletLoad.get()).toEqual({ ready: false, error: true });
 });
 it('marks all fixture wallets as demo when no account exists', () => {
-  expect(allWallets('Owner', []).every((wallet) => wallet.demo)).toBe(true);
+  expect(allWallets('Owner', [], true).every((wallet) => wallet.demo)).toBe(true);
+});
+
+it('shows one empty wallet, with no sample money, when no account exists outside test mode', () => {
+  const list = allWallets('Owner', [], false);
+  expect(list).toEqual([{ id: 'main', kind: 'wallet', label: 'Owner', address: '', usd: 0 }]);
+  expect(isFixtureWallet(list[0])).toBe(true);
 });
 
 it('test mode gives real wallets fake money without hiding their keys', () => {

@@ -9,6 +9,7 @@ pub mod market;
 pub mod near_intents;
 pub mod operations;
 pub mod pairing;
+pub mod portfolio;
 pub mod prices;
 pub mod relay_quotes;
 pub mod stealth_jar_boxes;

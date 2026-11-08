@@ -39,6 +39,15 @@ export { isOperationPage, isOperationRecovery } from './operations';
 export { permit2TypedData, validateEmbeddedPermit, validatePermit2Quote } from './permit2';
 export { isPolymarketCatalog, isPolymarketOrderBook } from './polymarket';
 export {
+  isAccountDeletion,
+  isChainActivity,
+  isChainActivityItem,
+  isPortfolio,
+  isPortfolioHolding,
+  isTokenMarket,
+  portfolioQuery,
+} from './portfolio';
+export {
   isPriceSnapshot,
   type PriceConnectionState,
   type PriceStreamOptions,

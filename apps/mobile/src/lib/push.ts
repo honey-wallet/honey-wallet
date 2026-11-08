@@ -1,5 +1,6 @@
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
+import { TEST_MODE } from '@/lib/test-mode';
 
 /**
  * System notifications. For now they're local (scheduled on this device by the demo);
@@ -66,7 +67,8 @@ export async function notify(content: {
   /** Adds Review / Reject buttons. */
   approval?: boolean;
 }) {
-  if (Platform.OS === 'web') return false;
+  // Locally scheduled notifications come from simulations; only test mode shows them.
+  if (Platform.OS === 'web' || !TEST_MODE) return false;
   try {
     await setUpNotifications();
     if (!(await notificationsAllowed())) return false;

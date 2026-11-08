@@ -3,11 +3,24 @@
 //! Identity only, separate from SIWE wallet sessions: it proves an account sign-in
 //! (Apple, Google or email) and nothing about wallets. Returns 422 `unsupported` while
 //! Supabase Auth isn't configured.
+//!
+//! `DELETE /api/v1/me/account`: Settings → Delete account. Deletes what the server keeps
+//! for this Firebase account (its waitlist email, matched on the verified sign-in email).
+//! The app then deletes the Firebase sign-in account itself with the same session, and
+//! wipes the device. Keys never reach the server, so there is nothing else to delete.
 
-use axum::{Json, Router, routing::get};
+use axum::{
+    Json, Router,
+    extract::{FromRef, State},
+    routing::{delete, get},
+};
 use serde::Serialize;
+use sqlx::PgPool;
 
-use crate::firebase_auth::{FirebaseUser, FirebaseVerifier};
+use crate::{
+    error::AppError,
+    firebase_auth::{FirebaseUser, FirebaseVerifier},
+};
 
 /// Response shape mirrored in `packages/api-client/src/types.ts` (`AccountIdentity`).
 #[derive(Debug, Serialize)]
@@ -16,10 +29,60 @@ pub struct AccountIdentity {
     pub user_id: String,
 }
 
+/// Response shape mirrored in `packages/api-client/src/types.ts` (`AccountDeletion`).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountDeletion {
+    pub status: &'static str,
+    /// Waitlist rows removed (0 or 1).
+    pub waitlist_entries: u64,
+}
+
+#[derive(Clone)]
+struct AccountState {
+    verifier: Option<FirebaseVerifier>,
+    pool: Option<PgPool>,
+}
+
+impl FromRef<AccountState> for Option<FirebaseVerifier> {
+    fn from_ref(state: &AccountState) -> Self {
+        state.verifier.clone()
+    }
+}
+
 pub fn router(verifier: Option<FirebaseVerifier>) -> Router {
+    router_with_store(verifier, None)
+}
+
+/// `pool` is the identity database; without it deletion has nothing server-side to remove.
+pub fn router_with_store(verifier: Option<FirebaseVerifier>, pool: Option<PgPool>) -> Router {
     Router::new()
         .route("/me/identity", get(me))
-        .with_state(verifier)
+        .route("/me/account", delete(delete_account))
+        .with_state(AccountState { verifier, pool })
+}
+
+async fn delete_account(
+    State(state): State<AccountState>,
+    FirebaseUser(session): FirebaseUser,
+) -> Result<Json<AccountDeletion>, AppError> {
+    let mut waitlist_entries = 0;
+    if let (Some(pool), Some(email)) = (&state.pool, &session.verified_email) {
+        waitlist_entries = sqlx::query("DELETE FROM waitlist WHERE email = $1")
+            .bind(email)
+            .execute(pool)
+            .await
+            .map_err(crate::identity::unavailable)?
+            .rows_affected();
+    }
+    tracing::info!(
+        waitlist_entries,
+        "account deletion: server data removed for a Firebase user"
+    );
+    Ok(Json(AccountDeletion {
+        status: "deleted",
+        waitlist_entries,
+    }))
 }
 
 async fn me(FirebaseUser(session): FirebaseUser) -> Json<AccountIdentity> {
@@ -41,7 +104,16 @@ mod tests {
     use crate::firebase_auth::test_support;
 
     async fn call(app: Router, authorization: Option<&str>) -> (StatusCode, serde_json::Value) {
-        let mut request = Request::builder().uri("/me/identity");
+        call_at(app, "GET", "/me/identity", authorization).await
+    }
+
+    async fn call_at(
+        app: Router,
+        method: &str,
+        uri: &str,
+        authorization: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
+        let mut request = Request::builder().method(method).uri(uri);
         if let Some(value) = authorization {
             request = request.header("authorization", value);
         }
@@ -95,5 +167,32 @@ mod tests {
         let (status, body) = call(router(None), Some(&format!("Bearer {token}"))).await;
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
         assert_eq!(body["error"]["code"], "unsupported");
+    }
+
+    #[tokio::test]
+    async fn deletes_the_account_for_a_signed_in_user() {
+        let token = test_support::sign(&test_support::claims(now()));
+        let (status, body) = call_at(
+            enabled(),
+            "DELETE",
+            "/me/account",
+            Some(&format!("Bearer {token}")),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            body,
+            serde_json::json!({ "status": "deleted", "waitlistEntries": 0 })
+        );
+        let (status, _) = call_at(enabled(), "DELETE", "/me/account", None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let (status, _) = call_at(
+            router(None),
+            "DELETE",
+            "/me/account",
+            Some(&format!("Bearer {token}")),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     }
 }

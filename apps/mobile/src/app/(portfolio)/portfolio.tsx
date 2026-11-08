@@ -78,6 +78,25 @@ function allocation(grouping: Grouping) {
   });
 }
 
+/** The same split for a real wallet's live balances. */
+function liveAllocation(
+  grouping: Grouping,
+  tokens: { symbol: string; usd: number }[],
+  holdings: { chain: Chain; usd: number }[],
+) {
+  if (grouping === 'Tokens') {
+    return tokens
+      .filter((t) => t.usd > 0)
+      .map((t) => ({ id: t.symbol, label: t.symbol, value: t.usd }));
+  }
+  const byChain = new Map<Chain, number>();
+  for (const h of holdings) byChain.set(h.chain, (byChain.get(h.chain) ?? 0) + h.usd);
+  return [...byChain]
+    .filter(([, value]) => value > 0)
+    .sort((a, b) => b[1] - a[1])
+    .map(([chain, value]) => ({ id: chainSymbol(chain), label: chain, value }));
+}
+
 /** Portfolio value over time, after Uniswap's: scrub the chart, switch ranges. */
 export default function PortfolioScreen() {
   const { width } = useWindowDimensions();
@@ -92,19 +111,29 @@ export default function PortfolioScreen() {
   // The balance is already known; its history and returns are fetched.
   const loading = useFirstLoad(LOADS.history(wallet.id));
   // A wallet that's never had money in it: nothing to chart, return or split yet.
-  const { empty } = useWalletView();
-  const shares = empty ? [] : allocation(grouping);
+  const view = useWalletView();
+  const { empty } = view;
+  // A real wallet: its allocation from live balances. There's no balance history or cost
+  // basis source yet, so its chart is flat at today's value and returns read zero.
+  const live = 'live' in view;
+  const shares = empty
+    ? []
+    : live
+      ? liveAllocation(grouping, view.tokens, view.holdings ?? [])
+      : allocation(grouping);
   const sharesTotal = shares.reduce((s, x) => s + x.value, 0) || 1;
 
   const todayPct = (BALANCE_CHANGE / (BALANCE - BALANCE_CHANGE)) * 100;
-  const data = series('portfolio', range, BALANCE, range === '1D' ? todayPct : undefined);
-  const value = empty ? 0 : scrub === null ? BALANCE : data[scrub];
+  const data = live
+    ? [view.usd, view.usd]
+    : series('portfolio', range, BALANCE, range === '1D' ? todayPct : undefined);
+  const value = empty ? 0 : scrub === null ? (live ? view.usd : BALANCE) : data[scrub];
   const delta = empty ? 0 : value - data[0];
-  const pct = empty ? 0 : (delta / data[0]) * 100;
+  const pct = empty || !data[0] ? 0 : (delta / data[0]) * 100;
   const color = delta < 0 ? c.error : c.success;
 
   // Placeholder performance, scaled by the chosen window.
-  const factor = empty ? 0 : scope === 'all' ? 1 : scope === 'month' ? 0.4 : 0.15;
+  const factor = empty || live ? 0 : scope === 'all' ? 1 : scope === 'month' ? 0.4 : 0.15;
   const unrealized =
     Object.values(TOKEN_INFO).reduce((s, t) => s + t.performance.unrealized, 0) * factor;
   const realized =
@@ -178,7 +207,7 @@ export default function PortfolioScreen() {
           </View>
         )}
       </View>
-      {empty || !SHOW_DEMO_LABELS ? null : (
+      {empty || live || !SHOW_DEMO_LABELS ? null : (
         <View style={[styles.gutter, styles.sampleNotice]} accessibilityRole="text">
           <Text style={styles.sampleNoticeText}>
             Sample portfolio data. The balances, allocation, and performance below are illustrative

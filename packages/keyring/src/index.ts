@@ -194,3 +194,4 @@ export * from './sign';
 export * from './sputnik';
 export * from './stealth-jar';
 export * from './stealth-session';
+export * from './transfer';

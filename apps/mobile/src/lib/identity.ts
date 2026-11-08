@@ -51,3 +51,28 @@ export async function signOutIdentity() {
     console.warn('Couldn’t sign out of the Honey account', error);
   }
 }
+
+/**
+ * Deletes the signed-in Firebase account itself (Settings → Delete account). Throws
+ * `RecentSignInRequired` when Firebase wants a fresh sign-in first.
+ */
+export async function deleteIdentityUser() {
+  if (!IDENTITY_ENABLED) return;
+  const { identityAuth } = await import('@/lib/identity-client');
+  const user = identityAuth().currentUser;
+  if (!user) return;
+  const { deleteUser } = await import('firebase/auth');
+  try {
+    await deleteUser(user);
+  } catch (error) {
+    if ((error as { code?: string }).code === 'auth/requires-recent-login')
+      throw new RecentSignInRequired();
+    throw error;
+  }
+}
+
+export class RecentSignInRequired extends Error {
+  constructor() {
+    super('Sign in again, then delete your account.');
+  }
+}
