@@ -4,10 +4,29 @@
   "outputDirectory": "dist",
   "trailingSlash": false,
   "rewrites": [
-    { "source": "/app", "destination": "/index.html" },
-    { "source": "/privacy", "destination": "/privacy/index.html" },
-    { "source": "/terms", "destination": "/terms/index.html" },
-    { "source": "/support", "destination": "/support/index.html" },
-    { "source": "/delete-account", "destination": "/delete-account/index.html" }
+    {
+      "source": "/api/:path*",
+      "destination": "https://honey-server-845860586718.us-central1.run.app/api/:path*"
+    },
+    {
+      "source": "/app",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/privacy",
+      "destination": "/privacy/index.html"
+    },
+    {
+      "source": "/terms",
+      "destination": "/terms/index.html"
+    },
+    {
+      "source": "/support",
+      "destination": "/support/index.html"
+    },
+    {
+      "source": "/delete-account",
+      "destination": "/delete-account/index.html"
+    }
   ]
 }
