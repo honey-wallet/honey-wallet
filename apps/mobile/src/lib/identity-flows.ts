@@ -1,5 +1,11 @@
+import {
+  GoogleSignin,
+  isCancelledResponse,
+  isErrorWithCode,
+  isSuccessResponse,
+  statusCodes,
+} from '@react-native-google-signin/google-signin';
 import * as AppleAuthentication from 'expo-apple-authentication';
-import * as Google from 'expo-auth-session/providers/google';
 import * as Crypto from 'expo-crypto';
 import * as WebBrowser from 'expo-web-browser';
 import { FirebaseError } from 'firebase/app';
@@ -41,7 +47,9 @@ export const GOOGLE_SIGN_IN =
   !!(Platform.OS === 'ios'
     ? GOOGLE_CLIENT_IDS.iosClientId
     : Platform.OS === 'android'
-      ? GOOGLE_CLIENT_IDS.androidClientId
+      ? // The native SDK asks for a token for the web client; the Android client (with
+        // the app's SHA-1) is what lets this app ask.
+        GOOGLE_CLIENT_IDS.androidClientId && GOOGLE_CLIENT_IDS.webClientId
       : GOOGLE_CLIENT_IDS.webClientId);
 
 /** Email sign-in: Firebase emails a link that opens the app and signs in (native only). */
@@ -106,17 +114,6 @@ export function useIdentity() {
       await signOut(identityAuth());
     },
   };
-}
-
-// Android: start the browser early so Google's page opens faster.
-function useWarmUpBrowser() {
-  useEffect(() => {
-    if (Platform.OS !== 'android') return;
-    void WebBrowser.warmUpAsync();
-    return () => {
-      void WebBrowser.coolDownAsync();
-    };
-  }, []);
 }
 
 const cancelledBy = (name: string): SignInOutcome => ({
@@ -188,35 +185,45 @@ async function signInWithApple(): Promise<SignInOutcome> {
   );
 }
 
+let googleConfigured = false;
+
 /**
- * Sign in with Google: Google's page in the in-app browser (expo-auth-session) returns
- * an ID token, which Firebase exchanges for its own session.
+ * Sign in with Google: Google's own sign-in sheet (Credential Manager on Android, the
+ * Google SDK on iOS) returns an ID token for the web client, which Firebase exchanges
+ * for its own session. No browser redirect, so no custom URI scheme is needed.
  */
 function useGoogleSignIn() {
-  // Without this platform's client id the button is hidden, so a placeholder keeps the
-  // hook's rules (it's always called) without throwing.
-  const placeholder = GOOGLE_SIGN_IN ? undefined : 'unused';
-  const [request, , promptAsync] = Google.useIdTokenAuthRequest({
-    iosClientId: GOOGLE_CLIENT_IDS.iosClientId || placeholder,
-    androidClientId: GOOGLE_CLIENT_IDS.androidClientId || placeholder,
-    webClientId: GOOGLE_CLIENT_IDS.webClientId || placeholder,
-  });
   return async (): Promise<SignInOutcome> => {
-    if (!GOOGLE_SIGN_IN || !request) return failedWith('Google');
-    const result = await promptAsync();
-    if (result.type === 'cancel' || result.type === 'dismiss') return cancelledBy('Google');
-    const idToken = result.type === 'success' ? result.params.id_token : undefined;
-    if (!idToken) {
-      console.warn('Google sign-in came back without an ID token', result);
-      return failedWith('Google');
+    if (!GOOGLE_SIGN_IN) return failedWith('Google');
+    try {
+      if (!googleConfigured) {
+        GoogleSignin.configure({
+          webClientId: GOOGLE_CLIENT_IDS.webClientId,
+          iosClientId: GOOGLE_CLIENT_IDS.iosClientId || undefined,
+        });
+        googleConfigured = true;
+      }
+      if (Platform.OS === 'android')
+        await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
+      const response = await GoogleSignin.signIn();
+      if (isCancelledResponse(response)) return cancelledBy('Google');
+      const idToken = isSuccessResponse(response) ? response.data.idToken : null;
+      if (!idToken) {
+        console.warn('Google sign-in came back without an ID token');
+        return failedWith('Google');
+      }
+      return finish('Google', GoogleAuthProvider.credential(idToken));
+    } catch (error) {
+      if (isErrorWithCode(error) && error.code === statusCodes.IN_PROGRESS)
+        return cancelledBy('Google');
+      console.warn('Google sign-in failed', error);
+      return failedWith('Google', error);
     }
-    return finish('Google', GoogleAuthProvider.credential(idToken));
   };
 }
 
-/** Sign in with Apple (native, iOS) and Google (expo-auth-session), both into Firebase. */
+/** Sign in with Apple (native, iOS) and Google (native SDK), both into Firebase. */
 export function useSocialSignIn() {
-  useWarmUpBrowser();
   const google = useGoogleSignIn();
   const guard =
     (name: string, run: () => Promise<SignInOutcome>) => async (): Promise<SignInOutcome> => {
