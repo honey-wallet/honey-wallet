@@ -98,7 +98,13 @@
           }
         ]
       ],
-      "./plugins/withQuotedBundleScript"
+      "./plugins/withQuotedBundleScript",
+      [
+        "@react-native-google-signin/google-signin",
+        {
+          "iosUrlScheme": "com.googleusercontent.apps.466723419259-mo8s1gu589p5qpmsbfrk2f1bk3gpqoi8"
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

@@ -172,7 +172,13 @@ async function flows() {
   }));
   vi.doMock('react-native', () => ({ Platform: { OS: 'ios' } }));
   vi.doMock('expo-apple-authentication', () => ({}));
-  vi.doMock('expo-auth-session/providers/google', () => ({ useIdTokenAuthRequest: vi.fn() }));
+  vi.doMock('@react-native-google-signin/google-signin', () => ({
+    GoogleSignin: { configure: vi.fn(), hasPlayServices: vi.fn(), signIn: vi.fn() },
+    isCancelledResponse: vi.fn(),
+    isErrorWithCode: vi.fn(),
+    isSuccessResponse: vi.fn(),
+    statusCodes: {},
+  }));
   vi.doMock('expo-crypto', () => ({}));
   vi.doMock('expo-web-browser', () => ({ maybeCompleteAuthSession: vi.fn() }));
   vi.doMock('@/components/IdentityProvider', () => ({ useIdentityState: vi.fn() }));
