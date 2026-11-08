@@ -13,6 +13,8 @@ import { TEST_MODE } from '@/lib/test-mode';
 
 export type Venue = {
   chain: string;
+  /** The NEAR Intents asset to buy here (live venues only). */
+  assetId?: string;
   venue: string;
   /** Dollars on the buy side of the pool. */
   depthUsd: number;
@@ -21,7 +23,7 @@ export type Venue = {
   bridgeUsd: number;
 };
 
-export type Leg = { chain: string; venue: string; usd: number; units: number };
+export type Leg = { chain: string; venue: string; usd: number; units: number; assetId?: string };
 
 export type Route = {
   symbol: string;
@@ -97,7 +99,13 @@ export function planRoute(
   const legs = best.set
     .map((v, i) => {
       const legUsd = +(best.filled[i] as number).toFixed(2);
-      return { chain: v.chain, venue: v.venue, usd: legUsd, units: legUsd / price };
+      return {
+        chain: v.chain,
+        venue: v.venue,
+        usd: legUsd,
+        units: legUsd / price,
+        assetId: v.assetId,
+      };
     })
     .filter((l) => l.usd > 0)
     .sort((a, b) => b.usd - a.usd);
@@ -201,6 +209,7 @@ function liveVenues(symbol: string): Promise<LiveVenues | null> {
             price: r.priceUsd,
             venues: r.venues.map((v) => ({
               chain: v.chain,
+              assetId: v.assetId,
               venue: v.venue,
               depthUsd: v.depthUsd,
               feeBps: v.feeBps,

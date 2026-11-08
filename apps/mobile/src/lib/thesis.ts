@@ -75,6 +75,8 @@ export type ThesisJar = {
   mine: boolean;
   /** Set on your copy of someone's jar: who you pay, and their cut of your profit. */
   copiedFrom?: { creator: string; fee: number; jarId: string };
+  /** The real NEAR Intents swaps that bought this jar, one per asset and chain. */
+  buy?: import('@/lib/jar-buy').BuyLeg[];
   /** A resting limit order still waiting to fill, if the jar was bought that way. */
   openOrder?: { kind: OrderKind; amount: number; placedAt: number };
 };
@@ -486,6 +488,8 @@ export function createThesisJar(
     friends: string[];
     copyFee: number;
     order: OrderKind;
+    /** Set when the jar was bought for real: its swaps. */
+    buy?: import('@/lib/jar-buy').BuyLeg[];
   },
 ) {
   const id = `thesis-${Date.now()}`;
@@ -509,6 +513,7 @@ export function createThesisJar(
         })),
       ],
       picks: proposal.picks,
+      buy: options.buy,
       history: [share, share],
       invested: share,
       openOrder:
@@ -523,6 +528,11 @@ export function createThesisJar(
     ...list,
   ]);
   return id;
+}
+
+/** Saves the latest state of a jar's real swaps. */
+export function updateJarBuy(id: string, buy: import('@/lib/jar-buy').BuyLeg[]) {
+  thesisJars.set((list) => list.map((j) => (j.id === id ? { ...j, buy } : j)));
 }
 
 /** Copies a jar's picks into a new jar of your own (a one-time snapshot). */

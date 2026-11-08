@@ -1,5 +1,5 @@
 import { router, useLocalSearchParams } from 'expo-router';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Text, View } from 'react-native';
 import { PriceChart } from '@/components/charts/PriceChart';
 import { Icon } from '@/components/Icon';
@@ -9,13 +9,25 @@ import { SegmentedTabs } from '@/components/motion/SegmentedTabs';
 import { PillButton } from '@/components/onboarding/PillButton';
 import { EmptyState, PushedScreen } from '@/components/wallet/parts';
 import { tap } from '@/lib/haptics';
+import { refreshJarBuy } from '@/lib/jar-buy';
 import { formatUsd } from '@/lib/mock-wallet';
-import { copyJar, jarReturn, jarValue, useThesisJars } from '@/lib/thesis';
+import { copyJar, jarReturn, jarValue, updateJarBuy, useThesisJars } from '@/lib/thesis';
 import { showToast } from '@/lib/toast';
 import { makeStyles, radius, useTheme } from '@/theme';
 
 type Range = '1W' | '1M' | 'All';
 const COPY_AMOUNTS = [50, 100, 250];
+const FINAL = new Set(['SUCCESS', 'REFUNDED', 'FAILED', 'NOT_SENT']);
+const STATE_TEXT: Record<string, string> = {
+  NOT_SENT: 'Not sent',
+  PENDING_DEPOSIT: 'Waiting for payment',
+  KNOWN_DEPOSIT_TX: 'Payment seen',
+  PROCESSING: 'Swapping',
+  SUCCESS: 'Done',
+  INCOMPLETE_DEPOSIT: 'Paid too little',
+  REFUNDED: 'Refunded',
+  FAILED: 'Failed',
+};
 const RANGE_POINTS: Record<Range, number> = { '1W': 8, '1M': 30, All: Number.POSITIVE_INFINITY };
 
 /**
@@ -33,6 +45,16 @@ export default function JarScreen() {
   const [scrub, setScrub] = useState<number | null>(null);
   // The chart fits the page it's on (the extension popup is narrower than the window).
   const [width, setWidth] = useState(0);
+  // While any real swap is still moving, check on it every 10 seconds.
+  const moving = jar?.buy?.some((l) => !FINAL.has(l.status)) ?? false;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: restart only when the jar or its moving state changes, not on every status write.
+  useEffect(() => {
+    if (!jar?.buy || !moving) return;
+    const tick = () => void refreshJarBuy(jar.buy ?? []).then((legs) => updateJarBuy(jar.id, legs));
+    tick();
+    const timer = setInterval(tick, 10_000);
+    return () => clearInterval(timer);
+  }, [jar?.id, moving]);
 
   if (!jar)
     return (
@@ -176,6 +198,37 @@ export default function JarScreen() {
           </View>
         ) : null}
 
+        {jar.buy?.length ? (
+          <>
+            <Text style={styles.section}>Swaps</Text>
+            <View style={styles.card}>
+              {jar.buy.map((l) => (
+                <View key={l.depositAddress} style={styles.row}>
+                  <Text style={[styles.thesis, styles.flex]} numberOfLines={1}>
+                    {l.symbol} on {l.chain} · {formatUsd(l.usd)}
+                  </Text>
+                  <Text
+                    style={[
+                      styles.hint,
+                      styles.swapState,
+                      {
+                        color:
+                          l.status === 'SUCCESS'
+                            ? c.success
+                            : l.status === 'FAILED' || l.status === 'INCOMPLETE_DEPOSIT'
+                              ? c.error
+                              : c.textSecondary,
+                      },
+                    ]}
+                  >
+                    {STATE_TEXT[l.status] ?? l.status}
+                  </Text>
+                </View>
+              ))}
+            </View>
+          </>
+        ) : null}
+
         <Text style={styles.section}>Holdings</Text>
         <View style={styles.card}>
           {layers && jar.picks.length ? (
@@ -213,6 +266,7 @@ export default function JarScreen() {
 
 const useStyles = makeStyles((c) => ({
   flex: { flex: 1 },
+  swapState: { flex: 0, paddingBottom: 0, fontWeight: '600' },
   aave: { alignItems: 'center', gap: 0, paddingTop: 0, marginBottom: -4 },
   aaveLabel: { color: c.textSecondary, fontSize: 14 },
   aaveValue: {

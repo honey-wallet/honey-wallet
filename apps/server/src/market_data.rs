@@ -108,6 +108,8 @@ pub struct OneClickToken {
     pub asset_id: String,
     pub blockchain: String,
     pub symbol: String,
+    #[serde(default)]
+    pub decimals: u8,
     pub price: Option<f64>,
     pub contract_address: Option<String>,
     pub coingecko_id: Option<String>,
@@ -477,6 +479,7 @@ mod tests {
             asset_id: asset.into(),
             blockchain: chain.into(),
             symbol: symbol.into(),
+            decimals: 24,
             price: Some(3.7),
             contract_address: Some(format!("{asset}-addr")),
             coingecko_id: Some(gecko.into()),

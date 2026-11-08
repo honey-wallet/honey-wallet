@@ -793,3 +793,46 @@ export function isMarketVenues(v: unknown): v is MarketVenues {
     })
   );
 }
+
+/** A real jar buy (`POST /api/v1/jar-buys/quote`): one leg per pick and chain. */
+export interface JarBuyRequest {
+  originAsset: string;
+  refundTo: string;
+  slippageBps: number;
+  legs: { destinationAsset: string; amount: string; recipient: string }[];
+}
+
+export interface JarBuyLeg {
+  destinationAsset: string;
+  /** One-time NEAR Intents address the wallet pays into. */
+  depositAddress: string;
+  depositMemo: string | null;
+  amountIn: string;
+  amountOut: string;
+  minAmountOut: string;
+  amountOutUsd: string | null;
+  deadline: string;
+}
+
+export interface JarBuyQuote {
+  originAsset: string;
+  totalUsd: number;
+  capUsd: number;
+  legs: JarBuyLeg[];
+}
+
+export type JarBuyState =
+  | 'PENDING_DEPOSIT'
+  | 'KNOWN_DEPOSIT_TX'
+  | 'PROCESSING'
+  | 'SUCCESS'
+  | 'INCOMPLETE_DEPOSIT'
+  | 'REFUNDED'
+  | 'FAILED';
+
+export interface JarBuyStatus {
+  depositAddress: string;
+  status: JarBuyState;
+  destinationTxHashes: string[];
+  refundedAmount: string | null;
+}
