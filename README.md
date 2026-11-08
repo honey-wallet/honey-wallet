@@ -2,8 +2,37 @@
 
 A monorepo containing the Honey Wallet API server (Rust), web app (React + Vite) and mobile app (Expo / React Native).
 
-[![CI](https://github.com/honey-wallet/monorepo/actions/workflows/ci.yml/badge.svg)](https://github.com/honey-wallet/monorepo/actions/workflows/ci.yml)
+[![CI](https://github.com/honey-wallet/honey-wallet/actions/workflows/ci.yml/badge.svg)](https://github.com/honey-wallet/honey-wallet/actions/workflows/ci.yml)
 [![License: PolyForm Noncommercial](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-blue.svg)](LICENSE)
+
+## NEAR hackathon
+
+**What it is.** Honey is a multichain wallet (mobile, Chrome extension, web) for EVM, Solana and NEAR. Its hackathon feature is **Jars**: you describe an idea ("AI capex keeps growing"), an agent on NEAR AI Cloud reads it and any links, picks tokens that express it, and buys the mix in one go. Jars can be shared with friends, made public and copied, with the creator earning a cut of copiers' profit.
+
+**The problem.** Acting on a market view today means researching tokens one by one, finding which chain each trades on, bridging, and placing several swaps. Jars turns one sentence into one reviewed, routed purchase.
+
+**Try it (no keys, sample data):**
+
+1. `pnpm install`, then `EXPO_PUBLIC_TEST_MODE=1 pnpm dev:mobile` and press `w` (web) or open it in Expo Go.
+2. Tap the honey button in the bottom bar → the Jars page opens, with your portfolio on top and Yours / Explore below.
+3. Tap **What do you believe in? Ask Honey** and type an idea → see the agent's stages, then a proposal with picks, weights, fees and sources.
+4. Tap **Edit** → change weights or remove a pick; each pick shows the route its buy takes across chains, and the summary shows estimated slippage.
+5. On Explore, open a jar → see its chart, holdings and owners; tap **Copy with $100** → it appears under Yours.
+
+With the keys in `apps/server/.env` (see `.env.example`) and test mode off, the agent and prices are live.
+
+**NEAR pieces**
+
+| Piece | Where |
+| --- | --- |
+| NEAR AI Cloud: the thesis agent | `apps/server/src/thesis/near_ai.rs` |
+| NEAR Intents (1Click): quotes, swaps and cross-chain routing | `apps/server/src/providers/near_intents.rs`, `packages/api-client/src/near-intents.ts` |
+| Native NEAR accounts and transfers | `packages/keyring`, [`docs/NEAR.md`](docs/NEAR.md) |
+| Route planner: splits each buy across chains within a max slippage | `apps/mobile/src/lib/jar-routes.ts` |
+
+**What existed before the hackathon (disclosure, Q-002/Q-005).** Development started on 13 Oct 2026. Before the window opened on 19 Oct the project already had the wallet app's UI (mobile and extension), the keyring and an early API server. This public repo starts from a single snapshot commit, so there is no pre-hackathon diff to link; the work done in the window is listed here instead: Jars and the thesis agent on NEAR AI, NEAR Intents for swaps and bridging, NEAR chain support, the route planner, Supabase sign-in, and the landing page. Libraries used are the ones in each `package.json` and `Cargo.toml`; there are no templates.
+
+The app has no users, has not run on mainnet with real users, and has not been launched.
 
 ## Repository layout
 
@@ -37,8 +66,8 @@ A monorepo containing the Honey Wallet API server (Rust), web app (React + Vite)
 ## Getting started
 
 ```sh
-git clone https://github.com/honey-wallet/monorepo.git
-cd monorepo
+git clone https://github.com/honey-wallet/honey-wallet.git
+cd honey-wallet
 corepack enable
 pnpm install
 
