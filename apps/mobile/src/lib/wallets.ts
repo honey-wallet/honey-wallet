@@ -88,6 +88,11 @@ export function allWallets(
   if (added.some((wallet) => wallet.addresses)) {
     return testMode ? withSampleMoney(name, added) : added;
   }
+  // No keys on this device yet. Outside test mode that's an empty, unfunded wallet (no
+  // address, nothing to receive on) until one is created or imported: never sample money.
+  if (!testMode) {
+    return [{ id: 'main', kind: 'wallet', label: name, address: '', usd: 0 }, ...added];
+  }
   return [
     { demo: true, id: 'main', kind: 'wallet', label: name, address: ADDRESS, usd: BALANCE },
     ...otherWallets(name).map((wallet) => ({ ...wallet, demo: true })),

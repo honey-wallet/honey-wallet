@@ -12,7 +12,8 @@ import { tap } from '@/lib/haptics';
 import { LOADS } from '@/lib/loads';
 import { RECENT_RECIPIENTS, shortAddress } from '@/lib/mock-wallet';
 import { isWeb } from '@/lib/platform';
-import { isEvmAddress } from '@/lib/wallets';
+import { recentRecipients, usePortfolio } from '@/lib/portfolio';
+import { isEvmAddress, useActiveWallet } from '@/lib/wallets';
 import { makeStyles, radius, useTheme } from '@/theme';
 
 /** Send, step one: pick who to pay. */
@@ -20,9 +21,15 @@ export default function SendSheet() {
   const styles = useStyles();
   const c = useTheme();
   const [query, setQuery] = useState('');
-  const loading = useFirstLoad(LOADS.recipients);
+  const wallet = useActiveWallet();
+  // Sample wallets keep the sample contacts; a real wallet's recents are the addresses
+  // it actually sent to on chain.
+  const live = usePortfolio(wallet, true);
+  const firstLoad = useFirstLoad(LOADS.recipients);
+  const loading = wallet.demo ? firstLoad : live.loadingActivity;
+  const recents = wallet.demo ? RECENT_RECIPIENTS : recentRecipients(live.activity ?? []);
   const q = query.trim().toLowerCase();
-  const results = RECENT_RECIPIENTS.filter(
+  const results = recents.filter(
     (r) => !q || r.address.toLowerCase().includes(q) || r.label?.toLowerCase().includes(q),
   );
 

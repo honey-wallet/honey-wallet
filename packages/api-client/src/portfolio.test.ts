@@ -44,7 +44,7 @@ describe('portfolio', () => {
   });
 
   it('calls the portfolio and deletion endpoints', async () => {
-    const fetch = vi.fn<typeof fetch>(async (input) => {
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input) => {
       const url = String(input);
       const body = url.includes('/me/account')
         ? { status: 'deleted', waitlistEntries: 1 }
@@ -64,10 +64,10 @@ describe('portfolio', () => {
       status: 'deleted',
       waitlistEntries: 1,
     });
-    expect(String(fetch.mock.calls[0][0])).toBe(
+    expect(String(fetch.mock.calls[0]?.[0])).toBe(
       'http://api.test/api/v1/portfolio/balances?evm=0xabc',
     );
-    const [url, init] = fetch.mock.calls[2];
+    const [url, init] = fetch.mock.calls[2] ?? [];
     expect(String(url)).toBe('http://api.test/api/v1/me/account');
     expect(init?.method).toBe('DELETE');
   });

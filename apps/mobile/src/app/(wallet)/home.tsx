@@ -111,7 +111,7 @@ export default function HomeScreen() {
   const isMain = isMainWallet(wallet);
   const multisig = useMultisig(wallet.id);
   // Each wallet's balances arrive once; switching back to one shows them straight away.
-  const loading = useFirstLoad(LOADS.balances(wallet.id));
+  const firstLoad = useFirstLoad(LOADS.balances(wallet.id));
   // The bell also lights up while a shared wallet is waiting for your approval.
   const needsMe = useNeedsMyApproval();
   // The chains this wallet has addresses on, as icons under its name: one copies
@@ -130,6 +130,8 @@ export default function HomeScreen() {
   const view = useWalletView();
   // A new wallet that hasn't had its first deposit yet.
   const empty = !!view.empty;
+  // A real wallet's balances are read from its chains; sample ones only pretend to load.
+  const loading = firstLoad || ('loading' in view && !!view.loading);
   // A new wallet has no trades yet, whatever the demo data says.
   // const sections = SECTIONS.filter((s) => s !== 'Trades' || (hasTrades && !empty));
   // review: no trading in the extension, so the browser never shows the Trades tab.
@@ -275,13 +277,17 @@ export default function HomeScreen() {
                   scaleTo={0.97}
                   onPress={() => openPortfolio()}
                 >
-                  <Sparkline data={empty ? FLAT_DAY : BALANCE_HISTORY} width={116} height={60} />
+                  <Sparkline
+                    data={empty || 'live' in view ? FLAT_DAY : BALANCE_HISTORY}
+                    width={116}
+                    height={60}
+                  />
                 </PressableScale>
               </View>
             </SkeletonReveal>
           </Rise>
 
-          {empty || !SHOW_DEMO_LABELS ? null : (
+          {empty || 'live' in view || !SHOW_DEMO_LABELS ? null : (
             <View style={[styles.gutterMargin, styles.demoDisclosure]} accessibilityRole="text">
               <Text style={styles.demoDisclosureText}>
                 The balances and holdings shown here are illustrative examples, not real assets.

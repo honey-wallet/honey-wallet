@@ -39,7 +39,7 @@ it('keeps Home balance and holdings clearly labeled while demo data is visible',
   expect(home).toContain(
     'The balances and holdings shown here are illustrative examples, not real assets.',
   );
-  expect(home).toContain('{empty || !SHOW_DEMO_LABELS ? null : (');
+  expect(home).toContain("{empty || 'live' in view || !SHOW_DEMO_LABELS ? null : (");
   expect(home).toContain('styles.demoDisclosure');
 });
 

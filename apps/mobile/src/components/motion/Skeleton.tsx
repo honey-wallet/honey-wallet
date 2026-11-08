@@ -16,6 +16,7 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 import Svg, { Path } from 'react-native-svg';
+import { TEST_MODE } from '@/lib/test-mode';
 import { makeStyles, radius, useTheme } from '@/theme';
 import { DURATION, EASE } from '@/theme/motion';
 
@@ -50,7 +51,9 @@ const notify = () => {
 export function useFirstLoad(key: string, delay = LOAD_DELAY): boolean {
   // Read through the store, not straight from `loaded`: the React Compiler memoizes
   // plain reads of module state, which kept every skeleton up after its data arrived.
-  const loading = useSyncExternalStore(subscribe, () => !loaded.has(key));
+  // Outside test mode there's no pretend fetch to wait for: real screens pass their own
+  // loading state to SkeletonReveal, so this never adds a fake delay.
+  const loading = useSyncExternalStore(subscribe, () => TEST_MODE && !loaded.has(key));
   useEffect(() => {
     if (!loading) return;
     const timer = setTimeout(() => {

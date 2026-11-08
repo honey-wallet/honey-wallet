@@ -77,10 +77,14 @@ export default function SendAmountSheet() {
   // A shared wallet sends from its own balances, and proposes rather than sends.
   const signer = useSigner();
   // A new wallet holds nothing until its first deposit.
-  const { empty } = useWalletView();
+  const view = useWalletView();
+  const { empty } = view;
+  // A real wallet can't send from Honey yet: nothing is signed or broadcast, so the flow
+  // stops here instead of reporting a send that never happened.
+  const sendBlocked = !signer.multisig && 'live' in view;
   const sendable = signer.multisig
     ? signer.multisig.holdings.filter((h) => h.amount > 0)
-    : empty
+    : empty || sendBlocked
       ? []
       : SENDABLE;
   const loading = useFirstLoad(LOADS.balances(signer.walletId));
@@ -156,6 +160,18 @@ export default function SendAmountSheet() {
   };
 
   const finish = () => finishDemo('nothing was sent', { all: true });
+
+  if (sendBlocked && !empty) {
+    return (
+      <SheetScreen title="Send" size="fill">
+        <EmptyState
+          icon="send"
+          title="Sending is coming soon"
+          hint="Honey can’t sign transfers from this wallet yet, so nothing has been sent. Your money is safe on chain; to move it today, use your recovery phrase in another wallet."
+        />
+      </SheetScreen>
+    );
+  }
 
   // A new wallet has nothing to send until it's funded.
   if (sendable.length === 0) {

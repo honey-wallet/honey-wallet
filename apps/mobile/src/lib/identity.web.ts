@@ -14,3 +14,7 @@ export async function identityToken(): Promise<string | null> {
 }
 
 export async function signOutIdentity() {}
+
+export async function deleteIdentityUser() {}
+
+export class RecentSignInRequired extends Error {}

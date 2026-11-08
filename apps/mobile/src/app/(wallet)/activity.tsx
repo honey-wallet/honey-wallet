@@ -1,6 +1,6 @@
 import { router } from 'expo-router';
 import { useState } from 'react';
-import { Text, View } from 'react-native';
+import { Linking, Text, View } from 'react-native';
 import { OperationHistory } from '@/components/activity/OperationHistory';
 import { Icon, type IconName } from '@/components/Icon';
 import { PressableRow } from '@/components/motion/PressableRow';
@@ -15,6 +15,7 @@ import { tap } from '@/lib/haptics';
 import { LOADS } from '@/lib/loads';
 import { ACTIVITY, type Activity } from '@/lib/mock-wallet';
 import { describe, useActiveMultisig, useProposals } from '@/lib/multisig';
+import { toActivity, usePortfolio } from '@/lib/portfolio';
 import { type ActivityFilter, updateSectionPrefs, useSectionPrefs } from '@/lib/section-prefs';
 import { useWalletView } from '@/lib/wallet-view';
 import { useActiveWallet } from '@/lib/wallets';
@@ -25,6 +26,7 @@ const KIND: Record<Activity['kind'], { title: string; badge: IconName }> = {
   received: { title: 'Received', badge: 'arrowDown' },
   swapped: { title: 'Swapped', badge: 'trade' },
   approved: { title: 'Approved', badge: 'check' },
+  other: { title: 'Transaction', badge: 'history' },
 };
 
 const FILTER_KIND: Record<Exclude<ActivityFilter, 'All'>, Activity['kind']> = {
@@ -43,7 +45,11 @@ export default function ActivityScreen() {
     !q || texts.some((t) => t?.toLowerCase().includes(q));
   // A wallet that's never had money in it has no history, whatever the demo data says.
   const { empty } = useWalletView();
-  const all = empty ? [] : ACTIVITY;
+  const wallet = useActiveWallet();
+  // A real wallet's history is read from its chains; sample wallets keep the fixture.
+  const live = usePortfolio(wallet, true);
+  const real = !wallet.demo && wallet.kind === 'wallet';
+  const all = real ? toActivity(live.activity ?? []) : empty ? [] : ACTIVITY;
   const shown = all.filter(
     (a) =>
       (activityFilter === 'All' || a.kind === FILTER_KIND[activityFilter]) &&
@@ -53,31 +59,15 @@ export default function ActivityScreen() {
   const months = [...new Set(shown.map((a) => a.month))];
   // A shared wallet's proposals still collecting approvals come first.
   const multisig = useActiveMultisig();
-  const wallet = useActiveWallet();
   const proposals = useProposals(multisig?.walletId ?? '');
   const pending = proposals.pending.filter((p) => matches(describe(p.action).title));
   const history = proposals.history.filter((p) => matches(describe(p.action).title));
-  const loading = useFirstLoad(LOADS.activity(multisig?.walletId ?? wallet.id));
+  const firstLoad = useFirstLoad(LOADS.activity(multisig?.walletId ?? wallet.id));
+  const loading = real ? live.loadingActivity : firstLoad;
   const openProposal = (id: string) => {
     tap();
     router.push({ pathname: '/proposal/[id]', params: { id } });
   };
-
-  if (!wallet.demo && wallet.kind === 'wallet') {
-    return (
-      <TabScreen title="Activity">
-        <View style={styles.live}>
-          {wallet.watchOnly ? (
-            <Text style={styles.liveNote}>
-              On-chain activity for watched addresses is not connected yet.
-            </Text>
-          ) : (
-            <OperationHistory key={wallet.id} />
-          )}
-        </View>
-      </TabScreen>
-    );
-  }
 
   return (
     // The same top bar as Search: a search field, then the balance and settings.
@@ -154,6 +144,11 @@ export default function ActivityScreen() {
                   ))}
               </View>
             ))}
+          {real && !wallet.watchOnly && (
+            <View style={styles.live}>
+              <OperationHistory key={wallet.id} />
+            </View>
+          )}
           {!multisig && shown.length === 0 && (
             <ActivityEmpty
               query={q}
@@ -254,7 +249,9 @@ function ActivityRow({ activity: a }: { activity: Activity }) {
     <PressableRow
       onPress={() => {
         tap();
-        router.push({ pathname: '/activity/[id]', params: { id: a.id } });
+        // Live rows open the transaction on its explorer; the detail screen is the fixture's.
+        if (a.url) Linking.openURL(a.url).catch(() => {});
+        else router.push({ pathname: '/activity/[id]', params: { id: a.id } });
       }}
       style={styles.row}
     >
@@ -290,7 +287,6 @@ function ActivityRow({ activity: a }: { activity: Activity }) {
 
 const useStyles = makeStyles((c) => ({
   live: { padding: 20 },
-  liveNote: { fontSize: 15, color: c.textSecondary },
   flex: {
     flex: 1,
   },

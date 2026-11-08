@@ -258,6 +258,14 @@ export default function SettingsScreen() {
         >
           <Text style={styles.signOutLabel}>Sign out</Text>
         </PressableScale>
+        <PressableScale
+          accessibilityRole="button"
+          scaleTo={0.98}
+          onPress={open('/delete-account')}
+          style={styles.deleteAccount}
+        >
+          <Text style={styles.signOutLabel}>Delete account</Text>
+        </PressableScale>
         <Text style={styles.credit} onPress={() => Linking.openURL(AVATAR_CREDIT_URL)}>
           Avatars: “Dylan” by Natalia Spivak, CC BY 4.0, generated with DiceBear.
         </Text>
@@ -269,6 +277,14 @@ export default function SettingsScreen() {
 const useStyles = makeStyles((c) => ({
   signOut: {
     marginTop: 28,
+    height: 52,
+    ...radius(20),
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: c.card,
+  },
+  deleteAccount: {
+    marginTop: 12,
     height: 52,
     ...radius(20),
     alignItems: 'center',
