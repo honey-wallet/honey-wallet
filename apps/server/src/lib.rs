@@ -293,13 +293,15 @@ fn jar_buys_router(
     identity: Option<identity::Identity>,
     market: Option<std::sync::Arc<market_data::MarketData>>,
 ) -> Router {
-    let buys = market.and_then(|market| match jar_buys::JarBuys::from_env(market) {
-        Ok(buys) => Some(std::sync::Arc::new(buys)),
-        Err(error) => {
-            tracing::error!(%error, "jar buys disabled");
-            None
-        }
-    });
+    let buys = market
+        .clone()
+        .and_then(|market| match jar_buys::JarBuys::from_env(market) {
+            Ok(buys) => Some(std::sync::Arc::new(buys)),
+            Err(error) => {
+                tracing::error!(%error, "jar buys disabled");
+                None
+            }
+        });
     let router = match &buys {
         Some(buys) => routes::jar_buys::router(identity.clone(), buys.clone()),
         None => Router::new(),
@@ -308,7 +310,7 @@ fn jar_buys_router(
     match jar_dao::JarDao::from_env() {
         Ok(dao) => router.merge(routes::jar_dao::router(
             identity,
-            std::sync::Arc::new(dao),
+            std::sync::Arc::new(dao.with_market(market)),
             buys,
         )),
         Err(error) => {

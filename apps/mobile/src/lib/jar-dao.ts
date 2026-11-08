@@ -25,6 +25,7 @@ import {
   depositTx,
   fromChain,
   isFinalVote,
+  mintNavCheck,
   parseProposalId,
   prepare,
   type QuotedLeg,
@@ -174,7 +175,18 @@ export async function depositToJar(input: {
     depositTx: hash,
   });
   await send('Record your share', record.receiverId, record.actions);
-  return { hash, units: record.units };
+  // Your approval counts toward k; the units stay pending until the others approve.
+  const state = await api.jarDaoState(token(), input.dao, [USDC_INTENTS]);
+  const mine = state.proposals
+    .filter((p) => p.proposer === me.account && p.description.includes(`"tx":"${hash}"`))
+    .sort((a, b) => b.id - a.id)[0];
+  if (mine)
+    await send(
+      'Approve your share',
+      input.dao,
+      voteTx(input.dao, mine.id, 'VoteApprove', 'Vote').actions,
+    );
+  return { hash, units: record.units, pending: true };
 }
 
 /** Quote a buy from the jar's Intents USDC and propose paying the 1Click deposit addresses. */
@@ -237,10 +249,19 @@ async function voteOnChain(m: Multisig, p: Proposal, kind: 'approve' | 'reject')
   if (!ref) throw new Error('Unknown jar proposal');
   const view = await refreshJar(m.walletId, ref.dao, walletName(m.walletId));
   const raw = view.raw.proposals.find((x) => x.id === ref.id);
-  if (!raw || raw.status !== 'InProgress') throw new Error('This proposal is no longer open');
+  if (raw?.status !== 'InProgress') throw new Error('This proposal is no longer open');
   // The executing vote of an expired buy would only refund; reject it and re-quote instead.
   if (kind === 'approve' && isFinalVote(raw, view.raw.threshold) && buyExpired(raw))
     throw new Error('The quote expired. Reject this buy and propose it again for a fresh price.');
+  if (kind === 'approve') {
+    const nav = mintNavCheck(raw, view.raw.navMicroUsd);
+    if (nav && !nav.ok)
+      throw new Error(
+        nav.deviationBps === null
+          ? "Honey can't price this jar right now, so this share can't be checked. Try later."
+          : `This share states a jar value ${Number(nav.deviationBps) / 100}% off today's. Reject it.`,
+      );
+  }
   const action = kind === 'approve' ? 'VoteApprove' : 'VoteReject';
   const tx = voteTx(ref.dao, ref.id, action, raw.kind as never);
   await send(kind === 'approve' ? 'Approve' : 'Reject', tx.receiverId, tx.actions);

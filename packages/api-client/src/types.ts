@@ -812,6 +812,8 @@ export interface JarDaoState {
   /** Raw Sputnik proposals (newest page), including `honey:` unit records. */
   proposals: JarDaoProposal[];
   balances: { tokenId: string; amount: string }[];
+  /** Server's reference jar value now (micro-USD), or null when a held token has no price. */
+  navMicroUsd: string | null;
   /** Whether the NEP-366 gas relayer is on (members pay their own gas when false). */
   relayer: boolean;
 }

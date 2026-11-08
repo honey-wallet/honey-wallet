@@ -342,13 +342,15 @@ export type DaoProposal = {
 export type DepositFact = { member: string; dao: string; amount: string };
 
 /**
- * Units per member, rebuilt from the chain in proposal order. A mint counts only when:
- * the proposer is the member; `deposit(tx)` (the server's on-chain check) says that tx
- * was sent by that member into this DAO for exactly `usd` USDC base units; and the tx
- * hash wasn't cited by an earlier record. Its units are recomputed from the verified
- * amount and the ledger's own running total, never taken from the record. A burn
- * counts once its withdraw proposal executed, capped at the member's units.
- * The record's `nav` is still self-reported until jar NAV snapshots exist on chain.
+ * Units per member, rebuilt from the chain in proposal order. A mint record is valid
+ * when the proposer is the member and `deposit(tx)` (the server's on-chain check) says
+ * that tx was sent by that member into this DAO for exactly `usd` USDC base units.
+ * It counts only once its Vote proposal is Approved by the jar's threshold, so other
+ * members sign off on the stated jar value (nav); until then its units are pending.
+ * Units are recomputed from the verified amount, the approved nav and the ledger's
+ * running total. A tx hash is consumed only by a fully valid, approved record, so a
+ * bogus record citing someone else's tx can't block theirs. Burns count once
+ * executed, capped at the member's units.
  */
 export function unitLedger(
   proposals: DaoProposal[],
@@ -356,6 +358,7 @@ export function unitLedger(
   deposit: (tx: string) => DepositFact | undefined,
 ) {
   const units = new Map<string, bigint>();
+  const pending = new Map<number, { member: string; units: bigint }>();
   const seen = new Set<string>();
   let total = 0n;
   for (const p of [...proposals].sort((a, b) => a.id - b.id)) {
@@ -363,11 +366,16 @@ export function unitLedger(
     if (!r || r.t === 'buy') continue;
     if (r.t === 'mint') {
       if (r.member !== p.proposer || seen.has(r.tx)) continue;
-      seen.add(r.tx);
       const fact = deposit(r.tx);
       if (!fact || fact.member !== r.member || fact.dao !== dao) continue;
       if (!/^\d{1,38}$/.test(fact.amount) || BigInt(fact.amount) !== BigInt(r.usd)) continue;
       const minted = unitsFor(BigInt(fact.amount), BigInt(r.nav), total);
+      if (p.status === 'InProgress') {
+        pending.set(p.id, { member: r.member, units: minted });
+        continue;
+      }
+      if (p.status !== 'Approved') continue;
+      seen.add(r.tx);
       units.set(r.member, (units.get(r.member) ?? 0n) + minted);
       total += minted;
     }
@@ -378,8 +386,16 @@ export function unitLedger(
       total -= burned;
     }
   }
-  return { units, total };
+  return { units, total, pending };
 }
+
+/** How far a record's stated nav is from the server's reference, in basis points. */
+export function navDeviationBps(stated: bigint, reference: bigint) {
+  if (reference <= 0n) return stated === 0n ? 0n : 10_000n;
+  const diff = stated > reference ? stated - reference : reference - stated;
+  return (diff * 10_000n) / reference;
+}
+export const NAV_TOLERANCE_BPS = 200n;
 
 /** Members of the jar role, and its k, from get_policy. */
 export function readPolicy(policy: unknown): { members: string[]; threshold: number } {

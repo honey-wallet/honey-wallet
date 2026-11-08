@@ -3,11 +3,14 @@
 //! devices sign every transaction. Honey's database is never the source of truth:
 //! members, threshold, proposals, unit records and balances all come from the chain.
 
-use crate::error::AppError;
+use crate::{
+    error::AppError,
+    market_data::{MarketData, OneClickToken},
+};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::Serialize;
 use serde_json::{Value, json};
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 pub const FACTORY_SUFFIX: &str = ".sputnik-dao.near";
 pub const INTENTS: &str = "intents.near";
@@ -32,6 +35,10 @@ pub struct DaoState {
     /// Raw Sputnik proposals (newest page), including `honey:` unit records.
     pub proposals: Vec<Value>,
     pub balances: Vec<TokenBalance>,
+    /// Reference jar value now, in micro-USD (balances priced by 1Click token prices).
+    /// Members compare a unit record's stated nav against it before approving. None
+    /// when a held token has no price.
+    pub nav_micro_usd: Option<String>,
     pub relayer: bool,
 }
 
@@ -49,6 +56,7 @@ pub struct JarDao {
     client: reqwest::Client,
     rpc: String,
     relayer_enabled: bool,
+    market: Option<Arc<MarketData>>,
 }
 
 pub fn is_account(s: &str) -> bool {
@@ -67,6 +75,11 @@ pub fn is_jar_dao(s: &str) -> bool {
 }
 
 impl JarDao {
+    pub fn with_market(mut self, market: Option<Arc<MarketData>>) -> Self {
+        self.market = market;
+        self
+    }
+
     pub fn from_env() -> anyhow::Result<Self> {
         let var = |k: &str| std::env::var(k).ok().filter(|v| !v.trim().is_empty());
         Self::new(
@@ -85,6 +98,7 @@ impl JarDao {
                 .build()?,
             rpc,
             relayer_enabled,
+            market: None,
         })
     }
 
@@ -149,12 +163,23 @@ impl JarDao {
             )
             .await?;
         let (members, threshold) = read_policy(&policy)?;
+        let balances = read_balances(tokens, &balances)?;
+        let nav_micro_usd = match &self.market {
+            Some(m) => m
+                .tokens()
+                .await
+                .ok()
+                .and_then(|t| nav_micro(&balances, &t))
+                .map(|n| n.to_string()),
+            None => None,
+        };
         Ok(DaoState {
             dao: dao.into(),
             members,
             threshold,
             proposals: proposals.as_array().cloned().ok_or(AppError::Busy)?,
-            balances: read_balances(tokens, &balances)?,
+            balances,
+            nav_micro_usd,
             relayer: self.relayer_enabled,
         })
     }
@@ -211,6 +236,21 @@ pub fn read_policy(policy: &Value) -> Result<(Vec<String>, u32), AppError> {
         return Err(AppError::BadRequest("not a Honey jar".into()));
     }
     Ok((members.clone(), threshold.min(members.len() as u32)))
+}
+
+/// Jar value in micro-USD; None if a non-zero balance has no price.
+pub fn nav_micro(balances: &[TokenBalance], tokens: &[OneClickToken]) -> Option<u128> {
+    let mut total = 0f64;
+    for b in balances {
+        let amount: f64 = b.amount.parse().ok()?;
+        if amount == 0.0 {
+            continue;
+        }
+        let t = tokens.iter().find(|t| t.asset_id == b.token_id)?;
+        let price = t.price.filter(|p| p.is_finite() && *p > 0.0)?;
+        total += amount / 10f64.powi(t.decimals as i32) * price * 1e6;
+    }
+    Some(total.round() as u128)
 }
 
 fn read_balances(tokens: &[String], balances: &Value) -> Result<Vec<TokenBalance>, AppError> {
@@ -296,6 +336,31 @@ mod tests {
         assert_eq!(members.len(), 2);
         assert_eq!(k, 2, "an absolute weight above n is capped at n");
         assert!(read_policy(&json!({ "roles": [] })).is_err());
+    }
+
+    #[test]
+    fn prices_the_jar() {
+        let token = |id: &str, decimals: u8, price: Option<f64>| OneClickToken {
+            asset_id: id.into(),
+            blockchain: "near".into(),
+            symbol: "X".into(),
+            decimals,
+            price,
+            contract_address: None,
+            coingecko_id: None,
+        };
+        let bal = |id: &str, a: &str| TokenBalance {
+            token_id: id.into(),
+            amount: a.into(),
+        };
+        let tokens = [token("usdc", 6, Some(1.0)), token("near", 24, Some(2.5))];
+        let b = [
+            bal("usdc", "7500000"),
+            bal("near", "2000000000000000000000000"),
+        ];
+        assert_eq!(nav_micro(&b, &tokens), Some(12_500_000));
+        assert_eq!(nav_micro(&[bal("x", "1")], &tokens), None);
+        assert_eq!(nav_micro(&[bal("x", "0")], &tokens), Some(0));
     }
 
     #[test]

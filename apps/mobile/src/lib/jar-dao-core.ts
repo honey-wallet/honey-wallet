@@ -19,7 +19,9 @@ import {
   encodeRecord,
   type FunctionCall,
   INTENTS_CONTRACT,
+  NAV_TOLERANCE_BPS,
   type NearCallTx,
+  navDeviationBps,
   nearPublicKey,
   type ProposalKind,
   removeMemberKind,
@@ -203,6 +205,20 @@ export function buyExpired(p: JarDaoProposal, now = Date.now()) {
   if (r?.t !== 'buy') return false;
   return r.quote.some((d) => Date.parse(d) <= now);
 }
+/**
+ * A unit record counts only once members approve it, so they check its stated jar
+ * value. The server's reference nav is priced now, after the deposit landed, so the
+ * deposit is subtracted before comparing. Refuse to approve beyond 2%.
+ */
+export function mintNavCheck(p: JarDaoProposal, referenceNavMicro: string | null) {
+  const r = decodeRecord(p.description);
+  if (r?.t !== 'mint') return null;
+  if (referenceNavMicro === null) return { ok: false, deviationBps: null, record: r };
+  const before = BigInt(referenceNavMicro) - BigInt(r.usd);
+  const deviationBps = navDeviationBps(BigInt(r.nav), before > 0n ? before : 0n);
+  return { ok: deviationBps <= NAV_TOLERANCE_BPS, deviationBps, record: r };
+}
+
 export const isFinalVote = (p: JarDaoProposal, threshold: number) =>
   Object.values(p.votes).filter((v) => v === 'Approve').length + 1 >= threshold;
 
@@ -219,6 +235,20 @@ const ARGS = (a: { args: string }) => {
 /** What a Sputnik proposal means to the app, or null for records and unknown kinds. */
 export function actionOf(p: JarDaoProposal, jarName: string, usdc: (atomic: string) => number) {
   const k = p.kind as Record<string, unknown> | string;
+  if (k === 'Vote') {
+    // A deposit's unit record: members approve it to confirm the stated jar value.
+    const r = decodeRecord(p.description);
+    if (r?.t !== 'mint') return null;
+    const amount = usdc(r.usd);
+    return {
+      type: 'jarAdd',
+      jarId: '',
+      jar: jarName,
+      symbol: 'USDC',
+      amount,
+      usd: amount,
+    } satisfies ProposalAction;
+  }
   if (typeof k !== 'object' || !k) return null;
   if ('FunctionCall' in k) {
     const call = k.FunctionCall as {

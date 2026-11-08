@@ -17,6 +17,8 @@ import {
   encodeRecord,
   jarDaoName,
   jarPolicy,
+  NAV_TOLERANCE_BPS,
+  navDeviationBps,
   readPolicy,
   signDelegateAction,
   signNearCall,
@@ -182,24 +184,26 @@ describe('fund-style units', () => {
       bySigner: { member: signer, dao: DAO, amount: '30' },
       elsewhere: { member: other, dao: 'other.sputnik-dao.near', amount: '30' },
     };
+    const A = 'Approved';
     const ledger = unitLedger(
       [
-        p(0, signer, mint(signer, '100', 'tx1')),
+        p(0, signer, mint(signer, '100', 'tx1'), A),
+        // Attacker cites tx2 first with a wrong amount; it must not burn the hash.
+        p(1, other, mint(other, '999', 'tx2', '100'), A),
         // Jar worth 100 with 100 units: 50 buys 50, whatever units the record claims.
-        p(1, other, mint(other, '50', 'tx2', '100', '5000')),
-        p(2, other, mint(signer, '999', 'tx3')), // proposer is not the member
-        p(3, other, mint(other, '70', 'fake')), // unverified tx
-        p(4, other, mint(other, '1000', 'small', '150')), // inflated: chain says 1
-        p(6, other, mint(other, '50', 'tx2', '150')), // reused tx hash
-        p(7, other, mint(other, '30', 'bySigner', '150')), // wrong sender
-        p(8, other, mint(other, '30', 'elsewhere', '150')), // deposited into another DAO
-        p(
-          9,
-          signer,
-          encodeRecord({ v: 1, t: 'burn', member: signer, units: '40', nav: '1' }),
-          'Approved',
-        ),
+        p(2, other, mint(other, '50', 'tx2', '100', '5000'), A),
+        p(3, other, mint(signer, '999', 'tx3'), A), // proposer is not the member
+        p(4, other, mint(other, '70', 'fake'), A), // unverified tx
+        p(5, other, mint(other, '1000', 'small', '150'), A), // inflated: chain says 1
+        p(6, other, mint(other, '50', 'tx2', '150'), A), // reused tx hash
+        p(7, other, mint(other, '30', 'bySigner', '150'), A), // wrong sender
+        p(8, other, mint(other, '30', 'elsewhere', '150'), A), // another DAO
+        p(9, signer, encodeRecord({ v: 1, t: 'burn', member: signer, units: '40', nav: '1' }), A),
         p(10, signer, encodeRecord({ v: 1, t: 'burn', member: signer, units: '40', nav: '1' })),
+        // Low-nav record still awaiting votes: pending, not counted.
+        p(11, other, mint(other, '1', 'small', '1')),
+        // Rejected low-nav record never counts.
+        p(12, other, mint(other, '1', 'small', '1'), 'Rejected'),
       ],
       DAO,
       (tx) => facts[tx],
@@ -207,6 +211,19 @@ describe('fund-style units', () => {
     expect(ledger.units.get(signer)).toBe(60n);
     expect(ledger.units.get(other)).toBe(50n);
     expect(ledger.total).toBe(110n);
+    expect(ledger.pending.get(11)).toEqual({ member: other, units: 110n });
+    // Once members approve the same record, it counts.
+    const approved = unitLedger(
+      [
+        p(0, signer, mint(signer, '100', 'tx1'), A),
+        p(1, other, mint(other, '1', 'small', '100'), A),
+      ],
+      DAO,
+      (tx) => facts[tx],
+    );
+    expect(approved.units.get(other)).toBe(1n);
+    expect(navDeviationBps(98n, 100n)).toBe(200n);
+    expect(navDeviationBps(97n, 100n) > NAV_TOLERANCE_BPS).toBe(true);
     expect(decodeRecord('honey:{"v":1,"t":"mint","member":"x","units":"-1"}')).toBeNull();
     expect(decodeRecord('plain text')).toBeNull();
   });

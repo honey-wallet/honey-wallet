@@ -9,6 +9,7 @@ import {
   createJarTx,
   fromChain,
   isFinalVote,
+  mintNavCheck,
   parseProposalId,
   prepare,
   unitRecordTx,
@@ -108,10 +109,12 @@ describe('reading a jar back from the chain', () => {
       members: [ME, BOB],
       threshold: 2,
       relayer: false,
+      navMicroUsd: '7500000',
       balances: [{ tokenId: USDC_INTENTS, amount: '7500000' }],
       proposals: [
         proposal({
           id: 0,
+          status: 'Approved',
           description: encodeRecord({
             v: 1,
             t: 'mint',
@@ -147,15 +150,80 @@ describe('reading a jar back from the chain', () => {
     expect(view.multisig.members.map((m) => m.id)).toEqual(['you', BOB]);
     expect(view.multisig.protocol).toBe('sputnik');
     expect(view.multisig.holdings[0]?.usd).toBe(7.5);
-    expect(view.proposals).toHaveLength(2);
+    expect(view.proposals).toHaveLength(3);
     expect(view.proposals[0]).toMatchObject({
+      status: 'executed',
+      action: { type: 'jarAdd', usd: 10 },
+    });
+    expect(view.proposals[1]).toMatchObject({
       id: `${DAO}#1`,
       status: 'pending',
       action: { type: 'jarBuy', usd: 2.5 },
     });
-    expect(view.proposals[0]?.approvals.map((v) => v.memberId)).toEqual([BOB]);
-    expect(view.proposals[1]).toMatchObject({ status: 'executed', action: { type: 'addMember' } });
+    expect(view.proposals[1]?.approvals.map((v) => v.memberId)).toEqual([BOB]);
+    expect(view.proposals[2]).toMatchObject({ status: 'executed', action: { type: 'addMember' } });
     expect(view.ledger.units.get(ME)).toBe(10_000_000n);
     expect(parseProposalId(`${DAO}#1`)).toEqual({ dao: DAO, id: 1 });
+  });
+});
+
+describe('unit records need member approval', () => {
+  const rec = (nav: string, status: JarDaoProposal['status'] = 'InProgress') =>
+    proposal({
+      status,
+      description: encodeRecord({
+        v: 1,
+        t: 'mint',
+        member: ME,
+        units: '1',
+        usd: '10000000',
+        nav,
+        tx: 'h',
+      }),
+    });
+  const state = (p: JarDaoProposal): JarDaoState => ({
+    dao: DAO,
+    members: [ME, BOB],
+    threshold: 2,
+    relayer: false,
+    navMicroUsd: '110000000',
+    balances: [{ tokenId: USDC_INTENTS, amount: '110000000' }],
+    proposals: [p],
+  });
+  const deposit = () => ({ member: ME, dao: DAO, amount: '10000000' });
+
+  it('shows a record as a jarAdd to vote on, pending until approved', () => {
+    const view = fromChain({
+      walletId: 'w',
+      jarName: 'T',
+      state: state(rec('1')),
+      me: ME,
+      you: 'you',
+      deposit,
+    });
+    expect(view.proposals[0]?.action.type).toBe('jarAdd');
+    expect(view.ledger.units.size).toBe(0);
+    expect(view.ledger.pending.size).toBe(1);
+    const approved = fromChain({
+      walletId: 'w',
+      jarName: 'T',
+      state: state(rec('1', 'Approved')),
+      me: ME,
+      you: 'you',
+      deposit,
+    });
+    expect(approved.ledger.total).toBeGreaterThan(0n);
+  });
+
+  it('flags a stated nav more than 2% off the reference (net of the deposit)', () => {
+    // Reference 110 after a 10 deposit: the jar was worth 100 before.
+    expect(mintNavCheck(rec('100000000'), '110000000')).toMatchObject({
+      ok: true,
+      deviationBps: 0n,
+    });
+    expect(mintNavCheck(rec('98000000'), '110000000')?.ok).toBe(true);
+    expect(mintNavCheck(rec('1'), '110000000')).toMatchObject({ ok: false });
+    expect(mintNavCheck(rec('100000000'), null)).toMatchObject({ ok: false, deviationBps: null });
+    expect(mintNavCheck(proposal({ description: 'x' }), '1')).toBeNull();
   });
 });
