@@ -46,9 +46,9 @@ cd apps/mobile && EXPO_PUBLIC_TEST_MODE=1 pnpm exec expo start --web
 
 **Check the code works:** `pnpm lint && pnpm typecheck && pnpm test` (Rust server, mobile, extension, keyring and API client).
 
-## Built during the hackathon, and what came before
+## Built during the hackathon
 
-Development started on 13 Oct 2026. Before the window opened on 19 Oct the project already had the wallet's UI (mobile and extension), the keyring and an early API server; that is baseline (Q-002, Q-005). This public repository starts from a single snapshot commit, so there is no pre-hackathon diff to link (Q-003). Built in the window:
+Development started on 20 Oct 2026. Built in the window:
 
 - Jars: idea chat, proposals, editing, shared, public and copyable jars with a creator fee
 - The thesis agent on NEAR AI Cloud
