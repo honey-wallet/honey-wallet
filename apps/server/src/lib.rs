@@ -249,6 +249,14 @@ fn router(config: &Config, health: runtime::RuntimeHealth, services: RouterServi
         .merge(routes::aave::router(identity.clone(), aave))
         .merge(routes::morpho::router(identity.clone(), morpho))
         .merge(routes::hyperliquid::router(identity.clone(), redis.clone()))
+        .merge(routes::stealth_jars::router(
+            identity.clone(),
+            redis.clone(),
+        ))
+        .merge(routes::stealth_jar_boxes::router(
+            identity.clone(),
+            redis.clone(),
+        ))
         .merge(routes::swaps::router_with_execution(
             identity.clone(),
             swaps,

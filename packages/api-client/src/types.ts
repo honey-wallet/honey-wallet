@@ -51,6 +51,48 @@ export interface PairChannel {
   token: string;
 }
 
+/** Mirrors `CreateSession` in apps/server/src/routes/stealth_jars.rs. */
+export interface StealthJarSessionRequest {
+  members: number;
+}
+/** Mirrors `SessionCreated`. The invite token goes in the invite link, never a URL path. */
+export interface StealthJarSession {
+  sessionId: string;
+  inviteToken: string;
+  memberIndex: number;
+  expiresIn: number;
+}
+/** Mirrors `Joined`. */
+export interface StealthJarMember {
+  memberIndex: number;
+  members: number;
+}
+/** Mirrors `RelayMessage`. `to` 0 is a broadcast; `data` is opaque to the server. */
+export interface StealthJarRelayMessage {
+  from: number;
+  to: number;
+  data: string;
+}
+/** Mirrors `Ledger` in apps/server/src/routes/stealth_jar_boxes.rs. `data` is ciphertext. */
+export interface StealthJarLedger {
+  version: number;
+  data: string;
+}
+/** Mirrors `BoxRequest`. `data` is a sealed, member-signed signing request. */
+export interface StealthJarBoxRequest {
+  id: string;
+  data: string;
+}
+/** Derived on device from the jar's ledger key (keyring `jarBox`). */
+export interface StealthJarBoxAccess {
+  boxId: string;
+  boxToken: string;
+}
+export interface StealthJarInvite {
+  sessionId: string;
+  inviteToken: string;
+}
+
 export interface PairMessage {
   /** Base64url: a public key for `hello`, ciphertext for `payload`. */
   data: string;

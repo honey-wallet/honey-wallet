@@ -268,3 +268,22 @@ it('requires finality, matching hash/signer, and successful execution', () => {
   expect(() => nearTransferOutcome(result, 'other', signer)).toThrow('mismatch');
   expect(() => nearTransferOutcome(result, 'hash', 'other.near')).toThrow('mismatch');
 });
+
+describe('nep413Hash', () => {
+  it('hashes the borsh layout with the 2^31+413 tag', async () => {
+    const { nep413Hash } = await import('./near');
+    const { sha256 } = await import('@noble/hashes/sha2.js');
+    const { concatBytes } = await import('@noble/hashes/utils.js');
+    const { base64 } = await import('@scure/base');
+    const nonce = new Uint8Array(32).fill(9);
+    const le32 = (n: number) => Uint8Array.of(n & 255, (n >>> 8) & 255, (n >>> 16) & 255, n >>> 24);
+    const str = (s: string) => concatBytes(le32(s.length), new TextEncoder().encode(s));
+    const expected = sha256(
+      concatBytes(le32(2147484061), str('{}'), nonce, str('intents.near'), Uint8Array.of(0)),
+    );
+    expect(
+      nep413Hash({ message: '{}', nonce: base64.encode(nonce), recipient: 'intents.near' }),
+    ).toEqual(expected);
+    expect(() => nep413Hash({ message: '{}', nonce: 'AA==', recipient: 'intents.near' })).toThrow();
+  });
+});

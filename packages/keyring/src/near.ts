@@ -80,16 +80,27 @@ export function encodeNearTransfer(tx: NearTransfer): Uint8Array {
   );
 }
 
-export function signNearTransfer(key: Uint8Array, tx: NearTransfer) {
-  if (nearAddressOfKey(key) !== tx.signerId) throw new Error('NEAR signing key does not match');
+/** The 32-byte digest an ed25519 key (single or FROST group) signs for this transfer. */
+export const nearTransferDigest = (tx: NearTransfer) => sha256(encodeNearTransfer(tx));
+
+/**
+ * Attaches an ed25519 signature produced elsewhere (e.g. a FROST group) and checks it
+ * against the implicit account's own key before returning a broadcastable SignedTransaction.
+ */
+export function attachNearSignature(tx: NearTransfer, signature: Uint8Array) {
   const bytes = encodeNearTransfer(tx);
   const digest = sha256(bytes);
+  if (signature.length !== 64 || !ed25519.verify(signature, digest, hexToBytes(tx.signerId)))
+    throw new Error('Signature does not verify for the NEAR signer');
   return {
     hash: base58.encode(digest),
-    signedTransaction: base64.encode(
-      concatBytes(bytes, Uint8Array.of(0), ed25519.sign(digest, key)),
-    ),
+    signedTransaction: base64.encode(concatBytes(bytes, Uint8Array.of(0), signature)),
   };
+}
+
+export function signNearTransfer(key: Uint8Array, tx: NearTransfer) {
+  if (nearAddressOfKey(key) !== tx.signerId) throw new Error('NEAR signing key does not match');
+  return attachNearSignature(tx, ed25519.sign(nearTransferDigest(tx), key));
 }
 
 export class NearRpcError extends Error {
@@ -241,4 +252,38 @@ export function nearTransferOutcome(
   if (typeof status.SuccessValue === 'string') return 'success';
   if ('Failure' in status) return 'failure';
   return 'pending';
+}
+
+export type Nep413Payload = {
+  message: string;
+  /** 32-byte nonce, base64 as returned by 1Click `/v0/generate-intent`. */
+  nonce: string;
+  recipient: string;
+  callbackUrl?: string | null;
+};
+
+const NEP413_TAG = 2 ** 31 + 413;
+
+/**
+ * NEP-413 off-chain message hash: sha256(borsh(u32 tag = 2^31 + 413) ||
+ * borsh({ message, nonce: [u8; 32], recipient, callback_url: Option<String> })).
+ * NEAR Intents verifies `nep413` MultiPayloads as an ed25519 signature over this hash,
+ * so a FROST group signs it exactly like a single key would.
+ */
+export function nep413Hash(payload: Nep413Payload): Uint8Array {
+  const nonce = base64.decode(payload.nonce);
+  if (nonce.length !== 32) throw new Error('NEP-413 nonce must be 32 bytes');
+  const callback =
+    payload.callbackUrl == null
+      ? Uint8Array.of(0)
+      : concatBytes(Uint8Array.of(1), string(payload.callbackUrl));
+  return sha256(
+    concatBytes(
+      uint(BigInt(NEP413_TAG), 4),
+      string(payload.message),
+      nonce,
+      string(payload.recipient),
+      callback,
+    ),
+  );
 }

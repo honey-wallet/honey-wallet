@@ -11,6 +11,8 @@ pub mod operations;
 pub mod pairing;
 pub mod prices;
 pub mod relay_quotes;
+pub mod stealth_jar_boxes;
+pub mod stealth_jars;
 pub mod theses;
 pub mod v1;
 pub mod waitlist;
