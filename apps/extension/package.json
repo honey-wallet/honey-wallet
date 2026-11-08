@@ -16,7 +16,8 @@
     "build:phone": "node scripts/build-phone.mjs",
     "typecheck": "tsc -b",
     "test": "vitest run",
-    "clean": "rm -rf dist node_modules/.tmp"
+    "clean": "rm -rf dist node_modules/.tmp",
+    "zip": "node scripts/build.mjs && rm -f honey-wallet-extension.zip && cd dist && zip -qr ../honey-wallet-extension.zip . && cd .. && echo honey-wallet-extension.zip"
   },
   "dependencies": {
     "@honey-wallet/api-client": "workspace:*",
