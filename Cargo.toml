@@ -15,7 +15,7 @@ publish = false
 alloy-consensus = { version = "=2.1.1", default-features = false, features = ["std", "k256"] }
 alloy-eips = { version = "=2.1.1", default-features = false, features = ["std"] }
 alloy-primitives = { version = "=1.7.3", default-features = false, features = ["std"] }
-chacha20poly1305 = "=0.10.1"
+chacha20poly1305 = "=0.11.0"
 zeroize = "1.9.1"
 anyhow = "1.0"
 axum = { version = "0.8", features = ["ws"] }
