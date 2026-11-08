@@ -54,3 +54,15 @@ describe('Landing footer', () => {
     }
   });
 });
+
+describe('Landing friends', () => {
+  it('toggles a friend name on tap', () => {
+    render(<Landing apiUrl="" />);
+    const vivek = screen.getByRole('button', { name: 'Vivek' });
+    expect(vivek).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(vivek);
+    expect(vivek).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.click(vivek);
+    expect(vivek).toHaveAttribute('aria-expanded', 'false');
+  });
+});
