@@ -5,6 +5,7 @@ import type {
   Portfolio,
   PortfolioAddresses,
   PortfolioHolding,
+  TokenMarket,
 } from './types';
 
 const isRecord = (v: unknown): v is Record<string, unknown> =>
@@ -74,4 +75,15 @@ export function isChainActivity(v: unknown): v is ChainActivity {
 
 export function isAccountDeletion(v: unknown): v is AccountDeletion {
   return isRecord(v) && v.status === 'deleted' && isNumber(v.waitlistEntries);
+}
+
+export function isTokenMarket(v: unknown): v is TokenMarket {
+  return (
+    isRecord(v) &&
+    isString(v.symbol) &&
+    (['priceUsd', 'change24h', 'volume24h', 'liquidityUsd', 'marketCap', 'fdv'] as const).every(
+      (k) => nullable(v[k], isNumber),
+    ) &&
+    (v.chart === null || (isRecord(v.chart) && isString(v.chart.chain) && isString(v.chart.pool)))
+  );
 }

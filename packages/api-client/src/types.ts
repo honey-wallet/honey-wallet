@@ -888,3 +888,17 @@ export interface AccountDeletion {
   status: 'deleted';
   waitlistEntries: number;
 }
+
+/** `GET /market/token`. Mirrors `market_data::TokenMarket`. */
+export interface TokenMarket {
+  symbol: string;
+  priceUsd: number | null;
+  /** Percent, from the deepest pool. */
+  change24h: number | null;
+  volume24h: number | null;
+  liquidityUsd: number | null;
+  marketCap: number | null;
+  fdv: number | null;
+  /** The deepest pool, for `poolHistory(chain, pool)`. */
+  chart: { chain: string; pool: string } | null;
+}

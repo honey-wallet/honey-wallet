@@ -1,0 +1,412 @@
+import { ed25519 } from '@noble/curves/ed25519.js';
+import { sha256 } from '@noble/hashes/sha2.js';
+import { concatBytes, utf8ToBytes } from '@noble/hashes/utils.js';
+import { base58, base64 } from '@scure/base';
+import {
+  encodeFunctionData,
+  erc20Abi,
+  type Hex,
+  isAddress,
+  type TransactionSerializableEIP1559,
+} from 'viem';
+
+/**
+ * Plain transfers the app sends itself: ETH and USDC on EVM networks, SOL and USDC on
+ * Solana. Each chain has a `prepare` (reads the chain: nonce, fees, blockhash; checks
+ * the balance covers amount + fee), a pure builder/signer, and a broadcast + confirm.
+ * Every network call goes through an injected `Rpc`, so tests never touch a chain.
+ */
+
+export type Rpc = (method: string, params: unknown) => Promise<unknown>;
+
+/** A JSON-RPC 2.0 caller for one endpoint. */
+export function jsonRpc(url: string, fetcher: typeof fetch = fetch, timeoutMs = 20_000): Rpc {
+  return async (method, params) => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetcher(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+        signal: controller.signal,
+      });
+      if (!response.ok) throw new Error(`RPC unavailable (${response.status})`);
+      const body = (await response.json()) as { result?: unknown; error?: { message?: string } };
+      if (body.error) throw new Error(body.error.message ?? 'RPC error');
+      return body.result;
+    } finally {
+      clearTimeout(timeout);
+    }
+  };
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Decimal text ("1.5") to base units; rejects more decimals than the token has. */
+export function toBaseUnits(amount: string, decimals: number): bigint {
+  const text = amount.trim();
+  if (!/^\d+(\.\d+)?$/.test(text)) throw new Error('Invalid amount');
+  const [whole, fraction = ''] = text.split('.');
+  if (fraction.length > decimals) throw new Error(`At most ${decimals} decimals`);
+  const units = BigInt(whole + fraction.padEnd(decimals, '0'));
+  if (units <= 0n) throw new Error('Amount must be more than zero');
+  return units;
+}
+
+// EVM
+
+/** USDC (native, Circle-issued) by chain id. */
+export const EVM_USDC: Record<number, `0x${string}`> = {
+  1: '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48',
+  8453: '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913',
+  42161: '0xaf88d065e77c8cc2239327c5edb3a432268e5831',
+};
+
+export type EvmTransferPlan = Readonly<{
+  tx: TransactionSerializableEIP1559;
+  /** Fee at today's base fee, for the review. */
+  feeEstimate: bigint;
+  /** The most the fee can be (gas × maxFeePerGas): checked against the ETH balance. */
+  feeMax: bigint;
+}>;
+
+const hexBig = (v: unknown) => {
+  if (typeof v !== 'string' || !/^0x[0-9a-fA-F]*$/.test(v)) throw new Error('Invalid RPC number');
+  return BigInt(v === '0x' ? 0 : v);
+};
+
+export async function prepareEvmTransfer(
+  rpc: Rpc,
+  input: {
+    chainId: number;
+    from: string;
+    to: string;
+    /** Base units (wei, or the token's units). */
+    amount: bigint;
+    /** ERC-20 contract; omit for the native coin. */
+    token?: `0x${string}`;
+  },
+): Promise<EvmTransferPlan> {
+  const { chainId, from, to, amount, token } = input;
+  if (!isAddress(from) || !isAddress(to)) throw new Error('Invalid EVM address');
+  if (to.toLowerCase() === from.toLowerCase()) throw new Error('That’s your own address');
+  if (amount <= 0n) throw new Error('Amount must be more than zero');
+  const call = token
+    ? {
+        to: token,
+        value: 0n,
+        data: encodeFunctionData({
+          abi: erc20Abi,
+          functionName: 'transfer',
+          args: [to as `0x${string}`, amount],
+        }),
+      }
+    : { to: to as `0x${string}`, value: amount, data: undefined };
+  const [rpcChain, nonce, block, tip, ethBalance, tokenBalance] = await Promise.all([
+    rpc('eth_chainId', []).then(hexBig),
+    rpc('eth_getTransactionCount', [from, 'pending']).then(hexBig),
+    rpc('eth_getBlockByNumber', ['latest', false]) as Promise<{ baseFeePerGas?: string }>,
+    rpc('eth_maxPriorityFeePerGas', []).then(hexBig),
+    rpc('eth_getBalance', [from, 'latest']).then(hexBig),
+    token
+      ? rpc('eth_call', [
+          {
+            to: token,
+            data: encodeFunctionData({
+              abi: erc20Abi,
+              functionName: 'balanceOf',
+              args: [from as `0x${string}`],
+            }),
+          },
+          'latest',
+        ]).then(hexBig)
+      : Promise.resolve(0n),
+  ]);
+  if (rpcChain !== BigInt(chainId)) throw new Error('RPC is on the wrong network');
+  if (token && tokenBalance < amount) throw new Error('Not enough tokens');
+  const baseFee = hexBig(block?.baseFeePerGas);
+  const estimated = hexBig(
+    await rpc('eth_estimateGas', [
+      {
+        from,
+        to: call.to,
+        value: `0x${call.value.toString(16)}`,
+        ...(call.data ? { data: call.data } : {}),
+      },
+    ]),
+  );
+  // Plain ETH sends to an account cost exactly 21,000; contract calls get 20% headroom.
+  const gas = token || estimated > 21_000n ? (estimated * 12n) / 10n : estimated;
+  const maxPriorityFeePerGas = tip;
+  const maxFeePerGas = baseFee * 2n + tip;
+  const feeMax = gas * maxFeePerGas;
+  if (ethBalance < feeMax + call.value)
+    throw new Error(
+      token ? 'Not enough ETH to pay the network fee' : 'Not enough ETH for amount + fee',
+    );
+  const tx: TransactionSerializableEIP1559 = {
+    type: 'eip1559',
+    chainId,
+    nonce: Number(nonce),
+    to: call.to,
+    value: call.value,
+    ...(call.data ? { data: call.data } : {}),
+    gas,
+    maxFeePerGas,
+    maxPriorityFeePerGas,
+  };
+  return Object.freeze({ tx, feeEstimate: gas * (baseFee + tip), feeMax });
+}
+
+export async function broadcastEvm(rpc: Rpc, signed: Hex): Promise<Hex> {
+  const hash = await rpc('eth_sendRawTransaction', [signed]);
+  if (typeof hash !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(hash))
+    throw new Error('Invalid transaction hash');
+  return hash as Hex;
+}
+
+/** Waits for the receipt: 'success' or 'failure', or 'pending' after the timeout. */
+export async function waitForEvmReceipt(
+  rpc: Rpc,
+  hash: Hex,
+  { intervalMs = 3_000, timeoutMs = 180_000 } = {},
+): Promise<'success' | 'failure' | 'pending'> {
+  const end = Date.now() + timeoutMs;
+  while (Date.now() < end) {
+    const receipt = (await rpc('eth_getTransactionReceipt', [hash]).catch(() => null)) as {
+      status?: string;
+    } | null;
+    if (receipt?.status) return receipt.status === '0x1' ? 'success' : 'failure';
+    await sleep(intervalMs);
+  }
+  return 'pending';
+}
+
+// Solana
+
+export const SOLANA_USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+const SYSTEM_PROGRAM = '11111111111111111111111111111111';
+const TOKEN_PROGRAM = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
+const ATA_PROGRAM = 'ATokenGPvbdKxYTo14Q8T7JpjvYLzMGmhX7vdrSWPmDV';
+/** Lamports per signature; one signer. */
+export const SOLANA_BASE_FEE = 5_000n;
+
+const key32 = (address: string) => {
+  const bytes = base58.decode(address);
+  if (bytes.length !== 32) throw new Error('Invalid Solana address');
+  return bytes;
+};
+
+export const isSolanaAddress = (value: string) => {
+  try {
+    return key32(value.trim()).length === 32;
+  } catch {
+    return false;
+  }
+};
+
+function onCurve(bytes: Uint8Array) {
+  try {
+    ed25519.Point.fromBytes(bytes);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** `findProgramAddress`: the first bump (255 down) whose hash is off the curve. */
+export function findProgramAddress(seeds: Uint8Array[], programId: string): string {
+  const program = key32(programId);
+  for (let bump = 255; bump >= 0; bump--) {
+    const hash = sha256(
+      concatBytes(...seeds, Uint8Array.of(bump), program, utf8ToBytes('ProgramDerivedAddress')),
+    );
+    if (!onCurve(hash)) return base58.encode(hash);
+  }
+  throw new Error('No program address');
+}
+
+/** The associated token account of `owner` for `mint`. */
+export const associatedTokenAddress = (owner: string, mint: string) =>
+  findProgramAddress([key32(owner), key32(TOKEN_PROGRAM), key32(mint)], ATA_PROGRAM);
+
+function shortVec(n: number) {
+  const out: number[] = [];
+  let v = n;
+  for (;;) {
+    const byte = v & 0x7f;
+    v >>= 7;
+    if (v === 0) {
+      out.push(byte);
+      return Uint8Array.from(out);
+    }
+    out.push(byte | 0x80);
+  }
+}
+
+const u64 = (v: bigint) => {
+  if (v < 0n || v >= 1n << 64n) throw new Error('Amount out of range');
+  const out = new Uint8Array(8);
+  new DataView(out.buffer).setBigUint64(0, v, true);
+  return out;
+};
+
+type Ix = { program: string; accounts: string[]; data: Uint8Array };
+
+/**
+ * A legacy message with one signer (the payer). `writable` lists every non-signer
+ * account the instructions write; all others are read-only.
+ */
+export function compileSolanaMessage(
+  payer: string,
+  writable: string[],
+  instructions: Ix[],
+  recentBlockhash: string,
+): Uint8Array {
+  const all = [
+    ...new Set([payer, ...writable, ...instructions.flatMap((i) => [...i.accounts, i.program])]),
+  ];
+  const readonly = all.filter((a) => a !== payer && !writable.includes(a));
+  const keys = [payer, ...writable.filter((a) => a !== payer), ...readonly];
+  const index = (a: string) => keys.indexOf(a);
+  const parts: Uint8Array[] = [
+    Uint8Array.of(1, 0, readonly.length),
+    shortVec(keys.length),
+    ...keys.map(key32),
+    key32(recentBlockhash),
+    shortVec(instructions.length),
+  ];
+  for (const ix of instructions) {
+    parts.push(
+      Uint8Array.of(index(ix.program)),
+      shortVec(ix.accounts.length),
+      Uint8Array.from(ix.accounts.map(index)),
+      shortVec(ix.data.length),
+      ix.data,
+    );
+  }
+  return concatBytes(...parts);
+}
+
+export type SolanaTransferPlan = Readonly<{
+  message: Uint8Array;
+  /** Network fee plus, for a first USDC payment, the recipient account's rent. */
+  feeLamports: bigint;
+  createsRecipientAccount: boolean;
+}>;
+
+export async function prepareSolanaTransfer(
+  rpc: Rpc,
+  input: { from: string; to: string; amount: bigint; token?: 'USDC' },
+): Promise<SolanaTransferPlan> {
+  const { from, to, amount, token } = input;
+  key32(from);
+  key32(to);
+  if (from === to) throw new Error('That’s your own address');
+  if (amount <= 0n) throw new Error('Amount must be more than zero');
+  const [blockhash, balance] = await Promise.all([
+    rpc('getLatestBlockhash', [{ commitment: 'confirmed' }]) as Promise<{
+      value?: { blockhash?: string };
+    }>,
+    rpc('getBalance', [from, { commitment: 'confirmed' }]) as Promise<{ value?: number }>,
+  ]);
+  const recent = blockhash?.value?.blockhash;
+  if (!recent) throw new Error('No recent blockhash');
+  const lamports = BigInt(balance?.value ?? 0);
+  if (!token) {
+    if (lamports < amount + SOLANA_BASE_FEE) throw new Error('Not enough SOL for amount + fee');
+    const message = compileSolanaMessage(
+      from,
+      [to],
+      [
+        {
+          program: SYSTEM_PROGRAM,
+          accounts: [from, to],
+          data: concatBytes(Uint8Array.of(2, 0, 0, 0), u64(amount)),
+        },
+      ],
+      recent,
+    );
+    return Object.freeze({ message, feeLamports: SOLANA_BASE_FEE, createsRecipientAccount: false });
+  }
+  const mint = SOLANA_USDC_MINT;
+  const source = associatedTokenAddress(from, mint);
+  const destination = associatedTokenAddress(to, mint);
+  const [sourceBalance, destinationInfo, rent] = await Promise.all([
+    rpc('getTokenAccountBalance', [source, { commitment: 'confirmed' }]) as Promise<{
+      value?: { amount?: string };
+    }>,
+    rpc('getAccountInfo', [
+      destination,
+      { encoding: 'base64', commitment: 'confirmed' },
+    ]) as Promise<{
+      value?: unknown;
+    }>,
+    rpc('getMinimumBalanceForRentExemption', [165]),
+  ]);
+  if (BigInt(sourceBalance?.value?.amount ?? '0') < amount) throw new Error('Not enough USDC');
+  const creates = !destinationInfo?.value;
+  const feeLamports = SOLANA_BASE_FEE + (creates ? BigInt(Number(rent) || 0) : 0n);
+  if (lamports < feeLamports) throw new Error('Not enough SOL to pay the network fee');
+  const message = compileSolanaMessage(
+    from,
+    [source, destination],
+    [
+      // Create the recipient's USDC account if it doesn't exist (no-op if it does).
+      {
+        program: ATA_PROGRAM,
+        accounts: [from, destination, to, mint, SYSTEM_PROGRAM, TOKEN_PROGRAM],
+        data: Uint8Array.of(1),
+      },
+      // TransferChecked: amount and decimals (6) are checked against the mint.
+      {
+        program: TOKEN_PROGRAM,
+        accounts: [source, mint, destination, from],
+        data: concatBytes(Uint8Array.of(12), u64(amount), Uint8Array.of(6)),
+      },
+    ],
+    recent,
+  );
+  return Object.freeze({ message, feeLamports, createsRecipientAccount: creates });
+}
+
+/** Signs a one-signer message: the wire transaction and its id (the signature). */
+export function signSolanaTransfer(key: Uint8Array, message: Uint8Array) {
+  const signature = ed25519.sign(message, key);
+  return {
+    signature: base58.encode(signature),
+    wire: base64.encode(concatBytes(shortVec(1), signature, message)),
+  };
+}
+
+export async function broadcastSolana(rpc: Rpc, wire: string): Promise<string> {
+  const id = await rpc('sendTransaction', [
+    wire,
+    { encoding: 'base64', preflightCommitment: 'confirmed' },
+  ]);
+  if (typeof id !== 'string') throw new Error('Invalid transaction id');
+  return id;
+}
+
+export async function waitForSolana(
+  rpc: Rpc,
+  signature: string,
+  { intervalMs = 2_000, timeoutMs = 90_000 } = {},
+): Promise<'success' | 'failure' | 'pending'> {
+  const end = Date.now() + timeoutMs;
+  while (Date.now() < end) {
+    const result = (await rpc('getSignatureStatuses', [[signature]]).catch(() => null)) as {
+      value?: ({ err: unknown; confirmationStatus?: string } | null)[];
+    } | null;
+    const status = result?.value?.[0];
+    if (status?.err) return 'failure';
+    if (
+      status &&
+      (status.confirmationStatus === 'confirmed' || status.confirmationStatus === 'finalized')
+    )
+      return 'success';
+    await sleep(intervalMs);
+  }
+  return 'pending';
+}

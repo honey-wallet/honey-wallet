@@ -22,13 +22,13 @@ import { POSITIONS } from '@/lib/collectibles';
 import { reorderFavorites, toggleFavorite, useFavorites } from '@/lib/favorites';
 import { tap } from '@/lib/haptics';
 import { LOADS } from '@/lib/loads';
+import { useMarketList } from '@/lib/market';
 import {
   CHAINS,
   type Chain,
   EARN,
   formatCompactUsd,
   formatPrice,
-  MARKET,
   type MarketToken,
 } from '@/lib/mock-wallet';
 import { isWeb } from '@/lib/platform';
@@ -79,11 +79,13 @@ export default function SearchScreen() {
   const styles = useStyles();
   const c = useTheme();
   const [query, setQuery] = useState('');
+  // Live prices and stats outside test mode (lib/market).
+  const marketList = useMarketList();
   const [editing, setEditing] = useState(false);
   const [dragging, setDragging] = useState(false);
   /** A favourite's card: price and move; while editing, a − to remove it. */
   const favoriteCard = (symbol: string) => {
-    const token = MARKET.find((t) => t.symbol === symbol);
+    const token = marketList.find((t) => t.symbol === symbol);
     if (!token) return null;
     return (
       <>
@@ -137,10 +139,10 @@ export default function SearchScreen() {
   // A wallet that's never had money in it isn't earning yet.
   const { empty } = useWalletView();
 
-  const results = MARKET.filter(
+  const results = marketList.filter(
     (t) => t.name.toLowerCase().includes(q) || t.symbol.toLowerCase().includes(q),
   );
-  const top = MARKET.filter((t) => chain === 'All' || t.chain === chain).sort(COMPARE[sort]);
+  const top = marketList.filter((t) => chain === 'All' || t.chain === chain).sort(COMPARE[sort]);
 
   return (
     <TabScreen>

@@ -115,8 +115,35 @@ pub struct OneClickToken {
     pub coingecko_id: Option<String>,
 }
 
+/// A token's market numbers for its detail screen, Search and share cards. Response
+/// shape mirrored in `packages/api-client/src/types.ts` (`TokenMarket`).
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenMarket {
+    pub symbol: String,
+    /// 1Click price (what Honey quotes), else the deepest pool's.
+    pub price_usd: Option<f64>,
+    /// From the deepest pool that prices this token, in percent.
+    pub change_24h: Option<f64>,
+    /// Summed over the pools found, in USD.
+    pub volume_24h: Option<f64>,
+    pub liquidity_usd: Option<f64>,
+    pub market_cap: Option<f64>,
+    pub fdv: Option<f64>,
+    /// The deepest pool, for `GET /market/history` (daily closes).
+    pub chart: Option<ChartPool>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ChartPool {
+    pub chain: &'static str,
+    pub pool: String,
+}
+
 #[derive(Clone)]
 enum Cached {
+    Market(TokenMarket),
     Tokens(Arc<Vec<OneClickToken>>),
     Venues(Venues),
     New(Vec<NewPool>),
@@ -251,6 +278,41 @@ impl MarketData {
         Ok(out)
     }
 
+    /// Price, 24h change, volume, liquidity and caps for one symbol, from the 1Click list
+    /// and DexScreener pools of its real contract addresses (no look-alikes). Cached 60s.
+    pub async fn token_market(&self, symbol: &str) -> Result<TokenMarket, Unavailable> {
+        let symbol = symbol.trim().to_uppercase();
+        let key = format!("market:{symbol}");
+        if let Some(Cached::Market(m)) = self.cached(&key, NEW_POOLS_TTL).await {
+            return Ok(m);
+        }
+        let tokens = self.tokens().await?;
+        let variants = variants_of(&symbol, &tokens);
+        if variants.is_empty() {
+            return Err(Unavailable);
+        }
+        let price_usd = variants.iter().find_map(|t| t.price);
+        let lookups = variants.iter().take(3).filter_map(|t| {
+            let (_, dex_chain) = chain_from_oneclick(&t.blockchain)?;
+            let address = match (&t.contract_address, t.blockchain.as_str()) {
+                (Some(a), _) => a.clone(),
+                (None, "sol") => WRAPPED_SOL.to_string(),
+                _ => return None,
+            };
+            let url = format!("{}/token-pairs/v1/{dex_chain}/{address}", self.dexscreener);
+            Some(async move { (*t, address, self.get(&url).await) })
+        });
+        let mut pools = Vec::new();
+        for (token, address, body) in futures_util::future::join_all(lookups).await {
+            if let Ok(body) = body {
+                pools.extend(market_pools(token, &address, &body));
+            }
+        }
+        let out = summarize_market(symbol, price_usd, pools);
+        self.store(key, Cached::Market(out.clone())).await;
+        Ok(out)
+    }
+
     /// The newest pools, on one chain or all of them.
     pub async fn new_pools(&self, chain: Option<&str>) -> Result<Vec<NewPool>, Unavailable> {
         let network = match chain {
@@ -333,6 +395,66 @@ fn variants_of<'a>(symbol: &str, tokens: &'a [OneClickToken]) -> Vec<&'a OneClic
 
 /// DexScreener pools for one asset variant: the deepest per exchange, priced within
 /// 5% of 1Click's price and with real trading in the last day.
+/// One DexScreener pool where the token is the base asset.
+#[derive(Debug, Clone, PartialEq)]
+struct MarketPool {
+    chain: &'static str,
+    pool: String,
+    price_usd: Option<f64>,
+    change_24h: Option<f64>,
+    volume_24h: f64,
+    liquidity_usd: f64,
+    market_cap: Option<f64>,
+    fdv: Option<f64>,
+}
+
+fn market_pools(token: &OneClickToken, address: &str, body: &Value) -> Vec<MarketPool> {
+    let Some((chain, _)) = chain_from_oneclick(&token.blockchain) else {
+        return Vec::new();
+    };
+    body.as_array()
+        .into_iter()
+        .flatten()
+        .filter(|p| {
+            p["baseToken"]["address"]
+                .as_str()
+                .is_some_and(|a| a.eq_ignore_ascii_case(address))
+        })
+        .filter_map(|p| {
+            Some(MarketPool {
+                chain,
+                pool: p["pairAddress"].as_str()?.to_string(),
+                price_usd: num(&p["priceUsd"]),
+                change_24h: num(&p["priceChange"]["h24"]),
+                volume_24h: num(&p["volume"]["h24"]).unwrap_or(0.0),
+                liquidity_usd: num(&p["liquidity"]["usd"]).filter(|l| *l > 0.0)?,
+                market_cap: num(&p["marketCap"]).filter(|v| *v > 0.0),
+                fdv: num(&p["fdv"]).filter(|v| *v > 0.0),
+            })
+        })
+        .collect()
+}
+
+fn summarize_market(symbol: String, price: Option<f64>, mut pools: Vec<MarketPool>) -> TokenMarket {
+    pools.sort_by(|a, b| b.liquidity_usd.total_cmp(&a.liquidity_usd));
+    let deepest = pools.first();
+    let sum =
+        |f: fn(&MarketPool) -> f64| Some(pools.iter().map(f).sum::<f64>()).filter(|v| *v > 0.0);
+    TokenMarket {
+        symbol,
+        price_usd: price.or_else(|| deepest.and_then(|p| p.price_usd)),
+        change_24h: deepest.and_then(|p| p.change_24h),
+        volume_24h: sum(|p| p.volume_24h),
+        liquidity_usd: sum(|p| p.liquidity_usd),
+        market_cap: pools.iter().find_map(|p| p.market_cap),
+        fdv: pools.iter().find_map(|p| p.fdv),
+        chart: deepest.map(|p| ChartPool {
+            chain: p.chain,
+            pool: p.pool.clone(),
+        }),
+    }
+}
+
 fn parse_pairs(token: &OneClickToken, address: &str, price: f64, body: &Value) -> Vec<Venue> {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
@@ -566,5 +688,39 @@ mod tests {
         assert!(m.history("Tron", "abc").await.is_err());
         assert!(m.history("Solana", "../../x").await.is_err());
         assert!(m.new_pools(Some("Tron")).await.is_err());
+    }
+
+    #[test]
+    fn summarizes_the_deepest_pool_and_sums_volume() {
+        let token: OneClickToken = serde_json::from_value(serde_json::json!({
+            "assetId": "nep141:base-0xabc", "blockchain": "base", "symbol": "ABC",
+            "decimals": 18, "price": 2.0, "contractAddress": "0xAbC",
+        }))
+        .unwrap();
+        let body = serde_json::json!([
+            { "pairAddress": "p1", "baseToken": { "address": "0xabc" }, "priceUsd": "2.01",
+              "priceChange": { "h24": -3.5 }, "volume": { "h24": 100.0 },
+              "liquidity": { "usd": 5000.0 }, "marketCap": 1e6, "fdv": 2e6 },
+            { "pairAddress": "p2", "baseToken": { "address": "0xabc" }, "priceUsd": "1.99",
+              "priceChange": { "h24": 9.0 }, "volume": { "h24": 50.0 },
+              "liquidity": { "usd": 900.0 } },
+            { "pairAddress": "quote-side", "baseToken": { "address": "0xother" },
+              "liquidity": { "usd": 1e9 } },
+        ]);
+        let pools = market_pools(&token, "0xabc", &body);
+        assert_eq!(pools.len(), 2);
+        let m = summarize_market("ABC".into(), token.price, pools);
+        assert_eq!(m.price_usd, Some(2.0));
+        assert_eq!(m.change_24h, Some(-3.5));
+        assert_eq!(m.volume_24h, Some(150.0));
+        assert_eq!(m.liquidity_usd, Some(5900.0));
+        assert_eq!(m.market_cap, Some(1e6));
+        assert_eq!(
+            m.chart,
+            Some(ChartPool {
+                chain: "Base",
+                pool: "p1".into()
+            })
+        );
     }
 }

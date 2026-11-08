@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createApiClient } from './client';
-import { isChainActivity, isPortfolio, portfolioQuery } from './portfolio';
+import { isChainActivity, isPortfolio, isTokenMarket, portfolioQuery } from './portfolio';
 
 const holding = {
   chain: 'Base',
@@ -41,6 +41,22 @@ describe('portfolio', () => {
         unavailable: [],
       }),
     ).toBe(false);
+  });
+
+  it('validates token market data', () => {
+    const m = {
+      symbol: 'ETH',
+      priceUsd: 3000,
+      change24h: -1.2,
+      volume24h: null,
+      liquidityUsd: 1e6,
+      marketCap: null,
+      fdv: null,
+      chart: { chain: 'Base', pool: '0xp' },
+    };
+    expect(isTokenMarket(m)).toBe(true);
+    expect(isTokenMarket({ ...m, chart: null })).toBe(true);
+    expect(isTokenMarket({ ...m, change24h: 'x' })).toBe(false);
   });
 
   it('calls the portfolio and deletion endpoints', async () => {

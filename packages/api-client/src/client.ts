@@ -25,7 +25,13 @@ import {
 } from './near-intents';
 import { isOperationPage, isOperationRecovery, OPERATION_ID } from './operations';
 import { isPolymarketCatalog, isPolymarketOrderBook } from './polymarket';
-import { isAccountDeletion, isChainActivity, isPortfolio, portfolioQuery } from './portfolio';
+import {
+  isAccountDeletion,
+  isChainActivity,
+  isPortfolio,
+  isTokenMarket,
+  portfolioQuery,
+} from './portfolio';
 import { isPriceSnapshot, type PriceStreamOptions, subscribePrices } from './prices';
 import {
   isRelayQuotePreview,
@@ -221,6 +227,9 @@ export function createApiClient({ baseUrl, fetch: fetchImpl = fetch }: ApiClient
         `/api/v1/market/new-pools${chain ? `?chain=${encodeURIComponent(chain)}` : ''}`,
         init,
       ),
+    /** Price, 24h change, volume, liquidity and caps for a symbol. Public. */
+    tokenMarket: (symbol: string, init?: RequestInit) =>
+      validated(`/api/v1/market/token?symbol=${encodeURIComponent(symbol)}`, isTokenMarket, init),
     /** Balances on every supported chain for these public addresses, priced in USD. Public. */
     portfolioBalances: (addresses: PortfolioAddresses, init?: RequestInit) =>
       validated(`/api/v1/portfolio/balances?${portfolioQuery(addresses)}`, isPortfolio, init),

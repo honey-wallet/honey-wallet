@@ -11,6 +11,7 @@ vi.mock('@/lib/profile', () => ({
   getProfile: () => ({ name: 'Owner' }),
 }));
 vi.mock('@/lib/multisig', () => ({ useMultisig: () => null }));
+vi.mock('@/lib/market', () => ({ useTokenMarkets: () => ({}), dayChange: () => 0 }));
 vi.mock('@/lib/portfolio', () => ({
   usePortfolio: () => ({ portfolio: undefined, loading: false }),
   toTokens: () => [],

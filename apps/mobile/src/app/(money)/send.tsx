@@ -13,6 +13,7 @@ import { LOADS } from '@/lib/loads';
 import { RECENT_RECIPIENTS, shortAddress } from '@/lib/mock-wallet';
 import { isWeb } from '@/lib/platform';
 import { recentRecipients, usePortfolio } from '@/lib/portfolio';
+import { recipientChains } from '@/lib/send';
 import { isEvmAddress, useActiveWallet } from '@/lib/wallets';
 import { makeStyles, radius, useTheme } from '@/theme';
 
@@ -35,8 +36,10 @@ export default function SendSheet() {
 
   // A full address that isn't a saved recipient can be sent to directly.
   const typed = query.trim();
+  // Real wallets can also pay a Solana address or a NEAR account.
   const direct =
-    isEvmAddress(typed) && !results.some((r) => r.address.toLowerCase() === typed.toLowerCase())
+    (wallet.demo ? isEvmAddress(typed) : recipientChains(typed).length > 0) &&
+    !results.some((r) => r.address.toLowerCase() === typed.toLowerCase())
       ? typed
       : null;
 

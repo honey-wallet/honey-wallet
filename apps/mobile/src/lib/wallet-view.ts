@@ -1,3 +1,4 @@
+import { dayChange, useTokenMarkets } from '@/lib/market';
 import { BALANCE, BALANCE_CHANGE, TOKENS, type Token, tokenName } from '@/lib/mock-wallet';
 import { useMultisig } from '@/lib/multisig';
 import { useOnboarding } from '@/lib/onboarding';
@@ -15,14 +16,23 @@ export function useWalletView() {
   const multisig = useMultisig(wallet.id);
   const { funded } = useOnboarding();
   const live = usePortfolio(wallet);
-  if (!multisig && !wallet.demo) {
+  const real = !multisig && !wallet.demo;
+  const liveTokens = toTokens(live.portfolio?.holdings ?? []);
+  const liveMarkets = useTokenMarkets(
+    liveTokens.map((t) => t.symbol),
+    real,
+  );
+  if (real) {
     const holdings = live.portfolio?.holdings ?? [];
-    const tokens = toTokens(holdings);
+    const tokens = liveTokens.map((t) => ({
+      ...t,
+      change: liveMarkets[t.symbol]?.market?.change24h ?? 0,
+    }));
     return {
       wallet,
       multisig,
       usd: live.portfolio?.totalUsd ?? 0,
-      change: 0,
+      change: dayChange(tokens, liveMarkets),
       tokens,
       empty: tokens.length === 0,
       /** Per-network balances, for Send. */

@@ -43,6 +43,7 @@ export {
   isChainActivityItem,
   isPortfolio,
   isPortfolioHolding,
+  isTokenMarket,
   portfolioQuery,
 } from './portfolio';
 export {

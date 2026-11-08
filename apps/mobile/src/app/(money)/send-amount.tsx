@@ -39,8 +39,11 @@ import {
 } from '@/lib/mock-wallet';
 import { type ProposalAction, propose, useSigner } from '@/lib/multisig';
 import { followFix, useFailure } from '@/lib/outcomes';
+import { prepareSend, recipientChains, type SendPlan, type SendResult } from '@/lib/send';
+import { showErrorToast } from '@/lib/toast';
 import { txReceipt } from '@/lib/tx-receipt';
 import { useWalletView } from '@/lib/wallet-view';
+import { useActiveWallet, wallets } from '@/lib/wallets';
 import { makeStyles, radius, useTheme } from '@/theme';
 
 type Page = 'pick' | 'amount' | 'review' | 'sent' | 'failed';
@@ -79,14 +82,21 @@ export default function SendAmountSheet() {
   // A new wallet holds nothing until its first deposit.
   const view = useWalletView();
   const { empty } = view;
-  // A real wallet can't send from Honey yet: nothing is signed or broadcast, so the flow
-  // stops here instead of reporting a send that never happened.
-  const sendBlocked = !signer.multisig && 'live' in view;
+  // A real wallet sends for real (lib/send): its live balances, on networks the
+  // recipient's address works on. Sample wallets keep the fixture flow.
+  const real = !signer.multisig && 'live' in view;
+  const wallet = useActiveWallet();
+  const toChains = recipientChains(to);
   const sendable = signer.multisig
     ? signer.multisig.holdings.filter((h) => h.amount > 0)
-    : empty || sendBlocked
-      ? []
-      : SENDABLE;
+    : real
+      ? (view.holdings ?? []).filter((h) => toChains.includes(h.chain))
+      : empty
+        ? []
+        : SENDABLE;
+  const [plan, setPlan] = useState<SendPlan | null>(null);
+  const [sent, setSent] = useState<SendResult | null>(null);
+  const [busy, setBusy] = useState(false);
   const loading = useFirstLoad(LOADS.balances(signer.walletId));
   // The largest holding of the requested token, so its network is the sensible default.
   const [picked, setPicked] = useState(() => {
@@ -110,8 +120,11 @@ export default function SendAmountSheet() {
   const label = !value ? 'Enter an amount' : insufficient ? 'Insufficient balance' : 'Continue';
 
   const recipient = describeRecipient(to);
-  // The sent transaction's id and explorer link, for the receipt.
-  const tx = txReceipt(chain, `${recipient.address}:${tokenValue}`);
+  // The sent transaction's id and explorer link, for the receipt: the real one for a real
+  // send, a placeholder in the sample flow.
+  const tx = sent
+    ? { hash: sent.hash, explorer: { name: 'explorer', url: sent.explorerUrl } }
+    : txReceipt(chain, `${recipient.address}:${tokenValue}`);
   const { copied, copy } = useCopy(recipient.address);
 
   const go = (next: Page) => {
@@ -145,7 +158,43 @@ export default function SendAmountSheet() {
     to: recipient.address,
   };
   const outcome = useFailure('send');
+  // Real wallets: read fees and check the balance before the review shows.
+  const review = async () => {
+    if (!real) return go('review');
+    tap();
+    setBusy(true);
+    try {
+      setPlan(
+        await prepareSend(wallet, {
+          chain,
+          symbol,
+          to: recipient.address,
+          amount: trimNumber(tokenValue, symbol === 'USDC' ? 6 : 8),
+        }),
+      );
+      setPage('review');
+    } catch (error) {
+      showErrorToast(error instanceof Error ? error.message : 'Couldn’t prepare the send');
+    } finally {
+      setBusy(false);
+    }
+  };
+  const sendReal = async () => {
+    if (!plan || busy) return;
+    setBusy(true);
+    try {
+      const walletId = wallet.id;
+      setSent(await plan.execute(() => wallets.get().activeId === walletId));
+      success();
+      setPage('sent');
+    } catch (error) {
+      showErrorToast(error instanceof Error ? error.message : 'Send failed');
+    } finally {
+      setBusy(false);
+    }
+  };
   const send = () => {
+    if (real) return void sendReal();
     // A failed send lands on its own page; nothing leaves the wallet.
     if (outcome.attempt()) {
       setPage('failed');
@@ -159,15 +208,20 @@ export default function SendAmountSheet() {
     setPage('sent');
   };
 
-  const finish = () => finishDemo('nothing was sent', { all: true });
+  const finish = () => (real ? router.dismissAll() : finishDemo('nothing was sent', { all: true }));
 
-  if (sendBlocked && !empty) {
+  if (real && !empty && sendable.length === 0) {
     return (
       <SheetScreen title="Send" size="fill">
         <EmptyState
           icon="send"
-          title="Sending is coming soon"
-          hint="Honey can’t sign transfers from this wallet yet, so nothing has been sent. Your money is safe on chain; to move it today, use your recovery phrase in another wallet."
+          title="Nothing to send there"
+          hint={
+            toChains.length
+              ? `You don’t hold anything on ${toChains.join(' or ')}, where this address works.`
+              : 'That address isn’t one Honey can send to.'
+          }
+          action={{ label: 'Change recipient', onPress: () => router.back() }}
         />
       </SheetScreen>
     );
@@ -368,9 +422,9 @@ export default function SendAmountSheet() {
         </View>
         {page !== 'pick' ? (
           <PillButton
-            label={label}
-            disabled={!ready}
-            onPress={() => go('review')}
+            label={busy && page === 'amount' ? 'Checking…' : label}
+            disabled={!ready || busy}
+            onPress={() => void review()}
             style={styles.cta}
           />
         ) : null}
@@ -416,7 +470,18 @@ export default function SendAmountSheet() {
                       </View>
                     }
                   />
-                  <StatRow label="Network cost" value="<$0.01" />
+                  {plan ? (
+                    <>
+                      {/* The whole address, so it can be checked character by character. */}
+                      <StatRow
+                        label="Address"
+                        value={<Text style={styles.rowAddress}>{plan.to}</Text>}
+                      />
+                      <StatRow label="Network cost" value={plan.fee} />
+                    </>
+                  ) : (
+                    <StatRow label="Network cost" value="<$0.01" />
+                  )}
                   {signer.rule(action) ? (
                     <StatRow label="Shared wallet" value={signer.rule(action)} />
                   ) : null}
@@ -426,10 +491,12 @@ export default function SendAmountSheet() {
                   />
                 </View>
                 <Text style={[styles.note, styles.noteInTray]}>
-                  Sends can't be undone. Check the address before you send.
+                  {plan?.note ? `${plan.note} ` : ''}Sends can't be undone. Check the address before
+                  you send.
                 </Text>
                 <PillButton
-                  label={signer.cta('Confirm send', action)}
+                  label={busy ? 'Sending…' : signer.cta('Confirm send', action)}
+                  disabled={busy}
                   onPress={send}
                   style={styles.cta}
                 />
@@ -486,8 +553,11 @@ export default function SendAmountSheet() {
                       ),
                     },
                     { label: 'Network', value: chain },
-                    { label: 'Network cost', value: '<$0.01' },
-                    { label: 'Sent', value: 'Just now' },
+                    { label: 'Network cost', value: plan?.fee ?? '<$0.01' },
+                    {
+                      label: 'Sent',
+                      value: sent?.state === 'pending' ? 'Confirming…' : 'Just now',
+                    },
                   ]}
                   onDone={finish}
                 />
