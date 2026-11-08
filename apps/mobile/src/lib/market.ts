@@ -107,7 +107,7 @@ async function loadListing() {
 }
 
 const HONEY_CHAINS = new Set<string>(CHAINS.map((ch) => ch.name));
-const NAMES = new Map(MARKET.map((t) => [t.symbol.toUpperCase(), t.name]));
+const KNOWN = new Map(MARKET.map((t) => [t.symbol.toUpperCase(), t]));
 /** Well-known symbols first (so their 24h numbers load first), then the rest A-Z. */
 const RANK = new Map(MARKET.map((t, i) => [t.symbol.toUpperCase(), i]));
 
@@ -140,13 +140,19 @@ export function liveMarketList(
 ): MarketToken[] {
   return tokens
     .flatMap((t) => {
-      const chain = t.chains.find((ch) => HONEY_CHAINS.has(ch)) as Chain | undefined;
+      const known = KNOWN.get(t.symbol.toUpperCase());
+      // A well-known token shows on its home chain (NEAR on NEAR), else its first Honey chain.
+      const chain = (
+        known && t.chains.includes(known.chain)
+          ? known.chain
+          : t.chains.find((ch) => HONEY_CHAINS.has(ch))
+      ) as Chain | undefined;
       if (!chain) return [];
       const m = all[t.symbol]?.market;
       return [
         {
           symbol: t.symbol,
-          name: NAMES.get(t.symbol.toUpperCase()) ?? t.symbol,
+          name: known?.name ?? t.symbol,
           chain,
           price: m?.priceUsd ?? t.priceUsd,
           change: m?.change24h ?? 0,

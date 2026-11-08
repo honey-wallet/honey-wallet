@@ -42,10 +42,12 @@ it('lists every 1Click token on a Honey chain, with live numbers where loaded', 
       { symbol: 'ZEC', priceUsd: 40, chains: ['NEAR'] },
       { symbol: 'ETH', priceUsd: 2999, chains: ['Ethereum', 'Base'] },
       { symbol: 'ARB', priceUsd: 0.5, chains: ['Arbitrum'] },
+      { symbol: 'NEAR', priceUsd: 3.5, chains: ['Ethereum', 'NEAR'] },
     ],
     { ETH: m(-2, 3000) },
   );
-  expect(list.map((t) => t.symbol)).toEqual(['ETH', 'ZEC']);
+  expect(list.map((t) => t.symbol)).toEqual(['ETH', 'NEAR', 'ZEC']);
+  expect(list[1]).toMatchObject({ chain: 'NEAR', name: 'NEAR' });
   expect(list[0]).toMatchObject({
     symbol: 'ETH',
     name: 'Ethereum',
@@ -55,7 +57,7 @@ it('lists every 1Click token on a Honey chain, with live numbers where loaded', 
     volume: 10,
     marketCap: 99,
   });
-  expect(list[1]).toMatchObject({
+  expect(list[2]).toMatchObject({
     symbol: 'ZEC',
     name: 'ZEC',
     chain: 'NEAR',

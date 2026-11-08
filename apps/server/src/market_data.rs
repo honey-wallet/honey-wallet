@@ -149,9 +149,15 @@ pub fn market_list(tokens: &[OneClickToken]) -> Vec<MarketListToken> {
         {
             continue;
         }
+        // Native NEAR is listed as wNEAR (wrap.near); Honey shows and sends it as NEAR.
+        let symbol = if t.blockchain == "near" && t.symbol.eq_ignore_ascii_case("wNEAR") {
+            "NEAR"
+        } else {
+            t.symbol.as_str()
+        };
         let entry = by_symbol
-            .entry(t.symbol.to_ascii_uppercase())
-            .or_insert_with(|| (t.symbol.clone(), Vec::new(), Vec::new()));
+            .entry(symbol.to_ascii_uppercase())
+            .or_insert_with(|| (symbol.to_string(), Vec::new(), Vec::new()));
         entry.1.push(price);
         if !entry.2.contains(&index) {
             entry.2.push(index);
@@ -696,6 +702,7 @@ mod tests {
             token("b", "bsc", "NEAR", "near"),
             token("c", "aptos", "APT", "aptos"),
             token("e", "eth", "NEAR", "near"),
+            token("w", "near", "wNEAR", "wrapped-near"),
             cheap,
             unpriced,
         ];
@@ -703,7 +710,7 @@ mod tests {
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].symbol, "NEAR");
         assert_eq!(list[0].price_usd, 3.7);
-        assert_eq!(list[0].chains, ["Ethereum", "Base", "BSC"]);
+        assert_eq!(list[0].chains, ["Ethereum", "Base", "BSC", "NEAR"]);
     }
 
     #[test]
