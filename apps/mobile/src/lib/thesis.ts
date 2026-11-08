@@ -75,6 +75,8 @@ export type ThesisJar = {
   mine: boolean;
   /** Set on your copy of someone's jar: who you pay, and their cut of your profit. */
   copiedFrom?: { creator: string; fee: number; jarId: string };
+  /** Set when a shared wallet owns the jar: its buy is a proposal members approve. */
+  sharedWallet?: { walletId: string; label: string; proposalId: string };
   /** The real NEAR Intents swaps that bought this jar, one per asset and chain. */
   buy?: import('@/lib/jar-buy').BuyLeg[];
   /** A resting limit order still waiting to fill, if the jar was bought that way. */
@@ -490,11 +492,25 @@ export function createThesisJar(
     order: OrderKind;
     /** Set when the jar was bought for real: its swaps. */
     buy?: import('@/lib/jar-buy').BuyLeg[];
+    /** Set in advance when something (a proposal) must name the jar first. */
+    id?: string;
+    /** A shared wallet buying it: its members own the jar together. */
+    sharedWallet?: {
+      walletId: string;
+      label: string;
+      proposalId: string;
+      members: { id: string; name: string }[];
+    };
   },
 ) {
-  const id = `thesis-${Date.now()}`;
-  // With friends, you put in your share now; each friend is asked for theirs.
-  const share = +(proposal.amount / (options.friends.length + 1)).toFixed(2);
+  const id = options.id ?? `thesis-${Date.now()}`;
+  const shared = options.sharedWallet;
+  // With friends, you put in your share now; each friend is asked for theirs. A shared
+  // wallet pays the whole amount, and its members own equal parts.
+  const share = shared
+    ? proposal.amount
+    : +(proposal.amount / (options.friends.length + 1)).toFixed(2);
+  const memberShare = shared ? +(proposal.amount / shared.members.length).toFixed(2) : share;
   thesisJars.set((list) => [
     {
       id,
@@ -502,18 +518,23 @@ export function createThesisJar(
       thesis: proposal.thesis,
       creator: ME,
       visibility: options.visibility,
-      members: [
-        { id: 'me', name: ME, units: share },
-        ...options.friends.map((name, i) => ({
-          id: `f${i}`,
-          name,
-          units: 0,
-          invited: true,
-          asked: share,
-        })),
-      ],
+      members: shared
+        ? shared.members.map((m) => ({ id: m.id, name: m.name, units: memberShare }))
+        : [
+            { id: 'me', name: ME, units: share },
+            ...options.friends.map((name, i) => ({
+              id: `f${i}`,
+              name,
+              units: 0,
+              invited: true,
+              asked: share,
+            })),
+          ],
       picks: proposal.picks,
       buy: options.buy,
+      sharedWallet: shared
+        ? { walletId: shared.walletId, label: shared.label, proposalId: shared.proposalId }
+        : undefined,
       history: [share, share],
       invested: share,
       openOrder:

@@ -1,6 +1,6 @@
 import { router } from 'expo-router';
 import { useState } from 'react';
-import { Text, View } from 'react-native';
+import { Text, TextInput, View } from 'react-native';
 import { Icon } from '@/components/Icon';
 import { JarList, Summary, signedPct } from '@/components/jars/JarParts';
 import { PressableScale } from '@/components/motion/PressableScale';
@@ -27,9 +27,19 @@ export default function JarsScreen() {
   // With nothing of your own yet, open on Explore.
   const [view, setView] = useState<View_>(() => (all.some((j) => j.mine) ? 'Yours' : 'Explore'));
   const [filter, setFilter] = useState<Filter>('All');
+  const [query, setQuery] = useState('');
+  const q = query.trim().toLowerCase();
   const mine = all.filter((j) => j.mine);
   const others = all
     .filter((j) => !j.mine && (filter === 'All' || j.visibility === filter.toLowerCase()))
+    // Search by jar name, its idea, or a token it holds (e.g. "SOL").
+    .filter(
+      (j) =>
+        !q ||
+        j.name.toLowerCase().includes(q) ||
+        j.thesis.toLowerCase().includes(q) ||
+        j.picks.some((p) => p.symbol.toLowerCase() === q || p.name.toLowerCase().includes(q)),
+    )
     .sort((a, b) => jarReturn(b) - jarReturn(a));
   const total = mine.reduce((s, j) => s + jarValue(j), 0);
   const invested = mine.reduce((s, j) => s + j.invested, 0);
@@ -119,6 +129,20 @@ export default function JarsScreen() {
           </>
         ) : (
           <>
+            <View style={styles.search}>
+              <Icon name="search" size={16} color={c.textSecondary} />
+              <TextInput
+                value={query}
+                onChangeText={setQuery}
+                placeholder="Search jars or tokens"
+                placeholderTextColor={c.placeholder}
+                autoCapitalize="none"
+                autoCorrect={false}
+                returnKeyType="search"
+                style={styles.searchInput}
+                accessibilityLabel="Search jars or tokens"
+              />
+            </View>
             <SegmentedTabs<Filter>
               options={['All', 'Public', 'Private']}
               labels={{ All: 'All', Public: 'Public', Private: 'Returns only' }}
@@ -134,7 +158,7 @@ export default function JarsScreen() {
                   compact
                   icon="binoculars"
                   title="Nothing here yet"
-                  hint="Jars people share show up here."
+                  hint={q ? 'No jar matches that search.' : 'Jars people share show up here.'}
                 />
               </View>
             )}
@@ -177,4 +201,14 @@ const useStyles = makeStyles((c) => ({
     backgroundColor: c.primary,
   },
   emptyCard: { ...radius(20), backgroundColor: c.card },
+  search: {
+    height: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 14,
+    borderRadius: 22,
+    backgroundColor: c.card,
+  },
+  searchInput: { flex: 1, color: c.text, fontSize: 16 },
 }));

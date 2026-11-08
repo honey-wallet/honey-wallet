@@ -11,6 +11,7 @@ import { EmptyState, PushedScreen } from '@/components/wallet/parts';
 import { tap } from '@/lib/haptics';
 import { refreshJarBuy } from '@/lib/jar-buy';
 import { formatUsd } from '@/lib/mock-wallet';
+import { approvalsLeft, useMultisig, useProposal } from '@/lib/multisig';
 import { copyJar, jarReturn, jarValue, updateJarBuy, useThesisJars } from '@/lib/thesis';
 import { showToast } from '@/lib/toast';
 import { makeStyles, radius, useTheme } from '@/theme';
@@ -45,6 +46,9 @@ export default function JarScreen() {
   const [scrub, setScrub] = useState<number | null>(null);
   // The chart fits the page it's on (the extension popup is narrower than the window).
   const [width, setWidth] = useState(0);
+  // A shared wallet's jar: its buy waits on members' approvals.
+  const shared = useMultisig(jar?.sharedWallet?.walletId);
+  const approval = useProposal(jar?.sharedWallet?.proposalId ?? '');
   // While any real swap is still moving, check on it every 10 seconds.
   const moving = jar?.buy?.some((l) => !FINAL.has(l.status)) ?? false;
   // biome-ignore lint/correctness/useExhaustiveDependencies: restart only when the jar or its moving state changes, not on every status write.
@@ -63,6 +67,7 @@ export default function JarScreen() {
       </PushedScreen>
     );
 
+  const left = shared && approval ? approvalsLeft(shared, approval) : 0;
   const data = jar.history.slice(-RANGE_POINTS[range]);
   const first = data[0] ?? 0;
   const shown = scrub === null ? (data.at(-1) ?? jarValue(jar)) : (data[scrub] ?? 0);
@@ -169,6 +174,33 @@ export default function JarScreen() {
                 ]),
           ]}
         />
+        {jar.sharedWallet && approval && approval.status !== 'executed' ? (
+          <PressableScale
+            accessibilityRole="button"
+            onPress={() => {
+              tap();
+              router.push({ pathname: '/proposal/[id]', params: { id: approval.id } });
+            }}
+            style={styles.order}
+          >
+            <Icon
+              name={approval.status === 'pending' ? 'clock' : 'warning'}
+              size={16}
+              color={approval.status === 'pending' ? c.accentText : c.error}
+            />
+            <View style={styles.flex}>
+              <Text style={styles.orderTitle}>
+                {approval.status === 'pending'
+                  ? `Waiting for ${left} more approval${left === 1 ? '' : 's'}`
+                  : `Not bought: the proposal was ${approval.status}`}
+              </Text>
+              <Text style={styles.orderHint}>
+                {jar.sharedWallet.label} buys this jar once enough members approve. Tap to see the
+                proposal.
+              </Text>
+            </View>
+          </PressableScale>
+        ) : null}
         {jar.openOrder ? (
           <View style={styles.order}>
             <Icon name="clock" size={16} color={c.accentText} />

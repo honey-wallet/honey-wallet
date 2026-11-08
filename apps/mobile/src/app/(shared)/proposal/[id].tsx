@@ -539,6 +539,13 @@ function ActionRows({ action, multisig }: { action: ProposalAction; multisig: Mu
           ) : null}
         </>
       );
+    case 'jarBuy':
+      return (
+        <>
+          <StatRow label="Jar" value={action.jar} />
+          <StatRow label="Buys" value={action.picks.join(', ')} />
+        </>
+      );
     case 'earnDeposit':
     case 'earnWithdraw':
     case 'jarAdd':

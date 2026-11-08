@@ -13,6 +13,7 @@ import { tap } from '@/lib/haptics';
 import { type BuyLeg, payJarBuy, quoteJarBuy } from '@/lib/jar-buy';
 import { describeRoute, useRoutes } from '@/lib/jar-routes';
 import { formatUsd } from '@/lib/mock-wallet';
+import { memberName, propose, useActiveMultisig } from '@/lib/multisig';
 import { TEST_MODE } from '@/lib/test-mode';
 import {
   createThesisJar,
@@ -31,6 +32,7 @@ import {
 } from '@/lib/thesis';
 import { chatDraft } from '@/lib/thesis-chat';
 import { showToast } from '@/lib/toast';
+import { useActiveWallet } from '@/lib/wallets';
 import { makeStyles, radius, useTheme } from '@/theme';
 import { DURATION } from '@/theme/motion';
 
@@ -122,9 +124,43 @@ export default function NewThesisSheet() {
   };
 
   const [buying, setBuying] = useState(false);
+  // A shared wallet buys the jar for its members: the buy is a proposal they approve.
+  const multisig = useActiveMultisig();
+  const activeWallet = useActiveWallet();
   const create = async () => {
     if (!proposal || buying) return;
     tap();
+    if (multisig) {
+      const id = `thesis-${Date.now()}`;
+      const jarName = name.trim() || 'My jar';
+      const { proposal: p, executed } = propose(multisig.walletId, {
+        type: 'jarBuy',
+        jarId: id,
+        jar: jarName,
+        picks: proposal.picks.map((x) => x.symbol),
+        usd: proposal.amount,
+      });
+      createThesisJar(proposal, {
+        id,
+        name: jarName,
+        visibility,
+        friends: [],
+        copyFee: visibility === 'members' ? 0 : copyFee,
+        order,
+        sharedWallet: {
+          walletId: multisig.walletId,
+          label: activeWallet.label,
+          proposalId: p.id,
+          members: multisig.members.map((m) => ({
+            id: m.id,
+            name: memberName(multisig, m.id),
+          })),
+        },
+      });
+      showToast(executed ? 'Jar bought' : 'Proposed. Waiting for approvals');
+      router.replace({ pathname: '/jar/[id]', params: { id } });
+      return;
+    }
     const options = {
       name: name.trim() || 'My jar',
       visibility,
@@ -320,9 +356,11 @@ export default function NewThesisSheet() {
               label={
                 buying
                   ? 'Paying…'
-                  : people.length
-                    ? `Invite and buy ${formatUsd(share)}`
-                    : `Buy ${formatUsd(proposal.amount)} and launch`
+                  : multisig
+                    ? `Propose to ${activeWallet.label}`
+                    : people.length
+                      ? `Invite and buy ${formatUsd(share)}`
+                      : `Buy ${formatUsd(proposal.amount)} and launch`
               }
               disabled={!name.trim() || buying}
               onPress={() => void create()}
@@ -347,40 +385,62 @@ export default function NewThesisSheet() {
           </View>
 
           <Text style={styles.section}>Who's in</Text>
-          <View style={styles.card}>
-            <View style={styles.memberRow}>
-              <People
-                names={[{ id: 'me', name: 'You' }, ...people.map((n) => ({ id: n, name: n }))]}
-                size={28}
-              />
-              <Text style={[styles.pickName, styles.flex]}>
-                {people.length
-                  ? `You and ${people.length} ${people.length === 1 ? 'friend' : 'friends'}`
-                  : 'Just you'}
+          {multisig ? (
+            <View style={styles.card}>
+              <View style={styles.memberRow}>
+                <People
+                  names={multisig.members.map((m) => ({
+                    id: m.id,
+                    name: memberName(multisig, m.id),
+                  }))}
+                  size={28}
+                />
+                <Text style={[styles.pickName, styles.flex]}>{activeWallet.label}</Text>
+                <Text style={styles.pickReason}>
+                  {multisig.threshold} of {multisig.members.length} approve
+                </Text>
+              </View>
+              <Text style={styles.pickReason}>
+                The shared wallet pays. Members own equal parts, and the buy goes through once{' '}
+                {multisig.threshold} of them approve.
               </Text>
+            </View>
+          ) : (
+            <View style={styles.card}>
+              <View style={styles.memberRow}>
+                <People
+                  names={[{ id: 'me', name: 'You' }, ...people.map((n) => ({ id: n, name: n }))]}
+                  size={28}
+                />
+                <Text style={[styles.pickName, styles.flex]}>
+                  {people.length
+                    ? `You and ${people.length} ${people.length === 1 ? 'friend' : 'friends'}`
+                    : 'Just you'}
+                </Text>
+                {people.length ? (
+                  <Text style={styles.pickReason}>{formatUsd(share)} each</Text>
+                ) : null}
+              </View>
+              <View style={[styles.field, styles.inviteField]}>
+                <Icon name="person" size={16} color={c.textSecondary} />
+                <TextInput
+                  value={friends}
+                  onChangeText={setFriends}
+                  placeholder="Add friends: name.near, 0x…, @handle"
+                  placeholderTextColor={c.placeholder}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  style={[styles.input, styles.flex, styles.smallInput]}
+                  accessibilityLabel="Friends to invite"
+                />
+              </View>
               {people.length ? (
-                <Text style={styles.pickReason}>{formatUsd(share)} each</Text>
+                <Text style={styles.pickReason}>
+                  Each friend gets an invite to put in their share. Trades need a majority to sign.
+                </Text>
               ) : null}
             </View>
-            <View style={[styles.field, styles.inviteField]}>
-              <Icon name="person" size={16} color={c.textSecondary} />
-              <TextInput
-                value={friends}
-                onChangeText={setFriends}
-                placeholder="Add friends: name.near, 0x…, @handle"
-                placeholderTextColor={c.placeholder}
-                autoCapitalize="none"
-                autoCorrect={false}
-                style={[styles.input, styles.flex, styles.smallInput]}
-                accessibilityLabel="Friends to invite"
-              />
-            </View>
-            {people.length ? (
-              <Text style={styles.pickReason}>
-                Each friend gets an invite to put in their share. Trades need a majority to sign.
-              </Text>
-            ) : null}
-          </View>
+          )}
 
           <Text style={styles.section}>Who can see it</Text>
           <View style={styles.card}>
