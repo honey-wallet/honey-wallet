@@ -5,8 +5,8 @@ const extensionId = 'abcdefghijklmnopabcdefghijklmnop';
 const origin = `chrome-extension://${extensionId}`;
 const address = '0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf';
 const id = '00000000-0000-4000-8000-000000000001';
-const issued = '2026-10-18T12:00:00Z';
-const expires = '2026-10-18T12:05:00Z';
+const issued = '2026-10-24T12:00:00Z';
+const expires = '2026-10-24T12:05:00Z';
 const challenge = {
   id,
   expiresAt: expires,

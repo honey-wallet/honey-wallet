@@ -1,6 +1,6 @@
 # Uniswap service, worker and native review flow
 
-Status (2026-10-18): the internal preparation components now have authenticated
+Status (2026-10-24): the internal preparation components now have authenticated
 HTTP commands, a supervised durable worker, typed client validation and native
 review/permit/transaction signing. One synthetic-provider/mock-RPC test exercises
 HTTP → worker → immutable review → permit admission → simulated preparation →

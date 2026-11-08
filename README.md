@@ -2,7 +2,7 @@
 
 **Turn one sentence about the market into one routed, cross-chain purchase.** Honey is a multichain wallet (mobile, Chrome extension, web) for EVM, Solana and NEAR. Its hackathon feature is **Jars**: you write an idea ("AI data-centre spending keeps growing"), an agent on **NEAR AI Cloud** turns it into a basket of tokens, and **NEAR Intents** buys the basket across chains in one approval.
 
-Built for **NEAR Hackathon** (19 Oct – 14 Nov 2026).
+Built for **NEAR Hackathon** (20 Oct – 14 Nov 2026).
 
 [![CI](https://github.com/honey-wallet/honey-wallet/actions/workflows/ci.yml/badge.svg)](https://github.com/honey-wallet/honey-wallet/actions/workflows/ci.yml)
 [![License: PolyForm Noncommercial](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-blue.svg)](LICENSE)

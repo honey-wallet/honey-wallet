@@ -14,7 +14,7 @@ Trading remains blocked pending current verified contracts and implementation fo
 
 Evidence: [Gamma keyset market API](https://docs.polymarket.com/api-reference/markets/list-markets-keyset-pagination) documents Gamma's market response fields, including `clobTokenIds`, `positionIds`, `version`, `enableOrderBook`, `active`, and `closed`. The [CLOB Get Order Book API](https://docs.polymarket.com/api-reference/market-data/get-order-book) specifies a token-ID keyed book with bids, asks, tick size, minimum order size, negative-risk status, and last-trade price; that is a distinct schema and is not returned by this endpoint. These provider contracts can evolve, so response normalization and fixtures need review when upgrading the integration. `enableOrderBook` alone is not used as an execution gate.
 
-## Read-only order-book snapshots (2026-10-19)
+## Read-only order-book snapshots (2026-10-25)
 
 `GET /api/v1/prediction/order-book?token_id=...` now proxies the official CLOB
 `GET /book?token_id=...` response for display. The server first resolves the canonical

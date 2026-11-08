@@ -1,4 +1,4 @@
-# Backend recovery security review — 2026-10-19
+# Backend recovery security review — 2026-10-25
 
 **Status: scoped backend source review complete; production gates remain open.**
 
@@ -12,7 +12,7 @@ approve production deployment.
 
 Three independent reviewers read assigned source areas; the parent inspected
 reported defects and integrated fixes and test evidence. The source hash inventory
-in `results/recovery-security-source-2026-10-19.json` records the exact current files
+in `results/recovery-security-source.json` records the exact current files
 covered. Standalone test modules are supporting evidence, not claimed exhaustive
 security coverage. Runtime dependencies, deployed contracts and live provider truth
 are not covered by source inspection.
@@ -57,7 +57,7 @@ identified in this pass. That is a review result, not proof of absence.
 
 ## Validation
 
-See `results/recovery-restore-local-2026-10-19.json` and the runnable commands in
+See `results/recovery-restore-local.json` and the runnable commands in
 [RECOVERY-RESTORE.md](RECOVERY-RESTORE.md). All database activity uses synthetic
 fixtures in randomly named databases on an owned disposable service. No production
 restore, public traffic reopening or funds movement was performed.

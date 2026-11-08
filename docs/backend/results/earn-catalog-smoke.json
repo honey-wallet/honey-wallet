@@ -20,7 +20,7 @@
           "chainId": "1",
           "contractAddress": "0x87870bca3f3fd6335c3f4ce8392d69350b4fa4e2",
           "executionAvailable": false,
-          "fetchedAtMs": 1792310136679,
+          "fetchedAtMs": 1792828536679,
           "positionAsset": {
             "address": "0x98c23e9d8f34fefb1b7bd6a91b7ff122f4e16f5c",
             "decimals": 6,
@@ -64,7 +64,7 @@
           "chainId": "1",
           "contractAddress": "0x04422053addbc9bb2759b248b574e3fca76bc145",
           "executionAvailable": false,
-          "fetchedAtMs": 1792310138444,
+          "fetchedAtMs": 1792828538444,
           "positionAsset": {
             "address": "0x04422053addbc9bb2759b248b574e3fca76bc145",
             "decimals": 18,

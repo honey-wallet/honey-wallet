@@ -8,7 +8,7 @@ import { type Backup, decryptBackup } from './backup';
 const backup: Backup = {
   app: 'honey',
   version: 1,
-  createdAt: '2026-10-17',
+  createdAt: '2026-10-23',
   kdf: { name: 'scrypt', N: 65536, r: 8, p: 1, salt: 'AAAAAAAAAAAAAAAAAAAAAA==' },
   cipher: { name: 'xchacha20-poly1305', nonce: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' },
   data: 'AAAAAAAAAAAAAAAAAAAAAA==',

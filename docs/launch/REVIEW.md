@@ -1,6 +1,6 @@
 # Honey launch: decisions and blockers for Swayam
 
-Updated 2026-10-19. Scope: the supplied launch brief, including Bunk mode,
+Updated 2026-10-25. Scope: the supplied launch brief, including Bunk mode,
 real Swap/Perps/Predict/Earn, the phone browser, and iOS/Android/Chrome releases.
 The requested deadline is tomorrow night; no store approval or mainnet readiness
 is claimed. Backend and frontend have separate active sessions. This session owns
@@ -102,7 +102,7 @@ Keep this limitation documented and continue normal restore/application acceptan
 - [ ] Physical iOS and Android tests against the named dApps; packaged Chrome integration.
 - [ ] Production HTTPS, explicit URLs in all builds, secrets, backup/restore, operational capacity and release rollback.
 - [ ] Real sign-in, live balances, pairing against production configuration.
-- [x] Merge PR #3: [verified merged](https://github.com/honey-wallet/monorepo/pull/3) at `2026-10-18T21:20:33Z`, commit `93f9efeafb7399e68fbef504f6caf4e5ec147ae6`; Rust, JS and CLA checks succeeded.
+- [x] Merge PR #3: [verified merged](https://github.com/honey-wallet/monorepo/pull/3); Rust, JS and CLA checks succeeded.
 - [ ] Privacy/terms approved; store listings/screenshots/permission notes/signing.
 - [ ] Testnet beta feedback, independent security review, deployment evidence and release decision.
 

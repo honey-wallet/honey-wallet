@@ -54,7 +54,7 @@
           "registryRevision": "observed-fork-morpho-v1",
           "feePolicyRevision": "local-zero-referral-fees",
           "quoteReference": null,
-          "expiresAtMs": 1792321766952,
+          "expiresAtMs": 1792840166952,
           "maximumNetworkFeeRaw": "675035292618012",
           "maximumSpend": {
             "assetAddress": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
@@ -71,7 +71,7 @@
             "blockNumber": "26218344",
             "blockHash": "0xbc2b4a39cc4c86645e794f1f633660fe1f1b4d966e265d68361252d48479250b",
             "callsHash": "7ec60690d0718b0eac11322a99a185fb3a1f1d532e869c862dc493a0b26910dc",
-            "observedAtMs": 1792321646952
+            "observedAtMs": 1792840046952
           },
           "steps": [
             {
@@ -122,7 +122,7 @@
           "registryRevision": "observed-fork-morpho-v1",
           "feePolicyRevision": "local-zero-referral-fees",
           "quoteReference": null,
-          "expiresAtMs": 1792321768666,
+          "expiresAtMs": 1792840168666,
           "maximumNetworkFeeRaw": "606112787909856",
           "maximumSpend": {
             "assetAddress": "0x04422053addbc9bb2759b248b574e3fca76bc145",
@@ -135,7 +135,7 @@
             "blockNumber": "26218346",
             "blockHash": "0x4ceb61180ff060948c5974840ba47a06a706e1485e2759038042e8f1ca3bc6a8",
             "callsHash": "4a841b2181e94a3c9b2b901cd16c4831b05b0ec1f8e0f5a15675ed06288d15b1",
-            "observedAtMs": 1792321648666
+            "observedAtMs": 1792840048666
           },
           "steps": [
             {

@@ -1,10 +1,10 @@
-# Local price-stream capacity result — 2026-10-18
+# Local price-stream capacity result — 2026-10-24
 
 **Observed: 10,000 simultaneous WebSockets remained connected for a 60-second soak,
 with zero unexpected disconnects and zero HTTP errors. This is not certification
 of 10,000 concurrent financial users in production.**
 
-Raw machine-readable output: [price-load-10000-local-2026-10-18.json](results/price-load-10000-local-2026-10-18.json).
+Raw machine-readable output: [price-load-10000-local.json](results/price-load-10000-local.json).
 Reproducible source: [price_load.rs](../../apps/server/examples/price_load.rs).
 Protocol/design: [REDIS-AND-PRICES.md](REDIS-AND-PRICES.md).
 
@@ -63,7 +63,7 @@ one useful local envelope; it does not remove the staging release gates.
 
 After adding per-request/Redis/socket instrumentation, the same local harness ran
 with the actual OTLP collector and Jaeger containers on this host.
-[Raw result](results/price-load-10000-observed-2026-10-18.json).
+[Raw result](results/price-load-10000-observed.json).
 
 | Measurement | Observed |
 | --- | ---: |
@@ -121,8 +121,8 @@ upstream latency before calling this a 10k price-freshness pass.
 
 The server resource fields are single `ps` samples collected at run end; `%CPU`
 is process-lifetime average, not an interval measurement. Generator resources are
-excluded. The raw reports are [run 1](results/price-load-external-10000-local-2026-10-18.json)
-and [run 2](results/price-load-external-10000-local-2026-10-18-repeat.json).
+excluded. The raw reports are [run 1](results/price-load-external-10000-local.json)
+and [run 2](results/price-load-external-10000-local-repeat.json).
 The setup is loopback and has no TLS or load balancer. It proves socket admission
 and 100-RPS public reads for this one local replica, but the repeated frame-rate
 threshold failure blocks a 10k live-price service claim. The original
@@ -135,7 +135,7 @@ connected all 10,000 sockets. Its raw report records 590,000 aggregate frames,
 deadline, and p50/p95/p99 of 0.359/5.660/29.036 ms. The end-of-run process sample
 was 143,296 KiB RSS and 53.8% process-lifetime average CPU; these are not peaks.
 The raw result is
-[after-poll-fix](results/price-load-external-10000-local-2026-10-18-after-poll-fix.json).
+[after-poll-fix](results/price-load-external-10000-local-after-poll-fix.json).
 
 **The third run does not yet prove the 45-frame-per-client soak gate.** The
 generator version that produced it calculated the minimum from each client's
@@ -159,7 +159,7 @@ issued 6,001 requests for a 6,000-request 100-RPS/60-second target, with 6,000
 completed by the deadline and one still in flight then (zero remained after
 drain). The old acceptance predicate checked only post-drain in-flight work, so
 it could report this run as passing. The raw report is
-[corrected pass 2](results/price-load-external-10000-local-2026-10-18-corrected-pass2.json).
+[corrected pass 2](results/price-load-external-10000-local-corrected-pass2.json).
 
 The harness anchors open-loop request deadlines to the soak start, caps scheduled
 issuance at `targetRps * soakSeconds`, rejects any issued-count mismatch, and
@@ -176,13 +176,13 @@ server measurements remain historical observations; it is not evidence for how
 the revised generator behaves under scheduling stalls. A new run is required to
 establish those measurements with this scheduler.
 
-The strict rerun passed on 2026-10-18. It connected all 10,000 sockets, delivered
+The strict rerun passed on 2026-10-24. It connected all 10,000 sockets, delivered
 60 valid frames to the slowest client during the 60-second soak, and issued and
 completed exactly 6,000 HTTP reads at 100 RPS with zero errors and zero in-flight
 requests at the deadline or after drain. HTTP latency was p50 0.410 ms, p95
 5.921 ms, p99 24.485 ms. The single end-of-run `ps` sample was 143,232 KiB RSS;
 `%CPU` was 121.6 process-lifetime average, not peak or interval CPU. The raw
-schema-v2 report is [strict pass](results/price-load-external-10000-local-2026-10-18-strict-pass.json).
+schema-v2 report is [strict pass](results/price-load-external-10000-local-strict-pass.json).
 
 Reproduction used the corrected release generator against one local API process
 with real Hyperliquid polling, disposable PostgreSQL/Redis, loopback WebSocket/HTTP,
@@ -197,13 +197,13 @@ financial workloads remains unverified.
 
 ## Revised no-burst scheduler runs with authenticated principals
 
-The first 2026-10-19 run used one generator for both loads: 10,000 WebSockets,
+The first 2026-10-25 run used one generator for both loads: 10,000 WebSockets,
 real Hyperliquid polling, Redis mirroring, 15 distinct SIWE principals and 100
 authenticated `/me` reads per second. All sockets stayed open, each client
 received at least 59 valid frames during the soak, and 5,995 reads completed with
 zero errors or in-flight work. It **failed the exact issue-count gate**: five late
 slots were skipped (34.5 ms maximum scheduler lag), rather than emitted in a
-catch-up burst. [Raw report](results/price-load-external-10000-authenticated-15-local-2026-10-19.json).
+catch-up burst. [Raw report](results/price-load-external-10000-authenticated-15-local.json).
 
 A slower connection ramp with the default 20-connection database pool then
 degraded sharply: 2,290 sockets closed, 322 profile reads failed with PostgreSQL
@@ -211,18 +211,18 @@ pool-acquisition timeouts, and only 36 frames reached the slowest client. Increa
 the local pool to 80 connections (within the configured limit of 100) removed the
 database errors and unexpected socket closes and restored 60 frames per client,
 but the one-process generator still skipped five HTTP slots. That result is a
-diagnostic failure, not a capacity pass. [Raw report](results/price-load-external-10000-authenticated-15-local-2026-10-19-repeat.json).
+diagnostic failure, not a capacity pass. [Raw report](results/price-load-external-10000-authenticated-15-local-repeat.json).
 
 Finally, the generators were separated. With the tuned pool, an independent 10k
 WebSocket process passed its socket and freshness gates: 10,000 connected, zero
 closed, 60 frames per client, zero HTTP errors, and exactly 60 background public
-reads at 1 RPS. [WebSocket report](results/price-load-external-10000-websocket-only-local-2026-10-19.json).
+reads at 1 RPS. [WebSocket report](results/price-load-external-10000-websocket-only-local.json).
 During its soak, a separate profile-only process sent 100 authenticated reads/sec
 across 15 distinct SIWE principals. It completed 5,988 of 6,000 slots (99.8%),
 with zero HTTP errors or deadline backlog; maximum scheduler lag was 67.9 ms and
 12 slots were skipped. It therefore **still fails the exact issue-count gate**,
 while providing evidence of successful 10k socket plus near-100-RPS authenticated
-profile service. [Profile report](results/price-load-external-auth-profile-15-100rps-local-2026-10-19.json).
+profile service. [Profile report](results/price-load-external-auth-profile-15-100rps-local.json).
 
 Across runs, reads were evenly distributed (399–400 per principal), identities
 were distinct, and every profile response matched expected user ID, wallet ID and
@@ -273,7 +273,7 @@ requested duration. A passing reducer is still a local workload acceptance resul
 not certify TLS, production limits, database failover, or financial execution
 capacity.
 
-### Coordinated 100-RPS acceptance (2026-10-19)
+### Coordinated 100-RPS acceptance (2026-10-25)
 
 The current-source external generator and reducer passed one local coordinated
 run (run ID `2f1d0620-c253-426e-a091-7b410b861dee`): 10,000 price WebSockets,
@@ -284,7 +284,7 @@ each shard completed 1,200 reads with zero errors, skips or deadline backlog. Th
 API ran in development mode with an 80-connection PostgreSQL pool, disposable
 local PostgreSQL/Redis, loopback transport and no TLS. API resource sampling was
 not enabled for this run. Raw shard reports and reducer output are
-[archived here](results/price-load-coordinated-10000-debug-2026-10-19-aggregate.json).
+[archived here](results/price-load-coordinated-10000-debug-aggregate.json).
 
 An optimized release-mode repeat used a 120-second socket ramp, a unique Redis
 namespace and the same five-shard authenticated profile workload (run ID
@@ -294,7 +294,7 @@ the ramp sample. The generator classified the 19 failed handshakes as HTTP 5xx;
 it saw no 4xx, I/O or timeout failures. The single end-of-run `ps` sample was
 11.5% process-lifetime CPU and 141,328 KiB RSS; it is not a peak or interval
 measurement. The reducer output and raw reports are
-[archived here](results/price-load-coordinated-10000-release-failed-2026-10-19-aggregate.json).
+[archived here](results/price-load-coordinated-10000-release-failed-aggregate.json).
 At that point this was the latest optimized result and the combined local gate
 failed. The corrected release-mode rerun documented below later passed the same
 local predicate; both outcomes remain archived. The bounded failure-category
@@ -378,7 +378,7 @@ cargo run -p honey-server --example price_load_client
 
 This produces `profileOnly: true` with zero target WebSockets and retains the same
 exact-schedule, wallet-binding, error and deadline checks for `/me` traffic. A local
-smoke run on 2026-10-18 used four distinct SIWE identities for 10 seconds at 2 RPS:
+smoke run on 2026-10-24 used four distinct SIWE identities for 10 seconds at 2 RPS:
 20 requests completed by the deadline, five per principal, with zero errors or
 in-flight work. This validates the multi-principal generator/server/database path;
 it is not a capacity result. That captured run predates the runtime assertion for
@@ -392,7 +392,7 @@ HONEY_POSTGRES_PORT=25450 HONEY_REDIS_PORT=26399 \
 docker compose -p honey-auth-capacity -f compose.backend.yaml down
 ```
 
-The 2026-10-18 local run passed this mixed profile (run ID
+The 2026-10-24 local run passed this mixed profile (run ID
 `3d2e7f54-c450-4373-9d1d-1ff4457e1d22`): 10,000 sockets connected after a 42.7s
 ramp, stayed open for the 60s soak, and received at least 60 frames each; 6,000
 authenticated `/me` reads completed at 100 RPS with zero HTTP errors. HTTP latency
@@ -400,7 +400,7 @@ was p50 1.76ms, p95 10.69ms, p99 45.79ms (max 132.67ms). The API readiness check
 reported PostgreSQL and Redis up. TLS was disabled and no API process resource
 sample was captured.
 
-### Coordinated release-mode rerun with exact HTTP status metrics (2026-10-19)
+### Coordinated release-mode rerun with exact HTTP status metrics (2026-10-25)
 
 A second, independently generated, release-mode run passed the same local acceptance
 predicate (run ID `c56ad8f7-4375-486b-9b1d-9b1d46b2d4a5`). It connected 10,000
@@ -423,14 +423,14 @@ used the loopback-only XFF simulation (`127.0.0.2`) because trusted proxy header
 were enabled; this is not evidence for any deployed proxy policy. There was no TLS,
 load balancer, replica failover, provider execution, or server-only CPU/RSS/FD/egress
 sample. Raw per-process reports, reducer output, and the cumulative metrics scrape
-are [archived here](results/price-load-coordinated-10000-release-pass-2026-10-19-aggregate.json)
-([WebSocket report](results/price-load-coordinated-10000-release-pass-2026-10-19-ws.json),
-[profile shard 0](results/price-load-coordinated-10000-release-pass-2026-10-19-profile-0.json),
-[shard 1](results/price-load-coordinated-10000-release-pass-2026-10-19-profile-1.json),
-[shard 2](results/price-load-coordinated-10000-release-pass-2026-10-19-profile-2.json),
-[shard 3](results/price-load-coordinated-10000-release-pass-2026-10-19-profile-3.json),
-[shard 4](results/price-load-coordinated-10000-release-pass-2026-10-19-profile-4.json),
-[metrics scrape](results/price-load-coordinated-10000-release-pass-2026-10-19-metrics.jsonl)).
+are [archived here](results/price-load-coordinated-10000-release-pass-aggregate.json)
+([WebSocket report](results/price-load-coordinated-10000-release-pass-ws.json),
+[profile shard 0](results/price-load-coordinated-10000-release-pass-profile-0.json),
+[shard 1](results/price-load-coordinated-10000-release-pass-profile-1.json),
+[shard 2](results/price-load-coordinated-10000-release-pass-profile-2.json),
+[shard 3](results/price-load-coordinated-10000-release-pass-profile-3.json),
+[shard 4](results/price-load-coordinated-10000-release-pass-profile-4.json),
+[metrics scrape](results/price-load-coordinated-10000-release-pass-metrics.jsonl)).
 This strengthens the local mixed-workload evidence and shows the prior handshake
 5xxs did not recur on this corrected run; it does not certify authenticated sockets,
 production or HA capacity, nor financial-operation capacity.

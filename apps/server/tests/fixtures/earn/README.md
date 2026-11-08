@@ -1,6 +1,6 @@
 # Public provider response fixtures
 
-Captured 2026-10-18 from official public endpoints. These are public protocol data,
+Captured 2026-10-24 from official public endpoints. These are public protocol data,
 not user positions, credentials or approved Honey products. JSON whitespace was
 formatted by Biome; numeric values and string fields are unmodified.
 

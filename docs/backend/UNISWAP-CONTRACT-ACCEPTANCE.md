@@ -1,11 +1,11 @@
 # Uniswap actual-contract acceptance
 
-Status, 2026-10-18: the independent server/wallet authority checks now have
+Status, 2026-10-24: the independent server/wallet authority checks now have
 actual-contract local-fork acceptance for seven routes. This is a contract-level
 test harness, not the unfinished provider HTTP, durable signing or app execution
 flow. Production swap execution remains disabled.
 
-Evidence: [captured local results](evidence/uniswap-contract-local-fork-2026-10-18.json).
+Evidence: [captured local results](evidence/uniswap-contract-local-fork.json).
 Reproduction lives in `packages/keyring/scripts/uniswap-fork-smoke.mjs`, with the
 pure Rust bridge `apps/server/examples/uniswap_fork_verify.rs`. No dependencies or
 database migrations were added.

@@ -6,7 +6,7 @@ with the code; git history keeps them.
 
 ## Requested automated-only verification
 
-On 2026-10-19, root `pnpm lint` and `pnpm typecheck` passed, followed by
+On 2026-10-25, root `pnpm lint` and `pnpm typecheck` passed, followed by
 `VITEST_MAX_WORKERS=1 pnpm test --env-mode=loose --concurrency=1 --force`.
 All seven test/build tasks executed without Turbo test-cache hits; the five
 typecheck tasks used existing successful cache entries. Results: 589 keyring,
@@ -968,7 +968,7 @@ independent review remain open in [EVM-CONTRACTS.md](EVM-CONTRACTS.md).
 
 ## Initial keyring slice
 
-2026-10-19, this session's changes only:
+2026-10-25, this session's changes only:
 
 - Added `packages/keyring/src/bunk.ts`, its public export, 34 targeted tests,
   eleven recovery vectors and an independent fixture generator.

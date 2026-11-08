@@ -1,6 +1,6 @@
 # Encrypted swap preparation and recovery
 
-Status, 2026-10-18: immutable **built swap signing requests** can now be encrypted
+Status, 2026-10-24: immutable **built swap signing requests** can now be encrypted
 and atomically persisted, recovered by their owner and used by the existing signed
 submission/dispatch/reconciliation repositories. No Uniswap HTTP signing endpoint,
 provider build service or automatic swap worker is enabled. Pre-build review/permit persistence is implemented separately in

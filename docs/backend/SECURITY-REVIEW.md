@@ -42,7 +42,7 @@ security clearance.
 
 ## Current recovery-focused backend pass
 
-The 2026-10-19 [backend recovery review](RECOVERY-SECURITY-REVIEW.md) accounts for
+The 2026-10-25 [backend recovery review](RECOVERY-SECURITY-REVIEW.md) accounts for
 99 production Rust/Lua files and all 14 migrations, with a source-hash inventory.
 It adds a real logical dump/restore drill, offline auth invalidation, Redis rollback
 staleness correction and drain alignment. Its evidence is scoped to backend production source;
@@ -63,7 +63,7 @@ not a line-by-line review of every client, contract, and dependency source file.
 separate completed Codex Security deep scan found four candidate issues (one medium,
 three low), with partial repository coverage; remediation status is summarized below.
 
-Verification on 2026-10-19:
+Verification on 2026-10-25:
 
 - `pnpm lint`, `pnpm typecheck`, and `pnpm test` passed with Node 25.2.1 and loopback
   access. A first sandboxed test attempt failed because four existing Uniswap fixture

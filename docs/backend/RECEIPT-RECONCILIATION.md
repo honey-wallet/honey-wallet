@@ -1,6 +1,6 @@
 # Receipt reconciliation, sequential execution and final settlement
 
-Implemented 2026-10-18: internal receipt verification/persistence, later-step dispatch,
+Implemented 2026-10-24: internal receipt verification/persistence, later-step dispatch,
 owner-scoped recovery and a database-backed actual-contract Aave fork smoke. This is
 not yet a running worker, public transaction API or frontend execution screen. The
 full backend goal remains active. Extends [SIGNED-SUBMISSIONS.md](SIGNED-SUBMISSIONS.md).
@@ -128,7 +128,7 @@ alone must never drive a success screen.
 
 ## Actual-contract/database proof
 
-[Captured evidence](evidence/aave-reconciled-local-fork-2026-10-18.json) records:
+[Captured evidence](evidence/aave-reconciled-local-fork.json) records:
 
 1. A new isolated PostgreSQL database migrated through version 4, a fixture principal
    and proven-address membership, a real Aave intent and persisted immutable preparation.

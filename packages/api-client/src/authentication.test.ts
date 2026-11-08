@@ -4,8 +4,8 @@ import { createApiClient } from './client';
 
 const address = '0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf';
 const id = '00000000-0000-4000-8000-000000000001';
-const issued = '2026-10-18T12:00:00Z';
-const expires = '2026-10-18T12:05:00Z';
+const issued = '2026-10-24T12:00:00Z';
+const expires = '2026-10-24T12:05:00Z';
 const message = `localhost:5173 wants you to sign in with your Ethereum account:
 ${address}
 
@@ -101,7 +101,7 @@ describe('wallet authentication contract', () => {
     message.replace('Sign in to Honey Wallet.', 'Authorize a transfer.'),
     `${message}\nResources:\n- urn:recap:delegated`,
     message.replace('12:05:00Z', '12:55:00Z'),
-    message.replace('Issued At: 2026-10-18T12:00:00Z', 'Issued At: October 18, 2026 12:00:00 UTC'),
+    message.replace('Issued At: 2026-10-24T12:00:00Z', 'Issued At: October 24, 2026 12:00:00 UTC'),
   ])('refuses an altered or broader signing request', (altered) => {
     expect(() =>
       validateSignInChallenge({ ...challenge, message: altered }, context, now),

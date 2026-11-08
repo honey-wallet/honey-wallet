@@ -1,6 +1,6 @@
 # Uniswap economic proof before signing
 
-Status, 2026-10-18: independent Rust and TypeScript economic verifiers are
+Status, 2026-10-24: independent Rust and TypeScript economic verifiers are
 implemented on top of the pinned router decoders. They check transaction identity,
 ordered token debits/credits, fee ceilings, receive floors and refund destinations.
 The shared client can derive public authority from a fresh reviewed quote.

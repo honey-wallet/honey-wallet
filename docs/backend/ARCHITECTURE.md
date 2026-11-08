@@ -61,7 +61,7 @@ Relay status recovery remains advisory. Bridging is NEAR Intents
 Production Uniswap activation, Relay/NEAR Intents/Hyperliquid/Polymarket
 execution, persistent-device authentication and production mixed-load capacity
 verification are also unfinished. The backend is not ready for production launch.
-Research date: 2026-10-17. Baseline commit: `297e0db` plus existing uncommitted work.
+Research baseline: the working tree at the start of research.
 Owner: Honey engineering. Deployment, commercial agreements, fee policy, jurisdiction
 and launch-chain decisions remain open. Nothing in this document proves production
 capacity or authorizes moving funds, provisioning paid services, or deploying contracts.
@@ -730,7 +730,7 @@ the actual feasible withdrawal path; simulation can go
 stale. Never advertise a guaranteed yield or immediate redemption from an illiquid
 position. Define minimum shares/output protection for the chosen transaction path.
 
-Verified implementation correction (2026-10-18): Vault V2's four ERC-4626 `max*`
+Verified implementation correction (2026-10-24): Vault V2's four ERC-4626 `max*`
 methods return zero unconditionally. They cannot establish whether a deposit or
 redemption is executable. The implemented adapter checks pinned configuration and
 simulates exact balance deltas. VaultBundlesV1 enforces deposit share-price limits;
@@ -882,7 +882,7 @@ Example envelope (planned contract):
   "topic": "prices:eip155:8453",
   "epoch": "opaque-stream-generation",
   "sequence": "1842",
-  "observedAt": "2026-10-17T18:00:00Z",
+  "observedAt": "2026-10-23T18:00:00Z",
   "stale": false,
   "data": []
 }

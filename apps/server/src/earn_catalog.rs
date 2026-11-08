@@ -462,7 +462,7 @@ mod tests {
         assert!(a.claim(p, &first).await.unwrap());
         assert!(!b.claim(p, &second).await.unwrap());
         let observations: Vec<EarnObservation> = serde_json::from_str(include_str!(
-            "../../../docs/backend/results/earn-read-smoke-2026-10-18.json"
+            "../../../docs/backend/results/earn-read-smoke.json"
         ))
         .unwrap();
         let mut observation = observations[0].clone();

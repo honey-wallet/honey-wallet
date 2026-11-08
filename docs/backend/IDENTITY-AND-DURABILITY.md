@@ -1,6 +1,6 @@
 # P1: wallet identity and durable work
 
-Implementation date: 2026-10-18. This document describes code that exists, its
+Implementation date: 2026-10-24. This document describes code that exists, its
 tradeoffs, and the boundaries that must remain closed. The broader product design
 is in [ARCHITECTURE.md](ARCHITECTURE.md); this is a concrete implementation record,
 not an assertion that the entire roadmap or 10k-user acceptance gate is complete.

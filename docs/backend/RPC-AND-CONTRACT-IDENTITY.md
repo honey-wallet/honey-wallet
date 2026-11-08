@@ -1,6 +1,6 @@
 # RPC account admission and Aave implementation identity
 
-Implemented 2026-10-18. This closes two code gaps in local Aave execution and provides
+Implemented 2026-10-24. This closes two code gaps in local Aave execution and provides
 primitives needed for production: coordinated RPC admission and explicit implementation
 pins. **Production execution remains disabled.** An observed address/hash on a fork is
 not an approved deployment registry, provider contract, or proof of safe governance.
@@ -22,7 +22,7 @@ uses a different, legacy slot:
 The adapter therefore uses the Aave slot for pool/aToken and the Circle slot for USDC.
 It does not discover arbitrary proxy families, beacons, diamonds or nested delegation.
 The current adapter's supported contract family is specifically Ethereum Aave V3/USDC.
-Sources inspected 2026-10-18; these mutable upstream source links explain the layout,
+Sources inspected 2026-10-24; these mutable upstream source links explain the layout,
 not the provenance/approval of an eventual production implementation.
 
 ## Registry and preparation contract
@@ -190,7 +190,7 @@ not establish provider account throughput, production upgrades policy, full fron
 execution UX, replacement/recovery behavior, or 10k mixed-user capacity. Those remain
 on the full [architecture roadmap](ARCHITECTURE.md).
 
-Captured acceptance evidence: [Aave RPC/implementation fork run](evidence/aave-rpc-implementation-pins-local-fork-2026-10-18.json).
+Captured acceptance evidence: [Aave RPC/implementation fork run](evidence/aave-rpc-implementation-pins-local-fork.json).
 The final run passed approval plus supply, withdrawal, preparation/staging restarts,
 and history recovery after disabling execution. All three implementation pins and
 the test-only quota are recorded without keys/URLs/signatures. Workspace gates passed,

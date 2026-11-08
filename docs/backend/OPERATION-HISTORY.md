@@ -26,8 +26,8 @@ Response:
         "state": "created",
         "version": "0"
       },
-      "createdAtMs": 1792320000000,
-      "updatedAtMs": 1792320000000
+      "createdAtMs": 1792838400000,
+      "updatedAtMs": 1792838400000
     }
   ],
   "nextCursor": null
@@ -126,7 +126,7 @@ Shared-client tests reject mixed-wallet pages, duplicates, wrong cursors, unsafe
 shapes and mismatched operation responses. Web tests cover a fresh session mount,
 read-only detail recovery, cursor traversal, wrong-wallet responses and unmount cancellation.
 
-[Captured query evidence](evidence/operation-history-query-2026-10-18.json) uses 100,001
+[Captured query evidence](evidence/operation-history-query.json) uses 100,001
 local operation rows split across two wallets under one principal. A page after the
 900th row of a 1,001-row wallet history used `operations_wallet_page`, returned 11 rows
 including lookahead, and executed in 0.167 ms on that warm local fixture. The original
@@ -134,7 +134,7 @@ single-wallet fixture selected the valid older user index; the final interleaved
 fixture exercises the reason for the new index. This is query-plan evidence, **not** a
 10k-concurrent-user throughput or production latency result.
 
-[Captured HTTP/fork acceptance evidence](evidence/operation-history-http-local-fork-2026-10-18.json)
+[Captured HTTP/fork acceptance evidence](evidence/operation-history-http-local-fork.json)
 confirms that the script discovers operations and their original typed intent
 after server restart, then disables Aave execution and checks that both completed operations
 remain readable. Its test transactions are on a disposable local fork; no public broadcasts

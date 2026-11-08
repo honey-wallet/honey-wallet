@@ -33,7 +33,7 @@ const steps = [
   { purpose: 'action', to: `0x${'33'.repeat(20)}`, valueRaw: '0', data: '0x12345678' },
 ];
 const signer = evmAddressOfKey(key).toLowerCase();
-const nowMs = 1792314500000;
+const nowMs = 1792832900000;
 const plan = {
   schemaVersion: 1,
   provider: 'aave_v3',

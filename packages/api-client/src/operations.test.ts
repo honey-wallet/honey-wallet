@@ -18,7 +18,7 @@ function recovery(): OperationRecovery {
       hash: 'a'.repeat(64),
       provider: 'aave_v3',
       chainId: '1',
-      expiresAtMs: 1792310000000,
+      expiresAtMs: 1792828400000,
       expired: true,
       stepCount: 2,
       registryRevision: 'test-v1',
@@ -130,7 +130,7 @@ describe('durable operation recovery', () => {
       effectiveGasPrice: '9007199254740993',
     };
     r.reconciliation = {
-      checkedAtMs: 1792310000000,
+      checkedAtMs: 1792828400000,
       headNumber: '101',
       headHash: hash,
       finalizedNumber: '90',

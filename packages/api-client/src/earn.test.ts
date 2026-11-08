@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import captured from '../../../docs/backend/results/earn-catalog-smoke-2026-10-18.json';
+import captured from '../../../docs/backend/results/earn-catalog-smoke.json';
 import { createApiClient } from './client';
 import { ageEarnCatalog, formatEarnApy, isEarnCatalog, observeEarnCatalog } from './earn';
 import type { EarnCatalog } from './types';

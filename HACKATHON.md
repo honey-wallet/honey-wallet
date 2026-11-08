@@ -63,7 +63,7 @@ Collect these before submitting. Do not guess, generate or fill in placeholders 
 
 **Q-000. NEAR AI credits?** Buy with crypto or card in the NEAR AI Cloud dashboard (https://cloud.near.ai), or claim $10 by joining NEAR Builders (https://nearbuilders.org/join). Generate the API key in the dashboard.
 
-**Q-001. Code before 2026-11-01?** Yes, from the announcement on 2026-10-19 (https://x.com/nearprotocol/status/2112257967818997891). The window runs from then to 2026-11-14. Earlier commits are baseline.
+**Q-001. Code before 2026-11-01?** Yes, from the announcement in October 2026 (https://x.com/nearprotocol/status/2112257967818997891). The window runs from then to 2026-11-14. Earlier commits are baseline.
 
 **Q-002. Existing product on another chain?** Allowed. Only the NEAR integration built in the window is judged. Disclose in README.
 

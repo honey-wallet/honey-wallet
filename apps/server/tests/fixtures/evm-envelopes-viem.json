@@ -1,6 +1,6 @@
 {
   "generator": "Honey keyring signEvmTransaction / viem 2.57.2, offline synthetic chain 31337",
-  "nowMs": 1792314500000,
+  "nowMs": 1792832900000,
   "plan": {
     "schemaVersion": 1,
     "provider": "aave_v3",
@@ -10,7 +10,7 @@
     "registryRevision": "synthetic-test-only",
     "feePolicyRevision": "synthetic-zero-app-fee",
     "quoteReference": null,
-    "expiresAtMs": 1792314620000,
+    "expiresAtMs": 1792833020000,
     "maximumNetworkFeeRaw": "500000000000000",
     "maximumSpend": {
       "assetAddress": "0x2222222222222222222222222222222222222222",
@@ -23,7 +23,7 @@
       "blockNumber": "10",
       "blockHash": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       "callsHash": "5c2e567d3453450edef31fbeb90153e384e9331ffadf1d8b40172cc2bc08818c",
-      "observedAtMs": 1792314499000
+      "observedAtMs": 1792832899000
     },
     "steps": [
       {
@@ -40,7 +40,7 @@
       }
     ]
   },
-  "preparationHash": "85472a7822af1b59435a3d2a2ae947f1e620a2e339224336960d792d136ffea9",
+  "preparationHash": "d44af83aa54df558694ee6415f4880ff789516980cbb48c6ecba566e4a8059ab",
   "policy": {
     "firstNonce": 7,
     "maximumGasPerTransaction": 500000

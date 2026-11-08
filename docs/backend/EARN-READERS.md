@@ -1,6 +1,6 @@
 # Earn provider readers: Morpho Vault V2 and Aave V3
 
-Implemented and live-read verified 2026-10-18. Source:
+Implemented and live-read verified 2026-10-24. Source:
 `apps/server/src/providers/{earn,transport}.rs`; reproducible public read:
 `apps/server/examples/earn_smoke.rs`. The indexed-data layer now feeds a fenced cached catalog API and web/native Savings
 displays; see [EARN-CATALOG.md](EARN-CATALOG.md). Financial capability
@@ -150,7 +150,7 @@ The smoke uses a stable `earn-smoke` Redis namespace to preserve cooldowns acros
 runs. Start only the disposable Redis service described in IMPLEMENTATION.md. The
 smoke makes four public metadata reads, prints normalized observations and cannot
 sign or submit transactions. Captured success output is in
-[results/earn-read-smoke-2026-10-18.json](results/earn-read-smoke-2026-10-18.json).
+[results/earn-read-smoke.json](results/earn-read-smoke.json).
 
 Coverage: exact APY precision, missing history, protocol/chain/asset/decimal mismatch,
 partial GraphQL errors, malformed numeric amounts, uint256 boundary, shared spacing

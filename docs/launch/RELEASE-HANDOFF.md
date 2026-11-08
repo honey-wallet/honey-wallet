@@ -1,6 +1,6 @@
 # Production release handoff
 
-Checked against the working tree on 2026-10-19. The full launch brief remains the
+Checked against the working tree on 2026-10-25. The full launch brief remains the
 target: Bunk, real trading, the phone browser, and iOS/Android/Chrome release.
 Local test success is not evidence that those product flows are launched.
 This document separates missing public release inputs from implementation owned
@@ -9,8 +9,7 @@ by the parallel sessions; it does not change the launch scope.
 ## Verified completed release work
 
 [PR #3](https://github.com/honey-wallet/monorepo/pull/3) is merged, as verified
-through GitHub on 2026-10-19. It merged at `2026-10-18T21:20:33Z` as
-`93f9efeafb7399e68fbef504f6caf4e5ec147ae6`; its Rust, JS and CLA checks succeeded.
+through GitHub. Its Rust, JS and CLA checks succeeded.
 This closes the brief's PR merge item, not the remaining release requirements.
 Neither the merge commit nor PR head `35819dbd3307bc4fd6038edbfdea40aed5f7deb7`
 is an ancestor of current local `HEAD`

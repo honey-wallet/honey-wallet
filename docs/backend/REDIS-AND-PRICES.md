@@ -1,6 +1,6 @@
 # Redis application state and public prices
 
-Implementation record, 2026-10-18. This extends P0/P1 and decisions D24–D28.
+Implementation record, 2026-10-24. This extends P0/P1 and decisions D24–D28.
 It implements distributed pairing, shared public price ingestion, bounded cache
 and WebSocket fanout. Provider trading, portfolio valuation, private order streams,
 refresh sessions and production capacity certification are separate capabilities.
@@ -89,7 +89,7 @@ They are **USDT-denominated**, while those contracts use USDC collateral. No USD
 conversion is assumed. They are not spot portfolio prices, oracle/mark prices,
 liquidation inputs, executable quotes, guaranteed fills or fresh trade timestamps.
 
-Sources checked 2026-10-18:
+Sources checked 2026-10-24:
 
 - [Hyperliquid info endpoint](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint): allMids schema and fallback semantics.
 - [Contract specifications](https://hyperliquid.gitbook.io/hyperliquid-docs/trading/contract-specifications): USDT denomination versus USDC margining.
@@ -132,7 +132,7 @@ delta because every value is a full snapshot.
   "type": "snapshot",
   "epoch": "01234567-89ab-4cde-8fab-0123456789ab",
   "sequence": "42",
-  "sampledAtMs": 1792300000000,
+  "sampledAtMs": 1792818400000,
   "stale": false,
   "source": "hyperliquid",
   "prices": [
@@ -228,7 +228,7 @@ production TLS, account traffic, provider latency, N-1, long soak or restore evi
 Measured results are recorded separately; do not equate configuration with evidence.
 
 The explicit `market_smoke` example passed a real read-only Hyperliquid fetch through
-the collector, Redis publication and local mirror on 2026-10-18. The reproducible
+the collector, Redis publication and local mirror on 2026-10-24. The reproducible
 local 10k experiment and raw results are in [CAPACITY-LOCAL.md](CAPACITY-LOCAL.md).
 
 For an independently generated connection load against a separately running API
@@ -276,7 +276,7 @@ This is a local single-replica price-stream result, not proof of 10k authenticat
 or financial users in production. The earlier 10k result above remains same-process
 and synthetic-ingress.
 
-## Price Redis failure visibility (2026-10-19)
+## Price Redis failure visibility (2026-10-25)
 
 The server exports `honey_price_redis_operations_total` with fixed `operation`
 (`poll`, `publish`, `read`) and `outcome` (`ok`, `empty`, `unavailable`,

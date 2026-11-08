@@ -3,7 +3,7 @@
 Status: **internal adapter and disposable-fork proof**, not a user-accessible
 transaction service. No public mutation, worker dispatch, mainnet broadcaster or
 wallet deposit/withdraw button is enabled by this change. Read this with
-[PREPARATION-AND-RECOVERY.md](PREPARATION-AND-RECOVERY.md). Research/test date: 2026-10-18.
+[PREPARATION-AND-RECOVERY.md](PREPARATION-AND-RECOVERY.md). Research/test date: 2026-10-24.
 
 ## Implemented path
 
@@ -74,7 +74,7 @@ selected version; the high-S cross-language regression prevents accidental subst
 
 ## Actual local-fork evidence
 
-[Captured receipt/balance evidence](evidence/aave-local-fork-2026-10-18.json): Anvil
+[Captured receipt/balance evidence](evidence/aave-local-fork.json): Anvil
 1.8.0, Ethereum source block **26,218,343**, local chain **31337**, loopback port
 28545. Public upstream was used only for reads. The test:
 

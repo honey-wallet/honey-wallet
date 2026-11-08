@@ -26,7 +26,7 @@ later. Therefore, this request validator does not imply that a response is safe
 to display as an executable plan, and it rejects unreviewed execution options
 such as `txs` and `appFees` rather than silently forwarding them.
 
-Sources (retrieved 2026-10-18):
+Sources (retrieved 2026-10-24):
 
 - [Relay OpenAPI JSON](https://api.relay.link/documentation/json), OpenAPI
   `3.0.3`, API version `1.0.0`, `POST /quote/v2`.

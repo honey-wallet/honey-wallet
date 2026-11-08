@@ -1,6 +1,6 @@
 # Backend decision record
 
-Date: 2026-10-17. These are engineering decisions/proposals, not user-approved
+Date: 2026-10-23. These are engineering decisions/proposals, not user-approved
 commercial terms. See [ARCHITECTURE.md](ARCHITECTURE.md) for evidence, feature
 coverage, unresolved inputs and implementation gates. See
 [IMPLEMENTATION.md](IMPLEMENTATION.md) for what actually exists.

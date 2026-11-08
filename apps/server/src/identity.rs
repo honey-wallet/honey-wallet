@@ -974,8 +974,8 @@ mod tests {
              Sign in to Honey Wallet. This does not authorize transactions.\n\n\
              URI: chrome-extension://{id}\nVersion: 1\nChain ID: 1\n\
              Nonce: 00000000000040008000000000000001\n\
-             Issued At: 2026-10-18T12:00:00Z\n\
-             Expiration Time: 2026-10-18T12:05:00Z\n\
+             Issued At: 2026-10-24T12:00:00Z\n\
+             Expiration Time: 2026-10-24T12:05:00Z\n\
              Request ID: 00000000-0000-4000-8000-000000000001"
         );
         let message: siwe::Message = raw.parse().expect("valid extension SIWE message");

@@ -1,6 +1,6 @@
 # Immutable preparation and restart recovery
 
-Implemented 2026-10-18. This closes a persistence gap: an intent hash alone cannot
+Implemented 2026-10-24. This closes a persistence gap: an intent hash alone cannot
 reconstruct an approved transaction after a restart. This document describes the
 persistence phase. Subsequent work adds Aave preparation/signature verification
 ([AAVE-EXECUTION.md](AAVE-EXECUTION.md)) and encrypted submissions/initial dispatch

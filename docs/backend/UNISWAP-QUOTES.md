@@ -1,6 +1,6 @@
 # Uniswap quote boundary and execution handoff
 
-Status, 2026-10-18: server quote transport, validation, typed client and web/native
+Status, 2026-10-24: server quote transport, validation, typed client and web/native
 quote forms are implemented. **Swap execution is not implemented.** No authenticated
 Trading API acceptance has run: an API key has not been supplied. Fixtures below
 test our interpretation of the official schema, not provider compatibility.
@@ -16,7 +16,7 @@ Research uses the official [quote reference](https://developers.uniswap.org/docs
 [OpenAPI specification](https://trade-api.gateway.uniswap.org/v1/api.json).
 The downloaded specification SHA-256 was
 `2f46a6cb498f27461c219dd898f513e77d725ad10546435fb3b5e1ff4fdc2e2e`.
-[Selected schema evidence](evidence/uniswap-openapi-selected-2026-10-18.json)
+[Selected schema evidence](evidence/uniswap-openapi-selected.json)
 is an excerpt, not a standalone schema or an authenticated response. Internal
 fields in that document are not an integration contract.
 

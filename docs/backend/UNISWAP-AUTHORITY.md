@@ -1,6 +1,6 @@
 # Uniswap router decoding and Permit2 proof
 
-Status, 2026-10-18: pure Rust and independent TypeScript router decoders, fixed
+Status, 2026-10-24: pure Rust and independent TypeScript router decoders, fixed
 PermitSingle reconstruction and Rust EOA signature verification are implemented.
 They are building blocks for the unfinished execution service. Ordered token-flow and
 fee verification is now implemented separately in [UNISWAP-ECONOMICS.md](UNISWAP-ECONOMICS.md);
@@ -16,7 +16,7 @@ The Trading API router version `2.1.2` resolves to Universal Router commit
 `802fe4c18f47300e0f183e2a42e9146ec2ea9fc3`, with V4 periphery
 `545a5d2a87228167edde48f3b9eda122d1e3c4d6` and Permit2
 `cc56ad0f3439c502c246fc5cfcc3db92bb8b7219`. Source links and downloaded SHA-256
-hashes are recorded in [the evidence manifest](evidence/uniswap-router-source-pins-2026-10-18.json).
+hashes are recorded in [the evidence manifest](evidence/uniswap-router-source-pins.json).
 This records source identity, not deployed bytecode approval.
 
 The pinned [dispatcher](https://github.com/Uniswap/universal-router/blob/802fe4c18f47300e0f183e2a42e9146ec2ea9fc3/contracts/base/Dispatcher.sol)

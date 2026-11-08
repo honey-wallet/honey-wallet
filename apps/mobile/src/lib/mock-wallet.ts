@@ -200,7 +200,7 @@ export const ACTIVITY: Activity[] = [
     symbol: 'USDC',
     detail: '0.300 USDC to 0x41CD…eEE3',
     month: 'October',
-    date: 'Oct 8',
+    date: 'Oct 24',
   },
   {
     id: '2',
@@ -208,7 +208,7 @@ export const ACTIVITY: Activity[] = [
     symbol: 'ETH',
     detail: '<0.001 ETH to 0xBf32…4312',
     month: 'October',
-    date: 'Oct 8',
+    date: 'Oct 24',
   },
   {
     id: '3',
@@ -216,7 +216,7 @@ export const ACTIVITY: Activity[] = [
     symbol: 'SOL',
     detail: '0.031 SOL from 7xKX…q9Fd',
     month: 'October',
-    date: 'Oct 7',
+    date: 'Oct 23',
   },
   {
     id: '4',
@@ -224,7 +224,7 @@ export const ACTIVITY: Activity[] = [
     symbol: 'SOL',
     swap: { from: ['SOL', '0.010'], to: ['USDC', '1.49'] },
     month: 'October',
-    date: 'Oct 7',
+    date: 'Oct 23',
   },
   {
     id: '5',
@@ -232,7 +232,7 @@ export const ACTIVITY: Activity[] = [
     symbol: 'USDC',
     detail: 'Unlimited USDC',
     month: 'October',
-    date: 'Oct 7',
+    date: 'Oct 23',
   },
   {
     id: '6',
@@ -240,7 +240,7 @@ export const ACTIVITY: Activity[] = [
     symbol: 'SOL',
     detail: '0.031 SOL from 9xQe…Fz2P',
     month: 'October',
-    date: 'Oct 5',
+    date: 'Oct 21',
   },
   {
     id: '7',
@@ -559,7 +559,7 @@ export const ACTIVITY_DETAILS: Record<string, ActivityDetail> = {
     chain: 'Ethereum',
     fee: '<$0.01',
     hash: '0x956c4e2a…123b',
-    time: 'October 8, 2026 6:16 PM',
+    time: 'October 24, 2026 6:16 PM',
   },
   '2': {
     amount: '<0.001 ETH',
@@ -568,7 +568,7 @@ export const ACTIVITY_DETAILS: Record<string, ActivityDetail> = {
     chain: 'Ethereum',
     fee: '$0.02',
     hash: '0x1a7f90c3…8e04',
-    time: 'October 8, 2026 2:41 PM',
+    time: 'October 24, 2026 2:41 PM',
   },
   '3': {
     amount: '0.031 SOL',
@@ -577,7 +577,7 @@ export const ACTIVITY_DETAILS: Record<string, ActivityDetail> = {
     chain: 'Solana',
     fee: '<$0.01',
     hash: '4sGjMW1s…Fq7Z',
-    time: 'October 7, 2026 9:12 AM',
+    time: 'October 23, 2026 9:12 AM',
   },
   '4': {
     amount: '0.010 SOL → 1.49 USDC',
@@ -586,7 +586,7 @@ export const ACTIVITY_DETAILS: Record<string, ActivityDetail> = {
     chain: 'Solana',
     fee: '<$0.01',
     hash: '7c0d5a91…44fe',
-    time: 'October 7, 2026 8:55 AM',
+    time: 'October 23, 2026 8:55 AM',
   },
   '5': {
     amount: 'Unlimited USDC',
@@ -595,7 +595,7 @@ export const ACTIVITY_DETAILS: Record<string, ActivityDetail> = {
     chain: 'Ethereum',
     fee: '$0.01',
     hash: '0x33ab0e7d…90c2',
-    time: 'October 7, 2026 8:50 AM',
+    time: 'October 23, 2026 8:50 AM',
   },
   '6': {
     amount: '0.031 SOL',
@@ -604,7 +604,7 @@ export const ACTIVITY_DETAILS: Record<string, ActivityDetail> = {
     chain: 'Solana',
     fee: '<$0.01',
     hash: '5h2Kq9Lr…vT8m',
-    time: 'October 5, 2026 7:03 PM',
+    time: 'October 21, 2026 7:03 PM',
   },
   '7': {
     amount: '0.50 NEAR',

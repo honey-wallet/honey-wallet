@@ -1,5 +1,5 @@
 {
-  "date": "2026-10-19",
+  "date": "2026-10-25",
   "scope": "isolated local synthetic fixtures; no production or financial broadcasts",
   "postgres": "17.10 (disposable postgres:17-alpine container)",
   "clients": [

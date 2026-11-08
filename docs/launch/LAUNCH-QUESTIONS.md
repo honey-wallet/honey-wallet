@@ -17,7 +17,7 @@ scale. **[Later]** = fine after launch.
 
 ## Already decided or already done (no action needed)
 
-- Bunk mode ships at launch, opt-in (off by default). You decided this on 2026-10-19.
+- Bunk mode ships at launch, opt-in (off by default). You decided this on 2026-10-25.
 - Until it's live, the apps show Bunk mode as "Coming soon": a row under Settings → Privacy and security, with its switch turned off. Flip `BUNK_LIVE` in apps/mobile/src/lib/bunk-mode.ts:28 to activate it (2026-10-21).
 - The audit happens after launch, with a deposit cap. Question 5 asks how the cap is enforced.
 - Honey pays Bunk gas through its own paymaster (a contract that pays users' gas). Question 12 covers the budget.

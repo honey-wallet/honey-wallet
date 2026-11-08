@@ -8,7 +8,7 @@ capability. Design: D75–D76 in [DECISIONS.md](DECISIONS.md).
 ## Evidence and scope
 
 The public [Trading API specification](https://trade-api.gateway.uniswap.org/v1/api.json)
-was fetched again on 2026-10-18. Its SHA-256 remains
+was fetched again on 2026-10-24. Its SHA-256 remains
 `2f46a6cb498f27461c219dd898f513e77d725ad10546435fb3b5e1ff4fdc2e2e`, matching the
 quote research. The selected-schema artifact now includes `CreateSwapRequest`,
 `CreateSwapResponse`, `SwapTransactionResponse`, deadline and safety-mode definitions.

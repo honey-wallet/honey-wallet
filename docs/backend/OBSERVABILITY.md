@@ -1,6 +1,6 @@
 # Runtime observability: implementation and operating guide
 
-Verified locally on 2026-10-18. This implements application logs, private pull
+Verified locally on 2026-10-24. This implements application logs, private pull
 metrics and sampled OTLP traces for the current API, Redis and price stream. It
 does not certify production operations, durable worker instrumentation, chain
 indexing or provider execution. Decisions: D30–D32 in [DECISIONS.md](DECISIONS.md).
@@ -216,7 +216,7 @@ mixed-load and N-1 failure tests.
 ## Primary references
 
 Versions were checked against package sources and official release/configuration
-references on 2026-10-18: [OTLP0.33.1](https://docs.rs/opentelemetry-otlp/0.33.1/opentelemetry_otlp/),
+references on 2026-10-24: [OTLP0.33.1](https://docs.rs/opentelemetry-otlp/0.33.1/opentelemetry_otlp/),
 [SDK0.33.1](https://docs.rs/opentelemetry_sdk/0.33.1/opentelemetry_sdk/),
 [tracing-opentelemetry0.34.0](https://docs.rs/tracing-opentelemetry/0.34.0/tracing_opentelemetry/),
 [Prometheus client0.25.1](https://docs.rs/prometheus-client/0.25.1/prometheus_client/),

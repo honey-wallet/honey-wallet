@@ -137,9 +137,9 @@ short-lived memory session, not a completed persistent-device authentication sys
 
 ## Verified acceptance evidence
 
-[Recorded HTTP/fork evidence](evidence/aave-http-local-fork-2026-10-18.json) contains
+[Recorded HTTP/fork evidence](evidence/aave-http-local-fork.json) contains
 actual persisted signing requests and finalized recovery objects from the successful
-run on 2026-10-18: supply used two transactions (approval + action), withdrawal used
+run on 2026-10-24: supply used two transactions (approval + action), withdrawal used
 one. Both survived server restarts after preparation and staging. Duplicate creates
 returned the same operation; changed intents conflicted; altered plan hashes were
 rejected. Only the server worker broadcast signed transactions. The test's public scalar

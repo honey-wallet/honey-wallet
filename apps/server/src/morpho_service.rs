@@ -55,12 +55,12 @@ mod tests {
     fn deadline_is_a_canonical_string_in_the_immutable_intent() {
         let value = json!({"vault":"0x04422053addbc9bb2759b248b574e3fca76bc145",
             "action":"deposit","amountRaw":"1000000","minimumSharesRaw":"100",
-            "acknowledgeUnprotectedOutput":false,"deadline":"1792323000",
+            "acknowledgeUnprotectedOutput":false,"deadline":"1792841400",
             "maximumNetworkFeeRaw":"1000000"});
         let parsed: CreateMorpho = serde_json::from_value(value.clone()).unwrap();
         assert_eq!(serde_json::to_value(parsed).unwrap(), value);
         for deadline in [
-            json!(1792323000),
+            json!(1792841400),
             json!("01792323000"),
             json!("1e9"),
             json!("-1"),

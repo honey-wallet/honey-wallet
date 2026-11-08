@@ -1,6 +1,6 @@
 # Cached Earn delivery and frontend contract
 
-Implemented 2026-10-18. Builds on [EARN-READERS.md](EARN-READERS.md). The API and
+Implemented 2026-10-24. Builds on [EARN-READERS.md](EARN-READERS.md). The API and
 web/native/extension displays serve indexed public observations. Deposits,
 withdrawals, wallet positions, fee collection and execution remain unavailable.
 Read configuration is not product approval. No production deployment or signed
@@ -140,7 +140,7 @@ HTTP reads. Provider-call counters must remain unchanged across those reads. The
 stable earn-smoke namespace preserves upstream cooldowns across runs. It does not
 change production configuration or approve those example products.
 
-[Captured result](results/earn-catalog-smoke-2026-10-18.json): both replicas ready,
+[Captured result](results/earn-catalog-smoke.json): both replicas ready,
 100 successful cached HTTP reads, unchanged provider-call counters, all financial
 execution flags false. This is functional integration evidence, not a 10k-user Earn
 load test. The existing 10k price-socket experiment has a different workload.

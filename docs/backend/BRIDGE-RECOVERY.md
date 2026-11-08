@@ -1,6 +1,6 @@
 # Relay bridge observation recovery
 
-Implemented and locally verified: 2026-10-18. Decisions D83–D84.
+Implemented and locally verified: 2026-10-24. Decisions D83–D84.
 
 This milestone adds provider status readers, durable polling, an authenticated
 recovery endpoint and web/native history presentation. **It does not create a
@@ -134,7 +134,7 @@ bridge settlement metrics remain future work.
 Relay's status contract is documented in its [v3 status reference](https://docs.relay.link/references/api/get-intents-status-v3)
 and machine-readable [API description](https://api.relay.link/documentation/json),
 retrieved during this work. The observed Relay schema hash and evidence limits are recorded in
-[contract evidence](evidence/bridge-status-contracts-2026-10-18.json).
+[contract evidence](evidence/bridge-status-contracts.json).
 
 Relay's [refund guide](https://docs.relay.link/references/api/api_core_concepts/refunds)
 requires explicit `refundTo` for automatic refunds, while the quote schema describes

@@ -1,6 +1,6 @@
 # Uniswap service: actual-contract local acceptance
 
-Verified 2026-10-18. The real HTTP server, PostgreSQL lifecycle, Redis admission,
+Verified 2026-10-24. The real HTTP server, PostgreSQL lifecycle, Redis admission,
 SIWE authentication, worker, shared client validation and keyring now complete a
 V3 exact-input swap against actual forked Ethereum contracts. The quote/build
 server is a synthetic local fixture. **This is not authenticated Trading API
@@ -63,9 +63,9 @@ only for its bounded disposable database lifecycle, not for swap execution.
 
 | Scenario | Result | Evidence |
 | --- | --- | --- |
-| Zero-fee V3 | 1,000,000 USDC base units spent; 413,588,559,259,636 WETH base units received, above 409,452,673,667,039 minimum | [JSON](evidence/uniswap-service-zero-fee-local-fork-2026-10-18.json) |
-| Two 100-bps fees + lost broadcast acknowledgement | Same input; owner receives 405,316,788,074,444; each recipient receives 4,135,885,592,596; signed transactions broadcast exactly once | [JSON](evidence/uniswap-service-fees-lost-ack-local-fork-2026-10-18.json) |
-| Unfillable output | Provider claims twice the actual quoter output; semantic proof passes but actual sequential simulation rejects it. Operation fails without preparation or signed submission; balances/allowance/Permit2 nonce unchanged | [JSON](evidence/uniswap-service-unfillable-local-fork-2026-10-18.json) |
+| Zero-fee V3 | 1,000,000 USDC base units spent; 413,588,559,259,636 WETH base units received, above 409,452,673,667,039 minimum | [JSON](evidence/uniswap-service-zero-fee-local-fork.json) |
+| Two 100-bps fees + lost broadcast acknowledgement | Same input; owner receives 405,316,788,074,444; each recipient receives 4,135,885,592,596; signed transactions broadcast exactly once | [JSON](evidence/uniswap-service-fees-lost-ack-local-fork.json) |
+| Unfillable output | Provider claims twice the actual quoter output; semantic proof passes but actual sequential simulation rejects it. Operation fails without preparation or signed submission; balances/allowance/Permit2 nonce unchanged | [JSON](evidence/uniswap-service-unfillable-local-fork.json) |
 
 Both successful scenarios exercise:
 

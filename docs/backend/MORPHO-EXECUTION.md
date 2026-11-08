@@ -1,6 +1,6 @@
 # Morpho Vault V2 execution and shared Earn processing
 
-2026-10-18. Local-fork integration; production activation remains disabled. This
+2026-10-24. Local-fork integration; production activation remains disabled. This
 document distinguishes contract behavior, Honey decisions and test evidence.
 The fixture vault is not an approved product recommendation. Existing public Earn
 catalog data does not enable execution or represent a user's savings balance.
@@ -155,15 +155,15 @@ do not delete persisted signed requests or ignore unknown transaction outcomes.
 
 ## Verification and remaining evidence
 
-Captured [adapter evidence](evidence/morpho-adapter-local-fork-2026-10-18.json)
-and [HTTP/worker evidence](evidence/morpho-http-local-fork-2026-10-18.json) both
+Captured [adapter evidence](evidence/morpho-adapter-local-fork.json)
+and [HTTP/worker evidence](evidence/morpho-http-local-fork.json) both
 completed successfully. The HTTP case deposited 1,000,000 raw USDC, minted
 941,825,668,054,109,067 shares, then redeemed exactly those shares for 1,000,000 raw
 USDC. Each action used two transactions; both reached the local finalized state.
 The two providers were enabled together; Aave signing/intent endpoints refused the
 Morpho operation. Disabled-execution history remained readable after restart.
 Neither file contains bearer tokens, private keys or signed raw transactions.
-The [Aave shared-engine regression](evidence/aave-shared-earn-local-fork-2026-10-18.json)
+The [Aave shared-engine regression](evidence/aave-shared-earn-local-fork.json)
 also passed supply/withdraw, staging/restart and disabled-execution recovery. A
 populated-table migration regression reapplies migration 7 from the previous
 metadata names and checks unchanged canonical JSON/hash plus update/delete rejection.
