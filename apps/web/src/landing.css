@@ -299,3 +299,25 @@ body {
     transform: none;
   }
 }
+
+/* Footer links: privacy, terms, support, account deletion. */
+.landing-foot {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px 20px;
+  padding: 20px 16px 28px;
+  font-size: 13px;
+  border-top: 1px solid var(--line);
+}
+
+.landing-foot a {
+  color: var(--text-2);
+  text-decoration: none;
+}
+
+.landing-foot a:hover,
+.landing-foot a:focus-visible {
+  color: var(--text);
+  text-decoration: underline;
+}

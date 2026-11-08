@@ -110,6 +110,12 @@ export default function Landing({ apiUrl = import.meta.env.VITE_API_URL }: { api
           </form>
         )}
       </main>
+      <footer className="landing-foot">
+        <a href="/privacy">Privacy</a>
+        <a href="/terms">Terms</a>
+        <a href="/support">Support</a>
+        <a href="/delete-account">Delete your data</a>
+      </footer>
     </div>
   );
 }
