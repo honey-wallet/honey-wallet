@@ -1,0 +1,143 @@
+import { Platform, StyleSheet, useColorScheme } from 'react-native';
+import { useSettings } from '@/lib/settings';
+
+/** Honey design tokens. Base values come from the brand palette. */
+const light = {
+  scheme: 'light' as 'light' | 'dark',
+  // Pure white page with soft grey cards: the mirror of dark mode's ink and charcoal.
+  canvas: '#FFFFFF', // Milk
+  card: '#F5F5F5', // Cloud
+  raised: '#EBEBEB', // Inset / hover
+  // Loading placeholders: translucent ink, so a bar reads the same on the page, a card
+  // or a sheet (a solid grey vanishes on the grey cards).
+  skeleton: 'rgba(36, 35, 41, 0.09)',
+  // Sheets are white like the page; cards inside them are grey.
+  sheet: '#FFFFFF',
+  divider: '#E6E6E6',
+  primary: '#F5C451', // Honey
+  primaryTint: '#FFF1CB',
+  text: '#242329',
+  textSecondary: '#716E78',
+  // True green and red for gains, losses and errors (no pink or mint).
+  success: '#178548',
+  error: '#D23B30',
+
+  // Derived for components.
+  onPrimary: '#242329',
+  disabledText: '#B4A37A',
+  placeholder: '#A9A6AE',
+  highlight: '#8F6200',
+  heroTop: '#FFEBB8',
+  // Wallet: honey-tinted tiles and accent text, like Uniswap's pink surfaces.
+  accentSurface: '#FFF3D1',
+  accentText: '#8F6200',
+  // A deep amber for the Honey Jar name and art: rich on white, warm on ink.
+  honey: '#B5730A',
+  // Segmented tabs: flat bar, lighter sliding pill.
+  tabsBar: '#F0F0F0',
+  tabsPill: '#FFFFFF',
+  // Floating nav: lifted above page content with a shadow and hairline edge.
+  navBar: '#FFFFFF',
+  navPill: '#EFEFEF',
+  navEdge: '#E6E6E6',
+  navShadow: 0.12,
+
+  // Logo artwork colours.
+  brandYellow: '#FEBE2B',
+  brandEyes: '#4B2817',
+  brandWordmark: '#4B2817',
+};
+
+export type Palette = typeof light;
+
+const dark: Palette = {
+  scheme: 'dark',
+  canvas: '#131313', // Ink
+  card: '#1B1B1B', // Charcoal
+  raised: '#262626', // Raised / hover
+  skeleton: 'rgba(246, 243, 235, 0.09)',
+  // Sheets match the page, like light mode, so c.card fills read on them.
+  sheet: '#131313',
+  divider: '#2C2C2C',
+  primary: '#F3C969', // Honey
+  primaryTint: '#3B301C',
+  text: '#F6F3EB',
+  textSecondary: '#A3A3A3',
+  success: '#3FD07E',
+  error: '#FF665D',
+
+  onPrimary: '#131313',
+  disabledText: '#7D6B47',
+  placeholder: '#5E5E5E',
+  highlight: '#F3C969',
+  heroTop: '#5C4722',
+  accentSurface: '#29241B',
+  accentText: '#F3C969',
+  honey: '#F0B347',
+  tabsBar: '#202020',
+  tabsPill: '#3A3A3A',
+  navBar: '#262626',
+  navPill: '#3A3A3A',
+  navEdge: '#333333',
+  navShadow: 0.5,
+
+  brandYellow: '#FEBE2B',
+  brandEyes: '#131313',
+  brandWordmark: '#F6F3EB',
+};
+
+/** Both palettes, for the rare surface that keeps one look whatever the theme (a share card). */
+export const palettes: Record<'light' | 'dark', Palette> = { light, dark };
+
+/**
+ * Light or dark: Settings › Theme, else the system's. Read here rather than through
+ * Appearance.setColorScheme, which React Native Web doesn't implement, so the browser
+ * extension follows the setting too.
+ */
+export function useScheme(): 'light' | 'dark' {
+  const system = useColorScheme();
+  const { theme } = useSettings();
+  if (theme === 'light' || theme === 'dark') return theme;
+  return system === 'dark' ? 'dark' : 'light';
+}
+
+export function useTheme(): Palette {
+  // return useColorScheme() === 'dark' ? palettes.dark : palettes.light;
+  return palettes[useScheme()];
+}
+
+/**
+ * Builds a themed `StyleSheet` once per palette and returns a hook for it:
+ *
+ *   const useStyles = makeStyles((c) => ({ root: { backgroundColor: c.canvas } }));
+ */
+export function makeStyles<T extends StyleSheet.NamedStyles<T>>(factory: (c: Palette) => T) {
+  const cache = new Map<Palette, T>();
+  return function useStyles(): T {
+    const c = useTheme();
+    let styles = cache.get(c);
+    if (!styles) {
+      styles = StyleSheet.create(factory(c));
+      cache.set(c, styles);
+    }
+    return styles;
+  };
+}
+
+/**
+ * Apple's continuous (squircle) corner curve. iOS uses `borderCurve`; web uses the CSS
+ * `corner-shape` property, which React Native's types don't know yet. Skip it on circles
+ * and capsules, where the curve has no effect.
+ */
+type Squircle = { borderCurve?: 'continuous' };
+
+export const squircle: Squircle = Platform.select<Squircle>({
+  ios: { borderCurve: 'continuous' },
+  web: { cornerShape: 'squircle' } as Squircle,
+  default: {},
+});
+
+/** A rounded corner of radius `r` with the continuous curve: `...radius(20)`. */
+export function radius(r: number): { borderRadius: number } & Squircle {
+  return { borderRadius: r, ...squircle };
+}

@@ -1,0 +1,39 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+dist-e2e/
+target/
+*.tsbuildinfo
+
+# Tooling caches
+.turbo/
+.expo/
+.metro-health-check*
+coverage/
+
+# Env files (commit .env.example only)
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Editors / OS
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.DS_Store
+*.swp
+
+# Local design reference screenshots (large; not part of the app)
+inspiration/
+
+# Python bytecode caches
+__pycache__/
+*.pyc

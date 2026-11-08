@@ -1,0 +1,38 @@
+packages:
+  - apps/*
+  - packages/*
+
+# Shared versions for tooling used by several packages. Reference with "catalog:".
+catalog:
+  typescript: ~6.0.3
+  vitest: ^5.0.5
+
+# Only allow dependency install scripts we have reviewed.
+onlyBuiltDependencies:
+  - '@biomejs/biome'
+  - esbuild
+  - turbo
+
+overrides:
+  # Keep Expo's consumers on fixed releases without changing the SDK.
+  query-string>decode-uri-component: 0.5.0
+  node-forge: 1.4.1
+  xcode>uuid: 11.1.1
+
+patchedDependencies:
+  # braces has no fixed release; decode-uri-component 0.5.1 is ESM-only and breaks
+  # query-string 7, so 0.5.0 stays with the fix patched in
+  # (see auditConfig below).
+  braces@3.0.3: patches/braces@3.0.3.patch
+  decode-uri-component@0.5.0: patches/decode-uri-component@0.5.0.patch
+  expo-alternate-app-icons@8.0.0: patches/expo-alternate-app-icons@8.0.0.patch
+  # The web build (Honey for Chrome): Keyframe entrances were left pinned with
+  # position:absolute after they finished, shifting text (see the patch).
+  react-native-reanimated@4.5.1: patches/react-native-reanimated@4.5.1.patch
+
+auditConfig:
+  # Fixed by the local braces patch above (no upstream release yet). Build tooling
+  # (Metro), not code that ships in the app. Drop once braces > 3.0.3 is released.
+  ignoreGhsas:
+    - GHSA-vfj7-8cjw-p6xm # braces: deeply nested pattern stack exhaustion
+    - GHSA-qr28-fpjm-wq7f # decode-uri-component: patched (tests/dependency-security.test.ts)
