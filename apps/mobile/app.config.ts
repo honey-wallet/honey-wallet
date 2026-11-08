@@ -55,8 +55,39 @@ export default ({ config }: ConfigContext): ExpoConfig => {
       );
   }
 
+  // Email sign-in links open the app from Firebase's auth domain (an iOS universal link
+  // and an Android app link). Firebase Hosting serves the matching association files
+  // once the iOS and Android apps are registered in the Firebase project.
+  const authDomain = process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN?.trim();
+  if (authDomain && !/^[a-z0-9.-]+$/i.test(authDomain))
+    throw new Error(
+      'EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN must be a host name, e.g. app.firebaseapp.com.',
+    );
+  const ios = authDomain
+    ? {
+        ...base.ios,
+        associatedDomains: [...(base.ios?.associatedDomains ?? []), `applinks:${authDomain}`],
+      }
+    : base.ios;
+  const android = authDomain
+    ? {
+        ...base.android,
+        intentFilters: [
+          ...(base.android?.intentFilters ?? []),
+          {
+            action: 'VIEW',
+            autoVerify: true,
+            data: [{ scheme: 'https', host: authDomain, pathPrefix: '/__/auth/links' }],
+            category: ['BROWSABLE', 'DEFAULT'],
+          },
+        ],
+      }
+    : base.android;
+
   return {
     ...base,
+    ios,
+    android,
     runtimeVersion: { policy: 'fingerprint' },
     updates: {
       ...base.updates,

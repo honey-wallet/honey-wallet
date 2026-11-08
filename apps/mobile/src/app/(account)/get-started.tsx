@@ -12,7 +12,13 @@ import { SheetScreen, SheetText } from '@/components/sheets/Sheet';
 import { LabeledRule } from '@/components/wallet/parts';
 import { failure, tap } from '@/lib/haptics';
 import { IDENTITY_ENABLED } from '@/lib/identity';
-import { APPLE_SIGN_IN, GOOGLE_SIGN_IN, useIdentity, useSocialSignIn } from '@/lib/identity-flows';
+import {
+  APPLE_SIGN_IN,
+  EMAIL_SIGN_IN,
+  GOOGLE_SIGN_IN,
+  useIdentity,
+  useSocialSignIn,
+} from '@/lib/identity-flows';
 import { continueAfterSignIn, type IdentityMethod } from '@/lib/identity-onboarding';
 import { leaveSheetTo } from '@/lib/navigation';
 import { HERE, isWeb } from '@/lib/platform';
@@ -22,7 +28,7 @@ import { DURATION } from '@/theme/motion';
 type Busy = IdentityMethod | 'continue' | null;
 
 /**
- * The two ways in, after Phantom: Apple or Google first (no recovery phrase to
+ * The two ways in, after Phantom: Apple, Google or email first (no recovery phrase to
  * write down and no password, so nothing to lose people on before the wallet exists),
  * with a recovery phrase or an import tucked under them for people who want it.
  *
@@ -59,7 +65,7 @@ export default function GetStartedSheet() {
         {restore ? 'Use an existing wallet' : 'Create a new wallet'}
       </Text>
 
-      {IDENTITY_ENABLED && (APPLE_SIGN_IN || GOOGLE_SIGN_IN) ? (
+      {IDENTITY_ENABLED && (APPLE_SIGN_IN || GOOGLE_SIGN_IN || EMAIL_SIGN_IN) ? (
         <IdentityWays restore={restore} busy={busy} setBusy={setBusy} />
       ) : (
         <SheetText center>
@@ -297,8 +303,19 @@ function IdentityWays({
             onPress={() => signIn('google')}
           />
         ) : null}
-        {/* No email way in for now: Firebase has no emailed code like the old flow, and
-            its email-link sign-in is a later step. The email and verify screens stay. */}
+        {EMAIL_SIGN_IN ? (
+          <AuthButton
+            label="Continue with email"
+            icon={<Icon name="mail" size={18} color={c.text} />}
+            disabled={!!busy}
+            onPress={() =>
+              router.push({
+                pathname: '/email',
+                params: { intent: restore ? 'restore' : 'create' },
+              })
+            }
+          />
+        ) : null}
       </Animated.View>
       {/* Why sign-in didn't work, under the buttons, until the next try. */}
       {error ? (

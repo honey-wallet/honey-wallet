@@ -21,7 +21,22 @@ none of these services ever sees them.
 5. Apple Developer → the App ID `com.honeywallet.app` → enable **Sign in with Apple**.
 6. Server: set `FIREBASE_PROJECT_ID` (the only value it needs; no secret).
 
-Email sign-in is off for now; Firebase's email-link sign-in is a later step.
+### Email sign-in (a one-time link)
+
+1. Authentication → Sign-in method → **Email/Password** → turn on **Email link
+   (passwordless sign-in)**.
+2. Hosting → Get started (the default site is enough). Firebase serves the iOS and
+   Android association files for `<project>.firebaseapp.com` from Hosting.
+3. Project settings → Your apps → add an **iOS app** (bundle id `com.honeywallet.app`,
+   plus your Apple **Team ID**) and an **Android app** (package `com.honeywallet.app`,
+   plus the **SHA-256** fingerprints of the debug, EAS and Play signing keys).
+4. Authentication → Settings → Authorized domains: keep `<project>.firebaseapp.com`.
+5. Build the app with `EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN` set: the build adds
+   `applinks:<auth domain>` (iOS) and an Android app link for `/__/auth/links`, so the
+   emailed link opens Honey. The link works once and expires after about an hour.
+
+Emails come from Firebase (`noreply@<project>.firebaseapp.com`); the template is under
+Authentication → Templates. A custom sender domain can be added there later.
 
 ## 2. Cloud SQL for PostgreSQL (database)
 

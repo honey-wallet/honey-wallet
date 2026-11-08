@@ -1,11 +1,14 @@
 import { isAuthCallback } from '@/lib/auth-callback';
+import { takeEmailLink } from '@/lib/identity-flows';
 
 /**
  * Incoming links. The Google sign-in redirect belongs to the in-app browser session that
  * is waiting for it, so it opens no screen (null keeps the current one); on a cold start
- * it falls back to the app's first screen.
+ * it falls back to the app's first screen. An email sign-in link opens /verify.
  */
 export function redirectSystemPath({ path, initial }: { path: string; initial: boolean }) {
   if (isAuthCallback(path)) return initial ? '/' : null;
+  // A Firebase email sign-in link: the check-your-email screen finishes it.
+  if (takeEmailLink(path)) return '/verify';
   return path;
 }
