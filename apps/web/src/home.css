@@ -75,12 +75,12 @@ html:has(.home) {
   flex-direction: column;
   justify-content: center;
   text-align: center;
-  padding: 24px var(--h-gutter) 48px;
+  padding: 24px var(--h-gutter);
 }
 .home-title {
   margin: 0 auto;
-  font-size: clamp(30px, 9.4vw, 92px);
-  line-height: 1.1;
+  font-size: clamp(36px, 11.4vw, 92px);
+  line-height: 1.04;
   letter-spacing: -0.035em;
   font-weight: 700;
   color: var(--h-text);
@@ -266,4 +266,60 @@ html:has(.home) {
   overflow: hidden;
   clip-path: inset(50%);
   white-space: nowrap;
+}
+
+/* Phones: bigger headline, stacked form, centred footer. */
+@media (max-width: 520px) {
+  .home {
+    --h-gutter: 16px;
+    min-height: 100dvh;
+  }
+  .home-nav {
+    height: 60px;
+  }
+  .home-brand {
+    font-size: 17px;
+  }
+  .home-brand svg {
+    width: 26px;
+    height: auto;
+  }
+  .home-waitlist .landing-form,
+  .home .landing-joined {
+    margin-top: 32px;
+  }
+  .home .landing-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    height: auto;
+    padding: 0;
+    background: none;
+    border: 0;
+  }
+  .home .landing-input {
+    height: 52px;
+    padding: 0 20px;
+    font-size: 17px;
+    background: #0e0d0c;
+    border: 1px solid rgba(243, 201, 105, 0.22);
+  }
+  .home .landing-button {
+    height: 52px;
+    width: 100%;
+  }
+  .home .landing-note,
+  .home .landing-joined {
+    text-align: center;
+  }
+  .home-foot {
+    flex-direction: column;
+    justify-content: center;
+    text-align: center;
+    gap: 10px;
+  }
+  .home-foot-links {
+    justify-content: center;
+    gap: 6px 18px;
+  }
 }
