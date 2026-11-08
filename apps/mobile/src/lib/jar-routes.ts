@@ -1,3 +1,5 @@
+import { useEffect, useState } from 'react';
+import { TEST_MODE } from '@/lib/test-mode';
 /**
  * Splits each jar buy across the places it trades. A pick like NVDA can trade as a
  * tokenized stock on several chains; buying all of it in one pool moves the price,
@@ -176,4 +178,71 @@ export function sampleRoute(
     { chain: pick.chain, venue: 'Best pool', depthUsd: 1_000_000, feeBps: 30, bridgeUsd: 0.5 },
   ];
   return planRoute(pick.symbol, usd, known?.price ?? 1, venues, maxSlippage);
+}
+
+/** Rough cost of moving funds to another chain through NEAR Intents, in dollars. */
+const BRIDGE_USD = 0.3;
+/** Where a jar's money starts; buys on other chains cross through NEAR Intents. */
+const FUNDING_CHAIN = 'Base';
+
+const venueCache = new Map<string, { at: number; value: Promise<LiveVenues | null> }>();
+type LiveVenues = { price: number; venues: Venue[] };
+
+/** Live venues for a symbol from the server (DexScreener depth, 1Click prices). */
+function liveVenues(symbol: string): Promise<LiveVenues | null> {
+  const hit = venueCache.get(symbol);
+  if (hit && Date.now() - hit.at < 30_000) return hit.value;
+  const value = import('@/lib/api')
+    .then(({ api }) => api.marketVenues(symbol))
+    .then((r) =>
+      r.priceUsd === null || !r.venues.length
+        ? null
+        : {
+            price: r.priceUsd,
+            venues: r.venues.map((v) => ({
+              chain: v.chain,
+              venue: v.venue,
+              depthUsd: v.depthUsd,
+              feeBps: v.feeBps,
+              bridgeUsd: v.chain === FUNDING_CHAIN ? 0 : BRIDGE_USD,
+            })),
+          },
+    )
+    .catch(() => null);
+  venueCache.set(symbol, { at: Date.now(), value });
+  return value;
+}
+
+/**
+ * Routes for every pick of a jar. Live when the server answers (outside test mode);
+ * otherwise the sample venues, marked `live: false` so the screen can say so.
+ */
+export function useRoutes(
+  picks: { symbol: string; chain: string; weight: number }[],
+  amount: number,
+  maxSlippage: number,
+): { routes: Route[]; live: boolean } {
+  const sample = picks.map((p) => sampleRoute(p, (amount * p.weight) / 100, maxSlippage));
+  const [live, setLive] = useState<Record<string, LiveVenues | null>>({});
+  const symbols = picks.map((p) => p.symbol).join(',');
+  useEffect(() => {
+    if (TEST_MODE || !symbols) return;
+    let alive = true;
+    for (const symbol of symbols.split(',')) {
+      void liveVenues(symbol).then((v) => {
+        if (alive) setLive((prev) => ({ ...prev, [symbol]: v }));
+      });
+    }
+    return () => {
+      alive = false;
+    };
+  }, [symbols]);
+  let anyLive = false;
+  const routes = picks.map((p, i) => {
+    const v = live[p.symbol];
+    if (!v) return sample[i] as Route;
+    anyLive = true;
+    return planRoute(p.symbol, (amount * p.weight) / 100, v.price, v.venues, maxSlippage);
+  });
+  return { routes, live: anyLive };
 }

@@ -740,3 +740,56 @@ export interface ThesisArtifact {
   body: unknown;
   createdAt: string;
 }
+
+/** One pool a jar pick can be bought from (`GET /api/v1/market/venues`). */
+export interface MarketVenue {
+  chain: string;
+  /** The NEAR Intents asset this pool trades. */
+  assetId: string;
+  venue: string;
+  pool: string;
+  /** Dollars on one side of the pool. */
+  depthUsd: number;
+  feeBps: number;
+  priceUsd: number;
+}
+
+export interface MarketVenues {
+  symbol: string;
+  /** 1Click's price; null when NEAR Intents can't deliver the symbol. */
+  priceUsd: number | null;
+  venues: MarketVenue[];
+}
+
+export interface NewPool {
+  chain: string;
+  name: string;
+  pool: string;
+  token: string | null;
+  priceUsd: number | null;
+  liquidityUsd: number | null;
+  createdAt: string | null;
+}
+
+export function isMarketVenues(v: unknown): v is MarketVenues {
+  if (typeof v !== 'object' || v === null) return false;
+  const o = v as Record<string, unknown>;
+  return (
+    typeof o.symbol === 'string' &&
+    (o.priceUsd === null || typeof o.priceUsd === 'number') &&
+    Array.isArray(o.venues) &&
+    o.venues.every((x) => {
+      const m = x as Record<string, unknown>;
+      return (
+        typeof m === 'object' &&
+        m !== null &&
+        typeof m.chain === 'string' &&
+        typeof m.assetId === 'string' &&
+        typeof m.venue === 'string' &&
+        typeof m.depthUsd === 'number' &&
+        typeof m.feeBps === 'number' &&
+        typeof m.priceUsd === 'number'
+      );
+    })
+  );
+}

@@ -23,6 +23,7 @@ pub mod evm_envelope;
 pub mod http_runtime;
 pub mod hyperliquid_perps;
 pub mod identity;
+pub mod market_data;
 pub mod markets;
 pub mod metrics;
 pub mod morpho_service;
@@ -207,6 +208,7 @@ fn router(config: &Config, health: runtime::RuntimeHealth, services: RouterServi
             capability_adapters,
         ))
         .merge(routes::prices::router(markets, health.clone(), config))
+        .merge(market_router())
         .merge(routes::pairing::router_with_proxies(
             config.trust_proxy_headers,
             config.trusted_proxy_cidrs.clone(),
@@ -268,6 +270,17 @@ fn router(config: &Config, health: runtime::RuntimeHealth, services: RouterServi
         // CORS must decorate overload/body-limit/timeout responses too, so web
         // clients can read their error envelope and diagnostic headers.
         .layer(cors)
+}
+
+/// Public jar market data (DexScreener, GeckoTerminal). Builds offline; fetches lazily.
+fn market_router() -> Router {
+    match market_data::MarketData::new() {
+        Ok(market) => routes::market::router(market),
+        Err(error) => {
+            tracing::error!(%error, "market data disabled");
+            Router::new()
+        }
+    }
 }
 
 /// Thesis runs (agent pipeline). Without NEAR_AI_API_KEY it answers with fixtures

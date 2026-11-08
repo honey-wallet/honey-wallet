@@ -22,6 +22,7 @@ pub enum FetchedVia {
     XOembed,
     JinaReader,
     OpenGraph,
+    Linkup,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -108,6 +109,8 @@ impl Intake {
 
     async fn try_fetch(&self, url: &str, via: FetchedVia) -> Option<LinkContent> {
         match via {
+            // Search results arrive already read; never fetched by URL.
+            FetchedVia::Linkup => None,
             FetchedVia::Fxtwitter => {
                 let id = tweet_id(url)?;
                 let body = self

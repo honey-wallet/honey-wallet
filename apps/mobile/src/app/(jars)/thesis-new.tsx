@@ -10,7 +10,7 @@ import { SegmentedTabs } from '@/components/motion/SegmentedTabs';
 import { PillButton } from '@/components/onboarding/PillButton';
 import { SheetScreen } from '@/components/sheets/Sheet';
 import { tap } from '@/lib/haptics';
-import { describeRoute, sampleRoute } from '@/lib/jar-routes';
+import { describeRoute, useRoutes } from '@/lib/jar-routes';
 import { formatUsd } from '@/lib/mock-wallet';
 import {
   createThesisJar,
@@ -96,6 +96,12 @@ export default function NewThesisSheet() {
   const [copyFee, setCopyFee] = useState(10);
   const [order, setOrder] = useState<OrderKind>('market');
   const [maxSlip, setMaxSlip] = useState(1);
+  // Each pick's buy split across chains: live venues when the server answers.
+  const { routes, live: liveRoutes } = useRoutes(
+    proposal?.picks ?? [],
+    proposal?.amount ?? 0,
+    maxSlip / 100,
+  );
   const links = linksIn(text);
   const value = Number(amount) || 0;
 
@@ -207,10 +213,7 @@ export default function NewThesisSheet() {
               {
                 label: 'Est. slippage',
                 value: `${(
-                  (proposal.picks.reduce((s, p) => {
-                    const r = sampleRoute(p, (proposal.amount * p.weight) / 100, maxSlip / 100);
-                    return s + r.slippage * r.usd + r.bridgeUsd;
-                  }, 0) /
+                  (routes.reduce((s, r) => s + r.slippage * r.usd + r.bridgeUsd, 0) /
                     Math.max(proposal.amount, 1)) *
                     100
                 ).toFixed(2)}%`,
@@ -222,7 +225,7 @@ export default function NewThesisSheet() {
               },
             ]}
           />
-          <Text style={styles.section}>What it buys</Text>
+          <Text style={styles.section}>What it buys{liveRoutes ? '' : ' · sample routes'}</Text>
           <View style={styles.card}>
             {proposal.picks.map((p) => (
               <View key={p.symbol}>
@@ -243,7 +246,8 @@ export default function NewThesisSheet() {
                 <Text style={styles.why}>{p.reason}</Text>
                 {(() => {
                   // Where this pick gets bought, split across chains for the best fill.
-                  const route = sampleRoute(p, (proposal.amount * p.weight) / 100, maxSlip / 100);
+                  const route = routes.find((r) => r.symbol === p.symbol);
+                  if (!route) return null;
                   return (
                     <Text
                       style={[styles.why, route.status === 'thin' && { color: c.error }]}
