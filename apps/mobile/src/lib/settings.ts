@@ -97,7 +97,10 @@ export function toggleHideBalance() {
 /** Applies the theme everywhere at once; "auto" follows the device. */
 export function setTheme(theme: ThemePreference) {
   updateSettings({ theme });
-  Appearance.setColorScheme(theme === 'auto' ? 'unspecified' : theme);
+  // React Native Web has no setColorScheme: in the browser the theme hook reads the
+  // setting itself (theme/index.ts), so only native apps set the system appearance.
+  if (typeof Appearance.setColorScheme === 'function')
+    Appearance.setColorScheme(theme === 'auto' ? 'unspecified' : theme);
 }
 
 export const CURRENCIES: [code: string, name: string][] = [

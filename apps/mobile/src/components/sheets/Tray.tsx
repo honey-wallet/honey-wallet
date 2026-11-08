@@ -1,4 +1,4 @@
-// Motion: a tray is a card that floats a little above the bottom edge and rises over
+// Motion: a tray is a card that sits on the bottom edge and rises over
 // the screen. It enters on the iOS sheet curve (300ms) while the backdrop fades in,
 // and leaves the same way down, faster (200ms). When its content changes (the next
 // step of a flow) the card's height eases to fit (250ms, snappy ease-out), so one tray
@@ -46,11 +46,11 @@ import { ContentSwap } from '@/components/motion/ContentSwap';
 import { PressableScale } from '@/components/motion/PressableScale';
 import { isWeb } from '@/lib/platform';
 import { trayOpened } from '@/lib/toast';
-import { makeStyles, radius, useTheme } from '@/theme';
+import { makeStyles, useTheme } from '@/theme';
 import { DURATION, EASE, SPRING } from '@/theme/motion';
 
-/** Gap between the tray and the screen's sides and bottom. */
-export const TRAY_INSET = 10;
+/** Gap between the tray and the screen's sides and bottom: none, it sits on the edge. */
+export const TRAY_INSET = 0;
 const RADIUS = 40;
 /** The close button's corner of the tray, kept clear by tray headers. */
 export const TRAY_CLOSE = { size: 32, top: 18, right: 20 } as const;
@@ -186,7 +186,7 @@ function TrayFrame({
   }));
   const card = useAnimatedStyle(() => {
     const offscreen = height.value + TRAY_INSET + 40;
-    const lift = Math.max(TRAY_INSET, keyboard.height.value + 8);
+    const lift = keyboard.height.value > 0 ? keyboard.height.value + 8 : TRAY_INSET;
     return {
       height: viewport.value,
       bottom: TRAY_INSET,
@@ -370,7 +370,9 @@ const useStyles = makeStyles((c) => ({
     position: 'absolute',
     left: TRAY_INSET,
     right: TRAY_INSET,
-    ...radius(RADIUS),
+    // Flush with the bottom edge: only the top corners are rounded.
+    borderTopLeftRadius: RADIUS,
+    borderTopRightRadius: RADIUS,
     borderCurve: 'continuous',
     overflow: 'hidden',
     backgroundColor: c.sheet,
