@@ -25,6 +25,7 @@ import {
 } from './near-intents';
 import { isOperationPage, isOperationRecovery, OPERATION_ID } from './operations';
 import { isPolymarketCatalog, isPolymarketOrderBook } from './polymarket';
+import { isAccountDeletion, isChainActivity, isPortfolio, portfolioQuery } from './portfolio';
 import { isPriceSnapshot, type PriceStreamOptions, subscribePrices } from './prices';
 import {
   isRelayQuotePreview,
@@ -54,6 +55,7 @@ import type {
   PairChannel,
   PairMessage,
   PairSlot,
+  PortfolioAddresses,
   StartThesis,
   SwapIntent,
   SwapQuoteRequest,
@@ -219,6 +221,12 @@ export function createApiClient({ baseUrl, fetch: fetchImpl = fetch }: ApiClient
         `/api/v1/market/new-pools${chain ? `?chain=${encodeURIComponent(chain)}` : ''}`,
         init,
       ),
+    /** Balances on every supported chain for these public addresses, priced in USD. Public. */
+    portfolioBalances: (addresses: PortfolioAddresses, init?: RequestInit) =>
+      validated(`/api/v1/portfolio/balances?${portfolioQuery(addresses)}`, isPortfolio, init),
+    /** Recent on-chain transactions for these public addresses, newest first. Public. */
+    portfolioActivity: (addresses: PortfolioAddresses, init?: RequestInit) =>
+      validated(`/api/v1/portfolio/activity?${portfolioQuery(addresses)}`, isChainActivity, init),
     /** Up to 90 daily closes for one pool. Public. */
     poolHistory: (chain: string, pool: string, init?: RequestInit) =>
       request<{ closes: number[] }>(
@@ -567,6 +575,12 @@ export function createApiClient({ baseUrl, fetch: fetchImpl = fetch }: ApiClient
     linkWallet: (token: string, challengeId: string, signature: string, init?: RequestInit) =>
       validated('/api/v1/me/wallets', isWalletIdentity, {
         ...authorizedJson(token, { challengeId, signature }, init),
+      }),
+    /** Deletes the server data for this Firebase account (Settings → Delete account). */
+    deleteAccount: (accessToken: string, init?: RequestInit) =>
+      validated('/api/v1/me/account', isAccountDeletion, {
+        ...authorized(accessToken, init),
+        method: 'DELETE',
       }),
     signOut: async (token: string, init?: RequestInit) => {
       await send('/api/v1/auth/session', { ...authorized(token, init), method: 'DELETE' });

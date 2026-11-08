@@ -31,6 +31,7 @@ pub mod metrics;
 pub mod morpho_service;
 pub mod operation_history;
 pub mod pairing_store;
+pub mod portfolio;
 pub mod preparation;
 pub mod providers;
 pub mod reconciliation;
@@ -188,6 +189,8 @@ fn router(config: &Config, health: runtime::RuntimeHealth, services: RouterServi
     let public_markets = routes::polymarket::router(redis.clone().map(|store| {
         std::sync::Arc::new(routes::polymarket::PolymarketCatalogService::new(store))
     }));
+    let market = market_data();
+    let public_markets = public_markets.merge(portfolio_router(market.clone()));
     let public_markets = if let Some(redis) = redis.clone() {
         public_markets.route_layer(middleware::from_fn_with_state(
             routes::identity::AuthenticatedApiAdmission::new(
@@ -201,7 +204,6 @@ fn router(config: &Config, health: runtime::RuntimeHealth, services: RouterServi
         public_markets
     };
 
-    let market = market_data();
     let mut api = routes::v1::router(config)
         .merge(routes::earn::router(earn))
         .merge(public_markets)
@@ -238,7 +240,10 @@ fn router(config: &Config, health: runtime::RuntimeHealth, services: RouterServi
     // colocated with these handlers also receive the generous IP-level budget;
     // their route-specific wallet quotas remain in the handlers that need them.
     let private_api = Router::new()
-        .merge(routes::account_identity::router(firebase_auth))
+        .merge(routes::account_identity::router_with_store(
+            firebase_auth,
+            identity.as_ref().map(|i| i.pool().clone()),
+        ))
         .merge(routes::operations::router(identity.clone(), work))
         .merge(routes::bridges::router(identity.clone(), bridges))
         .merge(routes::near_intents::router(identity.clone(), near_intents))
@@ -285,6 +290,17 @@ fn market_data() -> Option<std::sync::Arc<market_data::MarketData>> {
     market_data::MarketData::new()
         .map_err(|error| tracing::error!(%error, "market data disabled"))
         .ok()
+}
+
+/// Public balances and activity for the user's addresses (keyless public nodes).
+fn portfolio_router(market: Option<std::sync::Arc<market_data::MarketData>>) -> Router {
+    match portfolio::PortfolioService::new(market) {
+        Ok(service) => routes::portfolio::router(service),
+        Err(error) => {
+            tracing::error!(%error, "portfolio reads disabled");
+            Router::new()
+        }
+    }
 }
 
 /// Real jar buys through NEAR Intents; needs market data for prices and the cap.

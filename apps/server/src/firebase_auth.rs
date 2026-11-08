@@ -131,6 +131,9 @@ fn validate_origin_url(raw: &str) -> Result<(), ()> {
 pub struct FirebaseSession {
     pub user_id: String,
     pub session_id: Option<String>,
+    /// The sign-in email, only when the provider verified it (used to find the
+    /// account's waitlist entry on deletion; never stored).
+    pub verified_email: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -453,6 +456,10 @@ struct Claims {
     nbf: Option<i64>,
     #[serde(default)]
     firebase: FirebaseClaim,
+    #[serde(default)]
+    email: Option<String>,
+    #[serde(default)]
+    email_verified: Option<bool>,
 }
 
 #[derive(Deserialize, Default)]
@@ -566,9 +573,14 @@ impl<'a> ParsedToken<'a> {
         {
             return Err(FirebaseAuthError::Malformed);
         }
+        let verified_email = claims
+            .email
+            .filter(|_| claims.email_verified == Some(true))
+            .map(|e| e.trim().to_lowercase());
         Ok(FirebaseSession {
             user_id: claims.sub,
             session_id: None,
+            verified_email,
         })
     }
 }
@@ -718,6 +730,7 @@ pub(crate) mod test_support {
             "auth_time": now - 10,
             "user_id": USER_ID,
             "email": "maya@example.com",
+            "email_verified": true,
             "firebase": { "sign_in_provider": "google.com", "identities": {} },
         })
     }
@@ -739,6 +752,7 @@ mod tests {
         let expected = FirebaseSession {
             user_id: USER_ID.into(),
             session_id: None,
+            verified_email: Some("maya@example.com".into()),
         };
         let now = unix_now();
         assert_eq!(
