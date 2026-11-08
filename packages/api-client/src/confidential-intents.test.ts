@@ -1,0 +1,133 @@
+import { describe, expect, it, vi } from 'vitest';
+import {
+  authenticateRequest,
+  confidentialDepositQuote,
+  confidentialTransferQuote,
+  confidentialWithdrawQuote,
+  createConfidentialIntents,
+  generateIntentRequest,
+  validateGeneratedIntent,
+} from './confidential-intents';
+
+const jar = 'a'.repeat(64);
+const now = Date.parse('2026-11-09T00:00:00Z');
+const usdc = 'nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1';
+const payload = (signer: string, intents: unknown[] = []) => ({
+  standard: 'nep413',
+  payload: {
+    message: JSON.stringify({ signer_id: signer, deadline: '2026-11-09T00:10:00Z', intents }),
+    nonce: 'A'.repeat(43) + '=',
+    recipient: 'intents.near',
+  },
+});
+const sig = {
+  public_key: `ed25519:${'1'.repeat(44)}`,
+  signature: `ed25519:${'2'.repeat(88)}`,
+};
+
+describe('confidential quote builders', () => {
+  it('deposit lands in the jar confidential balance', () => {
+    const q = confidentialDepositQuote({
+      asset: usdc,
+      originAsset: 'nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near',
+      amount: '5000000',
+      jarAccount: jar,
+      refundTo: '0x1111111111111111111111111111111111111111',
+      now,
+    });
+    expect(q).toMatchObject({
+      depositType: 'ORIGIN_CHAIN',
+      recipient: jar,
+      recipientType: 'CONFIDENTIAL_INTENTS',
+      confidentiality: 'advanced',
+      deadline: '2026-11-09T00:10:00.000Z',
+    });
+  });
+
+  it('transfer and withdraw spend from the confidential balance', () => {
+    const t = confidentialTransferQuote({
+      asset: usdc,
+      amount: '1',
+      jarAccount: jar,
+      recipient: 'bob.near',
+      now,
+    });
+    expect(t).toMatchObject({
+      depositType: 'CONFIDENTIAL_INTENTS',
+      recipientType: 'CONFIDENTIAL_INTENTS',
+      refundTo: jar,
+    });
+    const w = confidentialWithdrawQuote({
+      asset: usdc,
+      destinationAsset: usdc,
+      amount: '1',
+      jarAccount: jar,
+      recipient: 'bob.near',
+      now,
+    });
+    expect(w).toMatchObject({
+      depositType: 'CONFIDENTIAL_INTENTS',
+      recipientType: 'DESTINATION_CHAIN',
+    });
+  });
+
+  it('rejects named accounts, bad amounts and bad deadlines', () => {
+    expect(() =>
+      confidentialTransferQuote({
+        asset: usdc,
+        amount: '1',
+        jarAccount: 'jar.near',
+        recipient: 'b.near',
+      }),
+    ).toThrow();
+    expect(() =>
+      confidentialTransferQuote({ asset: usdc, amount: '0', jarAccount: jar, recipient: 'b.near' }),
+    ).toThrow();
+    expect(() =>
+      confidentialTransferQuote({
+        asset: usdc,
+        amount: '1',
+        jarAccount: jar,
+        recipient: 'b.near',
+        ttlSeconds: 5,
+      }),
+    ).toThrow();
+    expect(() => generateIntentRequest('dep', 'alice.near')).toThrow();
+  });
+
+  it('validates generated intents and auth payloads', () => {
+    expect(validateGeneratedIntent(payload(jar), jar).standard).toBe('nep413');
+    expect(() => validateGeneratedIntent(payload('other.near'), jar)).toThrow(/different signer/);
+    expect(() =>
+      authenticateRequest({ ...payload(jar, [{ intent: 'transfer' }]), ...sig } as never),
+    ).toThrow();
+  });
+});
+
+describe('createConfidentialIntents', () => {
+  it('sends partner key on quotes and bearer token on balances', async () => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({ balances: [] })));
+    const api = createConfidentialIntents('partner-jwt', fetcher as unknown as typeof fetch);
+    await api.balances('session');
+    await api.generateIntent('dep-addr', jar);
+    const [balUrl, balInit] = fetcher.mock.calls[0] as unknown as [string, RequestInit];
+    expect(balUrl).toBe('https://1click.chaindefuser.com/v0/account/balances');
+    expect(balInit.headers).toMatchObject({ Authorization: 'Bearer session' });
+    const [, genInit] = fetcher.mock.calls[1] as unknown as [string, RequestInit];
+    expect(genInit.headers).toMatchObject({ 'X-API-Key': 'partner-jwt' });
+    expect(JSON.parse(genInit.body as string)).toEqual({
+      type: 'swap_transfer',
+      standard: 'nep413',
+      signerId: jar,
+      depositAddress: 'dep-addr',
+    });
+  });
+
+  it('surfaces HTTP failures', async () => {
+    const api = createConfidentialIntents(
+      'k',
+      (async () => new Response('', { status: 401 })) as typeof fetch,
+    );
+    await expect(api.status('x')).rejects.toThrow(/401/);
+  });
+});

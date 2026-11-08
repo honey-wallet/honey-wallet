@@ -55,6 +55,10 @@ import type {
   PairMessage,
   PairSlot,
   StartThesis,
+  StealthJarInvite,
+  StealthJarMember,
+  StealthJarRelayMessage,
+  StealthJarSession,
   SwapIntent,
   SwapQuoteRequest,
   ThesisArtifact,
@@ -586,6 +590,38 @@ export function createApiClient({ baseUrl, fetch: fetchImpl = fetch }: ApiClient
         throw new ApiError(200, 'invalid_response', 'Invalid capabilities response');
       return value;
     },
+    /** Opens a blind relay session for a stealth-jar DKG or signing round. */
+    stealthJarCreate: (accessToken: string, members: number) =>
+      request<StealthJarSession>(
+        '/api/v1/stealth-jars/sessions',
+        authorizedJson(accessToken, { members }),
+      ),
+    stealthJarJoin: (accessToken: string, invite: StealthJarInvite) =>
+      request<StealthJarMember>(
+        `/api/v1/stealth-jars/sessions/${encodeURIComponent(invite.sessionId)}/join`,
+        authorizedJson(accessToken, {}, undefined, { 'X-Jar-Invite': invite.inviteToken }),
+      ),
+    /** `to` 0 broadcasts. `data` must already be sealed or public-only. */
+    stealthJarSend: async (
+      accessToken: string,
+      invite: StealthJarInvite,
+      round: number,
+      to: number,
+      data: string,
+    ) => {
+      const init = authorizedJson(accessToken, { data }, undefined, {
+        'X-Jar-Invite': invite.inviteToken,
+      });
+      await send(
+        `/api/v1/stealth-jars/sessions/${encodeURIComponent(invite.sessionId)}/rounds/${round}/${to}`,
+        { ...init, method: 'PUT' },
+      );
+    },
+    stealthJarReceive: (accessToken: string, invite: StealthJarInvite, round: number) =>
+      request<StealthJarRelayMessage[]>(
+        `/api/v1/stealth-jars/sessions/${encodeURIComponent(invite.sessionId)}/rounds/${round}`,
+        authorized(accessToken, { headers: { 'X-Jar-Invite': invite.inviteToken } }),
+      ),
     /** Leaves a pairing message for the other device. */
     pairSend: async (pair: PairChannel, slot: PairSlot, message: PairMessage) => {
       await send(pairPath(pair, slot), {

@@ -15,6 +15,7 @@ export {
   createApiClient,
   isFeatureAvailable,
 } from './client';
+export * from './confidential-intents';
 export { ageEarnCatalog, formatEarnApy, isEarnCatalog, isEarnObservation } from './earn';
 export { isHyperliquidPerpsAccountState } from './hyperliquid';
 export {

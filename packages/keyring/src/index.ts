@@ -191,3 +191,4 @@ export * from './near';
 export * from './networks';
 export * from './pairing';
 export * from './sign';
+export * from './stealth-jar';
