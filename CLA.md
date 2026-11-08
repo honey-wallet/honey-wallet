@@ -6,7 +6,7 @@ Thank you for your interest in contributing to Honey Wallet. This Contributor Li
 
 ## 1. Definitions
 
-- **"We"**, **"us"** and **"Honey Wallet"** mean the owner of the Honey Wallet project hosted at <https://github.com/honey-wallet/monorepo>, together with its successors and assigns.
+- **"We"**, **"us"** and **"Honey Wallet"** mean the owner of the Honey Wallet project hosted at <https://github.com/honey-wallet/honey-wallet>, together with its successors and assigns.
 - **"You"** means the individual, or the legal entity on whose behalf an individual is acting, who submits a Contribution.
 - **"Project"** means the software, documentation and other materials that we own or manage, including the repository above.
 - **"Contribution"** means any work of authorship, including code, documentation, designs, translations, tests and other material, that You intentionally submit to us for inclusion in the Project, whether by pull request, patch, issue, comment or any other means. This includes modifications of and additions to existing work.

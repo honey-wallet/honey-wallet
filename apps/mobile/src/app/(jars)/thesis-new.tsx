@@ -10,6 +10,7 @@ import { SegmentedTabs } from '@/components/motion/SegmentedTabs';
 import { PillButton } from '@/components/onboarding/PillButton';
 import { SheetScreen } from '@/components/sheets/Sheet';
 import { tap } from '@/lib/haptics';
+import { describeRoute, sampleRoute } from '@/lib/jar-routes';
 import { formatUsd } from '@/lib/mock-wallet';
 import {
   createThesisJar,
@@ -34,6 +35,7 @@ import { DURATION } from '@/theme/motion';
 type Step = 'idea' | 'working' | 'proposal' | 'jar';
 const AMOUNTS = [100, 500, 1000];
 const FEES = [5, 10, 15, 20];
+const SLIPPAGES = [0.5, 1, 2];
 
 const VISIBILITY: { id: Visibility; icon: IconName; title: string; hint: string }[] = [
   { id: 'members', icon: 'lock', title: 'Only members', hint: 'Private to you and your friends' },
@@ -93,6 +95,7 @@ export default function NewThesisSheet() {
   const [friends, setFriends] = useState('');
   const [copyFee, setCopyFee] = useState(10);
   const [order, setOrder] = useState<OrderKind>('market');
+  const [maxSlip, setMaxSlip] = useState(1);
   const links = linksIn(text);
   const value = Number(amount) || 0;
 
@@ -201,7 +204,17 @@ export default function NewThesisSheet() {
           />
           <Facts
             facts={[
-              { label: 'Picks', value: String(proposal.picks.length) },
+              {
+                label: 'Est. slippage',
+                value: `${(
+                  (proposal.picks.reduce((s, p) => {
+                    const r = sampleRoute(p, (proposal.amount * p.weight) / 100, maxSlip / 100);
+                    return s + r.slippage * r.usd + r.bridgeUsd;
+                  }, 0) /
+                    Math.max(proposal.amount, 1)) *
+                    100
+                ).toFixed(2)}%`,
+              },
               { label: 'Est. fees', value: formatUsd(proposal.feesUsd) },
               {
                 label: 'Fee share',
@@ -228,6 +241,18 @@ export default function NewThesisSheet() {
                   }
                 />
                 <Text style={styles.why}>{p.reason}</Text>
+                {(() => {
+                  // Where this pick gets bought, split across chains for the best fill.
+                  const route = sampleRoute(p, (proposal.amount * p.weight) / 100, maxSlip / 100);
+                  return (
+                    <Text
+                      style={[styles.why, route.status === 'thin' && { color: c.error }]}
+                      numberOfLines={2}
+                    >
+                      {describeRoute(route)}
+                    </Text>
+                  );
+                })()}
               </View>
             ))}
           </View>
@@ -377,7 +402,7 @@ export default function NewThesisSheet() {
               first
               icon="clock"
               title="Now"
-              hint="At today's price, within 1% slippage"
+              hint={`At today's price, within ${maxSlip}% slippage, split across chains for the best fill`}
               selected={order === 'market'}
               onPress={() => setOrder('market')}
             />
@@ -388,6 +413,23 @@ export default function NewThesisSheet() {
               selected={order === 'limit'}
               onPress={() => setOrder('limit')}
             />
+          </View>
+          <Text style={styles.section}>Max slippage</Text>
+          <View style={styles.feeRow}>
+            {SLIPPAGES.map((sl) => (
+              <PressableScale
+                key={sl}
+                accessibilityRole="button"
+                accessibilityState={{ selected: maxSlip === sl }}
+                onPress={() => {
+                  tap();
+                  setMaxSlip(sl);
+                }}
+                style={[styles.choice, styles.flex, maxSlip === sl && styles.choiceOn]}
+              >
+                <Text style={styles.choiceText}>{sl}%</Text>
+              </PressableScale>
+            ))}
           </View>
 
           <View style={[styles.card, styles.row]}>
