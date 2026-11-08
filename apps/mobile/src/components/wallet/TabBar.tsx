@@ -33,10 +33,8 @@ const PILL_TABS: { name: string; icon: IconName; label: string }[] = [
   { name: 'trade', icon: 'trade', label: 'Swap' },
   // On the phone it's the browser (review), so a globe; the extension's tab is just search.
   // { name: 'search', icon: 'search', label: 'Search' },
-  // 2026-11-08: Search and Browse are hidden while Honey focuses on jars.
-  // isWeb
-  //   ? { name: 'search', icon: 'search', label: 'Search' }
-  //   : { name: 'search', icon: 'globe', label: 'Browse' },
+  // Search: explore tokens (and, on the phone, open a site by typing its address).
+  { name: 'search', icon: 'search', label: 'Search' },
   { name: 'activity', icon: 'history', label: 'Activity' },
 ];
 
