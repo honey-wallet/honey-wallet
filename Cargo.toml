@@ -44,7 +44,7 @@ sqlx-postgres = { version = "=0.8.6", default-features = false, features = ["uui
 siwe = { version = "0.6.1", default-features = false }
 time = { version = "0.3", features = ["formatting", "parsing"] }
 hex = "0.4"
-redis = { version = "0.32.7", default-features = false, features = ["tokio-rustls-comp", "connection-manager"] }
+redis = { version = "1.8.1", default-features = false, features = ["tokio-rustls-comp", "connection-manager"] }
 thiserror = "2.0"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "sync", "time"] }
 tower = { version = "0.5", features = ["util"] }
