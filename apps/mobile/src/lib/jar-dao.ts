@@ -8,15 +8,18 @@
 
 import type { JarDaoProposal, JarDaoState } from '@honey-wallet/api-client';
 import {
+  buyLegsOf,
+  checkThreshold,
   createNearRpc,
   type DepositFact,
   type FunctionCall,
   nearTransferOutcome,
   signNearCall,
   USDC_INTENTS,
+  USDC_NEAR,
   valueOfUnits,
 } from '@honey-wallet/keyring';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import { confirmOwner } from '@/lib/auth';
 import { backendSessionToken } from '@/lib/backend-session';
@@ -34,7 +37,10 @@ import {
   proposalId,
   type QuotedLeg,
   unitRecordTx,
+  verifyBuyWith1Click,
+  viewFtBalance,
   voteTx,
+  withdrawCheck,
   withdrawProposalTx,
 } from '@/lib/jar-dao-core';
 import {
@@ -200,6 +206,26 @@ export function memberValue(units: bigint, navMicro: bigint, totalUnits: bigint)
 
 const POLL_MS = 15_000;
 
+/** Your own USDC on NEAR (what Add can draw on), in dollars; null while loading. */
+export function useMyNearUsdc(enabled: boolean) {
+  const [usd, setUsd] = useState<number | null>(null);
+  useEffect(() => {
+    if (!enabled || TEST_MODE) return;
+    let live = true;
+    try {
+      viewFtBalance(rpc, USDC_NEAR, member().account)
+        .then((b) => live && setUsd(Number(b) / 1e6))
+        .catch(() => live && setUsd(0));
+    } catch {
+      setUsd(0);
+    }
+    return () => {
+      live = false;
+    };
+  }, [enabled]);
+  return usd;
+}
+
 /**
  * Keeps a shared jar's wallet in sync with the chain while a screen shows it, and
  * returns this device's view of its ownership. Does nothing in TEST_MODE or for
@@ -299,6 +325,8 @@ async function deposit(m: Multisig, usd: number) {
   const dao = m.dao as string;
   const me = member();
   const amount = toAtomic(usd);
+  if (amount > (await viewFtBalance(rpc, USDC_NEAR, me.account)))
+    throw new Error('You have less USDC on NEAR than that.');
   const d = depositTx(dao, amount, me.account);
   const hash = await send('Add to shared jar', d.receiverId, d.actions);
   const record = unitRecordTx({
@@ -349,6 +377,16 @@ async function buy(m: Multisig, action: Extract<ProposalAction, { type: 'jarBuy'
     })),
   });
   const legs: QuotedLeg[] = quote.legs;
+  // Never propose a blind transfer: 1Click must confirm each address pays the jar.
+  await verifyBuyWith1Click(
+    fetch,
+    m.dao as string,
+    legs.map((l) => ({
+      receiver: l.depositAddress,
+      tokenId: USDC_INTENTS,
+      amount: BigInt(l.amountIn),
+    })),
+  );
   // Record the assets the buy delivers so the jar's value includes them.
   const title = `Buy ${action.jar}\nassets:${[...merged.keys()].join(',')}`;
   const withAssets = buyProposalTx(m.dao as string, legs, title);
@@ -359,8 +397,47 @@ async function proposeOnChain(m: Multisig, action: ProposalAction) {
   if (action.type === 'jarAdd') return deposit(m, action.usd);
   if (action.type === 'jarWithdraw') return withdraw(m, action.usd);
   if (action.type === 'jarBuy') return buy(m, action);
-  const tx = configProposalTx(m.dao as string, action);
+  const tx = configProposalTx(m.dao as string, action, m.members.length);
   return proposeAndApprove(m, tx, 'Propose change');
+}
+
+/** Refuses to approve anything the app can't check is safe for the jar. */
+async function approvable(raw: JarDaoProposal, view: Awaited<ReturnType<typeof refreshJar>>) {
+  const nav = mintNavCheck(raw, view.raw.navMicroUsd);
+  if (nav) {
+    if (!nav.ok)
+      throw new Error(
+        nav.deviationBps === null
+          ? "Honey can't price this jar right now, so this share can't be checked. Try later."
+          : `This share states a jar value ${Number(nav.deviationBps) / 100}% off today's. Reject it.`,
+      );
+    return;
+  }
+  const legs = buyLegsOf(raw.kind);
+  if (legs) {
+    await verifyBuyWith1Click(fetch, view.raw.dao, legs);
+    return;
+  }
+  const w = withdrawCheck(
+    raw,
+    view.raw.navMicroUsd,
+    view.ledger.total,
+    view.ledger.units.get(raw.proposer) ?? 0n,
+  );
+  if (w) {
+    if (!w.ok) throw new Error(`Don't approve this withdrawal: ${w.why}.`);
+    return;
+  }
+  const k = raw.kind as Record<string, { vote_policy?: { threshold?: string } }> | string;
+  if (typeof k === 'object' && k) {
+    if ('AddMemberToRole' in k || 'RemoveMemberFromRole' in k) return;
+    const t = k.ChangePolicyUpdateDefaultVotePolicy?.vote_policy?.threshold;
+    if (t !== undefined) {
+      checkThreshold(Number(t), view.raw.members.length);
+      return;
+    }
+  }
+  throw new Error("Honey doesn't recognise this proposal. Reject it.");
 }
 
 async function voteOnChain(m: Multisig, p: Proposal, kind: 'approve' | 'reject') {
@@ -372,15 +449,7 @@ async function voteOnChain(m: Multisig, p: Proposal, kind: 'approve' | 'reject')
   // The executing vote of an expired buy would only refund; reject it and re-quote instead.
   if (kind === 'approve' && isFinalVote(raw, view.raw.threshold) && buyExpired(raw))
     throw new Error('The quote expired. Reject this buy and propose it again for a fresh price.');
-  if (kind === 'approve') {
-    const nav = mintNavCheck(raw, view.raw.navMicroUsd);
-    if (nav && !nav.ok)
-      throw new Error(
-        nav.deviationBps === null
-          ? "Honey can't price this jar right now, so this share can't be checked. Try later."
-          : `This share states a jar value ${Number(nav.deviationBps) / 100}% off today's. Reject it.`,
-      );
-  }
+  if (kind === 'approve') await approvable(raw, view);
   const action = kind === 'approve' ? 'VoteApprove' : 'VoteReject';
   const tx = voteTx(ref.dao, ref.id, action, raw.kind as never);
   await send(kind === 'approve' ? 'Approve' : 'Reject', tx.receiverId, tx.actions);

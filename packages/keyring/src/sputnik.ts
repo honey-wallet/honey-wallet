@@ -143,18 +143,43 @@ export const votePolicy = (threshold: number): VotePolicy => ({
   threshold: String(threshold),
 });
 
+/** Shared jars need at least 2 approvals once there are 2 members. */
+export function checkThreshold(threshold: number, members: number) {
+  if (!Number.isInteger(threshold) || threshold < 1 || threshold > members)
+    throw new Error('Threshold must be between 1 and the member count');
+  if (members >= 2 && threshold < 2) throw new Error('A shared jar needs at least 2 approvals');
+}
+
+/**
+ * Members may only propose the kinds Honey uses (Sputnik policy labels): FunctionCall
+ * (checked against an allowlist before anyone votes), unit records (Vote), adding or
+ * removing members and changing k. No Transfer, ChangeConfig, ChangePolicy, upgrades,
+ * bounties or role edits.
+ */
+export const JAR_PROPOSAL_KINDS = [
+  'function_call',
+  'vote',
+  'add_member_to_role',
+  'remove_member_from_role',
+  'policy_update_default_vote_policy',
+] as const;
+
 export function jarPolicy(members: string[], threshold: number) {
   const unique = [...new Set(members)];
   if (unique.length !== members.length || !members.length) throw new Error('Members must differ');
   if (!members.every(isNearAccountId)) throw new Error('Invalid member account');
-  if (!Number.isInteger(threshold) || threshold < 1 || threshold > members.length)
-    throw new Error('Threshold must be between 1 and the member count');
+  checkThreshold(threshold, members.length);
   return {
     roles: [
       {
         name: JAR_ROLE,
         kind: { Group: members },
-        permissions: ['*:AddProposal', '*:VoteApprove', '*:VoteReject', '*:VoteRemove'],
+        permissions: [
+          ...JAR_PROPOSAL_KINDS.map((k) => `${k}:AddProposal`),
+          '*:VoteApprove',
+          '*:VoteReject',
+          '*:VoteRemove',
+        ],
         vote_policy: {},
       },
     ],
@@ -250,9 +275,10 @@ export const addMemberKind = (member: string): ProposalKind => ({
 export const removeMemberKind = (member: string): ProposalKind => ({
   RemoveMemberFromRole: { member_id: member, role: JAR_ROLE },
 });
-export const thresholdKind = (threshold: number): ProposalKind => ({
-  ChangePolicyUpdateDefaultVotePolicy: { vote_policy: votePolicy(threshold) },
-});
+export function thresholdKind(threshold: number, members: number): ProposalKind {
+  checkThreshold(threshold, members);
+  return { ChangePolicyUpdateDefaultVotePolicy: { vote_policy: votePolicy(threshold) } };
+}
 
 export const addProposalCall = (description: string, kind: ProposalKind): FunctionCall => ({
   methodName: 'add_proposal',
@@ -380,8 +406,15 @@ export function unitLedger(
       total += minted;
     }
     if (r.t === 'burn' && p.status === 'Approved') {
+      // Only a burn bound to its own withdrawal counts (receiver = burner = proposer).
+      const w = withdrawOf(p.kind);
+      if (!w || w.receiver !== r.member || r.member !== p.proposer) continue;
       const held = units.get(r.member) ?? 0n;
-      const burned = BigInt(r.units) > held ? held : BigInt(r.units);
+      // Burn at least what the withdrawn amount was worth at the record's nav.
+      const nav = BigInt(r.nav);
+      const worth = nav > 0n ? (w.amount * total + nav - 1n) / nav : held;
+      const want = BigInt(r.units) > worth ? BigInt(r.units) : worth;
+      const burned = want > held ? held : want;
       units.set(r.member, held - burned);
       total -= burned;
     }
@@ -396,6 +429,52 @@ export function navDeviationBps(stated: bigint, reference: bigint) {
   return (diff * 10_000n) / reference;
 }
 export const NAV_TOLERANCE_BPS = 200n;
+
+const decodeArgs = (args: string) => {
+  try {
+    return JSON.parse(new TextDecoder().decode(base64.decode(args))) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+};
+
+/** A single ft_withdraw of NEAR USDC from intents.near, or null. */
+export function withdrawOf(kind: unknown): { receiver: string; amount: bigint } | null {
+  const fc = (
+    kind as {
+      FunctionCall?: { receiver_id: string; actions: { method_name: string; args: string }[] };
+    }
+  )?.FunctionCall;
+  if (!fc || fc.receiver_id !== INTENTS_CONTRACT || fc.actions.length !== 1) return null;
+  const a = fc.actions[0] as { method_name: string; args: string };
+  if (a.method_name !== 'ft_withdraw') return null;
+  const args = decodeArgs(a.args);
+  if (!args || args.token !== USDC_NEAR || typeof args.receiver_id !== 'string') return null;
+  if (typeof args.amount !== 'string' || !/^\d{1,38}$/.test(args.amount)) return null;
+  if (args.msg !== undefined) return null;
+  return { receiver: args.receiver_id, amount: BigInt(args.amount) };
+}
+
+/** Each mt_transfer leg of a buy: receiver, token and amount, or null if anything else is in it. */
+export function buyLegsOf(kind: unknown) {
+  const fc = (
+    kind as {
+      FunctionCall?: { receiver_id: string; actions: { method_name: string; args: string }[] };
+    }
+  )?.FunctionCall;
+  if (!fc || fc.receiver_id !== INTENTS_CONTRACT || !fc.actions.length) return null;
+  const legs: { receiver: string; tokenId: string; amount: bigint }[] = [];
+  for (const a of fc.actions) {
+    if (a.method_name !== 'mt_transfer') return null;
+    const args = decodeArgs(a.args);
+    if (!args || typeof args.receiver_id !== 'string' || typeof args.token_id !== 'string')
+      return null;
+    if (typeof args.amount !== 'string' || !/^\d{1,38}$/.test(args.amount)) return null;
+    if (args.msg !== undefined) return null;
+    legs.push({ receiver: args.receiver_id, tokenId: args.token_id, amount: BigInt(args.amount) });
+  }
+  return legs;
+}
 
 /** Members of the jar role, and its k, from get_policy. */
 export function readPolicy(policy: unknown): { members: string[]; threshold: number } {

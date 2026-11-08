@@ -48,7 +48,7 @@ pub struct DepositCheck {
     pub tx_hash: String,
     pub member: String,
     pub dao: String,
-    /// USDC atomic units the transfer moved (before any refund by intents.near).
+    /// USDC atomic units intents.near kept (ft_resolve_transfer), net of any refund.
     pub amount: String,
 }
 
@@ -282,7 +282,15 @@ pub fn check_deposit(
     if tx["hash"] != tx_hash || tx["signer_id"] != member || tx["receiver_id"] != USDC_NEAR {
         return Err(bad());
     }
-    if result["status"].get("SuccessValue").is_none() {
+    // ft_transfer_call's final value is ft_resolve_transfer's: the amount intents.near
+    // actually kept (base64 JSON string). A refunded deposit resolves to "0".
+    let used: u128 = result["status"]["SuccessValue"]
+        .as_str()
+        .and_then(|v| STANDARD.decode(v).ok())
+        .and_then(|v| serde_json::from_slice::<String>(&v).ok())
+        .and_then(|v| v.parse().ok())
+        .ok_or_else(bad)?;
+    if used == 0 {
         return Err(bad());
     }
     let call = &tx["actions"][0]["FunctionCall"];
@@ -297,15 +305,19 @@ pub fn check_deposit(
     if args["receiver_id"] != INTENTS || args["msg"] != dao {
         return Err(bad());
     }
-    let amount = args["amount"]
+    let sent: u128 = args["amount"]
         .as_str()
-        .filter(|a| !a.is_empty() && a.bytes().all(|b| b.is_ascii_digit()))
+        .filter(|a| !a.is_empty() && a.len() <= 38 && a.bytes().all(|b| b.is_ascii_digit()))
+        .and_then(|a| a.parse().ok())
         .ok_or_else(bad)?;
+    if used > sent {
+        return Err(bad());
+    }
     Ok(DepositCheck {
         tx_hash: tx_hash.into(),
         member: member.into(),
         dao: dao.into(),
-        amount: amount.into(),
+        amount: used.to_string(),
     })
 }
 
@@ -382,12 +394,16 @@ mod tests {
     }
 
     fn deposit_tx(msg: &str) -> Value {
+        deposit_tx_used(msg, "5000000")
+    }
+
+    fn deposit_tx_used(msg: &str, used: &str) -> Value {
         let args = STANDARD.encode(
             json!({ "receiver_id": INTENTS, "amount": "5000000", "msg": msg, "memo": "m" })
                 .to_string(),
         );
         json!({
-            "status": { "SuccessValue": "" },
+            "status": { "SuccessValue": STANDARD.encode(json!(used).to_string()) },
             "transaction": {
                 "hash": "h", "signer_id": MEMBER, "receiver_id": USDC_NEAR,
                 "actions": [{ "FunctionCall": { "method_name": "ft_transfer_call", "args": args } }]
@@ -401,6 +417,14 @@ mod tests {
         assert_eq!(ok.amount, "5000000");
         assert!(check_deposit(&deposit_tx("other.sputnik-dao.near"), "h", MEMBER, DAO).is_err());
         assert!(check_deposit(&deposit_tx(DAO), "h", "b.near", DAO).is_err());
+        assert!(check_deposit(&deposit_tx_used(DAO, "0"), "h", MEMBER, DAO).is_err());
+        assert_eq!(
+            check_deposit(&deposit_tx_used(DAO, "2000000"), "h", MEMBER, DAO)
+                .unwrap()
+                .amount,
+            "2000000"
+        );
+        assert!(check_deposit(&deposit_tx_used(DAO, "9000000"), "h", MEMBER, DAO).is_err());
         let mut failed = deposit_tx(DAO);
         failed["status"] = json!({ "Failure": {} });
         assert!(check_deposit(&failed, "h", MEMBER, DAO).is_err());

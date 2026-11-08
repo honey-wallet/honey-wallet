@@ -24,6 +24,7 @@ import {
   signNearCall,
   thresholdKind,
   USDC_INTENTS,
+  USDC_NEAR,
   unitLedger,
   unitsFor,
   valueOfUnits,
@@ -114,6 +115,13 @@ describe('Sputnik arguments', () => {
     expect(readPolicy(policy)).toEqual({ members: [signer, other], threshold: 2 });
     expect(() => jarPolicy([signer], 2)).toThrow('Threshold');
     expect(() => jarPolicy([signer, signer], 1)).toThrow('differ');
+    expect(() => jarPolicy([signer, other], 1)).toThrow('at least 2');
+    expect(jarPolicy([signer], 1).default_vote_policy.threshold).toBe('1');
+    expect(() => thresholdKind(1, 2)).toThrow('at least 2');
+    const perms = policy.roles[0]!.permissions;
+    expect(perms).not.toContain('*:AddProposal');
+    expect(perms).toContain('function_call:AddProposal');
+    expect(perms.some((p) => p.startsWith('transfer') || p.startsWith('upgrade'))).toBe(false);
   });
 
   it('wraps the DAO config and policy as base64 JSON for the factory', () => {
@@ -145,7 +153,7 @@ describe('Sputnik arguments', () => {
     });
     const w = withdrawKind('usdc.near', signer, '1');
     expect(JSON.stringify(w)).toContain('ft_withdraw');
-    const vote = decode(actProposalCall(3, 'VoteApprove', thresholdKind(2)).args);
+    const vote = decode(actProposalCall(3, 'VoteApprove', thresholdKind(2, 3)).args);
     expect(vote.proposal.ChangePolicyUpdateDefaultVotePolicy.vote_policy.threshold).toBe('2');
     expect(decode(depositCall('jar.sputnik-dao.near', 5n, 'm').args).msg).toBe(
       'jar.sputnik-dao.near',
@@ -164,12 +172,18 @@ describe('fund-style units', () => {
   });
 
   it('reads the ledger from proposals, counting only verified mints and executed burns', () => {
-    const p = (id: number, proposer: string, description: string, status = 'InProgress') =>
+    const p = (
+      id: number,
+      proposer: string,
+      description: string,
+      status = 'InProgress',
+      kind: unknown = 'Vote',
+    ) =>
       ({
         id,
         proposer,
         description,
-        kind: 'Vote',
+        kind,
         status,
         votes: {},
         submission_time: '0',
@@ -198,7 +212,23 @@ describe('fund-style units', () => {
         p(6, other, mint(other, '50', 'tx2', '150'), A), // reused tx hash
         p(7, other, mint(other, '30', 'bySigner', '150'), A), // wrong sender
         p(8, other, mint(other, '30', 'elsewhere', '150'), A), // another DAO
-        p(9, signer, encodeRecord({ v: 1, t: 'burn', member: signer, units: '40', nav: '1' }), A),
+        p(
+          9,
+          signer,
+          encodeRecord({ v: 1, t: 'burn', member: signer, units: '40', nav: '150' }),
+          A,
+          withdrawKind(USDC_NEAR, signer, '40'),
+        ),
+        // Burn names someone else while the withdrawal pays the proposer: ignored.
+        p(
+          13,
+          other,
+          encodeRecord({ v: 1, t: 'burn', member: signer, units: '1', nav: '110' }),
+          A,
+          withdrawKind(USDC_NEAR, other, '100'),
+        ),
+        // A burn record on a non-withdraw proposal: ignored.
+        p(14, other, encodeRecord({ v: 1, t: 'burn', member: other, units: '1', nav: '110' }), A),
         p(10, signer, encodeRecord({ v: 1, t: 'burn', member: signer, units: '40', nav: '1' })),
         // Low-nav record still awaiting votes: pending, not counted.
         p(11, other, mint(other, '1', 'small', '1')),
@@ -222,6 +252,22 @@ describe('fund-style units', () => {
       (tx) => facts[tx],
     );
     expect(approved.units.get(other)).toBe(1n);
+    // Understated burn: withdrawing $50 of a $100 jar burns half the units, not 1.
+    const under = unitLedger(
+      [
+        p(0, signer, mint(signer, '100', 'tx1'), A),
+        p(
+          1,
+          signer,
+          encodeRecord({ v: 1, t: 'burn', member: signer, units: '1', nav: '100' }),
+          A,
+          withdrawKind(USDC_NEAR, signer, '50'),
+        ),
+      ],
+      DAO,
+      (tx) => facts[tx],
+    );
+    expect(under.units.get(signer)).toBe(50n);
     expect(navDeviationBps(98n, 100n)).toBe(200n);
     expect(navDeviationBps(97n, 100n) > NAV_TOLERANCE_BPS).toBe(true);
     expect(decodeRecord('honey:{"v":1,"t":"mint","member":"x","units":"-1"}')).toBeNull();

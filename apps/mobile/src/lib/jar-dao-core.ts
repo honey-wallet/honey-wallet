@@ -33,7 +33,9 @@ import {
   unitLedger,
   unitsFor,
   type VoteAction,
+  valueOfUnits,
   withdrawKind,
+  withdrawOf,
 } from '@honey-wallet/keyring';
 import type { Member, Multisig, Proposal, ProposalAction } from '@/lib/multisig';
 
@@ -173,11 +175,12 @@ export const registerForUsdcTx = (member: string) => ({
   ],
 });
 
-export function configProposalTx(dao: string, action: ProposalAction) {
+export function configProposalTx(dao: string, action: ProposalAction, members?: number) {
   let kind: ProposalKind;
   if (action.type === 'addMember') kind = addMemberKind(action.member.address);
   else if (action.type === 'removeMember') kind = removeMemberKind(action.memberId);
-  else if (action.type === 'changeThreshold') kind = thresholdKind(action.threshold);
+  else if (action.type === 'changeThreshold')
+    kind = thresholdKind(action.threshold, members ?? action.threshold);
   else throw new Error('Jars have no daily limit or other settings');
   return { receiverId: dao, actions: [addProposalCall(describeConfig(action), kind)], kind };
 }
@@ -219,6 +222,94 @@ export function mintNavCheck(p: JarDaoProposal, referenceNavMicro: string | null
   return { ok: deviationBps <= NAV_TOLERANCE_BPS, deviationBps, record: r };
 }
 
+// ---------- Checks before proposing or approving ----------
+
+export const ONECLICK = 'https://1click.chaindefuser.com/v0';
+type Fetch = (url: string) => Promise<{ ok: boolean; json(): Promise<unknown> }>;
+
+/**
+ * Asks 1Click itself (not Honey's server) what each deposit address is for, and
+ * requires it to pay out to the jar: USDC from Intents, recipient and refundTo the
+ * DAO, the same amount, not expired. A buy proposal is otherwise a blind transfer.
+ */
+export async function verifyBuyWith1Click(
+  fetcher: Fetch,
+  dao: string,
+  legs: { receiver: string; tokenId: string; amount: bigint }[],
+  now = Date.now(),
+) {
+  if (!legs.length) throw new Error('This buy has no legs');
+  const out: { depositAddress: string; destinationAsset: string; amount: bigint }[] = [];
+  for (const leg of legs) {
+    if (leg.tokenId !== USDC_INTENTS) throw new Error('This buy spends something other than USDC');
+    const res = await fetcher(
+      `${ONECLICK}/status?depositAddress=${encodeURIComponent(leg.receiver)}`,
+    );
+    if (!res.ok) throw new Error(`1Click doesn't know ${leg.receiver}. Don't approve this buy.`);
+    const body = (await res.json()) as {
+      status?: string;
+      quoteResponse?: {
+        quoteRequest?: Record<string, unknown>;
+        quote?: Record<string, unknown>;
+      };
+    };
+    const req = body.quoteResponse?.quoteRequest ?? {};
+    const quote = body.quoteResponse?.quote ?? {};
+    const deadline = Date.parse(String(quote.deadline ?? req.deadline ?? ''));
+    const problems = [
+      quote.depositAddress !== leg.receiver && 'deposit address',
+      req.recipient !== dao && 'recipient',
+      req.refundTo !== dao && 'refund address',
+      req.originAsset !== USDC_INTENTS && 'paying asset',
+      req.depositType !== 'INTENTS' && 'deposit type',
+      req.recipientType !== 'INTENTS' && 'recipient type',
+      String(quote.amountIn ?? req.amount) !== leg.amount.toString() && 'amount',
+      !(deadline > now) && 'deadline',
+      body.status !== undefined && body.status !== 'PENDING_DEPOSIT' && 'status',
+    ].filter(Boolean);
+    if (problems.length)
+      throw new Error(`This buy doesn't match its 1Click quote (${problems.join(', ')}).`);
+    out.push({
+      depositAddress: leg.receiver,
+      destinationAsset: String(req.destinationAsset),
+      amount: leg.amount,
+    });
+  }
+  return out;
+}
+
+/**
+ * A withdrawal pays only its burner: one ft_withdraw of USDC to the proposer, whose
+ * burn record names them, burns no more units than they hold, and is worth at least
+ * the amount at today's jar value (2% tolerance).
+ */
+export function withdrawCheck(
+  p: JarDaoProposal,
+  referenceNavMicro: string | null,
+  totalUnits: bigint,
+  burnerUnits: bigint,
+) {
+  const w = withdrawOf(p.kind);
+  if (!w) return null;
+  const r = decodeRecord(p.description);
+  const fail = (why: string) => ({
+    ok: false as const,
+    why,
+    receiver: w.receiver,
+    amount: w.amount,
+  });
+  if (r?.t !== 'burn') return fail('it has no share record');
+  if (r.member !== p.proposer || w.receiver !== p.proposer)
+    return fail('it pays someone other than the member whose share it uses');
+  const units = BigInt(r.units);
+  if (units > burnerUnits) return fail('it uses more than their share');
+  if (referenceNavMicro === null || totalUnits <= 0n) return fail("the jar can't be priced");
+  const worth = valueOfUnits(units, BigInt(referenceNavMicro), totalUnits);
+  if (w.amount * 10_000n > worth * (10_000n + NAV_TOLERANCE_BPS))
+    return fail('it takes more than their share is worth');
+  return { ok: true as const, why: '', receiver: w.receiver, amount: w.amount };
+}
+
 export const isFinalVote = (p: JarDaoProposal, threshold: number) =>
   Object.values(p.votes).filter((v) => v === 'Approve').length + 1 >= threshold;
 
@@ -231,6 +322,21 @@ const ARGS = (a: { args: string }) => {
     return {};
   }
 };
+
+/** `ft_balance_of` as a view call; atomic units. */
+export async function viewFtBalance(rpc: Rpc, token: string, account: string) {
+  const res = (await rpc('query', {
+    request_type: 'call_function',
+    finality: 'final',
+    account_id: token,
+    method_name: 'ft_balance_of',
+    args_base64: btoa(JSON.stringify({ account_id: account })),
+  })) as { result?: number[] };
+  if (!Array.isArray(res.result)) throw new Error('Invalid NEAR view response');
+  const value = JSON.parse(new TextDecoder().decode(Uint8Array.from(res.result)));
+  if (typeof value !== 'string' || !/^\d{1,38}$/.test(value)) throw new Error('Invalid balance');
+  return BigInt(value);
+}
 
 /** What a Sputnik proposal means to the app, or null for records and unknown kinds. */
 export function actionOf(p: JarDaoProposal, jarName: string, usdc: (atomic: string) => number) {
@@ -259,7 +365,12 @@ export function actionOf(p: JarDaoProposal, jarName: string, usdc: (atomic: stri
     const methods = call.actions.map((a) => a.method_name);
     if (methods.every((m) => m === 'mt_transfer')) {
       const usd = call.actions.reduce((sum, a) => sum + usdc(ARGS(a).amount ?? '0'), 0);
-      const title = p.description.split('\n')[1] ?? '';
+      // Show where the money goes, not just the proposer's label.
+      const to = call.actions
+        .map((a) => ARGS(a).receiver_id ?? '?')
+        .map(short)
+        .join(', ');
+      const title = `${p.description.split('\n')[1] ?? 'Buy'} · pays ${to}`;
       return {
         type: 'jarBuy',
         jarId: '',
@@ -358,8 +469,20 @@ export function fromChain(input: {
   };
   const proposals: Proposal[] = [];
   for (const p of state.proposals) {
-    const action = actionOf(p, input.jarName, usdc);
-    if (!action) continue;
+    const known = actionOf(p, input.jarName, usdc);
+    const isRecord = p.kind === 'Vote' && !known;
+    if (isRecord) continue;
+    // Anything Honey doesn't recognise is shown, flagged, and never approved by the app.
+    const action: ProposalAction = known ?? {
+      type: 'appCall',
+      site: 'Unrecognised DAO proposal: do not approve',
+      network: 'NEAR',
+      native: 'NEAR',
+      to: typeof p.kind === 'object' && p.kind ? (Object.keys(p.kind)[0] ?? null) : null,
+      value: '0x0',
+      data: '0x',
+      usd: 0,
+    };
     const at = Number(BigInt(p.submission_time) / 1_000_000n);
     const votes = Object.entries(p.votes);
     proposals.push({

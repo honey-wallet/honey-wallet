@@ -1,5 +1,5 @@
 import type { JarDaoProposal, JarDaoState } from '@honey-wallet/api-client';
-import { encodeRecord, USDC_INTENTS } from '@honey-wallet/keyring';
+import { encodeRecord, USDC_INTENTS, USDC_NEAR, withdrawKind } from '@honey-wallet/keyring';
 import { base58, base64 } from '@scure/base';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -13,6 +13,9 @@ import {
   parseProposalId,
   prepare,
   unitRecordTx,
+  verifyBuyWith1Click,
+  viewFtBalance,
+  withdrawCheck,
 } from '@/lib/jar-dao-core';
 
 const ME = 'a'.repeat(64);
@@ -225,5 +228,109 @@ describe('unit records need member approval', () => {
     expect(mintNavCheck(rec('1'), '110000000')).toMatchObject({ ok: false });
     expect(mintNavCheck(rec('100000000'), null)).toMatchObject({ ok: false, deviationBps: null });
     expect(mintNavCheck(proposal({ description: 'x' }), '1')).toBeNull();
+  });
+});
+
+describe('audit checks', () => {
+  const quoteFor = (over: Record<string, unknown> = {}, quote: Record<string, unknown> = {}) => ({
+    ok: true,
+    json: async () => ({
+      status: 'PENDING_DEPOSIT',
+      quoteResponse: {
+        quoteRequest: {
+          recipient: DAO,
+          refundTo: DAO,
+          originAsset: USDC_INTENTS,
+          destinationAsset: 'nep141:wrap.near',
+          depositType: 'INTENTS',
+          recipientType: 'INTENTS',
+          amount: '5000000',
+          ...over,
+        },
+        quote: {
+          depositAddress: 'dep.near',
+          amountIn: '5000000',
+          deadline: '2026-11-10T00:00:00Z',
+          ...quote,
+        },
+      },
+    }),
+  });
+  const leg = { receiver: 'dep.near', tokenId: USDC_INTENTS, amount: 5_000_000n };
+  const now = Date.parse('2026-11-09T12:00:00Z');
+
+  it('accepts a buy only when 1Click confirms it pays the jar', async () => {
+    await expect(verifyBuyWith1Click(async () => quoteFor(), DAO, [leg], now)).resolves.toEqual([
+      { depositAddress: 'dep.near', destinationAsset: 'nep141:wrap.near', amount: 5_000_000n },
+    ]);
+    for (const [over, quote, why] of [
+      [{ recipient: 'thief.near' }, {}, 'recipient'],
+      [{ refundTo: 'thief.near' }, {}, 'refund'],
+      [{}, { amountIn: '1' }, 'amount'],
+      [{}, { deadline: '2026-11-09T00:00:00Z' }, 'deadline'],
+      [{}, { depositAddress: 'other.near' }, 'deposit address'],
+    ] as const)
+      await expect(
+        verifyBuyWith1Click(async () => quoteFor(over, quote), DAO, [leg], now),
+      ).rejects.toThrow(why);
+    await expect(
+      verifyBuyWith1Click(async () => ({ ok: false, json: async () => ({}) }), DAO, [leg], now),
+    ).rejects.toThrow("doesn't know");
+    await expect(
+      verifyBuyWith1Click(async () => quoteFor(), DAO, [{ ...leg, tokenId: 'nep141:x' }], now),
+    ).rejects.toThrow('other than USDC');
+  });
+
+  it('binds a withdrawal to its burner and their share', () => {
+    const w = (receiver: string, amount: string, member = ME, units = '50') =>
+      proposal({
+        proposer: ME,
+        kind: withdrawKind(USDC_NEAR, receiver, amount),
+        description: encodeRecord({ v: 1, t: 'burn', member, units, nav: '100' }),
+      });
+    // Jar $100 with 100 units; ME holds 60.
+    expect(withdrawCheck(w(ME, '50000000'), '100000000', 100n, 60n)?.ok).toBe(true);
+    expect(withdrawCheck(w(BOB, '50000000'), '100000000', 100n, 60n)?.why).toContain(
+      'someone other',
+    );
+    expect(withdrawCheck(w(ME, '50000000', BOB), '100000000', 100n, 60n)?.ok).toBe(false);
+    expect(withdrawCheck(w(ME, '90000000'), '100000000', 100n, 60n)?.why).toContain('more than');
+    expect(withdrawCheck(w(ME, '1', ME, '70'), '100000000', 100n, 60n)?.why).toContain('share');
+    expect(
+      withdrawCheck(proposal({ kind: withdrawKind(USDC_NEAR, ME, '1') }), '1', 1n, 1n)?.why,
+    ).toContain('no share record');
+    expect(withdrawCheck(proposal({}), '1', 1n, 1n)).toBeNull();
+  });
+
+  it('reads your NEAR USDC balance with a view call', async () => {
+    const bytes = [...new TextEncoder().encode('"12500000"')];
+    const rpc = vi.fn().mockResolvedValue({ result: bytes });
+    await expect(viewFtBalance(rpc, USDC_NEAR, ME)).resolves.toBe(12_500_000n);
+    expect(rpc).toHaveBeenCalledWith(
+      'query',
+      expect.objectContaining({ method_name: 'ft_balance_of', account_id: USDC_NEAR }),
+    );
+  });
+
+  it('flags proposals Honey does not recognise', () => {
+    const state: JarDaoState = {
+      dao: DAO,
+      members: [ME, BOB],
+      threshold: 2,
+      relayer: false,
+      navMicroUsd: null,
+      balances: [],
+      proposals: [proposal({ kind: { Transfer: { receiver_id: 'thief.near' } } })],
+    };
+    const view = fromChain({
+      walletId: 'w',
+      jarName: 'T',
+      state,
+      me: ME,
+      you: 'you',
+      deposit: () => undefined,
+    });
+    expect(view.proposals[0]?.action).toMatchObject({ type: 'appCall' });
+    expect(JSON.stringify(view.proposals[0]?.action)).toContain('do not approve');
   });
 });

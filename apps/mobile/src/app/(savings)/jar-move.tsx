@@ -10,7 +10,7 @@ import { applyKey, Keypad, PercentChips, TypedAmount } from '@/components/wallet
 import { LiveProposedPage } from '@/components/wallet/MultisigParts';
 import { EmptyState, TokenIcon } from '@/components/wallet/parts';
 import { success, tap } from '@/lib/haptics';
-import { memberValue, useDaoJar } from '@/lib/jar-dao';
+import { memberValue, useDaoJar, useMyNearUsdc } from '@/lib/jar-dao';
 import { moveJar, usdValue, useJars } from '@/lib/jars';
 import { formatUsd } from '@/lib/mock-wallet';
 import { type ProposalAction, propose, useSigner } from '@/lib/multisig';
@@ -38,6 +38,7 @@ function JarMoveSheetContent() {
   const jar = useJars().find((j) => j.id === id);
   const signer = useSigner();
   const jarLedger = useDaoJar(signer.multisig?.walletId);
+  const myNearUsdc = useMyNearUsdc(!!jarLedger);
   const [amount, setAmount] = useState('');
   const outcome = useFailure('jar');
   const [done, setDone] = useState(false);
@@ -58,7 +59,7 @@ function JarMoveSheetContent() {
       ? memberValue(jarLedger.myUnits, jarLedger.navMicro, jarLedger.totalUnits)
       : 0;
   const wallet = jarLedger
-    ? Number.MAX_SAFE_INTEGER
+    ? (myNearUsdc ?? 0)
     : signer.multisig
       ? signer.multisig.holdings
           .filter((h) => h.symbol === jar.symbol)
