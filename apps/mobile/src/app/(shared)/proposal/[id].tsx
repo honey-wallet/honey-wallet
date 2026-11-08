@@ -232,7 +232,13 @@ export default function ProposalSheet() {
   const idRows = (
     <>
       <StatRow
-        label={multisig.protocol === 'safe' ? 'Safe tx hash' : 'Squads proposal'}
+        label={
+          multisig.protocol === 'safe'
+            ? 'Safe tx hash'
+            : multisig.protocol === 'sputnik'
+              ? 'DAO proposal'
+              : 'Squads proposal'
+        }
         value={<Copyable value={ids.proposalHash} toast="Proposal ID copied" />}
       />
       {/* Slides open when the last signature sends it. */}
@@ -397,7 +403,7 @@ export default function ProposalSheet() {
         <Text style={[styles.groupTitle, styles.groupGap]}>Transaction</Text>
         <View style={styles.group}>
           <StatRow
-            label={multisig.protocol === 'safe' ? 'Safe tx hash' : 'Squads proposal'}
+            label={multisig.protocol === 'safe' ? 'Safe tx hash' : multisig.protocol === 'sputnik' ? 'DAO proposal' : 'Squads proposal'}
             value={<Copyable value={ids.proposalHash} toast="Proposal ID copied" />}
           />
           <Accordion open={executed}>

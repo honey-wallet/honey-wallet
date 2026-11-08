@@ -4,6 +4,7 @@ pub mod capabilities;
 pub mod health;
 pub mod identity;
 pub mod jar_buys;
+pub mod jar_dao;
 pub mod market;
 pub mod near_intents;
 pub mod operations;

@@ -27,7 +27,8 @@ import {
 
 /** Why the wallet exists; sets the wording, suggested members and default rule. */
 export type MultisigPurpose = 'vault' | 'family' | 'team';
-export type MultisigProtocol = 'safe' | 'squads';
+/** Safe (EVM), Squads (Solana) or a Sputnik DAO on NEAR (shared jars). */
+export type MultisigProtocol = 'safe' | 'squads' | 'sputnik';
 
 /**
  * Who (or what) holds one of the keys. In a vault every member is you: this phone,
@@ -51,6 +52,8 @@ export type MultisigHolding = { symbol: string; chain: Chain; amount: number; us
 export type MultisigNetwork = { name: string; chainId: number | null; native: string };
 
 export const SOLANA_NETWORK: MultisigNetwork = { name: 'Solana', chainId: null, native: 'SOL' };
+/** Shared jars: a Sputnik DAO on NEAR mainnet. */
+export const NEAR_NETWORK: MultisigNetwork = { name: 'NEAR', chainId: null, native: 'NEAR' };
 
 export type Multisig = {
   walletId: string;
@@ -64,6 +67,8 @@ export type Multisig = {
   dailyLimit: number | null;
   spentToday: number;
   holdings: MultisigHolding[];
+  /** Shared jars on NEAR: the Sputnik DAO account; the chain is the source of truth. */
+  dao?: string;
 };
 
 type Amount = { symbol: string; amount: number };
@@ -158,19 +163,21 @@ export const PURPOSES: Record<
   },
 };
 
-/** A network's protocol: Squads on Solana, Safe everywhere else. */
+/** A network's protocol: Sputnik on NEAR, Squads on Solana, Safe everywhere else. */
 export const protocolFor = (n: MultisigNetwork): MultisigProtocol =>
-  n.chainId === null ? 'squads' : 'safe';
+  n.name === 'NEAR' ? 'sputnik' : n.chainId === null ? 'squads' : 'safe';
 
 /** Rough one-time setup cost, where known; elsewhere just the network fee. */
 export function setupCost(n: MultisigNetwork) {
+  if (n.name === 'NEAR') return '≈ 0.1 NEAR';
   if (n.chainId === null) return '0.003 SOL';
   if (n.chainId === 1) return '≈ $4.80';
   if (n.chainId === 8453 || n.chainId === 10 || n.chainId === 42161) return '≈ $0.05';
   return `A small ${n.native} network fee`;
 }
 
-export const protocolName = (p: MultisigProtocol) => (p === 'safe' ? 'Safe' : 'Squads');
+export const protocolName = (p: MultisigProtocol) =>
+  p === 'safe' ? 'Safe' : p === 'sputnik' ? 'Sputnik DAO' : 'Squads';
 
 /** The default rule for a group: a majority, so one lost key never locks anyone out. */
 export const recommendedThreshold = (members: number) =>
@@ -588,6 +595,32 @@ const trim = (n: number) => (n >= 1 ? Number(n.toFixed(4)) : Number(n.toPrecisio
 // ---------------------------------------------------------------------------
 // Acting
 
+/**
+ * Shared jars on NEAR go to the chain instead of this in-memory demo. `jar-dao.ts`
+ * registers itself here (it imports this module, so the hook avoids a cycle).
+ */
+export type DaoBackend = {
+  propose(m: Multisig, action: ProposalAction): Promise<void>;
+  vote(m: Multisig, p: Proposal, kind: 'approve' | 'reject'): Promise<void>;
+};
+let daoBackend: DaoBackend | null = null;
+export const setDaoBackend = (b: DaoBackend | null) => {
+  daoBackend = b;
+};
+const onChain = (m: Multisig | undefined) => !TEST_MODE && !!m?.dao;
+function daoFailed(error: unknown) {
+  showToast(error instanceof Error ? error.message : 'NEAR transaction failed');
+}
+
+/** Replaces a DAO jar's members, rule and proposals with what the chain says. */
+export function syncDaoJar(multisig: Multisig, proposals: Proposal[]) {
+  store.set((s) => ({
+    ...s,
+    multisigs: { ...s.multisigs, [multisig.walletId]: multisig },
+    proposals: [...s.proposals.filter((p) => p.walletId !== multisig.walletId), ...proposals],
+  }));
+}
+
 let seq = 0;
 const nextId = (prefix: string) => `${prefix}-${Date.now()}-${seq++}`;
 
@@ -632,6 +665,13 @@ function applyEffect(m: Multisig, action: ProposalAction): Multisig {
 
 /** Records a vote, and executes or rejects the proposal once the outcome is certain. */
 function vote(proposalId: string, memberId: string, kind: 'approve' | 'reject') {
+  const current = store.get().proposals.find((x) => x.id === proposalId);
+  const owner = current && store.get().multisigs[current.walletId];
+  if (current && owner && onChain(owner)) {
+    if (!daoBackend) throw new Error(NOT_AVAILABLE);
+    daoBackend.vote(owner, current, kind).catch(daoFailed);
+    return 'pending' as Proposal['status'];
+  }
   let outcome = 'pending' as Proposal['status'];
   store.set((s) => {
     const p = s.proposals.find((x) => x.id === proposalId);
@@ -711,6 +751,23 @@ export function propose(walletId: string, action: ProposalAction) {
   const s = store.get();
   const m = s.multisigs[walletId];
   if (!m) throw new Error(`No shared wallet ${walletId}`);
+  if (onChain(m)) {
+    if (!daoBackend) throw new Error(NOT_AVAILABLE);
+    // The chain assigns the proposal; the jar re-syncs once it lands.
+    const pending: Proposal = {
+      id: nextId('p'),
+      walletId,
+      nonce: 0,
+      action,
+      createdBy: YOU,
+      createdAt: Date.now(),
+      approvals: [],
+      rejections: [],
+      status: 'pending',
+    };
+    daoBackend.propose(m, action).catch(daoFailed);
+    return { proposal: pending, executed: false };
+  }
   const at = Date.now();
   const nonce =
     Math.max(0, ...s.proposals.filter((p) => p.walletId === walletId).map((p) => p.nonce)) + 1;

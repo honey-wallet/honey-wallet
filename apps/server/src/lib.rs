@@ -25,6 +25,7 @@ pub mod http_runtime;
 pub mod hyperliquid_perps;
 pub mod identity;
 pub mod jar_buys;
+pub mod jar_dao;
 pub mod market_data;
 pub mod markets;
 pub mod metrics;
@@ -292,14 +293,27 @@ fn jar_buys_router(
     identity: Option<identity::Identity>,
     market: Option<std::sync::Arc<market_data::MarketData>>,
 ) -> Router {
-    let Some(market) = market else {
-        return Router::new();
-    };
-    match jar_buys::JarBuys::from_env(market) {
-        Ok(buys) => routes::jar_buys::router(identity, std::sync::Arc::new(buys)),
+    let buys = market.and_then(|market| match jar_buys::JarBuys::from_env(market) {
+        Ok(buys) => Some(std::sync::Arc::new(buys)),
         Err(error) => {
             tracing::error!(%error, "jar buys disabled");
-            Router::new()
+            None
+        }
+    });
+    let router = match &buys {
+        Some(buys) => routes::jar_buys::router(identity.clone(), buys.clone()),
+        None => Router::new(),
+    };
+    // Shared jar DAOs: chain reads and INTENTS quotes; works without market data for reads.
+    match jar_dao::JarDao::from_env() {
+        Ok(dao) => router.merge(routes::jar_dao::router(
+            identity,
+            std::sync::Arc::new(dao),
+            buys,
+        )),
+        Err(error) => {
+            tracing::error!(%error, "jar DAOs disabled");
+            router
         }
     }
 }

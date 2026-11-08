@@ -49,6 +49,9 @@ import type {
   JarBuyQuote,
   JarBuyRequest,
   JarBuyStatus,
+  JarDaoBuyRequest,
+  JarDaoDepositCheck,
+  JarDaoState,
   MorphoIntent,
   NewPool,
   PairChannel,
@@ -241,6 +244,25 @@ export function createApiClient({ baseUrl, fetch: fetchImpl = fetch }: ApiClient
         `/api/v1/jar-buys/status?depositAddress=${encodeURIComponent(depositAddress)}`,
         authorized(token, init),
       ),
+    /** A shared jar DAO's members, threshold, proposals and Intents balances. */
+    jarDaoState: (token: string, dao: string, tokens?: string[], init?: RequestInit) =>
+      request<JarDaoState>(
+        `/api/v1/jar-dao/state?dao=${encodeURIComponent(dao)}${
+          tokens?.length ? `&tokens=${encodeURIComponent(tokens.join(','))}` : ''
+        }`,
+        authorized(token, init),
+      ),
+    jarDaoVerifyDeposit: (
+      token: string,
+      input: { txHash: string; member: string; dao: string },
+      init?: RequestInit,
+    ) =>
+      request<JarDaoDepositCheck>(
+        `/api/v1/jar-dao/verify-deposit?${new URLSearchParams(input).toString()}`,
+        authorized(token, init),
+      ),
+    jarDaoBuyQuote: (token: string, input: JarDaoBuyRequest, init?: RequestInit) =>
+      request<JarBuyQuote>('/api/v1/jar-dao/buy-quote', authorizedJson(token, input, init)),
     startThesis: (token: string, input: StartThesis, init?: RequestInit) =>
       validated('/api/v1/theses', isThesisStarted, authorizedJson(token, input, init)),
     thesis: (token: string, runId: string, init?: RequestInit) =>

@@ -19,7 +19,15 @@ import { useCopy } from '@/lib/copy';
 import { tap } from '@/lib/haptics';
 import { LOADS } from '@/lib/loads';
 import { formatAmount, formatUsd, shortAddress } from '@/lib/mock-wallet';
-import { memberName, PURPOSES, propose, useMultisig, useProposals, YOU } from '@/lib/multisig';
+import {
+  memberName,
+  PURPOSES,
+  propose,
+  protocolName,
+  useMultisig,
+  useProposals,
+  YOU,
+} from '@/lib/multisig';
 import { useProfile } from '@/lib/profile';
 import { receiveAddresses } from '@/lib/receive';
 import { showToast } from '@/lib/toast';
@@ -82,11 +90,13 @@ export default function MultisigScreen() {
     tap();
     const chainId = multisig.network.chainId;
     const url =
-      multisig.protocol === 'squads'
-        ? 'https://app.squads.so'
-        : address && chainId !== null && SAFE_PREFIX[chainId]
-          ? `https://app.safe.global/home?safe=${SAFE_PREFIX[chainId]}:${address}`
-          : 'https://app.safe.global';
+      multisig.protocol === 'sputnik' && multisig.dao
+        ? `https://nearblocks.io/address/${multisig.dao}`
+        : multisig.protocol === 'squads'
+          ? 'https://app.squads.so'
+          : address && chainId !== null && SAFE_PREFIX[chainId]
+            ? `https://app.safe.global/home?safe=${SAFE_PREFIX[chainId]}:${address}`
+            : 'https://app.safe.global';
     Linking.openURL(url).catch(() => {});
   };
 
@@ -244,9 +254,7 @@ export default function MultisigScreen() {
       )}
 
       <PressableScale onPress={viewOnline} scaleTo={0.98} style={styles.external}>
-        <Text style={styles.externalText}>
-          View on {multisig.protocol === 'safe' ? 'Safe' : 'Squads'}
-        </Text>
+        <Text style={styles.externalText}>View on {protocolName(multisig.protocol)}</Text>
         <Icon name="link" size={13} color={c.textSecondary} />
       </PressableScale>
     </PushedScreen>

@@ -1,5 +1,7 @@
 // Must come first: WalletConnect's polyfills (a no-op in the browser).
 import '@/lib/walletconnect-compat';
+// Registers the NEAR shared-jar (Sputnik DAO) backend with the multisig store.
+import '@/lib/jar-dao';
 import * as Notifications from 'expo-notifications';
 import { DarkTheme, DefaultTheme, router, Stack, type Theme, ThemeProvider } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';

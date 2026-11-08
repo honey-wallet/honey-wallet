@@ -1,3 +1,4 @@
+import { isNearAccountId, jarDaoName } from '@honey-wallet/keyring';
 import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
 import {
@@ -29,6 +30,7 @@ import { EmptyState } from '@/components/wallet/parts';
 import { SearchField } from '@/components/wallet/SearchField';
 import { type EvmChain, loadEvmChains, matchesChain, POPULAR_EVM } from '@/lib/evm-chains';
 import { success, tap } from '@/lib/haptics';
+import { createSharedJar } from '@/lib/jar-dao';
 import { RECENT_RECIPIENTS, shortAddress } from '@/lib/mock-wallet';
 import {
   createMultisig,
@@ -36,6 +38,7 @@ import {
   type MemberKind,
   type MultisigNetwork,
   type MultisigPurpose,
+  NEAR_NETWORK,
   newMemberId,
   protocolFor,
   protocolName,
@@ -165,7 +168,12 @@ export default function NewMultisigSheet() {
   };
 
   const squads = protocolFor(network) === 'squads';
-  const entryValid = squads ? isSolanaAddress(entry) : isEvmAddress(entry);
+  const entryValid =
+    protocolFor(network) === 'sputnik'
+      ? isNearAccountId(entry.trim())
+      : squads
+        ? isSolanaAddress(entry)
+        : isEvmAddress(entry);
   const addPerson = (value: string, label?: string) => {
     const v = value.trim();
     if (members.some((m) => m.address === v)) return;
@@ -185,6 +193,24 @@ export default function NewMultisigSheet() {
 
   const outcome = useFailure('multisig');
   const create = () => {
+    if (!TEST_MODE && protocolFor(network) === 'sputnik') {
+      // Shared jar: a Sputnik DAO on NEAR. People are added by NEAR account.
+      createSharedJar({
+        name: jarDaoName(name),
+        members: members.filter((m) => m.kind === 'person').map((m) => m.address),
+        threshold,
+      })
+        .then((jar) => {
+          success();
+          setWalletId(jar.walletId);
+          setPage('done');
+        })
+        .catch((error) => {
+          showToast(error instanceof Error ? error.message : 'Could not create the jar');
+          setPage('failed');
+        });
+      return;
+    }
     if (!TEST_MODE) {
       showToast(NOT_AVAILABLE);
       return;
@@ -306,9 +332,11 @@ export default function NewMultisigSheet() {
                     list.filter(
                       (m) =>
                         m.kind !== 'person' ||
-                        (protocolFor(n) === 'squads'
-                          ? isSolanaAddress(m.address)
-                          : isEvmAddress(m.address)),
+                        (protocolFor(n) === 'sputnik'
+                          ? isNearAccountId(m.address)
+                          : protocolFor(n) === 'squads'
+                            ? isSolanaAddress(m.address)
+                            : isEvmAddress(m.address)),
                     ),
                   );
                   go('members');
@@ -609,6 +637,7 @@ function NetworkPage({
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
+        {showSolana ? row(NEAR_NETWORK, `Sputnik DAO · ${setupCost(NEAR_NETWORK)}`) : null}
         {showSolana ? row(SOLANA_NETWORK, `Squads · ${setupCost(SOLANA_NETWORK)}`) : null}
         <SheetSection title={searching ? 'EVM networks' : 'Popular EVM networks'} />
         {evm
