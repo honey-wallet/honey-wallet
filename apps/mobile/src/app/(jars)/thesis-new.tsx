@@ -10,8 +10,10 @@ import { SegmentedTabs } from '@/components/motion/SegmentedTabs';
 import { PillButton } from '@/components/onboarding/PillButton';
 import { SheetScreen } from '@/components/sheets/Sheet';
 import { tap } from '@/lib/haptics';
+import { type BuyLeg, payJarBuy, quoteJarBuy } from '@/lib/jar-buy';
 import { describeRoute, useRoutes } from '@/lib/jar-routes';
 import { formatUsd } from '@/lib/mock-wallet';
+import { TEST_MODE } from '@/lib/test-mode';
 import {
   createThesisJar,
   hostOf,
@@ -119,17 +121,35 @@ export default function NewThesisSheet() {
     setStep('proposal');
   };
 
-  const create = () => {
-    if (!proposal) return;
+  const [buying, setBuying] = useState(false);
+  const create = async () => {
+    if (!proposal || buying) return;
     tap();
-    const id = createThesisJar(proposal, {
+    const options = {
       name: name.trim() || 'My jar',
       visibility,
       friends: friendList(friends),
       copyFee: visibility === 'members' ? 0 : copyFee,
       order,
-    });
-    showToast('Jar created');
+    };
+    // Real buys: on your own, at market, outside test mode. Everything else is saved
+    // as a plan (shared and limit buys aren't live yet).
+    const real = !TEST_MODE && order === 'market' && !options.friends.length;
+    let buy: BuyLeg[] | undefined;
+    if (real) {
+      setBuying(true);
+      try {
+        const quoted = await quoteJarBuy(routes, maxSlip / 100);
+        buy = await payJarBuy(quoted.legs);
+      } catch (error) {
+        setBuying(false);
+        showToast(error instanceof Error ? error.message : 'Buy failed');
+        return;
+      }
+      setBuying(false);
+    }
+    const id = createThesisJar(proposal, { ...options, buy });
+    showToast(buy ? 'Paid. Swaps are on their way' : 'Jar created');
     router.replace({ pathname: '/jar/[id]', params: { id } });
   };
 
@@ -298,12 +318,14 @@ export default function NewThesisSheet() {
           <View style={styles.footer}>
             <PillButton
               label={
-                people.length
-                  ? `Invite and buy ${formatUsd(share)}`
-                  : `Buy ${formatUsd(proposal.amount)} and launch`
+                buying
+                  ? 'Paying…'
+                  : people.length
+                    ? `Invite and buy ${formatUsd(share)}`
+                    : `Buy ${formatUsd(proposal.amount)} and launch`
               }
-              disabled={!name.trim()}
-              onPress={create}
+              disabled={!name.trim() || buying}
+              onPress={() => void create()}
             />
             <Text style={styles.footnote}>You sign every order. Honey never holds your keys.</Text>
           </View>

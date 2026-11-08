@@ -23,6 +23,7 @@ pub mod evm_envelope;
 pub mod http_runtime;
 pub mod hyperliquid_perps;
 pub mod identity;
+pub mod jar_buys;
 pub mod market_data;
 pub mod markets;
 pub mod metrics;
@@ -200,6 +201,7 @@ fn router(config: &Config, health: runtime::RuntimeHealth, services: RouterServi
         public_markets
     };
 
+    let market = market_data();
     let mut api = routes::v1::router(config)
         .merge(routes::earn::router(earn))
         .merge(public_markets)
@@ -208,7 +210,12 @@ fn router(config: &Config, health: runtime::RuntimeHealth, services: RouterServi
             capability_adapters,
         ))
         .merge(routes::prices::router(markets, health.clone(), config))
-        .merge(market_router())
+        .merge(
+            market
+                .clone()
+                .map(routes::market::router)
+                .unwrap_or_default(),
+        )
         .merge(routes::pairing::router_with_proxies(
             config.trust_proxy_headers,
             config.trusted_proxy_cidrs.clone(),
@@ -237,6 +244,7 @@ fn router(config: &Config, health: runtime::RuntimeHealth, services: RouterServi
         .merge(routes::near_intents::router(identity.clone(), near_intents))
         .merge(routes::relay_quotes::router(identity.clone(), relay_quotes))
         .merge(theses_router(identity.clone()))
+        .merge(jar_buys_router(identity.clone(), market.clone()))
         .merge(routes::aave::router(identity.clone(), aave))
         .merge(routes::morpho::router(identity.clone(), morpho))
         .merge(routes::hyperliquid::router(identity.clone(), redis.clone()))
@@ -272,12 +280,25 @@ fn router(config: &Config, health: runtime::RuntimeHealth, services: RouterServi
         .layer(cors)
 }
 
-/// Public jar market data (DexScreener, GeckoTerminal). Builds offline; fetches lazily.
-fn market_router() -> Router {
-    match market_data::MarketData::new() {
-        Ok(market) => routes::market::router(market),
+/// Public jar market data (DexScreener, GeckoTerminal, 1Click tokens). Builds offline.
+fn market_data() -> Option<std::sync::Arc<market_data::MarketData>> {
+    market_data::MarketData::new()
+        .map_err(|error| tracing::error!(%error, "market data disabled"))
+        .ok()
+}
+
+/// Real jar buys through NEAR Intents; needs market data for prices and the cap.
+fn jar_buys_router(
+    identity: Option<identity::Identity>,
+    market: Option<std::sync::Arc<market_data::MarketData>>,
+) -> Router {
+    let Some(market) = market else {
+        return Router::new();
+    };
+    match jar_buys::JarBuys::from_env(market) {
+        Ok(buys) => routes::jar_buys::router(identity, std::sync::Arc::new(buys)),
         Err(error) => {
-            tracing::error!(%error, "market data disabled");
+            tracing::error!(%error, "jar buys disabled");
             Router::new()
         }
     }

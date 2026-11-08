@@ -46,6 +46,9 @@ import type {
   Capabilities,
   Health,
   HyperliquidPerpsAccountState,
+  JarBuyQuote,
+  JarBuyRequest,
+  JarBuyStatus,
   MorphoIntent,
   NewPool,
   PairChannel,
@@ -221,6 +224,22 @@ export function createApiClient({ baseUrl, fetch: fetchImpl = fetch }: ApiClient
       request<{ closes: number[] }>(
         `/api/v1/market/history?chain=${encodeURIComponent(chain)}&pool=${encodeURIComponent(pool)}`,
         init,
+      ),
+    /** Live NEAR Intents quotes for a jar buy, each with a one-time deposit address. */
+    jarBuyQuote: (token: string, input: JarBuyRequest, init?: RequestInit) =>
+      request<JarBuyQuote>('/api/v1/jar-buys/quote', authorizedJson(token, input, init)),
+    /** Tells NEAR Intents which transaction paid a deposit address. */
+    jarBuyDeposit: async (
+      token: string,
+      input: { depositAddress: string; txHash: string },
+      init?: RequestInit,
+    ) => {
+      await send('/api/v1/jar-buys/deposit', authorizedJson(token, input, init));
+    },
+    jarBuyStatus: (token: string, depositAddress: string, init?: RequestInit) =>
+      request<JarBuyStatus>(
+        `/api/v1/jar-buys/status?depositAddress=${encodeURIComponent(depositAddress)}`,
+        authorized(token, init),
       ),
     startThesis: (token: string, input: StartThesis, init?: RequestInit) =>
       validated('/api/v1/theses', isThesisStarted, authorizedJson(token, input, init)),

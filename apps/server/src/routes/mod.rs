@@ -3,6 +3,7 @@ pub mod account_identity;
 pub mod capabilities;
 pub mod health;
 pub mod identity;
+pub mod jar_buys;
 pub mod market;
 pub mod near_intents;
 pub mod operations;
