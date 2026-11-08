@@ -67,6 +67,6 @@ Run URL.
 
 ## 6. App builds (EAS)
 
-The app is linked to EAS project `50cea8fa-f380-421c-8c50-84d29bc0b824`
+The app is linked to EAS project `87e18b01-4634-4131-8172-27b964f999d4`
 (`apps/mobile/app.json`). Log in once with `pnpm dlx eas-cli login`, then build from
 `apps/mobile` with `pnpm dlx eas-cli build --profile <profile> --platform <ios|android>`.
