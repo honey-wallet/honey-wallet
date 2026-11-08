@@ -1,6 +1,7 @@
 pub mod aave;
 pub mod account_identity;
 pub mod capabilities;
+pub mod confidential_intents;
 pub mod health;
 pub mod identity;
 pub mod jar_buys;

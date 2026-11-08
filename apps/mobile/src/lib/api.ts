@@ -8,7 +8,7 @@ const SERVER_PORT = 8080;
  * (e.g. `192.168.1.20:8081`), so the same build works on simulators,
  * emulators and physical devices without editing config.
  */
-function resolveBaseUrl(): string {
+export function resolveBaseUrl(): string {
   const fromEnv = process.env.EXPO_PUBLIC_API_URL;
   if (fromEnv) return fromEnv;
 

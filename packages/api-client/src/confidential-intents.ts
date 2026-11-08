@@ -217,43 +217,72 @@ export interface ConfidentialBalance {
   source: 'private';
 }
 
-export function createConfidentialIntents(
-  apiKey: string | undefined,
-  fetcher: typeof fetch = fetch,
-) {
-  async function call<T>(path: string, init: RequestInit & { bearer?: string } = {}) {
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (init.bearer) headers.Authorization = `Bearer ${init.bearer}`;
-    // Without a partner key 1Click still works, with an extra 0.25% platform fee.
-    else if (apiKey) headers['X-API-Key'] = apiKey;
-    const response = await fetcher(`${ONE_CLICK_BASE}${path}`, { ...init, headers });
+export interface ConfidentialIntentsOptions {
+  /** Honey API origin; partner-key calls go through its signed-in proxy. */
+  apiBaseUrl: string;
+  /** Honey bearer session for the proxy (per-user rate limits). */
+  token: () => string;
+  fetcher?: typeof fetch;
+}
+
+/**
+ * Calls that need Honey's 1Click partner key (quote, generate-intent, submit-intent,
+ * auth) go through `POST /api/v1/confidential-intents/<call>`, where the server adds the
+ * key: it never ships in the app. `/v0/status` and `/v0/account/balances` (the user's
+ * own session token) go to 1Click directly, keyless. The device still checks every quote
+ * and intent it signs.
+ */
+export function createConfidentialIntents({
+  apiBaseUrl,
+  token,
+  fetcher = fetch,
+}: ConfidentialIntentsOptions) {
+  async function send<T>(url: string, label: string, init: RequestInit, bearer: string) {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${bearer}`,
+    };
+    const response = await fetcher(url, { ...init, headers });
+    if (!response.ok) throw new Error(`1Click ${label} failed (${response.status})`);
+    return (await response.json()) as T;
+  }
+  const base = apiBaseUrl.replace(/\/+$/, '');
+  const post = <T>(call: string, body: unknown) =>
+    send<T>(
+      `${base}/api/v1/confidential-intents/${call}`,
+      `/v0/${call}`,
+      { method: 'POST', body: JSON.stringify(body) },
+      token(),
+    );
+  async function direct<T>(path: string, bearer?: string) {
+    const headers: Record<string, string> = { accept: 'application/json' };
+    if (bearer) headers.Authorization = `Bearer ${bearer}`;
+    const response = await fetcher(`${ONE_CLICK_BASE}${path}`, { headers });
     if (!response.ok) throw new Error(`1Click ${path} failed (${response.status})`);
     return (await response.json()) as T;
   }
-  const post = <T>(path: string, body: unknown) =>
-    call<T>(path, { method: 'POST', body: JSON.stringify(body) });
   return {
     quote: (body: ConfidentialQuoteRequest) =>
-      post<{ quote: { depositAddress: string; depositMemo?: string } }>('/v0/quote', body),
+      post<{ quote: { depositAddress: string; depositMemo?: string } }>('quote', body),
     generateIntent: (depositAddress: string, signerId: string) =>
       post<{ intent: unknown; correlationId: string }>(
-        '/v0/generate-intent',
+        'generate-intent',
         generateIntentRequest(depositAddress, signerId),
       ),
     submitIntent: (signed: RawEd25519SignedData) =>
       post<{ intentHash: string; correlationId: string }>(
-        '/v0/submit-intent',
+        'submit-intent',
         submitIntentRequest(signed),
       ),
     status: (depositAddress: string) =>
-      call<{ status: string }>(`/v0/status?depositAddress=${encodeURIComponent(depositAddress)}`),
+      direct<{ status: string }>(`/v0/status?depositAddress=${encodeURIComponent(depositAddress)}`),
     authenticate: (signed: RawEd25519SignedData) =>
       post<{ accessToken: string; refreshToken: string; expiresIn: number }>(
-        '/v0/auth/authenticate',
+        'auth',
         authenticateRequest(signed),
       ),
     balances: (accessToken: string) =>
-      call<{ balances: ConfidentialBalance[] }>('/v0/account/balances', { bearer: accessToken }),
+      direct<{ balances: ConfidentialBalance[] }>('/v0/account/balances', accessToken),
   };
 }
 

@@ -1,7 +1,7 @@
 import { createConfidentialIntents } from '@honey-wallet/api-client';
 import { type MemberSigner, type StealthJar, signerFromSecretKey } from '@honey-wallet/keyring';
 import { getRandomBytes } from 'expo-crypto';
-import { api } from '@/lib/api';
+import { api, resolveBaseUrl } from '@/lib/api';
 import { confirmOwner } from '@/lib/auth';
 import { backendSessionToken } from '@/lib/backend-session';
 import { getItemAsync, setItemAsync } from '@/lib/secure-store';
@@ -30,8 +30,8 @@ function token() {
 export function flowDeps(): FlowDeps {
   return {
     api,
-    // Optional partner key; without it 1Click adds a 0.25% platform fee.
-    oneClick: createConfidentialIntents(process.env.EXPO_PUBLIC_ONE_CLICK_API_KEY),
+    // Partner-key calls go through Honey's signed-in proxy; the key never ships in the app.
+    oneClick: createConfidentialIntents({ apiBaseUrl: resolveBaseUrl(), token }),
     token,
     random: getRandomBytes,
     now: Date.now,

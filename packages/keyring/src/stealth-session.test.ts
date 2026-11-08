@@ -150,7 +150,7 @@ describe('signing session over the relay', () => {
     const { jars, signers } = await dkg(3, 2);
     return { jars: jars as StealthJar[], signers };
   }
-  const request = (jar: StealthJar, payload: string, initiator = 1): SigningRequest => ({
+  const request = (_jar: StealthJar, payload: string, initiator = 1): SigningRequest => ({
     sessionId: 'sign-1',
     inviteToken: 'j'.repeat(64),
     kind: 'intent',

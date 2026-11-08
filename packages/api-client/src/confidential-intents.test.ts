@@ -111,17 +111,37 @@ describe('confidential quote builders', () => {
 });
 
 describe('createConfidentialIntents', () => {
-  it('sends partner key on quotes and bearer token on balances', async () => {
+  const make = (fetcher: unknown) =>
+    createConfidentialIntents({
+      apiBaseUrl: 'https://api.test/',
+      token: () => 'honey-session',
+      fetcher: fetcher as typeof fetch,
+    });
+
+  it('sends partner-key calls through the Honey proxy and never carries a key', async () => {
     const fetcher = vi.fn(async () => new Response(JSON.stringify({ balances: [] })));
-    const api = createConfidentialIntents('partner-jwt', fetcher as unknown as typeof fetch);
-    await api.balances('session');
+    const api = make(fetcher);
     await api.generateIntent('dep-addr', jar);
-    const [balUrl, balInit] = fetcher.mock.calls[0] as unknown as [string, RequestInit];
-    expect(balUrl).toBe('https://1click.chaindefuser.com/v0/account/balances');
-    expect(balInit.headers).toMatchObject({ Authorization: 'Bearer session' });
-    const [, genInit] = fetcher.mock.calls[1] as unknown as [string, RequestInit];
-    expect(genInit.headers).toMatchObject({ 'X-API-Key': 'partner-jwt' });
-    expect(JSON.parse(genInit.body as string)).toEqual({
+    await api.quote(
+      confidentialWithdrawQuote({
+        asset: usdc,
+        destinationAsset: usdc,
+        amount: '1',
+        jarAccount: jar,
+        recipient: 'bob.near',
+        now,
+      }),
+    );
+    const calls = fetcher.mock.calls as unknown as [string, RequestInit][];
+    expect(calls.map(([url]) => url)).toEqual([
+      'https://api.test/api/v1/confidential-intents/generate-intent',
+      'https://api.test/api/v1/confidential-intents/quote',
+    ]);
+    for (const [, init] of calls) {
+      expect(init.headers).toMatchObject({ Authorization: 'Bearer honey-session' });
+      expect(init.headers).not.toHaveProperty('X-API-Key');
+    }
+    expect(JSON.parse(calls[0]?.[1].body as string)).toEqual({
       type: 'swap_transfer',
       standard: 'raw_ed25519',
       signerId: jar,
@@ -129,11 +149,20 @@ describe('createConfidentialIntents', () => {
     });
   });
 
+  it('reads status keyless and balances with the user session, straight from 1Click', async () => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({ balances: [] })));
+    const api = make(fetcher);
+    await api.status('dep');
+    await api.balances('session');
+    const calls = fetcher.mock.calls as unknown as [string, RequestInit][];
+    expect(calls[0]?.[0]).toBe('https://1click.chaindefuser.com/v0/status?depositAddress=dep');
+    expect(calls[0]?.[1].headers).not.toHaveProperty('Authorization');
+    expect(calls[1]?.[0]).toBe('https://1click.chaindefuser.com/v0/account/balances');
+    expect(calls[1]?.[1].headers).toMatchObject({ Authorization: 'Bearer session' });
+  });
+
   it('surfaces HTTP failures', async () => {
-    const api = createConfidentialIntents(
-      'k',
-      (async () => new Response('', { status: 401 })) as typeof fetch,
-    );
+    const api = make(async () => new Response('', { status: 401 }));
     await expect(api.status('x')).rejects.toThrow(/401/);
   });
 });

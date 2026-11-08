@@ -262,6 +262,7 @@ fn router(config: &Config, health: runtime::RuntimeHealth, services: RouterServi
         .merge(routes::near_intents::router(identity.clone(), near_intents))
         .merge(routes::relay_quotes::router(identity.clone(), relay_quotes))
         .merge(theses_router(identity.clone()))
+        .merge(confidential_intents_router(identity.clone()))
         .merge(jar_buys_router(
             identity.clone(),
             market.clone(),
@@ -323,6 +324,17 @@ fn portfolio_router(market: Option<std::sync::Arc<market_data::MarketData>>) -> 
         Ok(service) => routes::portfolio::router(service),
         Err(error) => {
             tracing::error!(%error, "portfolio reads disabled");
+            Router::new()
+        }
+    }
+}
+
+/// Signed-in proxy for 1Click calls that carry the partner key (private jars).
+fn confidential_intents_router(identity: Option<identity::Identity>) -> Router {
+    match routes::confidential_intents::ConfidentialProxy::from_env() {
+        Ok(proxy) => routes::confidential_intents::router(identity, std::sync::Arc::new(proxy)),
+        Err(error) => {
+            tracing::error!(%error, "confidential intents proxy disabled");
             Router::new()
         }
     }
