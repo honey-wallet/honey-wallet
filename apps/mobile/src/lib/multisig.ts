@@ -82,6 +82,8 @@ export type ProposalAction =
       usd: number;
     }
   | { type: 'sell'; symbol: string; amount: number; usd: number }
+  /** Buy a thesis jar's picks with the shared wallet's money. */
+  | { type: 'jarBuy'; jarId: string; jar: string; picks: string[]; usd: number }
   | { type: 'addMember'; member: Member }
   | { type: 'removeMember'; memberId: string; name: string }
   | { type: 'changeThreshold'; threshold: number }
@@ -413,6 +415,9 @@ export function useActiveMultisig() {
   return useMultisig(wallet.id);
 }
 
+/** A proposal by id, outside React. */
+export const proposalById = (id: string) => store.get().proposals.find((p) => p.id === id);
+
 export function useProposal(id: string) {
   return store.useValue().proposals.find((p) => p.id === id);
 }
@@ -520,6 +525,12 @@ export function describe(action: ProposalAction): {
         icon: 'piggyBank',
         symbol: action.symbol,
       };
+    case 'jarBuy':
+      return {
+        title: `Buy ${action.jar} for $${trim(action.usd)}`,
+        done: 'Bought',
+        icon: 'pie',
+      };
     case 'sell':
       return {
         title: `Sell ${amt(action.amount, action.symbol)}`,
@@ -600,6 +611,9 @@ function applyEffect(m: Multisig, action: ProposalAction): Multisig {
     case 'jarAdd':
     case 'jarWithdraw':
       moveJar(action.jarId, action.type === 'jarAdd' ? action.amount : -action.amount);
+      return m;
+    // The jar reads its proposal's status; nothing else changes on the wallet.
+    case 'jarBuy':
       return m;
     case 'addMember':
       return { ...m, members: [...m.members, action.member] };

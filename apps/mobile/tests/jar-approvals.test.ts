@@ -54,3 +54,19 @@ it('does not move a cancelled proposal', async () => {
   await vi.advanceTimersByTimeAsync(4000);
   expect(jars.get()[0].saved).toBe(20);
 });
+it('a thesis jar bought by a shared wallet waits for approvals, then goes through', async () => {
+  vi.useFakeTimers();
+  const { describe: describeAction, proposalById } = await import('@/lib/multisig');
+  const { proposal, executed } = propose('family', {
+    type: 'jarBuy',
+    jarId: 'thesis-1',
+    jar: 'AI capex',
+    picks: ['TAO', 'NEAR'],
+    usd: 400,
+  });
+  expect(describeAction(proposal.action).title).toBe('Buy AI capex for $400');
+  expect(executed).toBe(false);
+  expect(proposalById(proposal.id)?.status).toBe('pending');
+  await vi.advanceTimersByTimeAsync(4000);
+  expect(proposalById(proposal.id)?.status).toBe('executed');
+});
