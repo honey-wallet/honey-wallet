@@ -2,5 +2,12 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "buildCommand": "pnpm build",
   "outputDirectory": "dist",
-  "rewrites": [{ "source": "/app", "destination": "/index.html" }]
+  "trailingSlash": false,
+  "rewrites": [
+    { "source": "/app", "destination": "/index.html" },
+    { "source": "/privacy", "destination": "/privacy/index.html" },
+    { "source": "/terms", "destination": "/terms/index.html" },
+    { "source": "/support", "destination": "/support/index.html" },
+    { "source": "/delete-account", "destination": "/delete-account/index.html" }
+  ]
 }

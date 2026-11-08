@@ -40,3 +40,17 @@ describe('Landing', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Too many tries');
   });
 });
+
+describe('Landing footer', () => {
+  it('links the privacy, terms, support and data deletion pages', () => {
+    render(<Landing apiUrl="" />);
+    for (const [name, href] of [
+      ['Privacy', '/privacy'],
+      ['Terms', '/terms'],
+      ['Support', '/support'],
+      ['Delete your data', '/delete-account'],
+    ]) {
+      expect(screen.getByRole('link', { name })).toHaveAttribute('href', href);
+    }
+  });
+});
