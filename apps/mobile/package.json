@@ -78,7 +78,7 @@
     "react-native-web": "~0.21.0",
     "react-native-webview": "13.16.1",
     "react-native-worklets": "0.10.1",
-    "viem": "2.57.11"
+    "viem": "2.57.16"
   },
   "devDependencies": {
     "@iconify-json/cryptocurrency-color": "^1.2.4",
