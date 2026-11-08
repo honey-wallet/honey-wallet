@@ -1,0 +1,77 @@
+/* ── Compare (vs-, since base.css owns .cmp): a print-style table. Hairline rules, no boxes; the hero column
+   carries a light accent tint and an accent rule on top. ── */
+.vs {
+  display: grid;
+  grid-auto-rows: auto;
+  margin-block: auto;
+  border-bottom: 1px solid var(--hair);
+}
+.vs-row {
+  display: grid;
+  grid-template-columns: clamp(110px, 13vw, 190px) repeat(var(--vs-cols), minmax(0, 1fr));
+  border-top: 1px solid var(--hair-2);
+}
+.vs-head {
+  border-top: 0;
+}
+.vs-label {
+  padding: clamp(12px, 2.2vh, 24px) clamp(8px, 1vw, 16px) clamp(12px, 2.2vh, 24px) 0;
+  font-family: var(--font-mono);
+  font-size: clamp(11px, 0.95vw, 13px);
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
+  color: var(--fg-faint);
+}
+.vs-cell {
+  padding: clamp(12px, 2.2vh, 24px) clamp(12px, 1.4vw, 22px);
+  font-size: clamp(14px, 1.25vw, 19px);
+  line-height: 1.45;
+  color: var(--fg-muted);
+}
+.vs-cell b {
+  color: var(--fg);
+  font-weight: 500;
+}
+.vs-head .vs-cell {
+  padding-top: clamp(10px, 1.6vh, 18px);
+  padding-bottom: clamp(10px, 1.6vh, 18px);
+  border-top: 3px solid transparent;
+}
+.vs-head .vs-cell b {
+  display: block;
+  font-size: clamp(20px, 2vw, 30px);
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+}
+.vs-head .vs-cell span {
+  display: block;
+  margin-top: 4px;
+  font-family: var(--font-mono);
+  font-size: clamp(11px, 0.95vw, 13px);
+  text-transform: uppercase;
+  color: var(--fg-faint);
+}
+
+.vs-cell.hero {
+  background: color-mix(in srgb, var(--primary) 9%, transparent);
+  color: var(--fg);
+}
+.vs-head .vs-cell.hero {
+  border-top-color: var(--primary);
+}
+.vs-head .vs-cell.hero b {
+  color: var(--primary);
+}
+
+@media (max-width: 760px) {
+  .vs-row {
+    grid-template-columns: repeat(var(--vs-cols), minmax(0, 1fr));
+  }
+  .vs-label {
+    grid-column: 1 / -1;
+    padding-bottom: 0;
+  }
+  .vs-head .vs-label {
+    display: none;
+  }
+}

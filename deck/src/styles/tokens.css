@@ -1,0 +1,63 @@
+/* THEME TOKENS: edit this :root block to re-theme the whole deck.
+   Honey Wallet's brand in dark mode: ink page, charcoal cards, honey yellow. */
+:root {
+  /* Surfaces: Honey's dark palette (apps/mobile/src/theme/index.ts): Ink page, Charcoal cards */
+  --bg: #131313;
+  --bg-grad-1: transparent;
+  --bg-grad-2: transparent;
+  --surface: #131313;
+  --surface-2: #1b1b1b;
+  --surface-3: #262626;
+
+  /* Ink */
+  --fg: #f6f3eb;
+  --fg-muted: #a3a3a3;
+  --fg-faint: #767676;
+
+  /* Hairlines */
+  --hair: rgba(246, 243, 235, 0.32);
+  --hair-2: #2c2c2c;
+
+  /* Accent: Honey yellow for data, fills and accent text; ink on top of yellow fills. */
+  --primary: #f3c969;
+  --honey: #f3c969;
+  --honey-press: #f0b347;
+  --honey-tint: #3b301c;
+  --honey-surface: #29241b;
+  --honey-text: #f3c969;
+  --brand-brown: #f6f3eb;
+  --success: #3fd07e;
+  --error: #ff665d;
+  --accent: linear-gradient(115deg, #f5c451 0%, #f0b347 100%);
+  --accent-ink: #131313;
+
+  /* Radius: soft, like the app's squircle cards */
+  --radius: 22px;
+  --radius-sm: 14px;
+  --radius-lg: 32px;
+
+  /* Depth: one soft lift for floating cards */
+  --shadow: 0 0 0 1px #2c2c2c, 0 20px 40px -20px rgba(0, 0, 0, 0.6);
+  --glow: 0 0 0 transparent;
+
+  /* Type: Apple's system face, as on the landing page; Inter where it isn't available.
+     Geist Mono for small labels. */
+  --font-head:
+    -apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", "Helvetica Neue", sans-serif;
+  --font-body:
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Helvetica Neue", sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* Motion */
+  --dur: 0.4s;
+  --ease: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-spring: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* Atmosphere: none */
+  --grain: 0;
+  --vignette: transparent;
+
+  /* Responsive gutter: fluid side / vertical padding */
+  --gutter: clamp(24px, 6vw, 112px);
+  --gutter-y: clamp(32px, 7vh, 80px);
+}

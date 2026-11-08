@@ -1,6 +1,7 @@
 packages:
   - apps/*
   - packages/*
+  - deck
 
 # Shared versions for tooling used by several packages. Reference with "catalog:".
 catalog:

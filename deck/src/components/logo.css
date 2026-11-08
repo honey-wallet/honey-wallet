@@ -1,0 +1,39 @@
+/* Brand marks: a round coin by default, a rounded square where the shape is the logo. */
+.lo {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: var(--lo-size);
+  height: var(--lo-size);
+  padding: calc(var(--lo-size) * var(--lo-pad));
+  box-sizing: border-box;
+  border-radius: 50%;
+  background: var(--lo-chip);
+  box-shadow: 0 0 0 1px rgba(246, 243, 235, 0.14);
+  overflow: hidden;
+  vertical-align: -0.28em;
+}
+.lo.sq {
+  border-radius: 22%;
+  box-shadow: none;
+}
+.lo img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.lo-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.38em;
+  white-space: nowrap;
+}
+.lo-stack {
+  display: inline-flex;
+  align-items: center;
+}
+.lo-stack .lo + .lo {
+  margin-left: calc(var(--lo-size) * -0.3);
+  box-shadow: 0 0 0 2px var(--surface-2, #1b1b1b);
+}
