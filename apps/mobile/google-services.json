@@ -1,0 +1,62 @@
+{
+  "project_info": {
+    "project_number": "466723419259",
+    "project_id": "honey-wallet-92ea2",
+    "storage_bucket": "honey-wallet-92ea2.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:466723419259:android:ef1a1a469eb8ccb96f1ede",
+        "android_client_info": {
+          "package_name": "com.honeywallet.app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "466723419259-5lej46reuk5sg464ifg5n9k756g95qbp.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.honeywallet.app",
+            "certificate_hash": "7204305893cd1a0726283a1d67cd19b0c4966628"
+          }
+        },
+        {
+          "client_id": "466723419259-gnt8fngqulshrdbttumjv7qc669vonip.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.honeywallet.app",
+            "certificate_hash": "b5edc694d52dca680729e10255de7b9b1bd8c906"
+          }
+        },
+        {
+          "client_id": "466723419259-v0c9favnkoadjms79i6c4lfnb52ec335.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC0NHXeMqYoZPvl9r_2VU4pyt7MvcPE8po"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "466723419259-v0c9favnkoadjms79i6c4lfnb52ec335.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "466723419259-mo8s1gu589p5qpmsbfrk2f1bk3gpqoi8.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.honeywallet.app"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
