@@ -196,8 +196,8 @@ pub fn render(links: &Links, personal: &Personal) -> Email {
 /// [`render`] with images from `asset_base` (local previews before the web deploy).
 ///
 /// Warm charcoal with a lighter rounded card and a honey accent, sized to fit about one
-/// screen with the store buttons above the fold. Gmail-safe: no `<style>`, everything
-/// inline, nested tables with `bgcolor` fallbacks. URLs are operator config. Never
+/// screen with the store buttons above the fold. Everything is inline on nested tables
+/// with `bgcolor` fallbacks; dark-mode locks keep Gmail's apps from inverting it. URLs are operator config. Never
 /// contains the recipient's address.
 pub fn render_with_assets(links: &Links, personal: &Personal, asset_base: &str) -> Email {
     const BG: &str = "#1c1b1a";
@@ -208,6 +208,24 @@ pub fn render_with_assets(links: &Links, personal: &Personal, asset_base: &str) 
     const SANS: &str =
         "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
     const SIGN_OFF: &str = "Hit reply, it comes to me. &mdash; Abhishek";
+    // Gmail's app dark mode inverts colors but not background images, so every background
+    // also carries a one-color gradient. Text is restored by the screen/difference blend
+    // wrappers below (styled only in Gmail via `u + .body`); inline styles stay primary.
+    const HEAD_STYLE: &str = "<style>u + .body .gmail-blend-screen{background:#000;mix-blend-mode:screen;}u + .body .gmail-blend-difference{background:#000;mix-blend-mode:difference;}</style>";
+    let lock = |color: &str| {
+        format!("background-color:{color};background-image:linear-gradient({color},{color});")
+    };
+    let blend = |inner: &str| {
+        format!(
+            r#"<div class="gmail-blend-screen"><div class="gmail-blend-difference">{inner}</div></div>"#
+        )
+    };
+    let blend_inline = |inner: &str| {
+        format!(
+            r#"<span class="gmail-blend-screen" style="display:inline-block;"><span class="gmail-blend-difference" style="display:inline-block;">{inner}</span></span>"#
+        )
+    };
+    let (bg_lock, card_lock, honey_lock) = (lock(BG), lock(CARD), lock(HONEY));
     let n = personal.position;
     let stores = links.stores();
     let primary = stores
@@ -216,13 +234,15 @@ pub fn render_with_assets(links: &Links, personal: &Personal, asset_base: &str) 
         .unwrap_or("https://www.honeywallet.org");
     let base = escape(asset_base.trim_end_matches('/'));
 
-    // One row of equal columns with 8px gutters; each a compact pill with a honey edge.
+    // One row of equal columns with 8px gutters. Each pill is a honey cell with 1px of
+    // padding around a charcoal cell, so the "border" is a locked background too.
     let columns: Vec<String> = stores
         .iter()
         .map(|store| {
-            let (label, icon, url) = (store.label, store.icon, store.url);
+            let (icon, url) = (store.icon, store.url);
+            let label = blend_inline(store.label);
             format!(
-                r#"<td width="{width}%" valign="top"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td align="center" bgcolor="{CARD}" style="background-color:{CARD};border:1px solid {HONEY};border-radius:999px;"><a href="{url}" target="_blank" style="display:block;padding:11px 4px;font-family:{SANS};font-size:14px;line-height:18px;font-weight:600;color:{TEXT};text-decoration:none;border-radius:999px;"><img src="{base}/{icon}" width="16" height="16" alt="" style="display:inline-block;vertical-align:middle;border:0;margin:0 7px 2px 0;"><span style="vertical-align:middle;">{label}</span></a></td></tr></table></td>"#,
+                r#"<td width="{width}%" valign="top"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td bgcolor="{HONEY}" style="{honey_lock}border-radius:999px;padding:1px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td align="center" bgcolor="{CARD}" style="{card_lock}border-radius:999px;"><a href="{url}" target="_blank" style="display:block;padding:10px 4px;font-family:{SANS};font-size:14px;line-height:18px;font-weight:600;color:{TEXT};text-decoration:none;border-radius:999px;"><img src="{base}/{icon}" width="16" height="16" alt="" style="display:inline-block;vertical-align:middle;border:0;margin:0 7px 2px 0;">{label}</a></td></tr></table></td></tr></table></td>"#,
                 width = 100 / stores.len().max(1),
             )
         })
@@ -230,20 +250,28 @@ pub fn render_with_assets(links: &Links, personal: &Personal, asset_base: &str) 
     let buttons =
         columns.join(r#"<td width="8" style="width:8px;font-size:0;line-height:0;">&nbsp;</td>"#);
 
+    let wordmark = blend("Honey");
+    let headline = blend("You're in.");
+    let line = blend(&format!(
+        r#"You were <span style="color:{HONEY};font-weight:600;">#{n}</span> on the waitlist."#
+    ));
+    let sign_off = blend(SIGN_OFF);
+    let footer = blend("You joined the waitlist at honeywallet.org.");
+
     let html = format!(
         r#"<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><meta name="supported-color-schemes" content="dark"><title>{SUBJECT}</title></head>
-<body bgcolor="{BG}" style="margin:0;padding:0;background-color:{BG};color:{TEXT};font-family:{SANS};-webkit-text-size-adjust:100%;">
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><meta name="supported-color-schemes" content="dark"><title>{SUBJECT}</title>{HEAD_STYLE}</head>
+<body class="body" bgcolor="{BG}" style="margin:0;padding:0;{bg_lock}color:{TEXT};font-family:{SANS};-webkit-text-size-adjust:100%;">
 <div style="display:none;max-height:0;overflow:hidden;mso-hide:all;">You were #{n} on the waitlist.</div>
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="{BG}" style="background-color:{BG};"><tr><td align="center" bgcolor="{BG}" style="background-color:{BG};padding:40px 16px 32px 16px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="{BG}" style="{bg_lock}"><tr><td align="center" bgcolor="{BG}" style="{bg_lock}padding:40px 16px 32px 16px;">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:560px;">
-<tr><td style="padding:0 0 36px 0;"><table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr><td style="padding:0 10px 0 0;vertical-align:middle;"><img src="{base}/icon-honey.png" width="28" height="28" alt="" style="display:block;border:0;border-radius:7px;"></td><td style="vertical-align:middle;font-family:{SANS};font-size:18px;line-height:28px;font-weight:700;color:{TEXT};">Honey</td></tr></table></td></tr>
-<tr><td style="padding:0 0 12px 0;font-family:{SANS};font-size:48px;line-height:52px;font-weight:800;letter-spacing:-1.5px;color:{TEXT};">You're in.</td></tr>
-<tr><td style="padding:0 0 28px 0;font-family:{SANS};font-size:17px;line-height:26px;color:{TEXT_2};">You were <span style="color:{HONEY};font-weight:600;">#{n}</span> on the waitlist.</td></tr>
+<tr><td style="padding:0 0 36px 0;"><table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr><td style="padding:0 10px 0 0;vertical-align:middle;"><img src="{base}/icon-honey.png" width="28" height="28" alt="" style="display:block;border:0;border-radius:7px;"></td><td style="vertical-align:middle;font-family:{SANS};font-size:18px;line-height:28px;font-weight:700;color:{TEXT};">{wordmark}</td></tr></table></td></tr>
+<tr><td style="padding:0 0 12px 0;font-family:{SANS};font-size:48px;line-height:52px;font-weight:800;letter-spacing:-1.5px;color:{TEXT};">{headline}</td></tr>
+<tr><td style="padding:0 0 28px 0;font-family:{SANS};font-size:17px;line-height:26px;color:{TEXT_2};">{line}</td></tr>
 <tr><td style="padding:0 0 24px 0;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>{buttons}</tr></table></td></tr>
-<tr><td bgcolor="{CARD}" style="background-color:{CARD};border-radius:16px;padding:32px 32px 0 32px;"><a href="{primary}" target="_blank" style="text-decoration:none;"><img src="{base}/invite-hero.png" width="496" height="350" alt="The Honey app: your wallet and a $500 basket from the thesis agent" style="display:block;width:100%;max-width:496px;height:auto;border:0;background-color:{CARD};color:{TEXT_2};font-family:{SANS};font-size:13px;"></a></td></tr>
-<tr><td style="padding:28px 0 0 0;font-family:{SANS};font-size:15px;line-height:22px;color:{TEXT};">{SIGN_OFF}</td></tr>
-<tr><td style="padding:20px 0 0 0;font-family:{SANS};font-size:11px;line-height:16px;color:{TEXT_2};">You joined the waitlist at honeywallet.org.</td></tr>
+<tr><td bgcolor="{CARD}" style="{card_lock}border-radius:16px;padding:32px 32px 0 32px;"><a href="{primary}" target="_blank" style="text-decoration:none;"><img src="{base}/invite-hero.png" width="496" height="350" alt="The Honey app: your wallet and a $500 basket from the thesis agent" style="display:block;width:100%;max-width:496px;height:auto;border:0;color:{TEXT_2};font-family:{SANS};font-size:13px;"></a></td></tr>
+<tr><td style="padding:28px 0 0 0;font-family:{SANS};font-size:15px;line-height:22px;color:{TEXT};">{sign_off}</td></tr>
+<tr><td style="padding:20px 0 0 0;font-family:{SANS};font-size:11px;line-height:16px;color:{TEXT_2};">{footer}</td></tr>
 </table></td></tr></table>
 </body></html>"#
     );
@@ -562,7 +590,40 @@ mod tests {
         assert!(email.html.contains("bgcolor=\"#1c1b1a\""));
         assert!(email.html.contains("bgcolor=\"#2a2826\""));
         assert!(!email.html.contains("#0b0b0a"));
-        assert!(!email.html.contains("<style"));
+        // Dark-mode locks: gradient backgrounds Gmail won't invert, blend-wrapped text.
+        for color in ["#1c1b1a", "#2a2826", "#f3c969"] {
+            assert!(email.html.contains(&format!(
+                "background-color:{color};background-image:linear-gradient({color},{color});"
+            )));
+        }
+        assert!(email.html.contains("<body class=\"body\""));
+        assert!(
+            email
+                .html
+                .contains("u + .body .gmail-blend-screen{background:#000;mix-blend-mode:screen;}")
+        );
+        assert!(email.html.contains(
+            "u + .body .gmail-blend-difference{background:#000;mix-blend-mode:difference;}"
+        ));
+        for text in [
+            "Honey",
+            "You're in.",
+            "Hit reply",
+            "You joined the waitlist",
+        ] {
+            assert!(
+                email.html.contains(&format!(
+                    "<div class=\"gmail-blend-screen\"><div class=\"gmail-blend-difference\">{text}"
+                )),
+                "{text}"
+            );
+        }
+        assert!(email.html.contains(
+            "<div class=\"gmail-blend-difference\">You were <span style=\"color:#f3c969;"
+        ));
+        assert!(email.html.contains("<span class=\"gmail-blend-difference\" style=\"display:inline-block;\">Google Play</span>"));
+        // Pill edges are a honey cell around a charcoal cell, not a CSS border.
+        assert!(!email.html.contains("border:1px solid"));
         assert!(email.html.contains("max-width:560px"));
     }
 

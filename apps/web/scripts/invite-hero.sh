@@ -26,7 +26,7 @@ magick apps/web/public/apple-touch-icon.png -resize 56x56 -alpha set \
   \( -size 56x56 xc:none -fill white -draw "roundrectangle 0,0 55,55 13,13" \) \
   -compose DstIn -composite -strip "$OUT/icon-honey.png"
 
-# --- Hero phones (2x of 496x350, on the email card color #2a2826).
+# --- Hero phones (2x of 496x350, transparent background).
 B=11; R=50
 phone() { # src w h out
   W=$2; H=$3
@@ -51,10 +51,11 @@ phone "$T/proposal.jpg" 428 762 "$T/proposal.png"
 magick "$T/proposal.png" -channel RGB -evaluate multiply 0.85 +channel "$T/proposal.png"
 phone "$SRC/screenshot-4-home.jpg" 428 762 "$T/home.png"
 
-# 992x700 on the card color; the proposal sits back-left and lower,
+# 992x700, transparent around the phones (no rectangle if a client inverts the card);
+# the proposal sits back-left and lower,
 # and the home phone in front-right overlaps only its right bezel. Both run off the bottom
 # edge, flush with the bottom of the email card (no bottom padding).
-magick -size 992x700 xc:'#2a2826' \
+magick -size 992x700 xc:none \
   "$T/proposal.png" -geometry +58+100 -compose Over -composite \
   "$T/home.png" -geometry +483+30 -compose Over -composite \
   -strip +dither -colors 200 -define png:compression-level=9 "$OUT/invite-hero.png"
