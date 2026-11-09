@@ -1,17 +1,16 @@
-import Constants from 'expo-constants';
 import { Linking, Text } from 'react-native';
 import { SheetRow, SheetScreen } from '@/components/sheets/Sheet';
+import { buildInfo } from '@/lib/build-info';
 import { tap } from '@/lib/haptics';
 import { leaveSheetTo } from '@/lib/navigation';
 import { makeStyles } from '@/theme';
 
-const PRIVACY_URL = 'https://honeywallet.app/privacy';
-const TERMS_URL = 'https://honeywallet.app/terms';
+const PRIVACY_URL = 'https://honeywallet.org/privacy';
+const TERMS_URL = 'https://honeywallet.org/terms';
 
 /** Legal links, plus the app version. */
 export default function AboutSheet() {
   const styles = useStyles();
-  const version = Constants.expoConfig?.version ?? '—';
 
   const open = (url: string) => {
     tap();
@@ -41,7 +40,7 @@ export default function AboutSheet() {
           leaveSheetTo('/disclosures');
         }}
       />
-      <Text style={styles.version}>Honey {version}</Text>
+      <Text style={styles.version}>{buildInfo()}</Text>
     </SheetScreen>
   );
 }

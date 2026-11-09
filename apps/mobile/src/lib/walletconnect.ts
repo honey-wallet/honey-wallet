@@ -205,8 +205,8 @@ async function start(): Promise<IWalletKit | null> {
       // name: 'Honey',
       name: 'Honey Wallet',
       description: 'All your crypto, one wallet.',
-      url: 'https://honeywallet.app',
-      icons: ['https://honeywallet.app/icon.png'],
+      url: 'https://honeywallet.org',
+      icons: ['https://www.honeywallet.org/apple-touch-icon.png'],
     },
   });
 

@@ -13,14 +13,15 @@ import { SheetRow, SheetSection } from '@/components/sheets/Sheet';
 import { PushedScreen } from '@/components/wallet/parts';
 import { api } from '@/lib/api';
 import { lockNow } from '@/lib/app-lock';
+import { applyLatestUpdate, buildInfo } from '@/lib/build-info';
 import { expandView, inPopup } from '@/lib/dapp';
 import { tap } from '@/lib/haptics';
 import { shortAddress } from '@/lib/mock-wallet';
 import { isWeb } from '@/lib/platform';
 import { setProfile, useProfile } from '@/lib/profile';
 import { useSettings } from '@/lib/settings';
+import { showToast } from '@/lib/toast';
 import { useActiveWallet } from '@/lib/wallets';
-// import { showToast } from '@/lib/toast'; (with the other-wallets list)
 import { makeStyles, radius, useTheme } from '@/theme';
 
 const THEME_LABEL = { auto: 'Auto', light: 'Light', dark: 'Dark' } as const;
@@ -269,12 +270,43 @@ export default function SettingsScreen() {
         <Text style={styles.credit} onPress={() => Linking.openURL(AVATAR_CREDIT_URL)}>
           Avatars: “Dylan” by Natalia Spivak, CC BY 4.0, generated with DiceBear.
         </Text>
+        <BuildFooter />
       </View>
     </PushedScreen>
   );
 }
 
+/** Version, build, running update and mode, for testers' bug reports; tap to update now. */
+function BuildFooter() {
+  const styles = useStyles();
+  const [checking, setChecking] = useState(false);
+  const check = async () => {
+    if (checking) return;
+    tap();
+    setChecking(true);
+    try {
+      if (!(await applyLatestUpdate())) showToast('You have the latest version');
+    } catch {
+      showToast('Couldn’t check for updates', 1800, true);
+    } finally {
+      setChecking(false);
+    }
+  };
+  return (
+    <Text accessibilityRole="button" style={styles.build} onPress={check}>
+      {checking ? 'Checking for updates…' : buildInfo()}
+    </Text>
+  );
+}
+
 const useStyles = makeStyles((c) => ({
+  build: {
+    marginTop: 18,
+    color: c.textSecondary,
+    fontSize: 12,
+    textAlign: 'center',
+    fontVariant: ['tabular-nums'],
+  },
   signOut: {
     marginTop: 28,
     height: 52,

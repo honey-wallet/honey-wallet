@@ -3,8 +3,8 @@ import { Linking, Text } from 'react-native';
 import { PushedScreen } from '@/components/wallet/parts';
 import { makeStyles } from '@/theme';
 
-const TERMS_URL = 'https://honeywallet.app/terms';
-const PRIVACY_URL = 'https://honeywallet.app/privacy';
+const TERMS_URL = 'https://honeywallet.org/terms';
+const PRIVACY_URL = 'https://honeywallet.org/privacy';
 
 /** Plain-language disclosures about what Honey is, and isn't. */
 export default function DisclosuresScreen() {
