@@ -23,6 +23,6 @@ eval "$(node -e '
 ')"
 if [ "$branch" = simulation ]; then export EXPO_PUBLIC_TEST_MODE=1; fi
 
-npx eas-cli update --branch "$branch" --message "$message" --non-interactive
+npx eas-cli update --branch "$branch" --message "$message" --environment production --non-interactive
 npx eas-cli channel:edit production --branch "$branch" --non-interactive
 echo "Channel production now serves branch $branch. Testers get it on the next app restart."
