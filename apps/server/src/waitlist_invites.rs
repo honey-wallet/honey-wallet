@@ -158,27 +158,51 @@ pub struct Email {
 }
 
 /// Renders the invite. Contains no recipient data; URLs come from operator config.
+///
+/// Matches the landing page (apps/web/src/home.css): matte ink background, cream text,
+/// honey pill buttons, no glow. Email-safe: tables, inline CSS, `bgcolor` fallbacks and
+/// explicit backgrounds, so light-mode clients still show it dark and readable.
 pub fn render(links: &Links) -> Email {
+    const INK: &str = "#0b0b0a";
+    const PANEL: &str = "#0e0d0c";
+    const TEXT: &str = "#f6f3eb";
+    const TEXT_2: &str = "#a8a197";
+    const HONEY: &str = "#f3c969";
+    const ON_HONEY: &str = "#1a1408";
+    const EDGE: &str = "#3a3222";
+    const RULE: &str = "#1d1b18";
+    const FONT: &str =
+        "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
+    const ICON: &str = "https://www.honeywallet.org/apple-touch-icon.png";
     let buttons = links.buttons();
     let html_buttons: String = buttons
         .iter()
-        .map(|(label, url)| {
+        .enumerate()
+        .map(|(index, (label, url))| {
+            // First button filled honey, the rest outlined, like the landing CTAs.
+            let (bg, fg, border) = if index == 0 {
+                (HONEY, ON_HONEY, HONEY)
+            } else {
+                (PANEL, TEXT, EDGE)
+            };
             format!(
-                r#"<tr><td style="padding:0 0 12px 0;"><a href="{url}" style="display:block;background:#f5b100;color:#141414;text-decoration:none;font-weight:600;font-size:16px;line-height:20px;padding:14px 20px;border-radius:12px;text-align:center;">{label}</a></td></tr>"#
+                r#"<tr><td style="padding:0 0 12px 0;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td align="center" bgcolor="{bg}" style="background-color:{bg};border:1px solid {border};border-radius:999px;"><a href="{url}" target="_blank" style="display:block;padding:14px 24px;font-family:{FONT};font-size:16px;line-height:20px;font-weight:600;color:{fg};text-decoration:none;border-radius:999px;">{label}</a></td></tr></table></td></tr>"#
             )
         })
         .collect();
     let html = format!(
         r#"<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><meta name="supported-color-schemes" content="light dark"><title>{SUBJECT}</title></head>
-<body style="margin:0;padding:0;background:#141414;color:#f2f2f2;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#141414;"><tr><td align="center" style="padding:40px 16px;">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:420px;">
-<tr><td style="padding:0 0 8px 0;font-size:22px;line-height:28px;font-weight:700;color:#f2f2f2;">Honey</td></tr>
-<tr><td style="padding:0 0 24px 0;font-size:16px;line-height:24px;color:#f2f2f2;">You're off the waitlist. Honey is ready for you.</td></tr>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><meta name="supported-color-schemes" content="dark"><title>{SUBJECT}</title></head>
+<body bgcolor="{INK}" style="margin:0;padding:0;background-color:{INK};color:{TEXT};font-family:{FONT};-webkit-text-size-adjust:100%;">
+<div style="display:none;max-height:0;overflow:hidden;mso-hide:all;">You're off the waitlist. Keys stay on your device.</div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="{INK}" style="background-color:{INK};"><tr><td align="center" bgcolor="{INK}" style="background-color:{INK};padding:48px 16px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:440px;">
+<tr><td style="padding:0 0 32px 0;"><table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr><td style="padding:0 10px 0 0;vertical-align:middle;"><img src="{ICON}" width="32" height="32" alt="" style="display:block;border:0;border-radius:8px;"></td><td style="vertical-align:middle;font-family:{FONT};font-size:18px;line-height:24px;font-weight:700;color:{TEXT};">Honey</td></tr></table></td></tr>
+<tr><td style="padding:0 0 12px 0;font-family:{FONT};font-size:28px;line-height:34px;font-weight:700;letter-spacing:-0.5px;color:{TEXT};">You're <span style="color:{HONEY};">in</span>.</td></tr>
+<tr><td style="padding:0 0 28px 0;font-family:{FONT};font-size:16px;line-height:24px;color:{TEXT_2};">You're off the waitlist. Honey is ready for you.</td></tr>
 {html_buttons}
-<tr><td style="padding:12px 0 32px 0;font-size:15px;line-height:22px;color:#c8c8c8;">Keys stay on your device.</td></tr>
-<tr><td style="font-size:12px;line-height:18px;color:#8a8a8a;">You got this because you joined the waitlist at honeywallet.org.</td></tr>
+<tr><td style="padding:16px 0 40px 0;font-family:{FONT};font-size:15px;line-height:22px;color:{TEXT};">Keys stay on your device.</td></tr>
+<tr><td style="border-top:1px solid {RULE};padding:20px 0 0 0;font-family:{FONT};font-size:12px;line-height:18px;color:{TEXT_2};">You got this because you joined the waitlist at honeywallet.org.</td></tr>
 </table></td></tr></table>
 </body></html>"#
     );
@@ -187,7 +211,7 @@ pub fn render(links: &Links) -> Email {
         .map(|(label, url)| format!("{label}: {url}\n"))
         .collect();
     let text = format!(
-        "You're off the waitlist. Honey is ready for you.\n\n{text_buttons}\nKeys stay on your device.\n\nYou got this because you joined the waitlist at honeywallet.org.\n"
+        "You're in.\n\nYou're off the waitlist. Honey is ready for you.\n\n{text_buttons}\nKeys stay on your device.\n\nYou got this because you joined the waitlist at honeywallet.org.\n"
     );
     Email {
         subject: SUBJECT,
@@ -459,8 +483,28 @@ mod tests {
                 body.contains("You got this because you joined the waitlist at honeywallet.org.")
             );
         }
-        assert!(!email.html.contains("<img"));
+        // Only remote image is the hosted icon; no recipient data in the body.
+        assert_eq!(email.html.matches("<img").count(), 1);
+        assert!(
+            email
+                .html
+                .contains("https://www.honeywallet.org/apple-touch-icon.png")
+        );
+        assert!(email.html.contains("bgcolor=\"#0b0b0a\""));
+        assert!(
+            email
+                .html
+                .contains("name=\"color-scheme\" content=\"dark\"")
+        );
         assert!(!email.html.contains("<style"));
+    }
+
+    /// `INVITE_PREVIEW_PATH=/tmp/invite.html cargo test -p honey-server write_preview`
+    #[test]
+    fn write_preview() {
+        if let Ok(path) = std::env::var("INVITE_PREVIEW_PATH") {
+            std::fs::write(path, render(&links(true, true, true)).html).unwrap();
+        }
     }
 
     #[test]
