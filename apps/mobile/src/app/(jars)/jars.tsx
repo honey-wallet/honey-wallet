@@ -1,24 +1,34 @@
 import { router } from 'expo-router';
 import { useState } from 'react';
-import { Text, TextInput, View } from 'react-native';
+import { ScrollView, Text, View } from 'react-native';
 import { Icon } from '@/components/Icon';
-import { JarList, Summary, signedPct } from '@/components/jars/JarParts';
+import { JarCarousel, JarList } from '@/components/jars/JarParts';
+import { NumberPopIn } from '@/components/motion/NumberPopIn';
 import { PressableScale } from '@/components/motion/PressableScale';
-import { SegmentedTabs } from '@/components/motion/SegmentedTabs';
 import { UnderlineTabs } from '@/components/motion/UnderlineTabs';
-import { EmptyState, PushedScreen } from '@/components/wallet/parts';
+import { Chip } from '@/components/wallet/Chip';
+import { EmptyState, PushedScreen, SCREEN, Sparkline } from '@/components/wallet/parts';
+import { SearchField } from '@/components/wallet/SearchField';
 import { tap } from '@/lib/haptics';
 import { formatUsd } from '@/lib/mock-wallet';
 import { jarReturn, jarValue, useThesisJars } from '@/lib/thesis';
-import { makeStyles, radius, useTheme } from '@/theme';
+import { makeStyles, useTheme } from '@/theme';
 
 type View_ = 'Yours' | 'Explore';
 type Filter = 'All' | 'Public' | 'Private';
+const FILTERS: Filter[] = ['All', 'Public', 'Private'];
+const FILTER_LABEL: Record<Filter, string> = {
+  All: 'All',
+  Public: 'Public',
+  Private: 'Returns only',
+};
 
 /**
  * Jars, opened from the honey button: a pushed page with a back button, not a tab.
- * Your portfolio across jars sits on top like Home's balance; below it, Yours and
- * Explore. The ask field is pinned to the bottom, where a chat's input lives.
+ * Your portfolio across jars sits on top as Home's balance does (big number, change,
+ * the line on the right); below it, Yours and Explore. Explore is laid out like the
+ * Explore tab: search, a sideways row of cards, then filter chips and ranked rows.
+ * The ask field is pinned to the bottom, where a chat's input lives.
  */
 export default function JarsScreen() {
   const styles = useStyles();
@@ -41,6 +51,10 @@ export default function JarsScreen() {
         j.picks.some((p) => p.symbol.toLowerCase() === q || p.name.toLowerCase().includes(q)),
     )
     .sort((a, b) => jarReturn(b) - jarReturn(a));
+  const popular = all
+    .filter((j) => !j.mine)
+    .sort((a, b) => b.copiers - a.copiers)
+    .slice(0, 4);
   const total = mine.reduce((s, j) => s + jarValue(j), 0);
   const invested = mine.reduce((s, j) => s + j.invested, 0);
   const gain = total - invested;
@@ -77,38 +91,58 @@ export default function JarsScreen() {
         </PressableScale>
       }
     >
-      <View style={styles.page}>
-        {/* The portfolio first, like Home: one number for everything you hold in jars. */}
-        <Summary
-          label="Across your jars"
-          value={formatUsd(total)}
-          change={gain}
-          changeText={
-            mine.length
-              ? `${formatUsd(Math.abs(gain))} (${signedPct(gain / Math.max(invested, 1))}) all time`
-              : 'Start a jar to see it grow'
-          }
-          history={history}
-        />
+      <View style={styles.gutter}>
+        {/* Home's balance: the big number with dimmed cents, its change, the line. */}
+        <View style={styles.balanceRow}>
+          <View style={styles.flex}>
+            <Text style={styles.label}>Across your jars</Text>
+            <NumberPopIn
+              value={formatUsd(total)}
+              style={styles.balance}
+              fractionStyle={styles.cents}
+            />
+            <View style={styles.changeRow}>
+              {mine.length ? (
+                <>
+                  <Icon
+                    name={gain < 0 ? 'down' : 'up'}
+                    size={9}
+                    color={gain < 0 ? c.error : c.success}
+                  />
+                  <Text style={styles.changeText}>
+                    <Text style={styles.changeAmount}>
+                      {formatUsd(Math.abs(gain))} (
+                      {Math.abs((gain / Math.max(invested, 1)) * 100).toFixed(2)}%)
+                    </Text>{' '}
+                    all time
+                  </Text>
+                </>
+              ) : (
+                <Text style={styles.changeText}>Start a jar to see it grow</Text>
+              )}
+            </View>
+          </View>
+          <Sparkline data={history.length > 1 ? history : [0, 0]} width={116} height={60} />
+        </View>
 
-        <UnderlineTabs<View_> options={['Yours', 'Explore']} value={view} onChange={setView} />
+        <View style={styles.tabs}>
+          <UnderlineTabs<View_> options={['Yours', 'Explore']} value={view} onChange={setView} />
+        </View>
 
         {view === 'Yours' ? (
           <>
             {mine.length ? (
-              <JarList jars={mine} />
+              <JarList jars={mine} gutter={SCREEN.gutter} />
             ) : (
-              <View style={styles.emptyCard}>
-                <EmptyState
-                  compact
-                  icon="pie"
-                  title="No jars yet"
-                  hint="Ask Honey below to start one from an idea, or copy a jar from Explore."
-                />
-              </View>
+              <EmptyState
+                compact
+                icon="pie"
+                title="No jars yet"
+                hint="Ask Honey below to start one from an idea, or copy a jar from Explore."
+              />
             )}
-            <View style={styles.sectionHead}>
-              <Text style={styles.label}>Popular to copy</Text>
+            <View style={[styles.header, styles.section]}>
+              <Text style={styles.heading}>Popular to copy</Text>
               <PressableScale
                 accessibilityRole="button"
                 hitSlop={8}
@@ -120,47 +154,56 @@ export default function JarsScreen() {
                 <Text style={styles.seeAll}>See all</Text>
               </PressableScale>
             </View>
-            <JarList
-              jars={all
-                .filter((j) => !j.mine)
-                .sort((a, b) => b.copiers - a.copiers)
-                .slice(0, 3)}
-            />
+            <JarCarousel jars={popular} gutter={SCREEN.gutter} />
           </>
         ) : (
           <>
-            <View style={styles.search}>
-              <Icon name="search" size={16} color={c.textSecondary} />
-              <TextInput
-                value={query}
-                onChangeText={setQuery}
-                placeholder="Search jars or tokens"
-                placeholderTextColor={c.placeholder}
-                autoCapitalize="none"
-                autoCorrect={false}
-                returnKeyType="search"
-                style={styles.searchInput}
-                accessibilityLabel="Search jars or tokens"
-              />
-            </View>
-            <SegmentedTabs<Filter>
-              options={['All', 'Public', 'Private']}
-              labels={{ All: 'All', Public: 'Public', Private: 'Returns only' }}
-              value={filter}
-              onChange={setFilter}
-              bare
+            <SearchField
+              value={query}
+              onChangeText={setQuery}
+              placeholder="Search jars or tokens"
             />
-            {others.length ? (
-              <JarList jars={others} />
-            ) : (
-              <View style={styles.emptyCard}>
-                <EmptyState
-                  compact
-                  icon="binoculars"
-                  title="Nothing here yet"
-                  hint={q ? 'No jar matches that search.' : 'Jars people share show up here.'}
+            {q ? null : (
+              <>
+                <Text style={[styles.heading, styles.section]}>Most copied</Text>
+                <JarCarousel jars={popular} gutter={SCREEN.gutter} />
+              </>
+            )}
+            <Text style={[styles.heading, styles.section]}>{q ? 'Results' : 'Top jars'}</Text>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={styles.bleed}
+              contentContainerStyle={styles.chips}
+            >
+              {FILTERS.map((option) => (
+                <Chip
+                  key={option}
+                  label={FILTER_LABEL[option]}
+                  accessibilityRole="radio"
+                  selected={option === filter}
+                  onPress={() => setFilter(option)}
                 />
-              </View>
+              ))}
+            </ScrollView>
+            {others.length ? (
+              <JarList jars={others} gutter={SCREEN.gutter} ranked={!q} />
+            ) : q ? (
+              <EmptyState
+                compact
+                icon="search"
+                title="No jars match"
+                hint="Try another name or token."
+                action={{ label: 'Clear search', onPress: () => setQuery('') }}
+              />
+            ) : (
+              <EmptyState
+                compact
+                icon="binoculars"
+                title="Nothing here yet"
+                hint="Jars people share show up here."
+                action={{ label: 'Show all jars', onPress: () => setFilter('All') }}
+              />
             )}
           </>
         )}
@@ -170,15 +213,30 @@ export default function JarsScreen() {
 }
 
 const useStyles = makeStyles((c) => ({
-  page: { paddingHorizontal: 16, gap: 14, paddingBottom: 12 },
-  sectionHead: {
-    marginTop: 8,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
+  flex: { flex: 1 },
+  gutter: { paddingHorizontal: SCREEN.gutter, paddingBottom: 12 },
+  // Home's balance row.
+  balanceRow: { marginTop: 8, flexDirection: 'row', alignItems: 'flex-end', gap: 12 },
   label: { color: c.textSecondary, fontSize: 15 },
+  balance: {
+    color: c.text,
+    fontSize: 38,
+    fontWeight: '500',
+    letterSpacing: -0.8,
+    fontVariant: ['tabular-nums'],
+  },
+  cents: { color: c.textSecondary },
+  changeRow: { marginTop: 4, flexDirection: 'row', alignItems: 'center', gap: 5 },
+  changeAmount: { color: c.text, opacity: 0.85 },
+  changeText: { color: c.textSecondary, fontSize: 15, fontVariant: ['tabular-nums'] },
+  tabs: { marginTop: 20, marginBottom: 8 },
+  // Explore's section headings and sideways rows.
+  section: { marginTop: 24 },
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  heading: { color: c.textSecondary, fontSize: 15 },
   seeAll: { color: c.accentText, fontSize: 15, fontWeight: '600' },
+  bleed: { marginHorizontal: -SCREEN.gutter, marginTop: 10, marginBottom: 4 },
+  chips: { gap: 8, paddingHorizontal: SCREEN.gutter, paddingBottom: 6 },
   // The footer is a row; the field fills it.
   ask: {
     flex: 1,
@@ -200,15 +258,4 @@ const useStyles = makeStyles((c) => ({
     justifyContent: 'center',
     backgroundColor: c.primary,
   },
-  emptyCard: { ...radius(20), backgroundColor: c.card },
-  search: {
-    height: 44,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 14,
-    borderRadius: 22,
-    backgroundColor: c.card,
-  },
-  searchInput: { flex: 1, color: c.text, fontSize: 16 },
 }));

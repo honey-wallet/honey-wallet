@@ -1,10 +1,14 @@
+// Jar pieces, built from the app's existing patterns rather than a look of their own:
+// rows are Explore's top-token rows, the sideways cards are Explore's favourites, and
+// the numbers are Perps' tile grid. HoldingRow is the chat and strategy's own row.
 import { router } from 'expo-router';
-import { StyleSheet, Text, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Avatar } from '@/components/Avatar';
 import { DonutChart } from '@/components/charts/DonutChart';
 import { Icon } from '@/components/Icon';
+import { PressableRow } from '@/components/motion/PressableRow';
 import { PressableScale } from '@/components/motion/PressableScale';
-import { Sparkline, TokenIcon } from '@/components/wallet/parts';
+import { Change, TokenIcon } from '@/components/wallet/parts';
 import { TOKEN_IMAGES } from '@/components/wallet/token-images';
 import { TOKEN_LOGOS } from '@/components/wallet/token-logos';
 import { tap } from '@/lib/haptics';
@@ -19,83 +23,27 @@ export const layersOf = (jar: ThesisJar) =>
     ? jar.picks.map((p) => ({ id: p.symbol, weight: p.weight, color: p.color }))
     : undefined;
 
-/** A jar in a list: the jar itself, filled with what it holds, then its name and return. */
-export function JarCard({ jar }: { jar: ThesisJar }) {
-  const styles = useStyles();
-  const c = useTheme();
-  const ret = jarReturn(jar);
-  const hidden = !layersOf(jar);
-  return (
-    <PressableScale
-      accessibilityRole="button"
-      accessibilityLabel={`${jar.name}, ${signedPct(ret)}`}
-      scaleTo={0.98}
-      onPress={() => {
-        tap();
-        router.push({ pathname: '/jar/[id]', params: { id: jar.id } });
-      }}
-      style={styles.card}
-    >
-      {/* What it holds, who it's by, and how it's doing. */}
-      <View style={styles.top}>
-        <TokenStack picks={hidden ? [] : jar.picks} size={34} />
-        <View style={styles.flex}>
-          <Text style={styles.name} numberOfLines={1}>
-            {jar.name}
-          </Text>
-          <Text style={styles.metaText} numberOfLines={1}>
-            {jar.thesis}
-          </Text>
-        </View>
-        <View style={styles.right}>
-          <Text style={[styles.value, !jar.mine && { color: ret < 0 ? c.error : c.success }]}>
-            {jar.mine ? formatUsd(jarValue(jar)) : signedPct(ret)}
-          </Text>
-          {jar.mine ? (
-            <Text style={[styles.ret, { color: ret < 0 ? c.error : c.success }]}>
-              {signedPct(ret)}
-            </Text>
-          ) : (
-            <Text style={styles.metaText}>{jar.copiers} copied</Text>
-          )}
-        </View>
-      </View>
+/** Who can see a jar, in the words the launch step uses. */
+export const visibilityLabel = (jar: ThesisJar) =>
+  jar.visibility === 'public'
+    ? 'Public'
+    : jar.visibility === 'private'
+      ? 'Returns only'
+      : 'Members only';
 
-      {hidden ? (
-        <View style={styles.privateRow}>
-          <Icon name="lock" size={13} color={c.textSecondary} />
-          <Text style={styles.metaText}>Private · holdings hidden, returns only</Text>
-        </View>
-      ) : (
-        <View style={styles.chips}>
-          {jar.picks.map((p) => (
-            <View key={p.symbol} style={styles.chip}>
-              <PickIcon pick={p} size={16} />
-              <Text style={styles.chipText}>{p.symbol}</Text>
-              <Text style={styles.chipWeight}>{p.weight}%</Text>
-            </View>
-          ))}
-        </View>
-      )}
-
-      <View style={styles.divider} />
-      <View style={styles.bottom}>
-        <People names={jar.members.map((m) => ({ id: m.id, name: m.name }))} />
-        <Text style={[styles.metaText, styles.flex]} numberOfLines={1}>
-          {jar.members.length === 1
-            ? jar.mine
-              ? 'Just you'
-              : `by ${jar.creator}`
-            : `${jar.members.map((m) => m.name).join(', ')}`}
-        </Text>
-        <Sparkline data={jar.history} width={64} height={22} />
-      </View>
-    </PressableScale>
-  );
-}
-
-/** Overlapping token logos, like a wallet's asset stack; a lock well when hidden. */
-export function TokenStack({ picks, size = 34 }: { picks: Pick[]; size?: number }) {
+/**
+ * Overlapping token logos, as Earn shows a vault's exposure; a lock well when hidden.
+ * `ring` is the surface behind the stack (the page on a plain row, the card in a card).
+ */
+export function TokenStack({
+  picks,
+  size = 34,
+  ring,
+}: {
+  picks: Pick[];
+  size?: number;
+  ring?: string;
+}) {
   const c = useTheme();
   if (!picks.length)
     return (
@@ -124,7 +72,7 @@ export function TokenStack({ picks, size = 34 }: { picks: Pick[]; size?: number 
             left: i * (size - overlap),
             borderRadius: size / 2 + 2,
             borderWidth: 2,
-            borderColor: c.card,
+            borderColor: ring ?? c.card,
             top: -2,
             zIndex: shown.length - i,
           }}
@@ -191,42 +139,6 @@ export function People({
   );
 }
 
-/** A jar's mix as one thin stacked bar. */
-export function MixBar({ picks }: { picks: Pick[] }) {
-  const styles = useStyles();
-  return (
-    <View style={styles.mix}>
-      {picks.map((p) => (
-        <View key={p.symbol} style={{ flex: p.weight, backgroundColor: p.color }} />
-      ))}
-    </View>
-  );
-}
-
-/** Donut plus legend: what's in the jar (or a proposal), by weight. */
-export function Allocation({ picks, total }: { picks: Pick[]; total?: number }) {
-  const styles = useStyles();
-  return (
-    <View style={styles.allocation}>
-      <View style={styles.jarCol}>
-        <TokenStack picks={picks} size={32} />
-        {total !== undefined ? <Text style={styles.donutTotal}>{formatUsd(total)}</Text> : null}
-      </View>
-      <View style={styles.legend}>
-        {picks.map((p) => (
-          <View key={p.symbol} style={styles.legendRow}>
-            <View style={[styles.dot, { backgroundColor: p.color }]} />
-            <Text style={styles.legendLabel} numberOfLines={1}>
-              {p.symbol}
-            </Text>
-            <Text style={styles.legendValue}>{p.weight}%</Text>
-          </View>
-        ))}
-      </View>
-    </View>
-  );
-}
-
 /** Who owns what in a shared jar, as a donut of members. */
 const MEMBER_COLORS = ['#F5A524', '#2775CA', '#9945FF', '#00C08B', '#E5484D', '#8C96A3'];
 export function Owners({ jar }: { jar: ThesisJar }) {
@@ -235,7 +147,7 @@ export function Owners({ jar }: { jar: ThesisJar }) {
   return (
     <View style={styles.allocation}>
       <DonutChart
-        size={124}
+        size={112}
         segments={jar.members
           .filter((m) => !m.invited)
           .map((m, i) => ({
@@ -253,7 +165,6 @@ export function Owners({ jar }: { jar: ThesisJar }) {
             <View
               style={[styles.dot, { backgroundColor: MEMBER_COLORS[i % MEMBER_COLORS.length] }]}
             />
-            <Avatar name={m.name} size={20} seed={m.id} />
             <Text style={styles.legendLabel} numberOfLines={1}>
               {m.name}
             </Text>
@@ -290,7 +201,7 @@ export function PickIcon({ pick, size = 36 }: { pick: Pick; size?: number }) {
 }
 
 /**
- * Aave's asset row: logo, name and network, a bar for its share, then the dollars and
+ * The chat and strategy's asset row (Aave's): logo, name and network, a bar for its share, then the dollars and
  * the share. `onRemove` adds a remove button (editing a proposal).
  */
 export function HoldingRow({
@@ -378,93 +289,53 @@ export function HoldingRow({
   );
 }
 
-/** Aave's stat tiles: a label over a number, two to a row. */
-export function StatGrid({
-  stats,
+/** A signed percentage, "+12.4%". */
+export const signedPct = (fraction: number) =>
+  `${fraction >= 0 ? '+' : ''}${(fraction * 100).toFixed(1)}%`;
+
+/**
+ * The Perps page's market tiles: one grey card split into tiles by the page's colour,
+ * a grey label over each number. Four make a 2×2 grid; fewer share one row.
+ */
+export function Tiles({
+  tiles,
 }: {
-  stats: { label: string; value: string; tone?: 'up' | 'down' }[];
+  tiles: { label: string; value: string; hint?: string; tone?: 'up' | 'down' }[];
 }) {
   const styles = useStyles();
   const c = useTheme();
+  const grid = tiles.length === 4;
   return (
-    <View style={styles.stats}>
-      {stats.map((s) => (
-        <View key={s.label} style={styles.stat}>
-          <Text style={styles.statLabel}>{s.label}</Text>
+    <View style={styles.grid}>
+      {tiles.map((t, i) => (
+        <View
+          key={t.label}
+          style={[
+            styles.tile,
+            grid ? styles.tileHalf : styles.flex,
+            (grid ? i % 2 === 0 : i < tiles.length - 1) && styles.tileRight,
+            grid && i < 2 && styles.tileBottom,
+          ]}
+        >
+          <Text style={styles.tileLabel}>{t.label}</Text>
           <Text
             style={[
-              styles.statValue,
-              s.tone === 'up' && { color: c.success },
-              s.tone === 'down' && { color: c.error },
+              styles.tileValue,
+              t.tone === 'up' && { color: c.success },
+              t.tone === 'down' && { color: c.error },
             ]}
             numberOfLines={1}
           >
-            {s.value}
+            {t.value}
           </Text>
+          {t.hint ? <Text style={styles.tileHint}>{t.hint}</Text> : null}
         </View>
       ))}
     </View>
   );
 }
 
-/** A signed percentage, "+12.4%". */
-export const signedPct = (fraction: number) =>
-  `${fraction >= 0 ? '+' : ''}${(fraction * 100).toFixed(1)}%`;
-
-/**
- * The summary, quiet like Home's balance: a small label, the big number and its change
- * on the left, the line top right, then a few facts in one plain row.
- */
-export function Summary({
-  label,
-  value,
-  change,
-  changeText,
-  history,
-  facts,
-}: {
-  label: string;
-  value: string;
-  /** Fraction, for the colour. */
-  change: number;
-  changeText: string;
-  history: number[];
-  facts?: { label: string; value: string }[];
-}) {
-  const styles = useStyles();
-  const c = useTheme();
-  return (
-    <View style={styles.summary}>
-      <View style={styles.summaryRow}>
-        <View style={styles.flex}>
-          <Text style={styles.summaryLabel}>{label}</Text>
-          <Text style={styles.summaryValue}>{value}</Text>
-          <View style={styles.summaryChange}>
-            <Icon
-              name={change < 0 ? 'down' : 'up'}
-              size={9}
-              color={change < 0 ? c.error : c.success}
-            />
-            <Text style={styles.summaryChangeText}>{changeText}</Text>
-          </View>
-        </View>
-        <Sparkline data={history.length > 1 ? history : [0, 0]} width={116} height={60} />
-      </View>
-      {facts?.length ? (
-        <View style={styles.facts}>
-          {facts.map((f, i) => (
-            <View key={f.label} style={[styles.fact, i > 0 && styles.factBorder]}>
-              <Text style={styles.factValue}>{f.value}</Text>
-              <Text style={styles.factLabel}>{f.label}</Text>
-            </View>
-          ))}
-        </View>
-      ) : null}
-    </View>
-  );
-}
-
-/** A few facts in one plain row, split by hairlines. */
+/** A few facts in one plain row, split by hairlines (inside a card, e.g. the chat's). */
 export function Facts({ facts }: { facts: { label: string; value: string }[] }) {
   const styles = useStyles();
   return (
@@ -480,168 +351,132 @@ export function Facts({ facts }: { facts: { label: string; value: string }[] }) 
 }
 
 /**
- * A jar in a grouped list (one card, hairlines between rows, like Settings): its tokens,
- * name, the people in it, and value with return. Details live on the jar's page.
+ * A jar in a list, laid out like Explore's top-token rows (and Home's token rows): an
+ * optional rank, its tokens (a lock when they're private), name and a quiet line about
+ * it, then value (or copy fee) over its change. Rows run edge to edge so the press
+ * highlight fills the width; `gutter` is the page's.
  */
-export function JarRow({ jar, first }: { jar: ThesisJar; first?: boolean }) {
+export function JarRow({ jar, gutter, rank }: { jar: ThesisJar; gutter: number; rank?: number }) {
   const styles = useStyles();
   const c = useTheme();
   const ret = jarReturn(jar);
   const hidden = !layersOf(jar);
   return (
-    <PressableScale
+    <PressableRow
       accessibilityRole="button"
       accessibilityLabel={`${jar.name}, ${signedPct(ret)}`}
-      scaleTo={0.98}
-      onPress={() => {
-        tap();
-        router.push({ pathname: '/jar/[id]', params: { id: jar.id } });
-      }}
-      style={[styles.jarRow, !first && styles.jarRowBorder]}
+      onPress={() => openJar(jar.id)}
+      style={[styles.row, { marginHorizontal: -gutter, paddingHorizontal: gutter }]}
     >
-      <TokenStack picks={hidden ? [] : jar.picks} size={30} />
+      {rank ? <Text style={styles.rank}>{rank}</Text> : null}
+      <TokenStack picks={hidden ? [] : jar.picks.slice(0, 2)} size={36} ring={c.canvas} />
       <View style={styles.flex}>
         <Text style={styles.name} numberOfLines={1}>
           {jar.name}
         </Text>
-        <View style={styles.rowMeta}>
-          <People names={jar.members.map((m) => ({ id: m.id, name: m.name }))} size={16} />
-          <Text style={styles.metaText} numberOfLines={1}>
-            {jar.mine
-              ? jar.members.length === 1
-                ? 'Just you'
-                : `${jar.members.length} people`
-              : `${jar.creator} · ${jar.copiers} copied`}
-          </Text>
-        </View>
-      </View>
-      <View style={styles.right}>
-        <Text style={[styles.value, !jar.mine && { color: ret < 0 ? c.error : c.success }]}>
-          {jar.mine ? formatUsd(jarValue(jar)) : signedPct(ret)}
+        <Text style={styles.meta} numberOfLines={1}>
+          {jar.mine
+            ? jar.members.length === 1
+              ? 'Just you'
+              : `${jar.members.length} people`
+            : `${jar.creator} · ${jar.copiers} copied`}
         </Text>
-        {jar.mine ? (
-          <Text style={[styles.ret, { color: ret < 0 ? c.error : c.success }]}>
-            {signedPct(ret)}
-          </Text>
-        ) : (
-          <Text style={styles.metaText}>{jar.copyFee}% fee</Text>
-        )}
       </View>
-    </PressableScale>
+      <View style={styles.end}>
+        <Text style={styles.value}>
+          {jar.mine ? formatUsd(jarValue(jar)) : `${jar.copyFee}% fee`}
+        </Text>
+        <Change value={ret * 100} />
+      </View>
+    </PressableRow>
   );
 }
 
-/** A grouped list of jars in one card. */
-export function JarList({ jars }: { jars: ThesisJar[] }) {
-  const styles = useStyles();
+/** Jars as a plain list of rows, like Explore's top tokens; `ranked` numbers them. */
+export function JarList({
+  jars,
+  gutter = 18,
+  ranked,
+}: {
+  jars: ThesisJar[];
+  gutter?: number;
+  ranked?: boolean;
+}) {
   return (
-    <View style={styles.list}>
+    <View>
       {jars.map((jar, i) => (
-        <JarRow key={jar.id} jar={jar} first={i === 0} />
+        <JarRow key={jar.id} jar={jar} gutter={gutter} rank={ranked ? i + 1 : undefined} />
       ))}
     </View>
   );
 }
 
 /**
- * Says where a page's jar numbers come from. Until the server tracks jars, every jar,
- * value and return here is an example, and the page says so.
+ * Jars in one sideways row, as Explore shows favourite tokens: each card has the
+ * tokens and name, the return big, and how many copied it. `gutter` lines the first
+ * card up with the page while the row runs to the edges.
  */
-export function SampleNote({ what = 'Jars, values and returns' }: { what?: string }) {
+export function JarCarousel({ jars, gutter }: { jars: ThesisJar[]; gutter: number }) {
   const styles = useStyles();
-  const c = useTheme();
   return (
-    <View style={styles.note}>
-      <Icon name="info" size={12} color={c.textSecondary} />
-      <Text style={styles.noteText}>{what} are examples until jars go live.</Text>
-    </View>
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      style={{ marginHorizontal: -gutter, marginTop: 10 }}
+      contentContainerStyle={[styles.carousel, { paddingHorizontal: gutter }]}
+    >
+      {jars.map((jar) => {
+        const ret = jarReturn(jar);
+        const hidden = !layersOf(jar);
+        return (
+          <PressableScale
+            key={jar.id}
+            accessibilityRole="button"
+            accessibilityLabel={`${jar.name}, ${signedPct(ret)}`}
+            onPress={() => openJar(jar.id)}
+            style={styles.feature}
+          >
+            <View style={styles.featureName}>
+              <TokenStack picks={hidden ? [] : jar.picks.slice(0, 2)} size={22} />
+              <Text style={styles.featureSymbol} numberOfLines={1}>
+                {jar.name}
+              </Text>
+            </View>
+            <Text style={styles.featureValue} numberOfLines={1}>
+              {signedPct(ret)}
+            </Text>
+            <Text style={styles.meta} numberOfLines={1}>
+              {jar.copiers} copied · {jar.copyFee}% fee
+            </Text>
+          </PressableScale>
+        );
+      })}
+    </ScrollView>
   );
+}
+
+function openJar(id: string) {
+  tap();
+  router.push({ pathname: '/jar/[id]', params: { id } });
 }
 
 const useStyles = makeStyles((c) => ({
   flex: { flex: 1 },
-  ret: { fontSize: 14, fontWeight: '600', fontVariant: ['tabular-nums'] },
-  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
-  chip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    height: 26,
-    paddingLeft: 5,
-    paddingRight: 10,
-    borderRadius: 13,
-    backgroundColor: c.raised,
-  },
-  chipText: { color: c.text, fontSize: 13, fontWeight: '600' },
-  chipWeight: { color: c.textSecondary, fontSize: 13 },
-  jarCol: { alignItems: 'center', gap: 6 },
-  note: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  noteText: { flexShrink: 1, color: c.textSecondary, fontSize: 12 },
-  card: { padding: 16, gap: 12, ...radius(22), backgroundColor: c.card },
-  summary: { gap: 16, paddingTop: 4 },
-  summaryRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  summaryLabel: { color: c.textSecondary, fontSize: 15 },
-  summaryValue: {
-    marginTop: 2,
-    color: c.text,
-    fontSize: 36,
-    fontWeight: '700',
-    fontVariant: ['tabular-nums'],
-  },
-  summaryChange: { marginTop: 2, flexDirection: 'row', alignItems: 'center', gap: 4 },
-  summaryChangeText: { color: c.textSecondary, fontSize: 14, fontVariant: ['tabular-nums'] },
-  facts: { flexDirection: 'row', paddingVertical: 12, ...radius(18), backgroundColor: c.card },
-  fact: { flex: 1, paddingHorizontal: 14, gap: 2 },
-  factBorder: { borderLeftWidth: StyleSheet.hairlineWidth, borderLeftColor: c.divider },
-  factValue: { color: c.text, fontSize: 17, fontWeight: '600', fontVariant: ['tabular-nums'] },
-  factLabel: { color: c.textSecondary, fontSize: 13 },
-  list: { paddingHorizontal: 16, ...radius(20), backgroundColor: c.card },
-  jarRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 14 },
-  jarRowBorder: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: c.divider },
-  rowMeta: { marginTop: 3, flexDirection: 'row', alignItems: 'center', gap: 6 },
-  privateRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  divider: { height: StyleSheet.hairlineWidth, backgroundColor: c.divider },
-  hero: { padding: 20, gap: 18, ...radius(28), backgroundColor: c.primary },
-  heroRow: { flexDirection: 'row', alignItems: 'stretch', gap: 12 },
-  heroLabel: { color: c.onPrimary, opacity: 0.7, fontSize: 14, fontWeight: '500' },
-  heroValue: {
-    marginTop: 4,
-    color: c.onPrimary,
-    fontSize: 32,
-    fontWeight: '800',
-    fontVariant: ['tabular-nums'],
-  },
-  heroTag: {
-    marginTop: 10,
-    alignSelf: 'flex-start',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    height: 26,
-    paddingHorizontal: 10,
-    borderRadius: 13,
-    backgroundColor: c.onPrimary,
-  },
-  heroTagText: { color: c.primary, fontSize: 13, fontWeight: '700', fontVariant: ['tabular-nums'] },
-  bars: { width: 84, height: 88, flexDirection: 'row', alignItems: 'flex-end', gap: 5 },
-  bar: { flex: 1, borderRadius: 999, backgroundColor: c.onPrimary, opacity: 0.14 },
-  barNow: { opacity: 1, backgroundColor: '#FFFFFF' },
-  heroStats: { flexDirection: 'row', gap: 8 },
-  heroStat: {
-    flex: 1,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    gap: 2,
-    borderRadius: 16,
-    backgroundColor: 'rgba(255,255,255,0.35)',
-  },
-  heroStatValue: {
-    color: c.onPrimary,
-    fontSize: 17,
-    fontWeight: '700',
-    fontVariant: ['tabular-nums'],
-  },
-  heroStatLabel: { color: c.onPrimary, opacity: 0.7, fontSize: 12 },
+  // Perps' market row.
+  // Explore's market row.
+  row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10 },
+  rank: { width: 18, color: c.textSecondary, fontSize: 15 },
+  name: { color: c.text, fontSize: 16, fontWeight: '500' },
+  meta: { marginTop: 2, color: c.textSecondary, fontSize: 14 },
+  end: { alignItems: 'flex-end', gap: 2 },
+  value: { color: c.text, fontSize: 16, fontWeight: '500', fontVariant: ['tabular-nums'] },
+  // Explore's favourite-token cards.
+  carousel: { gap: 8 },
+  feature: { width: 168, height: 112, padding: 14, gap: 6, ...radius(20), backgroundColor: c.card },
+  featureName: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  featureSymbol: { flexShrink: 1, color: c.text, fontSize: 16, fontWeight: '500' },
+  featureValue: { color: c.text, fontSize: 24, fontWeight: '500', fontVariant: ['tabular-nums'] },
+  // The chat and strategy's asset row.
   stepper: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   stepButton: {
     width: 24,
@@ -692,29 +527,26 @@ const useStyles = makeStyles((c) => ({
     justifyContent: 'center',
     backgroundColor: c.raised,
   },
-  stats: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  stat: {
-    flexGrow: 1,
-    flexBasis: '45%',
-    paddingVertical: 12,
-    paddingHorizontal: 14,
-    gap: 4,
-    ...radius(16),
+  // Perps' tile grid: the page's colour between tiles, so one grey card reads as several.
+  grid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    ...radius(20),
+    overflow: 'hidden',
     backgroundColor: c.card,
   },
-  statLabel: { color: c.textSecondary, fontSize: 13 },
-  statValue: { color: c.text, fontSize: 18, fontWeight: '700', fontVariant: ['tabular-nums'] },
-  top: { flexDirection: 'row', alignItems: 'center', gap: 14 },
-  name: { color: c.text, fontSize: 17, fontWeight: '600' },
-  meta: { marginTop: 3, flexDirection: 'row', alignItems: 'center', gap: 5 },
-  metaText: { flexShrink: 1, color: c.textSecondary, fontSize: 13 },
-  right: { alignItems: 'flex-end', gap: 2 },
-  value: { color: c.text, fontSize: 17, fontWeight: '600', fontVariant: ['tabular-nums'] },
-  thesis: { marginTop: 4, color: c.textSecondary, fontSize: 13 },
-  bottom: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  hidden: { flex: 1, color: c.textSecondary, fontSize: 13 },
-  spark: { width: 72 },
-  mix: { flex: 1, height: 8, flexDirection: 'row', gap: 2, overflow: 'hidden', borderRadius: 4 },
+  tile: { padding: 16, gap: 4 },
+  tileHalf: { width: '50%' },
+  tileRight: { borderRightWidth: 2, borderColor: c.canvas },
+  tileBottom: { borderBottomWidth: 2, borderColor: c.canvas },
+  tileLabel: { color: c.textSecondary, fontSize: 14 },
+  tileValue: { color: c.text, fontSize: 19, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  tileHint: { color: c.textSecondary, fontSize: 12 },
+  facts: { flexDirection: 'row', paddingVertical: 12, ...radius(18), backgroundColor: c.card },
+  fact: { flex: 1, paddingHorizontal: 14, gap: 2 },
+  factBorder: { borderLeftWidth: StyleSheet.hairlineWidth, borderLeftColor: c.divider },
+  factValue: { color: c.text, fontSize: 17, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  factLabel: { color: c.textSecondary, fontSize: 13 },
   allocation: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -725,7 +557,7 @@ const useStyles = makeStyles((c) => ({
   },
   donutTotal: { color: c.text, fontSize: 16, fontWeight: '600' },
   donutLabel: { color: c.textSecondary, fontSize: 12 },
-  legend: { flex: 1, gap: 10 },
+  legend: { flex: 1, gap: 12 },
   legendRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   dot: { width: 8, height: 8, borderRadius: 4 },
   legendLabel: { flex: 1, color: c.text, fontSize: 15 },

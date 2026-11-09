@@ -2,23 +2,39 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { Text, View } from 'react-native';
 import { PriceChart } from '@/components/charts/PriceChart';
-import { Icon } from '@/components/Icon';
-import { Facts, HoldingRow, layersOf, Owners, signedPct } from '@/components/jars/JarParts';
+import { Icon, type IconName } from '@/components/Icon';
+import {
+  layersOf,
+  Owners,
+  PickIcon,
+  signedPct,
+  Tiles,
+  TokenStack,
+  visibilityLabel,
+} from '@/components/jars/JarParts';
+import { NumberPopIn } from '@/components/motion/NumberPopIn';
 import { PressableScale } from '@/components/motion/PressableScale';
 import { SegmentedTabs } from '@/components/motion/SegmentedTabs';
+import { TextSwap } from '@/components/motion/TextSwap';
 import { PillButton } from '@/components/onboarding/PillButton';
-import { EmptyState, PushedScreen } from '@/components/wallet/parts';
+import { Description } from '@/components/sheets/Description';
+import { DetailGroup, StatusPill } from '@/components/sheets/Details';
+import { StatRow } from '@/components/sheets/Sheet';
+import { OptionChips } from '@/components/trade/TradeForm';
+import { Change, EmptyState, PushedScreen, SCREEN } from '@/components/wallet/parts';
 import { tap } from '@/lib/haptics';
 import { refreshJarBuy } from '@/lib/jar-buy';
 import { useDaoJar } from '@/lib/jar-dao';
 import { formatUsd } from '@/lib/mock-wallet';
 import { approvalsLeft, useMultisig, useProposal } from '@/lib/multisig';
+import type { Pick } from '@/lib/thesis';
 import { copyJar, jarReturn, jarValue, updateJarBuy, useThesisJars } from '@/lib/thesis';
 import { showToast } from '@/lib/toast';
 import { makeStyles, radius, useTheme } from '@/theme';
 
 type Range = '1W' | '1M' | 'All';
-const COPY_AMOUNTS = [50, 100, 250];
+const COPY_AMOUNTS = ['$50', '$100', '$250'] as const;
+type CopyAmount = (typeof COPY_AMOUNTS)[number];
 const FINAL = new Set(['SUCCESS', 'REFUNDED', 'FAILED', 'NOT_SENT']);
 const STATE_TEXT: Record<string, string> = {
   NOT_SENT: 'Not sent',
@@ -31,11 +47,14 @@ const STATE_TEXT: Record<string, string> = {
   FAILED: 'Failed',
 };
 const RANGE_POINTS: Record<Range, number> = { '1W': 8, '1M': 30, All: Number.POSITIVE_INFINITY };
+const CHART_HEIGHT = 220;
 
 /**
- * One jar, laid out like an Aave market: the jar and its value up top with a ranged
- * chart, the key numbers as tiles, then holdings as asset rows, owners and the idea.
- * Private jars show other people only their returns.
+ * One jar, laid out like a Perps market page: what it is and its value (or, for
+ * someone else's jar, its return) with the change, the chart across the full width and
+ * its ranges, anything waiting on you, the jar's numbers as Perps' tiles, its holdings
+ * as Home's token rows, owners, and the idea as a Description. Copying sits at the
+ * bottom like an order. Private jars show other people only their returns.
  */
 export default function JarScreen() {
   const styles = useStyles();
@@ -43,7 +62,7 @@ export default function JarScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const jar = useThesisJars().find((j) => j.id === id);
   const [range, setRange] = useState<Range>('1M');
-  const [copyAmount, setCopyAmount] = useState(100);
+  const [copyAmount, setCopyAmount] = useState<CopyAmount>('$100');
   const [scrub, setScrub] = useState<number | null>(null);
   // The chart fits the page it's on (the extension popup is narrower than the window).
   const [width, setWidth] = useState(0);
@@ -65,8 +84,13 @@ export default function JarScreen() {
 
   if (!jar)
     return (
-      <PushedScreen title="Jar" fallback="/jars">
-        <EmptyState icon="pie" title="Jar not found" hint="It may have been closed." />
+      <PushedScreen title="Jar" fallback="/jars" contentStyle={styles.gutter}>
+        <EmptyState
+          icon="pie"
+          title="Jar not found"
+          hint="It may have been closed."
+          action={{ label: 'Browse jars', onPress: () => router.replace('/jars') }}
+        />
       </PushedScreen>
     );
 
@@ -77,7 +101,8 @@ export default function JarScreen() {
   const change = first > 0 ? (shown - first) / first : 0;
   const ret = jarReturn(jar);
   const layers = layersOf(jar);
-  const _up = change >= 0;
+  const amount = Number(copyAmount.slice(1));
+  const invited = jar.members.filter((m) => m.invited);
   // A new jar has no month behind it yet: no ranges, "since launch".
   const young = jar.history.length < 8;
   const period = young
@@ -85,287 +110,364 @@ export default function JarScreen() {
     : range === 'All'
       ? 'all time'
       : `past ${range === '1W' ? 'week' : 'month'}`;
+  const started = new Date(jar.createdAt).toLocaleDateString(undefined, { dateStyle: 'medium' });
 
   const copy = () => {
     tap();
-    const next = copyJar(jar, copyAmount);
-    showToast(`Copied for $${copyAmount} · ${jar.copyFee}% of profit goes to ${jar.creator}`);
+    const next = copyJar(jar, amount);
+    showToast(`Copied for $${amount} · ${jar.copyFee}% of profit goes to ${jar.creator}`);
     router.replace({ pathname: '/jar/[id]', params: { id: next } });
   };
 
   return (
     <PushedScreen
-      title={jar.name}
       fallback="/jars"
+      title={
+        <>
+          {layers ? <TokenStack picks={jar.picks} size={20} ring={c.canvas} /> : null}
+          <Text style={styles.headerTitle} numberOfLines={1}>
+            {jar.name}
+          </Text>
+        </>
+      }
       footer={
         jar.mine ? null : (
+          // Copying is an order: pick the amount, then the honey button.
           <View style={styles.footer}>
-            <View style={styles.amounts}>
-              {COPY_AMOUNTS.map((a) => (
-                <PressableScale
-                  key={a}
-                  accessibilityRole="button"
-                  accessibilityState={{ selected: copyAmount === a }}
-                  onPress={() => {
-                    tap();
-                    setCopyAmount(a);
-                  }}
-                  style={[styles.amount, copyAmount === a && styles.amountOn]}
-                >
-                  <Text style={styles.amountText}>${a}</Text>
-                </PressableScale>
-              ))}
-            </View>
-            <PillButton label={`Copy with $${copyAmount}`} onPress={copy} />
+            <OptionChips options={COPY_AMOUNTS} value={copyAmount} onChange={setCopyAmount} />
+            <PillButton label={`Copy with ${copyAmount}`} onPress={copy} />
           </View>
         )
       }
     >
-      <View style={styles.page}>
-        {/* Aave's balance: a centred number with smaller cents, the change under it,
-            then the chart across the full width; drag along it to read a day. */}
-        <View style={styles.aave}>
-          <Text style={styles.aaveLabel}>
-            {jar.creator} ·{' '}
-            {jar.visibility === 'public'
-              ? 'Public'
-              : jar.visibility === 'private'
-                ? 'Returns only'
-                : 'Members only'}
-          </Text>
-          {jar.mine ? (
-            <Text style={styles.aaveValue}>
-              {formatUsd(shown).split('.')[0]}
-              <Text style={styles.aaveCents}>.{formatUsd(shown).split('.')[1] ?? '00'}</Text>
-            </Text>
-          ) : (
-            <Text style={styles.aaveValue}>{signedPct(change)}</Text>
-          )}
-          <Text style={[styles.aaveChange, { color: change < 0 ? c.error : c.success }]}>
+      {/* Who it's by and who sees it, then the number; while scrubbing, the value under the finger. */}
+      <View style={styles.gutter}>
+        <View style={styles.nameRow}>
+          <Text style={styles.name} numberOfLines={1}>
             {jar.mine
-              ? `${change < 0 ? '−' : '+'}${formatUsd(Math.abs(shown - first))} (${signedPct(change)})`
-              : ''}{' '}
-            <Text style={styles.aavePeriod}>{scrub === null ? period : 'at this point'}</Text>
+              ? jar.members.length > 1
+                ? `${jar.members.length} owners`
+                : 'Yours'
+              : jar.creator}
           </Text>
+          <Text style={styles.badge}>{visibilityLabel(jar)}</Text>
         </View>
-        <View onLayout={(e) => setWidth(e.nativeEvent.layout.width)}>
-          {width > 0 ? (
-            <PriceChart data={data} width={width} height={200} onScrub={setScrub} />
+        {jar.mine ? (
+          scrub === null ? (
+            <NumberPopIn
+              value={formatUsd(shown)}
+              style={styles.price}
+              fractionStyle={styles.cents}
+            />
           ) : (
-            <View style={{ height: 200 }} />
-          )}
+            <Text style={styles.price}>{formatUsd(shown)}</Text>
+          )
+        ) : (
+          <Text style={styles.price}>{signedPct(change)}</Text>
+        )}
+        <View style={styles.changeRow}>
+          {jar.mine ? <Change value={change * 100} /> : null}
+          <TextSwap
+            text={
+              scrub !== null
+                ? 'at this point'
+                : jar.mine
+                  ? `${change < 0 ? '−' : '+'}${formatUsd(Math.abs(shown - first))} ${period}`
+                  : period
+            }
+            style={[styles.flex, styles.changeLabel]}
+          />
         </View>
-        {young ? null : (
+      </View>
+
+      <View onLayout={(e) => setWidth(e.nativeEvent.layout.width)}>
+        {width > 0 ? (
+          <PriceChart data={data} width={width} height={CHART_HEIGHT} onScrub={setScrub} />
+        ) : (
+          <View style={{ height: CHART_HEIGHT }} />
+        )}
+      </View>
+      {young ? null : (
+        <View style={styles.ranges}>
           <SegmentedTabs<Range>
+            bare
             options={['1W', '1M', 'All']}
             value={range}
             onChange={setRange}
-            fill
           />
-        )}
-        <Facts
-          facts={[
-            { label: 'Total return', value: signedPct(ret) },
-            ...(jar.copiedFrom
-              ? [
-                  { label: 'Copied from', value: jar.copiedFrom.creator },
-                  { label: 'Their cut', value: `${jar.copiedFrom.fee}% of profit` },
-                ]
-              : [
-                  { label: 'Copied by', value: String(jar.copiers) },
-                  { label: 'Copy fee', value: `${jar.copyFee}%` },
-                ]),
-          ]}
-        />
-        {jar.sharedWallet && approval && approval.status !== 'executed' ? (
-          <PressableScale
-            accessibilityRole="button"
+        </View>
+      )}
+
+      {/* Anything still waiting: an approval, a limit order, friends' shares. */}
+      {jar.sharedWallet && approval && approval.status !== 'executed' ? (
+        <View style={[styles.section, styles.gutter]}>
+          <Notice
+            icon={approval.status === 'pending' ? 'clock' : 'warning'}
+            failed={approval.status !== 'pending'}
+            title={
+              approval.status === 'pending'
+                ? `Waiting for ${left} more approval${left === 1 ? '' : 's'}`
+                : `Not bought: the proposal was ${approval.status}`
+            }
+            hint={`${jar.sharedWallet.label} buys this jar once enough members approve.`}
             onPress={() => {
               tap();
               router.push({ pathname: '/proposal/[id]', params: { id: approval.id } });
             }}
-            style={styles.order}
-          >
-            <Icon
-              name={approval.status === 'pending' ? 'clock' : 'warning'}
-              size={16}
-              color={approval.status === 'pending' ? c.accentText : c.error}
-            />
-            <View style={styles.flex}>
-              <Text style={styles.orderTitle}>
-                {approval.status === 'pending'
-                  ? `Waiting for ${left} more approval${left === 1 ? '' : 's'}`
-                  : `Not bought: the proposal was ${approval.status}`}
-              </Text>
-              <Text style={styles.orderHint}>
-                {jar.sharedWallet.label} buys this jar once enough members approve. Tap to see the
-                proposal.
-              </Text>
-            </View>
-          </PressableScale>
-        ) : null}
-        {jar.openOrder ? (
-          <View style={styles.order}>
-            <Icon name="clock" size={16} color={c.accentText} />
-            <View style={styles.flex}>
-              <Text style={styles.orderTitle}>
-                Limit order open · {formatUsd(jar.openOrder.amount)}
-              </Text>
-              <Text style={styles.orderHint}>
-                Buys 1% under today's price. Waits up to 24 hours; cancel anytime.
-              </Text>
-            </View>
-          </View>
-        ) : null}
-        {jar.members.some((m) => m.invited) ? (
-          <View style={styles.order}>
-            <Icon name="person" size={16} color={c.accentText} />
-            <View style={styles.flex}>
-              <Text style={styles.orderTitle}>
-                Waiting on {jar.members.filter((m) => m.invited).length} friend
-                {jar.members.filter((m) => m.invited).length === 1 ? '' : 's'}
-              </Text>
-              <Text style={styles.orderHint}>
-                Invites sent for {formatUsd(jar.members.find((m) => m.invited)?.asked ?? 0)} each.
-                Their share joins when they accept.
-              </Text>
-            </View>
-          </View>
-        ) : null}
-
-        {jar.buy?.length ? (
-          <>
-            <Text style={styles.section}>Swaps</Text>
-            <View style={styles.card}>
-              {jar.buy.map((l) => (
-                <View key={l.depositAddress} style={styles.row}>
-                  <Text style={[styles.thesis, styles.flex]} numberOfLines={1}>
-                    {l.symbol} on {l.chain} · {formatUsd(l.usd)}
-                  </Text>
-                  <Text
-                    style={[
-                      styles.hint,
-                      styles.swapState,
-                      {
-                        color:
-                          l.status === 'SUCCESS'
-                            ? c.success
-                            : l.status === 'FAILED' || l.status === 'INCOMPLETE_DEPOSIT'
-                              ? c.error
-                              : c.textSecondary,
-                      },
-                    ]}
-                  >
-                    {STATE_TEXT[l.status] ?? l.status}
-                  </Text>
-                </View>
-              ))}
-            </View>
-          </>
-        ) : null}
-
-        <Text style={styles.section}>Holdings</Text>
-        <View style={styles.card}>
-          {layers && jar.picks.length ? (
-            jar.picks.map((p) => (
-              <HoldingRow key={p.symbol} pick={p} total={jar.mine ? shown : undefined} />
-            ))
-          ) : (
-            <View style={styles.row}>
-              <Icon name="eyeSlash" size={18} color={c.textSecondary} />
-              <Text style={styles.hint}>
-                This jar is private: holdings stay hidden. Copy it to hold the same mix.
-              </Text>
-            </View>
-          )}
+          />
         </View>
-
-        {jar.mine && jar.members.length > 1 ? (
-          <>
-            <Text style={styles.section}>Who owns what</Text>
-            <Owners jar={jar} />
-          </>
-        ) : null}
-
-        <Text style={styles.section}>The idea</Text>
-        <View style={styles.card}>
-          <Text style={styles.thesis}>{jar.thesis}</Text>
-          <Text style={styles.hint}>
-            Started {new Date(jar.createdAt).toLocaleDateString(undefined, { dateStyle: 'medium' })}
-          </Text>
+      ) : null}
+      {jar.openOrder ? (
+        <View style={[styles.section, styles.gutter]}>
+          <Notice
+            icon="clock"
+            title={`Limit order open · ${formatUsd(jar.openOrder.amount)}`}
+            hint="Buys 1% under today's price. Waits up to 24 hours; cancel anytime."
+          />
         </View>
+      ) : null}
+      {invited.length ? (
+        <View style={[styles.section, styles.gutter]}>
+          <Notice
+            icon="person"
+            title={`Waiting on ${invited.length} friend${invited.length === 1 ? '' : 's'}`}
+            hint={`Invites sent for ${formatUsd(invited[0]?.asked ?? 0)} each. Their share joins when they accept.`}
+          />
+        </View>
+      ) : null}
+
+      {/* The jar's numbers, as a Perps market's four tiles */}
+      <View style={[styles.section, styles.gutter]}>
+        <Text style={styles.heading}>Jar</Text>
+        <Tiles
+          tiles={[
+            {
+              label: 'Total return',
+              value: signedPct(ret),
+              tone: ret < 0 ? 'down' : 'up',
+            },
+            ...(jar.copiedFrom
+              ? [
+                  { label: 'Copied from', value: jar.copiedFrom.creator },
+                  { label: 'Their cut', value: `${jar.copiedFrom.fee}%`, hint: 'Of profit only' },
+                ]
+              : [
+                  { label: 'Copied by', value: String(jar.copiers) },
+                  { label: 'Copy fee', value: `${jar.copyFee}%`, hint: 'Of profit only' },
+                ]),
+            { label: 'Started', value: started },
+          ]}
+        />
       </View>
+
+      {jar.buy?.length ? (
+        <View style={[styles.detail, styles.gutter]}>
+          <DetailGroup title="Swaps">
+            {jar.buy.map((l) => (
+              <StatRow
+                key={l.depositAddress}
+                label={`${l.symbol} on ${l.chain} · ${formatUsd(l.usd)}`}
+                value={
+                  <StatusPill
+                    tone={
+                      l.status === 'SUCCESS'
+                        ? 'done'
+                        : l.status === 'FAILED' || l.status === 'INCOMPLETE_DEPOSIT'
+                          ? 'failed'
+                          : 'waiting'
+                    }
+                    icon={
+                      l.status === 'SUCCESS'
+                        ? 'checkCircle'
+                        : l.status === 'FAILED' || l.status === 'INCOMPLETE_DEPOSIT'
+                          ? 'warning'
+                          : 'clock'
+                    }
+                    text={STATE_TEXT[l.status] ?? l.status}
+                  />
+                }
+              />
+            ))}
+          </DetailGroup>
+        </View>
+      ) : null}
+
+      <View style={[styles.section, styles.gutter]}>
+        <Text style={styles.heading}>Holdings</Text>
+        {layers && jar.picks.length ? (
+          jar.picks.map((p) => (
+            <Holding key={p.symbol} pick={p} total={jar.mine ? shown : undefined} />
+          ))
+        ) : (
+          <View style={styles.card}>
+            <EmptyState
+              compact
+              icon="eyeSlash"
+              title="Holdings are private"
+              hint="Only its members see what this jar holds. Copy it to hold the same mix."
+            />
+          </View>
+        )}
+      </View>
+
+      {jar.mine && jar.members.length > 1 ? (
+        <View style={[styles.section, styles.gutter]}>
+          <Text style={styles.heading}>Who owns what</Text>
+          <Owners jar={jar} />
+        </View>
+      ) : null}
+
+      <View style={[styles.section, styles.gutter]}>
+        <Description title="The idea" text={jar.thesis} />
+      </View>
+
+      <Text style={[styles.gutter, styles.disclaimer]}>
+        Jars hold real tokens and can lose value. Past returns don't promise future ones.
+      </Text>
     </PushedScreen>
+  );
+}
+
+/**
+ * A holding as Home lists a token: logo, name over its share and network, then the
+ * dollars (your own jar) or its share on the right.
+ */
+function Holding({ pick, total }: { pick: Pick; total?: number }) {
+  const styles = useStyles();
+  return (
+    <View style={styles.holding}>
+      <PickIcon pick={pick} size={40} />
+      <View style={styles.flex}>
+        <Text style={styles.rowTitle} numberOfLines={1}>
+          {pick.name}
+        </Text>
+        <Text style={styles.rowSubtitle} numberOfLines={1}>
+          {pick.symbol} · {pick.chain}
+          {pick.match === 'proxy' ? ' · proxy' : ''}
+        </Text>
+      </View>
+      <View style={styles.rowEnd}>
+        <Text style={styles.rowTitle}>
+          {total !== undefined ? formatUsd((total * pick.weight) / 100) : `${pick.weight}%`}
+        </Text>
+        {total !== undefined ? <Text style={styles.rowSubtitle}>{pick.weight}%</Text> : null}
+      </View>
+    </View>
+  );
+}
+
+/**
+ * Something waiting on the jar, as Savings lays out its rows: a round honey well, a
+ * title over one line, and a chevron when it opens something.
+ */
+function Notice({
+  icon,
+  title,
+  hint,
+  failed,
+  onPress,
+}: {
+  icon: IconName;
+  title: string;
+  hint: string;
+  failed?: boolean;
+  onPress?: () => void;
+}) {
+  const styles = useStyles();
+  const c = useTheme();
+  const body = (
+    <>
+      <View style={[styles.well, failed && { backgroundColor: `${c.error}1A` }]}>
+        <Icon name={icon} size={15} color={failed ? c.error : c.accentText} />
+      </View>
+      <View style={styles.flex}>
+        <Text style={styles.noticeTitle}>{title}</Text>
+        <Text style={styles.noticeHint}>{hint}</Text>
+      </View>
+      {onPress ? <Icon name="chevronRight" size={13} color={c.textSecondary} /> : null}
+    </>
+  );
+  return onPress ? (
+    <PressableScale
+      accessibilityRole="button"
+      scaleTo={0.98}
+      onPress={onPress}
+      style={styles.notice}
+    >
+      {body}
+    </PressableScale>
+  ) : (
+    <View style={styles.notice}>{body}</View>
   );
 }
 
 const useStyles = makeStyles((c) => ({
   flex: { flex: 1 },
-  swapState: { flex: 0, paddingBottom: 0, fontWeight: '600' },
-  aave: { alignItems: 'center', gap: 0, paddingTop: 0, marginBottom: -4 },
-  aaveLabel: { color: c.textSecondary, fontSize: 14 },
-  aaveValue: {
+  gutter: { paddingHorizontal: SCREEN.gutter },
+  headerTitle: { flexShrink: 1, color: c.text, fontSize: 17, fontWeight: '600' },
+  nameRow: { marginTop: 8, flexDirection: 'row', alignItems: 'center', gap: 6 },
+  name: { flexShrink: 1, color: c.textSecondary, fontSize: 15 },
+  badge: {
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    ...radius(6),
+    overflow: 'hidden',
+    color: c.accentText,
+    backgroundColor: c.accentSurface,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  price: {
     color: c.text,
-    fontSize: 40,
-    lineHeight: 46,
-    fontWeight: '700',
+    fontSize: 36,
+    fontWeight: '500',
+    letterSpacing: -0.6,
     fontVariant: ['tabular-nums'],
   },
-  aaveCents: { color: c.textSecondary, fontSize: 30, fontWeight: '700' },
-  aaveChange: { fontSize: 15, fontWeight: '600', fontVariant: ['tabular-nums'] },
-  aavePeriod: { color: c.textSecondary, fontWeight: '400' },
-  order: {
+  cents: { color: c.textSecondary },
+  // Home's token row.
+  holding: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10 },
+  rowTitle: { color: c.text, fontSize: 16, fontWeight: '500', fontVariant: ['tabular-nums'] },
+  rowSubtitle: {
+    marginTop: 2,
+    color: c.textSecondary,
+    fontSize: 15,
+    fontVariant: ['tabular-nums'],
+  },
+  rowEnd: { alignItems: 'flex-end', gap: 2 },
+  changeRow: {
+    marginTop: 2,
+    marginBottom: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  changeLabel: { color: c.textSecondary, fontSize: 15, fontVariant: ['tabular-nums'] },
+  ranges: { marginTop: 8, paddingHorizontal: 12 },
+  section: { marginTop: 28 },
+  // DetailGroup brings its own 16pt space above its title.
+  detail: { marginTop: 12 },
+  heading: { marginBottom: 10, color: c.textSecondary, fontSize: 15 },
+  card: { ...radius(20), backgroundColor: c.card },
+  notice: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-    padding: 14,
-    ...radius(18),
+    padding: 16,
+    ...radius(20),
     backgroundColor: c.card,
   },
-  orderTitle: { color: c.text, fontSize: 15, fontWeight: '600' },
-  orderHint: { marginTop: 2, color: c.textSecondary, fontSize: 13, lineHeight: 18 },
-  page: { paddingHorizontal: 16, gap: 12, paddingBottom: 24 },
-  hero: { flexDirection: 'row', alignItems: 'center', gap: 16, paddingVertical: 4 },
-  meta: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  metaText: { flexShrink: 1, color: c.textSecondary, fontSize: 14 },
-  badge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    height: 22,
-    paddingHorizontal: 8,
-    borderRadius: 11,
-    backgroundColor: c.card,
-  },
-  badgeText: { color: c.textSecondary, fontSize: 12, fontWeight: '600' },
-  value: {
-    marginTop: 4,
-    color: c.text,
-    fontSize: 36,
-    fontWeight: '700',
-    fontVariant: ['tabular-nums'],
-  },
-  period: { color: c.textSecondary, fontWeight: '400' },
-  jarHead: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 8 },
-  jarHeadText: { color: c.textSecondary, fontSize: 14 },
-  change: { fontSize: 14, fontWeight: '600', fontVariant: ['tabular-nums'] },
-  section: { marginTop: 10, color: c.textSecondary, fontSize: 15 },
-  card: { paddingHorizontal: 16, paddingVertical: 8, ...radius(20), backgroundColor: c.card },
-  row: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8 },
-  hint: { flex: 1, color: c.textSecondary, fontSize: 14, lineHeight: 19, paddingBottom: 8 },
-  thesis: { color: c.text, fontSize: 16, lineHeight: 23, paddingVertical: 8 },
-  // The screen's footer is a row (for side-by-side buttons); this column fills it.
-  footer: { flex: 1, minWidth: 0, gap: 10 },
-  amounts: { flexDirection: 'row', gap: 8 },
-  amount: {
-    flex: 1,
-    height: 40,
+  well: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: c.divider,
+    backgroundColor: c.accentSurface,
   },
-  amountOn: { borderColor: c.text },
-  amountText: { color: c.text, fontSize: 15, fontWeight: '600' },
+  noticeTitle: { color: c.text, fontSize: 16, fontWeight: '500' },
+  noticeHint: { marginTop: 2, color: c.textSecondary, fontSize: 14, lineHeight: 19 },
+  disclaimer: { marginTop: 28, color: c.textSecondary, fontSize: 12, lineHeight: 17 },
+  // The screen's footer is a row (for side-by-side buttons); this column fills it.
+  footer: { flex: 1, minWidth: 0, gap: 10 },
 }));
