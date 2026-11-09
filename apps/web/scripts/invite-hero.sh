@@ -9,38 +9,42 @@ OUT=apps/web/public/email
 T="$(mktemp -d)"
 mkdir -p "$OUT"
 
-# --- Store icons: simple white marks, 40x40.
+# --- Store icons: simple white marks, 64x64 (only used inside the button PNGs).
 magick -background none -fill white -font /System/Library/Fonts/SFNS.ttf -pointsize 160 \
-  label:"$(printf '\357\243\277')" -trim +repage -resize 34x34 -gravity center -extent 40x40 -strip "$OUT/icon-apple.png"
+  label:"$(printf '\357\243\277')" -trim +repage -resize 54x54 -gravity center -extent 64x64 -strip "$OUT/icon-apple.png"
 magick -size 160x160 xc:none -fill white -draw "polygon 36,18 36,142 140,80" \
-  -resize 40x40 -strip "$OUT/icon-play.png"
+  -resize 64x64 -strip "$OUT/icon-play.png"
 # Chrome-like mark: a disc cut into three blades by tangent gaps around a center dot.
 magick -size 160x160 xc:none -fill white -draw "circle 80,80 80,8" \
   \( -size 160x160 xc:none -fill none -stroke white -strokewidth 9 -draw "circle 80,80 80,45" \
      -draw "line 80,45 165,45" -draw "line 110,97 67,171" -draw "line 50,97 7,23" \) \
   -compose DstOut -composite -compose Over -fill white -draw "circle 80,80 80,52" \
-  -resize 40x40 -strip "$OUT/icon-chrome.png"
+  -resize 64x64 -strip "$OUT/icon-chrome.png"
 
-# --- Store buttons: PNGs so no mail client can invert or restyle them. 362x88 (2x of
-# 181x44; three fill a 560px row with 8px gaps, and they stack on narrow screens). Each
-# store has a dark pill (#2a2826, white icon and label) and a primary one (honey fill,
-# dark icon and label) used for the first configured store. Transparent corners; SF with a
-# light stroke for semibold.
-button() { # icon label out fill ink
-  magick -background none -fill "$5" -stroke "$5" -strokewidth 0.7 \
-    -font /System/Library/Fonts/SFNS.ttf -pointsize 28 label:"$2" "$T/label.png"
-  magick "$OUT/$1" -resize 32x32 -fill "$5" -colorize 100 "$T/icon.png"
-  magick -background none "$T/icon.png" \( -size 14x1 xc:none \) "$T/label.png" \
+# --- Store buttons: PNGs so no mail client can invert or restyle them; the email shows
+# them at width:100% so they scale with the screen. Row 1 is the primary store as a
+# full-width honey pill; row 2 holds the other two side by side (or one full-width).
+# Per store: -primary 1120x104 (2x of 560x52, honey, dark ink), -wide 1120x104 (dark,
+# white ink) and the half-width 552x104 (2x of 276x52, dark). Labels are 46px at 2x
+# (23px at 560 wide), so they stay above 14px when a 375px phone scales them to ~61%.
+# Transparent corners; SF with a light stroke for semibold.
+button() { # icon label out width fill ink
+  W=$4
+  magick -background none -fill "$6" -stroke "$6" -strokewidth 1.1 \
+    -font /System/Library/Fonts/SFNS.ttf -pointsize 46 label:"$2" "$T/label.png"
+  magick "$OUT/$1" -resize 44x44 -fill "$6" -colorize 100 "$T/icon.png"
+  magick -background none "$T/icon.png" \( -size 20x1 xc:none \) "$T/label.png" \
     -gravity center +append "$T/content.png"
-  magick -size 362x88 xc:none -fill "$4" -draw "roundrectangle 0,0 361,87 44,44" \
+  magick -size ${W}x104 xc:none -fill "$5" -draw "roundrectangle 0,0 $((W-1)),103 52,52" \
     "$T/content.png" -gravity center -compose Over -composite \
     -strip +dither -colors 64 -define png:compression-level=9 "$OUT/$3"
 }
 for spec in "icon-apple.png|App Store|btn-app-store" "icon-play.png|Google Play|btn-google-play" \
   "icon-chrome.png|Chrome|btn-chrome"; do
   icon="${spec%%|*}"; rest="${spec#*|}"; label="${rest%%|*}"; name="${rest#*|}"
-  button "$icon" "$label" "$name.png" '#2a2826' '#ffffff'
-  button "$icon" "$label" "$name-primary.png" '#f3c969' '#1a1408'
+  button "$icon" "$label" "$name-primary.png" 1120 '#f3c969' '#1a1408'
+  button "$icon" "$label" "$name-wide.png" 1120 '#2a2826' '#ffffff'
+  button "$icon" "$label" "$name.png" 552 '#2a2826' '#ffffff'
 done
 
 # --- Logo: the honey mark alone (no square), 64x56 (2x of 32x28), transparent.

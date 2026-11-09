@@ -105,8 +105,9 @@ pub struct Store<'a> {
     pub label: &'static str,
     /// Alt text for the button image.
     pub alt: &'static str,
-    /// Button image base name under the asset base: `<button>.png` (dark) or
-    /// `<button>-primary.png` (honey), built by apps/web/scripts/invite-hero.sh.
+    /// Button image base name under the asset base: `<button>-primary.png` (full-width
+    /// honey), `<button>-wide.png` (full-width dark) or `<button>.png` (half-width dark),
+    /// built by apps/web/scripts/invite-hero.sh.
     pub button: &'static str,
     pub url: &'a str,
 }
@@ -251,26 +252,38 @@ pub fn render_with_assets(links: &Links, personal: &Personal, asset_base: &str) 
     let base = escape(asset_base.trim_end_matches('/'));
 
     // Store buttons are images (pill, icon and label baked in), so no client can invert or
-    // restyle them. The first configured store is the honey primary, the rest are dark.
-    // Inline-blocks sit three across at 560px and stack at their real size on phones
-    // instead of shrinking; clients without inline-block simply stack them.
-    const BUTTON_WIDTH: usize = 181;
-    let buttons: String = stores
-        .iter()
-        .enumerate()
-        .map(|(index, store)| {
-            let (alt, url) = (store.alt, store.url);
-            let file = if index == 0 {
-                format!("{}-primary.png", store.button)
-            } else {
-                format!("{}.png", store.button)
-            };
-            let gap = if index + 1 < stores.len() { 8 } else { 0 };
-            format!(
-                r#"<div style="display:inline-block;width:100%;max-width:{BUTTON_WIDTH}px;margin:0 {gap}px 8px 0;vertical-align:top;"><a href="{url}" target="_blank" style="text-decoration:none;"><img src="{base}/{file}" width="{BUTTON_WIDTH}" height="44" alt="{alt}" style="display:block;width:{BUTTON_WIDTH}px;max-width:100%;height:auto;border:0;color:{TEXT};font-family:{SANS};font-size:13px;"></a></div>"#
-            )
-        })
-        .collect();
+    // restyle them, and they scale with width:100% instead of relying on media queries.
+    // Row 1: the first configured store, full-width honey. Row 2: the others, two dark
+    // half-width pills with an 8px gap, or one full-width dark pill.
+    let button = |store: &Store<'_>, file: &str, width: usize| {
+        format!(
+            r#"<a href="{url}" target="_blank" style="text-decoration:none;"><img src="{base}/{file}" width="{width}" height="52" alt="{alt}" style="display:block;width:100%;height:auto;border:0;color:{TEXT};font-family:{SANS};font-size:14px;"></a>"#,
+            url = store.url,
+            alt = store.alt,
+        )
+    };
+    let mut buttons = String::new();
+    if let Some((first, rest)) = stores.split_first() {
+        let primary_button = button(first, &format!("{}-primary.png", first.button), 560);
+        let bottom = if rest.is_empty() { 0 } else { 8 };
+        buttons.push_str(&format!(
+            r#"<tr><td style="padding:0 0 {bottom}px 0;">{primary_button}</td></tr>"#
+        ));
+        match rest {
+            [only] => {
+                let wide = button(only, &format!("{}-wide.png", only.button), 560);
+                buttons.push_str(&format!(r#"<tr><td>{wide}</td></tr>"#));
+            }
+            [left, right, ..] => {
+                let left = button(left, &format!("{}.png", left.button), 276);
+                let right = button(right, &format!("{}.png", right.button), 276);
+                buttons.push_str(&format!(
+                    r#"<tr><td><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td width="50%" valign="top" style="padding:0 4px 0 0;">{left}</td><td width="50%" valign="top" style="padding:0 0 0 4px;">{right}</td></tr></table></td></tr>"#
+                ));
+            }
+            [] => {}
+        }
+    }
 
     let wordmark = blend("Honey");
     let headline = blend("You're in.");
@@ -293,7 +306,7 @@ pub fn render_with_assets(links: &Links, personal: &Personal, asset_base: &str) 
 <tr><td style="padding:0 0 48px 0;"><table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr><td style="padding:0 10px 0 0;vertical-align:middle;"><img src="{base}/icon-honey.png" width="32" height="28" alt="" style="display:block;border:0;"></td><td style="vertical-align:middle;font-family:{SANS};font-size:18px;line-height:28px;font-weight:700;color:{TEXT};">{wordmark}</td></tr></table></td></tr>
 <tr><td style="padding:0 0 12px 0;font-family:{SANS};font-size:44px;line-height:48px;font-weight:800;letter-spacing:-1.2px;color:{WHITE};">{headline}</td></tr>
 <tr><td style="padding:0 0 32px 0;font-family:{SANS};font-size:17px;line-height:26px;color:{TEXT_2};">{line}</td></tr>
-<tr><td style="padding:0 0 24px 0;font-size:0;line-height:0;">{buttons}</td></tr>
+<tr><td style="padding:0 0 32px 0;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">{buttons}</table></td></tr>
 <tr><td bgcolor="{CARD}" style="{card_lock}border-radius:20px;padding:0;font-size:0;line-height:0;"><a href="{primary}" target="_blank" style="text-decoration:none;"><img src="{base}/invite-hero.png" width="560" height="340" alt="The Honey app: your wallet and a $500 basket from the thesis agent" style="display:block;width:100%;max-width:560px;height:auto;border:0;border-radius:20px;color:{TEXT_2};font-family:{SANS};font-size:13px;"></a></td></tr>
 <tr><td style="padding:32px 0 0 0;font-family:{SANS};font-size:15px;line-height:22px;color:{TEXT};">{sign_off}</td></tr>
 <tr><td style="padding:16px 0 0 0;font-family:{SANS};font-size:12px;line-height:18px;color:{TEXT_2};">{footer}</td></tr>
@@ -592,26 +605,15 @@ mod tests {
         )));
         assert!(!email.html.contains("App Store"));
         assert!(!email.html.contains("btn-app-store"));
-        // Buttons are linked images with alt text; the first configured store is primary.
+        // iOS unset: Google Play becomes the full-width honey primary, Chrome alone fills
+        // row 2 at full width. Images scale with width:100%.
         assert!(email.html.contains(&format!(
-            "<a href=\"{play}\" target=\"_blank\" style=\"text-decoration:none;\"><img src=\"{ASSET_BASE}/btn-google-play-primary.png\" width=\"181\" height=\"44\" alt=\"Get it on Google Play\" style=\"display:block;width:181px;max-width:100%;height:auto;"
+            "<a href=\"{play}\" target=\"_blank\" style=\"text-decoration:none;\"><img src=\"{ASSET_BASE}/btn-google-play-primary.png\" width=\"560\" height=\"52\" alt=\"Get it on Google Play\" style=\"display:block;width:100%;height:auto;"
         )));
-        assert!(
-            email
-                .html
-                .contains(&format!("<img src=\"{ASSET_BASE}/btn-chrome.png\""))
-        );
-        assert!(email.html.contains("alt=\"Add to Chrome\""));
-        // Fluid-hybrid: inline-blocks that wrap instead of shrinking; gap only between.
-        assert_eq!(
-            email
-                .html
-                .matches("<div style=\"display:inline-block;width:100%;max-width:181px;")
-                .count(),
-            2
-        );
-        assert!(email.html.contains("max-width:181px;margin:0 8px 8px 0;"));
-        assert!(email.html.contains("max-width:181px;margin:0 0px 8px 0;"));
+        assert!(email.html.contains(&format!(
+            "<img src=\"{ASSET_BASE}/btn-chrome-wide.png\" width=\"560\" height=\"52\" alt=\"Add to Chrome\""
+        )));
+        assert!(!email.html.contains("width=\"50%\""));
         assert!(email.text.contains(&format!("Google Play: {play}\n")));
         assert!(!email.text.contains("App Store"));
         // Logo, hero and two buttons; no inline icons left.
@@ -677,9 +679,35 @@ mod tests {
         assert!(a < b && b < c && c < hero);
         assert!(email.html.contains("alt=\"Download on the App Store\""));
         assert_eq!(email.html.matches("-primary.png").count(), 1);
+        // Row 2: the two secondaries side by side, 50% each with an 8px gap.
+        assert!(email.html.contains(&format!(
+            "<td width=\"50%\" valign=\"top\" style=\"padding:0 4px 0 0;\"><a href=\"https://play.google.com/store/apps/honey\" target=\"_blank\" style=\"text-decoration:none;\"><img src=\"{ASSET_BASE}/btn-google-play.png\" width=\"276\" height=\"52\""
+        )));
+        assert!(email.html.contains(&format!(
+            "<td width=\"50%\" valign=\"top\" style=\"padding:0 0 0 4px;\"><a href=\"https://chromewebstore.google.com/detail/honey\" target=\"_blank\" style=\"text-decoration:none;\"><img src=\"{ASSET_BASE}/btn-chrome.png\" width=\"276\""
+        )));
+        assert!(!email.html.contains("-wide.png"));
         assert!(email.html.contains(
             "apple.com/app/honey\" target=\"_blank\" style=\"text-decoration:none;\"><img src=\"https://www.honeywallet.org/email/invite-hero.png\""
         ));
+    }
+
+    #[test]
+    fn single_store_is_only_the_primary() {
+        let email = render(&links(false, false, true), &personal());
+        assert_eq!(
+            email
+                .html
+                .matches("<img src=\"https://www.honeywallet.org/email/btn-")
+                .count(),
+            1
+        );
+        assert!(email.html.contains("btn-chrome-primary.png"));
+        assert!(
+            email
+                .html
+                .contains("<tr><td style=\"padding:0 0 0px 0;\"><a href")
+        );
     }
 
     #[test]
