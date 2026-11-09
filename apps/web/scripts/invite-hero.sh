@@ -1,7 +1,7 @@
 #!/bin/sh
 # Builds the invite email images in apps/web/public/email/ with ImageMagick (macOS for the
-# Apple glyph font): invite-hero.png from real Play Store screenshots, icon-honey.png (logo)
-# and white store icons (icon-apple.png, icon-play.png, icon-chrome.png; shown at 16px).
+# Apple glyph and SF fonts): invite-hero.png from real Play Store screenshots, icon-honey.png
+# (the honey mark), the store buttons btn-*.png and the white icons they use (icon-*.png).
 # Usage, from the repo root: sh apps/web/scripts/invite-hero.sh
 set -eu
 SRC=docs/launch/play-store
@@ -21,13 +21,34 @@ magick -size 160x160 xc:none -fill white -draw "circle 80,80 80,8" \
   -compose DstOut -composite -compose Over -fill white -draw "circle 80,80 80,52" \
   -resize 40x40 -strip "$OUT/icon-chrome.png"
 
-# --- Logo: the app icon at 56x56 (2x of 28px) with rounded corners.
-magick apps/web/public/apple-touch-icon.png -resize 56x56 -alpha set \
-  \( -size 56x56 xc:none -fill white -draw "roundrectangle 0,0 55,55 13,13" \) \
-  -compose DstIn -composite -strip "$OUT/icon-honey.png"
+# --- Store buttons: PNGs so no mail client can invert or restyle them. 362x88 (2x of
+# 181x44; three fill a 560px row with 8px gaps, and they stack on narrow screens). Each
+# store has a dark pill (#2a2826, white icon and label) and a primary one (honey fill,
+# dark icon and label) used for the first configured store. Transparent corners; SF with a
+# light stroke for semibold.
+button() { # icon label out fill ink
+  magick -background none -fill "$5" -stroke "$5" -strokewidth 0.7 \
+    -font /System/Library/Fonts/SFNS.ttf -pointsize 28 label:"$2" "$T/label.png"
+  magick "$OUT/$1" -resize 32x32 -fill "$5" -colorize 100 "$T/icon.png"
+  magick -background none "$T/icon.png" \( -size 14x1 xc:none \) "$T/label.png" \
+    -gravity center +append "$T/content.png"
+  magick -size 362x88 xc:none -fill "$4" -draw "roundrectangle 0,0 361,87 44,44" \
+    "$T/content.png" -gravity center -compose Over -composite \
+    -strip +dither -colors 64 -define png:compression-level=9 "$OUT/$3"
+}
+for spec in "icon-apple.png|App Store|btn-app-store" "icon-play.png|Google Play|btn-google-play" \
+  "icon-chrome.png|Chrome|btn-chrome"; do
+  icon="${spec%%|*}"; rest="${spec#*|}"; label="${rest%%|*}"; name="${rest#*|}"
+  button "$icon" "$label" "$name.png" '#2a2826' '#ffffff'
+  button "$icon" "$label" "$name-primary.png" '#f3c969' '#1a1408'
+done
 
-# --- Hero phones (2x of 496x350, transparent background).
-B=11; R=50
+# --- Logo: the honey mark alone (no square), 64x56 (2x of 32x28), transparent.
+magick -background none -density 300 apps/web/public/honey-mark.svg -trim +repage \
+  -resize 64x56 -strip "$OUT/icon-honey.png"
+
+# --- Hero phones (2x of 560x340, transparent background).
+B=13; R=58
 phone() { # src w h out
   W=$2; H=$3
   magick "$1" -resize ${W}x${H}! -alpha set \
@@ -47,16 +68,16 @@ magick "$SRC/screenshot-2-proposal.jpg" \
   \( -clone 0 -crop 1080x190+0+1185 +repage \) \
   \( -size 1080x860 xc:'#131313' \) \
   -delete 0 -append "$T/proposal.jpg"
-phone "$T/proposal.jpg" 428 762 "$T/proposal.png"
+phone "$T/proposal.jpg" 494 878 "$T/proposal.png"
 magick "$T/proposal.png" -channel RGB -evaluate multiply 0.85 +channel "$T/proposal.png"
-phone "$SRC/screenshot-4-home.jpg" 428 762 "$T/home.png"
+phone "$SRC/screenshot-4-home.jpg" 494 878 "$T/home.png"
 
-# 992x700, transparent around the phones (no rectangle if a client inverts the card);
-# the proposal sits back-left and lower,
-# and the home phone in front-right overlaps only its right bezel. Both run off the bottom
-# edge, flush with the bottom of the email card (no bottom padding).
-magick -size 992x700 xc:none \
-  "$T/proposal.png" -geometry +58+100 -compose Over -composite \
-  "$T/home.png" -geometry +483+30 -compose Over -composite \
-  -strip +dither -colors 200 -define png:compression-level=9 "$OUT/invite-hero.png"
+# 1120x680, transparent around the phones so the email card shows through (and its rounded
+# corners stay visible). The phones span ~90% of the width: proposal back-left and lower,
+# home front-right overlapping only its right bezel. Both rise out of the bottom edge,
+# which sits flush with the card's bottom.
+magick -size 1120x680 xc:none \
+  "$T/proposal.png" -geometry +56+100 -compose Over -composite \
+  "$T/home.png" -geometry +545+36 -compose Over -composite \
+  -strip +dither -colors 128 -define png:compression-level=9 -define png:compression-filter=5 "$OUT/invite-hero.png"
 rm -rf "$T"

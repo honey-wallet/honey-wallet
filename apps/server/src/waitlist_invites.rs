@@ -72,21 +72,42 @@ impl Links {
     /// Configured stores in display order: App Store, Google Play, Chrome Web Store.
     pub fn stores(&self) -> Vec<Store<'_>> {
         [
-            ("App Store", "icon-apple.png", &self.ios),
-            ("Google Play", "icon-play.png", &self.android),
-            ("Chrome", "icon-chrome.png", &self.extension),
+            (
+                "App Store",
+                "Download on the App Store",
+                "btn-app-store",
+                &self.ios,
+            ),
+            (
+                "Google Play",
+                "Get it on Google Play",
+                "btn-google-play",
+                &self.android,
+            ),
+            ("Chrome", "Add to Chrome", "btn-chrome", &self.extension),
         ]
         .into_iter()
-        .filter_map(|(label, icon, url)| url.as_deref().map(|url| Store { label, icon, url }))
+        .filter_map(|(label, alt, button, url)| {
+            url.as_deref().map(|url| Store {
+                label,
+                alt,
+                button,
+                url,
+            })
+        })
         .collect()
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Store<'a> {
+    /// Short name, used in the text version.
     pub label: &'static str,
-    /// File name under the asset base.
-    pub icon: &'static str,
+    /// Alt text for the button image.
+    pub alt: &'static str,
+    /// Button image base name under the asset base: `<button>.png` (dark) or
+    /// `<button>-primary.png` (honey), built by apps/web/scripts/invite-hero.sh.
+    pub button: &'static str,
     pub url: &'a str,
 }
 
@@ -201,10 +222,10 @@ pub fn render(links: &Links, personal: &Personal) -> Email {
 /// contains the recipient's address.
 pub fn render_with_assets(links: &Links, personal: &Personal, asset_base: &str) -> Email {
     const BG: &str = "#1c1b1a";
-    const CARD: &str = "#2a2826";
+    const CARD: &str = "#242220";
     const TEXT: &str = "#f6f3eb";
     const TEXT_2: &str = "#a8a197";
-    const HONEY: &str = "#f3c969";
+    const WHITE: &str = "#ffffff";
     const SANS: &str =
         "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
     const SIGN_OFF: &str = "Hit reply, it comes to me. &mdash; Abhishek";
@@ -220,12 +241,7 @@ pub fn render_with_assets(links: &Links, personal: &Personal, asset_base: &str) 
             r#"<div class="gmail-blend-screen"><div class="gmail-blend-difference">{inner}</div></div>"#
         )
     };
-    let blend_inline = |inner: &str| {
-        format!(
-            r#"<span class="gmail-blend-screen" style="display:inline-block;"><span class="gmail-blend-difference" style="display:inline-block;">{inner}</span></span>"#
-        )
-    };
-    let (bg_lock, card_lock, honey_lock) = (lock(BG), lock(CARD), lock(HONEY));
+    let (bg_lock, card_lock) = (lock(BG), lock(CARD));
     let n = personal.position;
     let stores = links.stores();
     let primary = stores
@@ -234,29 +250,38 @@ pub fn render_with_assets(links: &Links, personal: &Personal, asset_base: &str) 
         .unwrap_or("https://www.honeywallet.org");
     let base = escape(asset_base.trim_end_matches('/'));
 
-    // One row of equal columns with 8px gutters. Each pill is a honey cell with 1px of
-    // padding around a charcoal cell, so the "border" is a locked background too.
-    let columns: Vec<String> = stores
+    // Store buttons are images (pill, icon and label baked in), so no client can invert or
+    // restyle them. The first configured store is the honey primary, the rest are dark.
+    // Inline-blocks sit three across at 560px and stack at their real size on phones
+    // instead of shrinking; clients without inline-block simply stack them.
+    const BUTTON_WIDTH: usize = 181;
+    let buttons: String = stores
         .iter()
-        .map(|store| {
-            let (icon, url) = (store.icon, store.url);
-            let label = blend_inline(store.label);
+        .enumerate()
+        .map(|(index, store)| {
+            let (alt, url) = (store.alt, store.url);
+            let file = if index == 0 {
+                format!("{}-primary.png", store.button)
+            } else {
+                format!("{}.png", store.button)
+            };
+            let gap = if index + 1 < stores.len() { 8 } else { 0 };
             format!(
-                r#"<td width="{width}%" valign="top"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td bgcolor="{HONEY}" style="{honey_lock}border-radius:999px;padding:1px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td align="center" bgcolor="{CARD}" style="{card_lock}border-radius:999px;"><a href="{url}" target="_blank" style="display:block;padding:10px 4px;font-family:{SANS};font-size:14px;line-height:18px;font-weight:600;color:{TEXT};text-decoration:none;border-radius:999px;"><img src="{base}/{icon}" width="16" height="16" alt="" style="display:inline-block;vertical-align:middle;border:0;margin:0 7px 2px 0;">{label}</a></td></tr></table></td></tr></table></td>"#,
-                width = 100 / stores.len().max(1),
+                r#"<div style="display:inline-block;width:100%;max-width:{BUTTON_WIDTH}px;margin:0 {gap}px 8px 0;vertical-align:top;"><a href="{url}" target="_blank" style="text-decoration:none;"><img src="{base}/{file}" width="{BUTTON_WIDTH}" height="44" alt="{alt}" style="display:block;width:{BUTTON_WIDTH}px;max-width:100%;height:auto;border:0;color:{TEXT};font-family:{SANS};font-size:13px;"></a></div>"#
             )
         })
         .collect();
-    let buttons =
-        columns.join(r#"<td width="8" style="width:8px;font-size:0;line-height:0;">&nbsp;</td>"#);
 
     let wordmark = blend("Honey");
     let headline = blend("You're in.");
+    // #N is bold white: colored text does not survive Gmail's inversion plus the blend.
     let line = blend(&format!(
-        r#"You were <span style="color:{HONEY};font-weight:600;">#{n}</span> on the waitlist."#
+        r#"You were <span style="color:{WHITE};font-weight:700;">#{n}</span> on the waitlist."#
     ));
     let sign_off = blend(SIGN_OFF);
-    let footer = blend("You joined the waitlist at honeywallet.org.");
+    let footer = blend(&format!(
+        r#"You joined the waitlist at <a href="https://www.honeywallet.org" target="_blank" style="color:{TEXT_2};text-decoration:none;">honeywallet.org</a>."#
+    ));
 
     let html = format!(
         r#"<!doctype html>
@@ -265,13 +290,13 @@ pub fn render_with_assets(links: &Links, personal: &Personal, asset_base: &str) 
 <div style="display:none;max-height:0;overflow:hidden;mso-hide:all;">You were #{n} on the waitlist.</div>
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="{BG}" style="{bg_lock}"><tr><td align="center" bgcolor="{BG}" style="{bg_lock}padding:40px 16px 32px 16px;">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:560px;">
-<tr><td style="padding:0 0 36px 0;"><table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr><td style="padding:0 10px 0 0;vertical-align:middle;"><img src="{base}/icon-honey.png" width="28" height="28" alt="" style="display:block;border:0;border-radius:7px;"></td><td style="vertical-align:middle;font-family:{SANS};font-size:18px;line-height:28px;font-weight:700;color:{TEXT};">{wordmark}</td></tr></table></td></tr>
-<tr><td style="padding:0 0 12px 0;font-family:{SANS};font-size:48px;line-height:52px;font-weight:800;letter-spacing:-1.5px;color:{TEXT};">{headline}</td></tr>
-<tr><td style="padding:0 0 28px 0;font-family:{SANS};font-size:17px;line-height:26px;color:{TEXT_2};">{line}</td></tr>
-<tr><td style="padding:0 0 24px 0;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>{buttons}</tr></table></td></tr>
-<tr><td bgcolor="{CARD}" style="{card_lock}border-radius:16px;padding:32px 32px 0 32px;"><a href="{primary}" target="_blank" style="text-decoration:none;"><img src="{base}/invite-hero.png" width="496" height="350" alt="The Honey app: your wallet and a $500 basket from the thesis agent" style="display:block;width:100%;max-width:496px;height:auto;border:0;color:{TEXT_2};font-family:{SANS};font-size:13px;"></a></td></tr>
-<tr><td style="padding:28px 0 0 0;font-family:{SANS};font-size:15px;line-height:22px;color:{TEXT};">{sign_off}</td></tr>
-<tr><td style="padding:20px 0 0 0;font-family:{SANS};font-size:11px;line-height:16px;color:{TEXT_2};">{footer}</td></tr>
+<tr><td style="padding:0 0 48px 0;"><table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr><td style="padding:0 10px 0 0;vertical-align:middle;"><img src="{base}/icon-honey.png" width="32" height="28" alt="" style="display:block;border:0;"></td><td style="vertical-align:middle;font-family:{SANS};font-size:18px;line-height:28px;font-weight:700;color:{TEXT};">{wordmark}</td></tr></table></td></tr>
+<tr><td style="padding:0 0 12px 0;font-family:{SANS};font-size:44px;line-height:48px;font-weight:800;letter-spacing:-1.2px;color:{WHITE};">{headline}</td></tr>
+<tr><td style="padding:0 0 32px 0;font-family:{SANS};font-size:17px;line-height:26px;color:{TEXT_2};">{line}</td></tr>
+<tr><td style="padding:0 0 24px 0;font-size:0;line-height:0;">{buttons}</td></tr>
+<tr><td bgcolor="{CARD}" style="{card_lock}border-radius:20px;padding:0;font-size:0;line-height:0;"><a href="{primary}" target="_blank" style="text-decoration:none;"><img src="{base}/invite-hero.png" width="560" height="340" alt="The Honey app: your wallet and a $500 basket from the thesis agent" style="display:block;width:100%;max-width:560px;height:auto;border:0;border-radius:20px;color:{TEXT_2};font-family:{SANS};font-size:13px;"></a></td></tr>
+<tr><td style="padding:32px 0 0 0;font-family:{SANS};font-size:15px;line-height:22px;color:{TEXT};">{sign_off}</td></tr>
+<tr><td style="padding:16px 0 0 0;font-family:{SANS};font-size:12px;line-height:18px;color:{TEXT_2};">{footer}</td></tr>
 </table></td></tr></table>
 </body></html>"#
     );
@@ -560,38 +585,52 @@ mod tests {
     fn render_has_a_button_per_configured_store() {
         let email = render(&links(false, true, true), &personal());
         assert_eq!(email.subject, "You're in: Honey is ready");
-        // iOS unset: no App Store column; hero links to the first available store.
+        // iOS unset: no App Store button; hero links to the first available store.
         let play = "https://play.google.com/store/apps/honey";
         assert!(email.html.contains(&format!(
             "<a href=\"{play}\" target=\"_blank\" style=\"text-decoration:none;\"><img src=\"{ASSET_BASE}/invite-hero.png\""
         )));
         assert!(!email.html.contains("App Store"));
-        assert!(!email.html.contains("icon-apple.png"));
+        assert!(!email.html.contains("btn-app-store"));
+        // Buttons are linked images with alt text; the first configured store is primary.
         assert!(email.html.contains(&format!(
-            "<img src=\"{ASSET_BASE}/icon-play.png\" width=\"16\" height=\"16\""
-        )));
-        assert!(email.html.contains(">Google Play</span>"));
-        assert!(email.html.contains(">Chrome</span>"));
-        // Two stores share the row equally.
-        assert_eq!(email.html.matches("<td width=\"50%\"").count(), 2);
-        assert!(email.text.contains(&format!("Google Play: {play}\n")));
-        assert!(!email.text.contains("App Store"));
-        // Logo, hero and two icons.
-        assert_eq!(email.html.matches("<img").count(), 4);
-        assert!(email.html.contains(&format!(
-            "<img src=\"{ASSET_BASE}/icon-honey.png\" width=\"28\""
+            "<a href=\"{play}\" target=\"_blank\" style=\"text-decoration:none;\"><img src=\"{ASSET_BASE}/btn-google-play-primary.png\" width=\"181\" height=\"44\" alt=\"Get it on Google Play\" style=\"display:block;width:181px;max-width:100%;height:auto;"
         )));
         assert!(
             email
                 .html
-                .contains("width=\"496\" height=\"350\" alt=\"The Honey app")
+                .contains(&format!("<img src=\"{ASSET_BASE}/btn-chrome.png\""))
         );
-        // Gmail-safe and charcoal, not pure black.
+        assert!(email.html.contains("alt=\"Add to Chrome\""));
+        // Fluid-hybrid: inline-blocks that wrap instead of shrinking; gap only between.
+        assert_eq!(
+            email
+                .html
+                .matches("<div style=\"display:inline-block;width:100%;max-width:181px;")
+                .count(),
+            2
+        );
+        assert!(email.html.contains("max-width:181px;margin:0 8px 8px 0;"));
+        assert!(email.html.contains("max-width:181px;margin:0 0px 8px 0;"));
+        assert!(email.text.contains(&format!("Google Play: {play}\n")));
+        assert!(!email.text.contains("App Store"));
+        // Logo, hero and two buttons; no inline icons left.
+        assert_eq!(email.html.matches("<img").count(), 4);
+        assert!(!email.html.contains("icon-play.png"));
+        assert!(email.html.contains(&format!(
+            "<img src=\"{ASSET_BASE}/icon-honey.png\" width=\"32\" height=\"28\""
+        )));
+        assert!(
+            email
+                .html
+                .contains("width=\"560\" height=\"340\" alt=\"The Honey app")
+        );
+        // Charcoal, not pure black.
         assert!(email.html.contains("bgcolor=\"#1c1b1a\""));
-        assert!(email.html.contains("bgcolor=\"#2a2826\""));
+        assert!(email.html.contains("bgcolor=\"#242220\""));
         assert!(!email.html.contains("#0b0b0a"));
         // Dark-mode locks: gradient backgrounds Gmail won't invert, blend-wrapped text.
-        for color in ["#1c1b1a", "#2a2826", "#f3c969"] {
+        for color in ["#1c1b1a", "#242220"] {
             assert!(email.html.contains(&format!(
                 "background-color:{color};background-image:linear-gradient({color},{color});"
             )));
@@ -608,6 +647,7 @@ mod tests {
         for text in [
             "Honey",
             "You're in.",
+            "You were ",
             "Hit reply",
             "You joined the waitlist",
         ] {
@@ -618,26 +658,27 @@ mod tests {
                 "{text}"
             );
         }
-        assert!(email.html.contains(
-            "<div class=\"gmail-blend-difference\">You were <span style=\"color:#f3c969;"
-        ));
-        assert!(email.html.contains("<span class=\"gmail-blend-difference\" style=\"display:inline-block;\">Google Play</span>"));
-        // Pill edges are a honey cell around a charcoal cell, not a CSS border.
+        // No colored text (it turns blue under the blend) and no inline blend spans.
+        assert!(!email.html.contains("color:#f3c969"));
+        assert!(!email.html.contains("<span class=\"gmail-blend"));
         assert!(!email.html.contains("border:1px solid"));
         assert!(email.html.contains("max-width:560px"));
+        // Footer link is plain grey, not a blue auto-link.
+        assert!(email.html.contains("<a href=\"https://www.honeywallet.org\" target=\"_blank\" style=\"color:#a8a197;text-decoration:none;\">honeywallet.org</a>"));
     }
 
     #[test]
     fn buttons_come_before_the_hero() {
         let email = render(&links(true, true, true), &personal());
-        let a = email.html.find(">App Store</span>").unwrap();
-        let b = email.html.find(">Google Play</span>").unwrap();
-        let c = email.html.find(">Chrome</span>").unwrap();
+        let a = email.html.find("btn-app-store-primary.png").unwrap();
+        let b = email.html.find("btn-google-play.png").unwrap();
+        let c = email.html.find("btn-chrome.png").unwrap();
         let hero = email.html.find("invite-hero.png").unwrap();
         assert!(a < b && b < c && c < hero);
-        assert_eq!(email.html.matches("<td width=\"33%\"").count(), 3);
+        assert!(email.html.contains("alt=\"Download on the App Store\""));
+        assert_eq!(email.html.matches("-primary.png").count(), 1);
         assert!(email.html.contains(
-            "apple.com/app/honey\" target=\"_blank\" style=\"text-decoration:none;\"><img src"
+            "apple.com/app/honey\" target=\"_blank\" style=\"text-decoration:none;\"><img src=\"https://www.honeywallet.org/email/invite-hero.png\""
         ));
     }
 
@@ -645,8 +686,9 @@ mod tests {
     fn render_is_personal_and_signed() {
         let email = render(&links(true, false, false), &personal());
         assert!(email.html.contains(
-            "You were <span style=\"color:#f3c969;font-weight:600;\">#128</span> on the waitlist."
+            "You were <span style=\"color:#ffffff;font-weight:700;\">#128</span> on the waitlist."
         ));
+        assert!(email.html.contains("color:#ffffff;\"><div class=\"gmail-blend-screen\"><div class=\"gmail-blend-difference\">You're in."));
         assert!(
             email
                 .text
