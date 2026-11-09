@@ -15,7 +15,8 @@
         "dark": "./assets/images/ios-dark.png",
         "tinted": "./assets/images/ios-tinted.png"
       },
-      "appleTeamId": "38V69R9TA5"
+      "appleTeamId": "38V69R9TA5",
+      "infoPlist": { "ITSAppUsesNonExemptEncryption": false }
     },
     "android": {
       "package": "com.honeywallet.app",
