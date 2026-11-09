@@ -69,16 +69,25 @@ pub struct Links {
 }
 
 impl Links {
-    fn buttons(&self) -> Vec<(&'static str, &str)> {
+    /// Configured stores in display order: App Store, Google Play, Chrome Web Store.
+    pub fn stores(&self) -> Vec<Store<'_>> {
         [
-            ("iOS", &self.ios),
-            ("Android", &self.android),
-            ("Chrome", &self.extension),
+            ("Download on the App Store", "icon-apple.png", &self.ios),
+            ("Get it on Google Play", "icon-play.png", &self.android),
+            ("Add to Chrome", "icon-chrome.png", &self.extension),
         ]
         .into_iter()
-        .filter_map(|(label, url)| url.as_deref().map(|url| (label, url)))
+        .filter_map(|(label, icon, url)| url.as_deref().map(|url| Store { label, icon, url }))
         .collect()
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Store<'a> {
+    pub label: &'static str,
+    /// File name under the asset base.
+    pub icon: &'static str,
+    pub url: &'a str,
 }
 
 #[derive(Clone)]
@@ -88,8 +97,6 @@ pub struct InviteConfig {
     pub from: String,
     pub reply_to: Option<String>,
     pub links: Links,
-    /// Optional early-member perks (`INVITE_PERKS`, pipe-separated). Empty omits the section.
-    pub perks: Vec<String>,
 }
 
 impl std::fmt::Debug for InviteConfig {
@@ -100,7 +107,6 @@ impl std::fmt::Debug for InviteConfig {
             .field("from", &self.from)
             .field("reply_to", &self.reply_to)
             .field("links", &self.links)
-            .field("perks", &self.perks)
             .finish()
     }
 }
@@ -135,25 +141,11 @@ impl InviteConfig {
             android: url("INVITE_ANDROID_URL")?,
             extension: url("INVITE_EXTENSION_URL")?,
         };
-        let perks: Vec<String> = get("INVITE_PERKS")
-            .map(|value| {
-                value
-                    .split('|')
-                    .map(str::trim)
-                    .filter(|perk| !perk.is_empty())
-                    .map(String::from)
-                    .collect()
-            })
-            .unwrap_or_default();
-        anyhow::ensure!(
-            perks.len() <= 5 && perks.iter().all(|perk| perk.chars().count() <= 120),
-            "INVITE_PERKS takes at most 5 perks of up to 120 characters"
-        );
         let api_key = get("RESEND_API_KEY");
         if !dry_run {
             anyhow::ensure!(api_key.is_some(), "RESEND_API_KEY is required");
             anyhow::ensure!(
-                !links.buttons().is_empty(),
+                !links.stores().is_empty(),
                 "set at least one of INVITE_IOS_URL, INVITE_ANDROID_URL, INVITE_EXTENSION_URL"
             );
         }
@@ -163,7 +155,6 @@ impl InviteConfig {
             from: get("INVITE_FROM").unwrap_or_else(|| DEFAULT_FROM.to_owned()),
             reply_to: get("INVITE_REPLY_TO"),
             links,
-            perks,
         })
     }
 }
@@ -193,70 +184,50 @@ fn escape(value: &str) -> String {
         .replace('\'', "&#39;")
 }
 
-/// Hosted hero (apps/web/public/email/invite-hero.png, built by apps/web/scripts/invite-hero.sh).
-pub const HERO_URL: &str = "https://www.honeywallet.org/email/invite-hero.png";
+/// Where the hero and store icons are hosted (apps/web/public/email/, built by
+/// apps/web/scripts/invite-hero.sh). They load only once the web app is deployed.
+pub const ASSET_BASE: &str = "https://www.honeywallet.org/email";
 
-/// Renders one invite: minimal copy, a hero of the real app, one "Get Honey" button.
-pub fn render(links: &Links, perks: &[String], personal: &Personal) -> Email {
-    render_with_hero(links, perks, personal, HERO_URL)
+/// Renders one invite: minimal copy, a hero of the real app, one button per store.
+pub fn render(links: &Links, personal: &Personal) -> Email {
+    render_with_assets(links, personal, ASSET_BASE)
 }
 
-/// [`render`] with a different hero URL (local previews before the web deploy).
+/// [`render`] with images from `asset_base` (local previews before the web deploy).
 ///
 /// Matches the landing page (apps/web/src/home.css): matte ink, cream text, honey accent,
 /// no glow. Email-safe: nested tables, inline CSS, `bgcolor` fallbacks and explicit
-/// backgrounds so light-mode clients still show it dark and readable. Perks and URLs are
-/// operator config; perks are escaped anyway. Never contains the recipient's address.
-pub fn render_with_hero(links: &Links, perks: &[String], personal: &Personal, hero: &str) -> Email {
+/// backgrounds so light-mode clients still show it dark and readable. URLs are operator
+/// config. Never contains the recipient's address.
+pub fn render_with_assets(links: &Links, personal: &Personal, asset_base: &str) -> Email {
     const INK: &str = "#0b0b0a";
+    const PILL: &str = "#16140f";
+    const EDGE: &str = "#3a3222";
     const TEXT: &str = "#f6f3eb";
     const TEXT_2: &str = "#a8a197";
     const HONEY: &str = "#f3c969";
-    const ON_HONEY: &str = "#1a1408";
     const RULE: &str = "#1d1b18";
     const SANS: &str =
         "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
     const MONO: &str = "ui-monospace,SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace";
     const SIGN_OFF: &str = "Hit reply, it comes to me. &mdash; Abhishek, Honey";
     let n = personal.position;
-    let stores = links.buttons();
+    let stores = links.stores();
     let primary = stores
         .first()
-        .map(|(_, url)| *url)
+        .map(|store| store.url)
         .unwrap_or("https://www.honeywallet.org");
-    let hero = escape(hero);
+    let base = escape(asset_base.trim_end_matches('/'));
 
-    let others = if stores.len() > 1 {
-        let items: Vec<String> = stores
-            .iter()
-            .map(|(label, url)| {
-                format!(r#"<a href="{url}" target="_blank" style="color:{TEXT_2};text-decoration:underline;">{label}</a>"#)
-            })
-            .collect();
-        format!(
-            r#"<tr><td align="center" style="padding:14px 0 0 0;font-family:{SANS};font-size:13px;line-height:20px;color:{TEXT_2};">{}</td></tr>"#,
-            items.join(" &middot; ")
-        )
-    } else {
-        String::new()
-    };
-
-    let perks_html = if perks.is_empty() {
-        String::new()
-    } else {
-        let items: String = perks
-            .iter()
-            .map(|perk| {
-                format!(
-                    r#"<tr><td style="padding:0 0 8px 0;font-family:{SANS};font-size:15px;line-height:22px;color:{TEXT};"><span style="font-family:{MONO};color:{HONEY};">+</span>&nbsp;&nbsp;{}</td></tr>"#,
-                    escape(perk)
-                )
-            })
-            .collect();
-        format!(
-            r#"<tr><td style="padding:40px 0 0 0;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td style="padding:0 0 12px 0;font-family:{MONO};font-size:11px;line-height:16px;letter-spacing:1.5px;color:{TEXT_2};">FOR EARLY MEMBERS</td></tr>{items}</table></td></tr>"#
-        )
-    };
+    let buttons: String = stores
+        .iter()
+        .map(|store| {
+            let (label, icon, url) = (store.label, store.icon, store.url);
+            format!(
+                r#"<tr><td style="padding:0 0 10px 0;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td align="center" bgcolor="{PILL}" style="background-color:{PILL};border:1px solid {EDGE};border-radius:999px;"><a href="{url}" target="_blank" style="display:block;padding:14px 24px;font-family:{SANS};font-size:16px;line-height:20px;font-weight:600;color:{TEXT};text-decoration:none;border-radius:999px;"><img src="{base}/{icon}" width="20" height="20" alt="" style="display:inline-block;vertical-align:middle;border:0;margin:0 10px 0 0;"><span style="vertical-align:middle;">{label}</span></a></td></tr></table></td></tr>"#
+            )
+        })
+        .collect();
 
     let html = format!(
         r#"<!doctype html>
@@ -268,28 +239,18 @@ pub fn render_with_hero(links: &Links, perks: &[String], personal: &Personal, he
 <tr><td style="padding:0 0 20px 0;font-family:{MONO};font-size:11px;line-height:16px;letter-spacing:1.5px;color:{HONEY};">INVITE &middot; #{n}</td></tr>
 <tr><td style="padding:0 0 10px 0;font-family:{SANS};font-size:40px;line-height:44px;font-weight:700;letter-spacing:-1px;color:{TEXT};">You're in.</td></tr>
 <tr><td style="padding:0 0 32px 0;font-family:{SANS};font-size:17px;line-height:26px;color:{TEXT_2};">You were #{n} on the waitlist.</td></tr>
-<tr><td style="padding:0 0 32px 0;"><a href="{primary}" target="_blank" style="text-decoration:none;"><img src="{hero}" width="560" height="350" alt="The Honey app: your wallet and the thesis agent" style="display:block;width:100%;max-width:560px;height:auto;border:0;border-radius:16px;background-color:{INK};color:{TEXT_2};font-family:{SANS};font-size:13px;"></a></td></tr>
-<tr><td><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td align="center" bgcolor="{HONEY}" style="background-color:{HONEY};border-radius:999px;"><a href="{primary}" target="_blank" style="display:block;padding:18px 24px;font-family:{SANS};font-size:17px;line-height:22px;font-weight:700;color:{ON_HONEY};text-decoration:none;border-radius:999px;">Get Honey</a></td></tr></table></td></tr>
-{others}
-{perks_html}
-<tr><td style="padding:40px 0 0 0;font-family:{SANS};font-size:15px;line-height:22px;color:{TEXT};">{SIGN_OFF}</td></tr>
+<tr><td style="padding:0 0 32px 0;"><a href="{primary}" target="_blank" style="text-decoration:none;"><img src="{base}/invite-hero.png" width="560" height="350" alt="The Honey app: your wallet and a $500 basket from the thesis agent" style="display:block;width:100%;max-width:560px;height:auto;border:0;border-radius:16px;background-color:{INK};color:{TEXT_2};font-family:{SANS};font-size:13px;"></a></td></tr>
+{buttons}
+<tr><td style="padding:30px 0 0 0;font-family:{SANS};font-size:15px;line-height:22px;color:{TEXT};">{SIGN_OFF}</td></tr>
 <tr><td style="padding:32px 0 0 0;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td height="1" bgcolor="{RULE}" style="height:1px;line-height:1px;font-size:1px;background-color:{RULE};">&nbsp;</td></tr></table></td></tr>
 <tr><td style="padding:16px 0 0 0;font-family:{SANS};font-size:11px;line-height:16px;color:{TEXT_2};">You joined the waitlist at honeywallet.org.</td></tr>
 </table></td></tr></table>
 </body></html>"#
     );
 
-    let mut text = format!(
-        "INVITE #{n}\n\nYou're in.\nYou were #{n} on the waitlist.\n\nGet Honey: {primary}\n"
-    );
-    for (label, url) in stores.iter().skip(1) {
-        text.push_str(&format!("{label}: {url}\n"));
-    }
-    if !perks.is_empty() {
-        text.push_str("\nFOR EARLY MEMBERS\n");
-        for perk in perks {
-            text.push_str(&format!("+ {perk}\n"));
-        }
+    let mut text = format!("INVITE #{n}\n\nYou're in.\nYou were #{n} on the waitlist.\n\n");
+    for store in &stores {
+        text.push_str(&format!("{}: {}\n", store.label, store.url));
     }
     text.push_str(
         "\nHit reply, it comes to me. -- Abhishek, Honey\n\n--\nYou joined the waitlist at honeywallet.org.\n",
@@ -428,7 +389,6 @@ pub struct Report {
 pub async fn deliver<F, Fut>(
     client: &ResendClient,
     links: &Links,
-    perks: &[String],
     recipients: &[Recipient],
     spacing: Duration,
     mut mark: F,
@@ -443,7 +403,7 @@ where
             tokio::time::sleep(spacing).await;
         }
         let to = redact(&recipient.email);
-        let email = render(links, perks, &recipient.personal);
+        let email = render(links, &recipient.personal);
         match client
             .send(&recipient.email, &idempotency_key(recipient.id), &email)
             .await
@@ -534,7 +494,6 @@ pub async fn run(
     let report = deliver(
         &client,
         &config.links,
-        &config.perks,
         &recipients,
         SEND_SPACING,
         |id, message_id| async move {
@@ -570,30 +529,35 @@ mod tests {
     }
 
     #[test]
-    fn render_is_minimal_with_one_primary_cta() {
-        let email = render(&links(false, true, true), &[], &personal());
+    fn render_has_a_button_per_configured_store() {
+        let email = render(&links(false, true, true), &personal());
         assert_eq!(email.subject, "You're in: Honey is ready");
-        // Primary is the first available store: Android here, iOS missing.
-        let primary = "https://play.google.com/store/apps/honey";
+        // iOS unset: no App Store button; hero links to the first available store.
+        let play = "https://play.google.com/store/apps/honey";
         assert!(email.html.contains(&format!(
-            "<a href=\"{primary}\" target=\"_blank\" style=\"text-decoration:none;\"><img src=\"{HERO_URL}\""
+            "<a href=\"{play}\" target=\"_blank\" style=\"text-decoration:none;\"><img src=\"{ASSET_BASE}/invite-hero.png\""
         )));
-        assert_eq!(email.html.matches(">Get Honey</a>").count(), 1);
-        assert!(email.html.contains(">Android</a> &middot; <a"));
-        assert!(email.html.contains(">Chrome</a>"));
-        assert!(!email.html.contains(">iOS</a>"));
-        assert!(email.text.contains(&format!("Get Honey: {primary}\n")));
-        assert!(email.text.contains("Chrome: https://chromewebstore"));
-        assert!(!email.text.contains("iOS"));
-        // Hero: alt, dimensions, the only image.
-        assert_eq!(email.html.matches("<img").count(), 1);
+        assert!(!email.html.contains("App Store"));
+        assert!(!email.html.contains("icon-apple.png"));
+        assert!(email.html.contains(&format!(
+            "<img src=\"{ASSET_BASE}/icon-play.png\" width=\"20\" height=\"20\""
+        )));
+        assert!(email.html.contains(">Get it on Google Play</span>"));
+        assert!(email.html.contains(">Add to Chrome</span>"));
+        assert!(
+            email
+                .text
+                .contains(&format!("Get it on Google Play: {play}\n"))
+        );
+        assert!(!email.text.contains("App Store"));
+        // Hero + two icons, nothing else.
+        assert_eq!(email.html.matches("<img").count(), 3);
         assert!(
             email
                 .html
                 .contains("width=\"560\" height=\"350\" alt=\"The Honey app")
         );
-        // Copy that was cut stays cut.
-        for gone in ["joined on", "Download Honey", "invest in what you believe"] {
+        for gone in ["Get Honey", "FOR EARLY MEMBERS", "joined on"] {
             assert!(
                 !email.html.contains(gone) && !email.text.contains(gone),
                 "{gone}"
@@ -610,21 +574,20 @@ mod tests {
     }
 
     #[test]
-    fn single_store_has_no_secondary_links() {
-        let email = render(&links(true, false, false), &[], &personal());
-        assert!(!email.html.contains(">iOS</a>"));
-        assert_eq!(
-            email
-                .html
-                .matches("https://apps.apple.com/app/honey")
-                .count(),
-            2
-        );
+    fn all_three_stores_in_order() {
+        let email = render(&links(true, true, true), &personal());
+        let a = email.html.find("Download on the App Store").unwrap();
+        let b = email.html.find("Get it on Google Play").unwrap();
+        let c = email.html.find("Add to Chrome").unwrap();
+        assert!(a < b && b < c);
+        assert!(email.html.contains(
+            "apple.com/app/honey\" target=\"_blank\" style=\"text-decoration:none;\"><img src"
+        ));
     }
 
     #[test]
     fn render_is_personal_and_signed() {
-        let email = render(&links(true, false, false), &[], &personal());
+        let email = render(&links(true, false, false), &personal());
         assert!(email.html.contains("INVITE &middot; #128"));
         assert!(email.html.contains("You were #128 on the waitlist."));
         assert!(
@@ -644,51 +607,13 @@ mod tests {
         );
     }
 
-    #[test]
-    fn perks_are_optional_and_escaped() {
-        let none = render(&links(true, false, false), &[], &personal());
-        assert!(!none.html.contains("FOR EARLY MEMBERS"));
-        assert!(!none.text.contains("FOR EARLY MEMBERS"));
-        let perks = vec![
-            "Founding member badge".to_owned(),
-            "<b>x</b> & y".to_owned(),
-        ];
-        let some = render(&links(true, false, false), &perks, &personal());
-        assert!(some.html.contains("FOR EARLY MEMBERS"));
-        assert!(some.html.contains("Founding member badge"));
-        assert!(some.html.contains("&lt;b&gt;x&lt;/b&gt; &amp; y"));
-        assert!(
-            some.text
-                .contains("FOR EARLY MEMBERS\n+ Founding member badge\n")
-        );
-    }
-
-    #[test]
-    fn perks_config_parses_pipes() {
-        let config =
-            InviteConfig::from_lookup(lookup(&[("INVITE_PERKS", " A | |B ")]), true).unwrap();
-        assert_eq!(config.perks, ["A", "B"]);
-        let unset = InviteConfig::from_lookup(lookup(&[]), true).unwrap();
-        assert!(unset.perks.is_empty());
-        assert!(
-            InviteConfig::from_lookup(lookup(&[("INVITE_PERKS", "a|b|c|d|e|f")]), true).is_err()
-        );
-    }
-
-    /// Sample perks for the preview only; production default is none.
-    /// Run with INVITE_PREVIEW_PATH=<file> (and optionally INVITE_PREVIEW_HERO=<url>)
+    /// Run with INVITE_PREVIEW_PATH=<file> (and optionally INVITE_PREVIEW_ASSETS=<base url>)
     /// cargo test -p honey-server write_preview
     #[test]
     fn write_preview() {
         if let Ok(path) = std::env::var("INVITE_PREVIEW_PATH") {
-            let hero = std::env::var("INVITE_PREVIEW_HERO").unwrap_or_else(|_| HERO_URL.into());
-            let perks = [
-                "Founding member badge",
-                "First jars free of Honey fees for 30 days",
-                "Direct line to the founders: reply to this email",
-            ]
-            .map(String::from);
-            let email = render_with_hero(&links(true, true, true), &perks, &personal(), &hero);
+            let base = std::env::var("INVITE_PREVIEW_ASSETS").unwrap_or_else(|_| ASSET_BASE.into());
+            let email = render_with_assets(&links(true, true, true), &personal(), &base);
             std::fs::write(path, email.html).unwrap();
         }
     }

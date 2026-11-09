@@ -65,7 +65,6 @@ fn config(api_base: String) -> InviteConfig {
             ios: Some("https://apps.apple.com/app/honey".into()),
             ..Links::default()
         },
-        perks: vec!["Founding member badge".into()],
     }
 }
 
@@ -94,7 +93,6 @@ async fn sends_with_idempotency_and_continues_past_failures() {
     let report = deliver(
         &client,
         &config.links,
-        &config.perks,
         &recipients,
         Duration::ZERO,
         |id, message_id| {
@@ -130,7 +128,6 @@ async fn sends_with_idempotency_and_continues_past_failures() {
         assert!(!body["html"].as_str().unwrap().contains("example.com"));
         let text = body["text"].as_str().unwrap();
         assert!(text.contains(&format!("You were #{id} on the waitlist.")));
-        assert!(text.contains("+ Founding member badge"));
     }
 }
 
@@ -143,7 +140,6 @@ async fn failed_record_counts_as_failure() {
     let report = deliver(
         &client,
         &config.links,
-        &config.perks,
         &recipients,
         Duration::ZERO,
         |_, _| async { anyhow::bail!("db down") },
