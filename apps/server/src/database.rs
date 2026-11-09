@@ -8,7 +8,7 @@ use sqlx_core::migrate::{Migration, MigrationSource, MigrationType, Migrator};
 /// Latest schema version required before authenticated endpoints are ready.
 /// Keep this attached to the final embedded migration so readiness cannot drift
 /// from the migration list when the schema advances.
-pub const LATEST_SCHEMA_VERSION: i64 = 202611090001;
+pub const LATEST_SCHEMA_VERSION: i64 = 202611090002;
 const AUTH_CLEANUP_LOCK: i64 = 0x484f_4e45_5941_5554;
 
 #[derive(Debug)]
@@ -117,9 +117,15 @@ impl MigrationSource<'static> for EmbeddedMigrations {
                     false,
                 ),
                 migration(
-                    LATEST_SCHEMA_VERSION,
+                    202611090001,
                     "stealth-jar ledgers",
                     include_str!("../migrations/202611090001_stealth_jar_ledgers.sql"),
+                    false,
+                ),
+                migration(
+                    LATEST_SCHEMA_VERSION,
+                    "waitlist invites",
+                    include_str!("../migrations/202611090002_waitlist_invites.sql"),
                     false,
                 ),
             ])
@@ -196,4 +202,34 @@ pub async fn prune_auth(pool: &PgPool) -> Result<u64, sqlx::Error> {
     }
     tx.commit().await?;
     Ok(total)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every file in migrations/ must be in the embedded list, or `honey-server migrate`
+    /// reports success while silently skipping it.
+    #[tokio::test]
+    async fn every_migration_file_is_embedded() {
+        let mut embedded: Vec<i64> = EmbeddedMigrations
+            .resolve()
+            .await
+            .unwrap()
+            .iter()
+            .map(|m| m.version)
+            .collect();
+        embedded.sort_unstable();
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/migrations");
+        let mut files: Vec<i64> = std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|entry| {
+                let name = entry.ok()?.file_name().into_string().ok()?;
+                name.strip_suffix(".sql")?.split('_').next()?.parse().ok()
+            })
+            .collect();
+        files.sort_unstable();
+        assert_eq!(embedded, files);
+        assert_eq!(embedded.last(), Some(&LATEST_SCHEMA_VERSION));
+    }
 }
