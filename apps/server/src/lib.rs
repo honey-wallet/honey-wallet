@@ -46,6 +46,7 @@ pub mod swap_review;
 pub mod telemetry;
 pub mod thesis;
 pub mod uniswap_service;
+pub mod waitlist_invites;
 pub mod work;
 
 use axum::{Router, http::HeaderName, middleware};

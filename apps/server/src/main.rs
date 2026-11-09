@@ -53,6 +53,19 @@ async fn main() -> anyhow::Result<()> {
             telemetry.shutdown().await;
             return Ok(());
         }
+        Some("invite-waitlist") => {
+            use honey_server::waitlist_invites::{InviteConfig, Options, run};
+            let options = Options::parse(std::env::args().skip(2))?;
+            let invite_config = InviteConfig::from_env(options.dry_run)?;
+            let pool = infrastructure
+                .postgres()
+                .context("DATABASE_URL required for waitlist invites")?;
+            let result = run(pool, &options, &invite_config).await;
+            infrastructure.close().await;
+            telemetry.shutdown().await;
+            result?;
+            return Ok(());
+        }
         Some("dead-letters") => {
             // One-shot, bounded, read-only operator view. Never expose this through
             // the public API: job IDs are internal metadata and replay needs a
