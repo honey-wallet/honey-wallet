@@ -1,7 +1,7 @@
 #!/bin/sh
 # Builds the invite email images in apps/web/public/email/ with ImageMagick (macOS for the
-# Apple glyph and SF fonts): invite-hero.png from real Play Store screenshots, icon-honey.png
-# (the honey mark), the store buttons btn-*.png and the white icons they use (icon-*.png).
+# SF font): invite-hero.png from real Play Store screenshots, icon-honey.png (the honey
+# mark) and btn-get-honey.png (the one CTA).
 # Usage, from the repo root: sh apps/web/scripts/invite-hero.sh
 set -eu
 SRC=docs/launch/play-store
@@ -9,43 +9,14 @@ OUT=apps/web/public/email
 T="$(mktemp -d)"
 mkdir -p "$OUT"
 
-# --- Store icons: simple white marks, 64x64 (only used inside the button PNGs).
-magick -background none -fill white -font /System/Library/Fonts/SFNS.ttf -pointsize 160 \
-  label:"$(printf '\357\243\277')" -trim +repage -resize 54x54 -gravity center -extent 64x64 -strip "$OUT/icon-apple.png"
-magick -size 160x160 xc:none -fill white -draw "polygon 36,18 36,142 140,80" \
-  -resize 64x64 -strip "$OUT/icon-play.png"
-# Chrome-like mark: a disc cut into three blades by tangent gaps around a center dot.
-magick -size 160x160 xc:none -fill white -draw "circle 80,80 80,8" \
-  \( -size 160x160 xc:none -fill none -stroke white -strokewidth 9 -draw "circle 80,80 80,45" \
-     -draw "line 80,45 165,45" -draw "line 110,97 67,171" -draw "line 50,97 7,23" \) \
-  -compose DstOut -composite -compose Over -fill white -draw "circle 80,80 80,52" \
-  -resize 64x64 -strip "$OUT/icon-chrome.png"
-
-# --- Store buttons: PNGs so no mail client can invert or restyle them; the email shows
-# them at width:100% so they scale with the screen. Row 1 is the primary store as a
-# full-width honey pill; row 2 holds the other two side by side (or one full-width).
-# Per store: -primary 1120x104 (2x of 560x52, honey, dark ink), -wide 1120x104 (dark,
-# white ink) and the half-width 552x104 (2x of 276x52, dark). Labels are 46px at 2x
-# (23px at 560 wide), so they stay above 14px when a 375px phone scales them to ~61%.
-# Transparent corners; SF with a light stroke for semibold.
-button() { # icon label out width fill ink
-  W=$4
-  magick -background none -fill "$6" -stroke "$6" -strokewidth 1.1 \
-    -font /System/Library/Fonts/SFNS.ttf -pointsize 46 label:"$2" "$T/label.png"
-  magick "$OUT/$1" -resize 44x44 -fill "$6" -colorize 100 "$T/icon.png"
-  magick -background none "$T/icon.png" \( -size 20x1 xc:none \) "$T/label.png" \
-    -gravity center +append "$T/content.png"
-  magick -size ${W}x104 xc:none -fill "$5" -draw "roundrectangle 0,0 $((W-1)),103 52,52" \
-    "$T/content.png" -gravity center -compose Over -composite \
-    -strip +dither -colors 64 -define png:compression-level=9 "$OUT/$3"
-}
-for spec in "icon-apple.png|App Store|btn-app-store" "icon-play.png|Google Play|btn-google-play" \
-  "icon-chrome.png|Chrome|btn-chrome"; do
-  icon="${spec%%|*}"; rest="${spec#*|}"; label="${rest%%|*}"; name="${rest#*|}"
-  button "$icon" "$label" "$name-primary.png" 1120 '#f3c969' '#1a1408'
-  button "$icon" "$label" "$name-wide.png" 1120 '#2a2826' '#ffffff'
-  button "$icon" "$label" "$name.png" 552 '#2a2826' '#ffffff'
-done
+# --- "Get Honey" button: a PNG so no mail client can invert or restyle it; shown at
+# width:100% so it scales. 1120x104 (2x of 560x52), honey pill, dark label at 46px (23px at
+# 560 wide, ~14px on a 375px phone). Transparent corners; SF with a light stroke.
+magick -background none -fill '#1a1408' -stroke '#1a1408' -strokewidth 1.1 \
+  -font /System/Library/Fonts/SFNS.ttf -pointsize 46 label:"Get Honey" "$T/label.png"
+magick -size 1120x104 xc:none -fill '#f3c969' -draw "roundrectangle 0,0 1119,103 52,52" \
+  "$T/label.png" -gravity center -compose Over -composite \
+  -strip +dither -colors 64 -define png:compression-level=9 "$OUT/btn-get-honey.png"
 
 # --- Logo: the honey mark alone (no square), 64x56 (2x of 32x28), transparent.
 magick -background none -density 300 apps/web/public/honey-mark.svg -trim +repage \

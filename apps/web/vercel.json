@@ -3,6 +3,25 @@
   "buildCommand": "pnpm build",
   "outputDirectory": "dist",
   "trailingSlash": false,
+  "redirects": [
+    {
+      "source": "/get",
+      "has": [{ "type": "header", "key": "user-agent", "value": ".*(iPhone|iPad|iPod).*" }],
+      "destination": "https://apps.apple.com/app/id6832346883",
+      "permanent": false
+    },
+    {
+      "source": "/get",
+      "has": [{ "type": "header", "key": "user-agent", "value": ".*Android.*" }],
+      "destination": "https://play.google.com/store/apps/details?id=com.honeywallet.app",
+      "permanent": false
+    },
+    {
+      "source": "/get",
+      "destination": "https://www.honeywallet.org",
+      "permanent": false
+    }
+  ],
   "rewrites": [
     {
       "source": "/api/:path*",

@@ -8,7 +8,7 @@ use std::{
 
 use axum::{Json, Router, extract::State, http::HeaderMap, http::StatusCode, routing::post};
 use honey_server::waitlist_invites::{
-    InviteConfig, Links, Options, Personal, Recipient, ResendClient, deliver,
+    InviteConfig, Links, Options, Recipient, ResendClient, deliver,
 };
 use serde_json::{Value, json};
 
@@ -72,10 +72,6 @@ fn recipient(id: i64, email: &str) -> Recipient {
     Recipient {
         id,
         email: email.into(),
-        personal: Personal {
-            position: id,
-            joined: "21 Oct".into(),
-        },
     }
 }
 
@@ -127,7 +123,7 @@ async fn sends_with_idempotency_and_continues_past_failures() {
         assert!(body["text"].as_str().unwrap().contains("apps.apple.com"));
         assert!(!body["html"].as_str().unwrap().contains("example.com"));
         let text = body["text"].as_str().unwrap();
-        assert!(text.contains(&format!("You were #{id} on the waitlist.")));
+        assert!(text.contains("You're off the waitlist."));
     }
 }
 
@@ -177,9 +173,6 @@ async fn pending_is_oldest_uninvited_first_and_marking_sticks() {
     mark_invited(&db.pool, rows[0].id, "msg-1").await.unwrap();
     let rows = pending(&db.pool, &options).await.unwrap();
     assert_eq!(rows[0].email, "second@example.com");
-    // Place in line counts invited rows too.
-    assert_eq!(rows[0].personal.position, 2);
-    assert!(rows[0].personal.joined.contains(' '));
     let one = Options {
         email: Some("third@example.com".into()),
         ..options

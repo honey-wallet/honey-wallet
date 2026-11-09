@@ -61,54 +61,41 @@ impl Options {
     }
 }
 
+/// Default device-aware link: apps/web/vercel.json redirects /get by user agent to the App
+/// Store, Google Play or the Chrome Web Store.
+pub const DEFAULT_GET_URL: &str = "https://www.honeywallet.org/get";
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Links {
+    /// The "Get Honey" button and hero link (`INVITE_GET_URL`); `None` means
+    /// [`DEFAULT_GET_URL`].
+    pub get: Option<String>,
     pub ios: Option<String>,
     pub android: Option<String>,
     pub extension: Option<String>,
 }
 
 impl Links {
+    pub fn get_url(&self) -> &str {
+        self.get.as_deref().unwrap_or(DEFAULT_GET_URL)
+    }
+
     /// Configured stores in display order: App Store, Google Play, Chrome Web Store.
     pub fn stores(&self) -> Vec<Store<'_>> {
         [
-            (
-                "App Store",
-                "Download on the App Store",
-                "btn-app-store",
-                &self.ios,
-            ),
-            (
-                "Google Play",
-                "Get it on Google Play",
-                "btn-google-play",
-                &self.android,
-            ),
-            ("Chrome", "Add to Chrome", "btn-chrome", &self.extension),
+            ("App Store", &self.ios),
+            ("Google Play", &self.android),
+            ("Chrome", &self.extension),
         ]
         .into_iter()
-        .filter_map(|(label, alt, button, url)| {
-            url.as_deref().map(|url| Store {
-                label,
-                alt,
-                button,
-                url,
-            })
-        })
+        .filter_map(|(label, url)| url.as_deref().map(|url| Store { label, url }))
         .collect()
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Store<'a> {
-    /// Short name, used in the text version.
     pub label: &'static str,
-    /// Alt text for the button image.
-    pub alt: &'static str,
-    /// Button image base name under the asset base: `<button>-primary.png` (full-width
-    /// honey), `<button>-wide.png` (full-width dark) or `<button>.png` (half-width dark),
-    /// built by apps/web/scripts/invite-hero.sh.
-    pub button: &'static str,
     pub url: &'a str,
 }
 
@@ -159,6 +146,7 @@ impl InviteConfig {
             Ok(Some(value))
         };
         let links = Links {
+            get: url("INVITE_GET_URL")?,
             ios: url("INVITE_IOS_URL")?,
             android: url("INVITE_ANDROID_URL")?,
             extension: url("INVITE_EXTENSION_URL")?,
@@ -188,15 +176,6 @@ pub struct Email {
     pub text: String,
 }
 
-/// What is personal about one invite. Never includes the address itself.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Personal {
-    /// 1-based place in line by `created_at, id`.
-    pub position: i64,
-    /// Join date as shown, e.g. `21 Oct` (UTC).
-    pub joined: String,
-}
-
 fn escape(value: &str) -> String {
     value
         .replace('&', "&amp;")
@@ -211,8 +190,8 @@ fn escape(value: &str) -> String {
 pub const ASSET_BASE: &str = "https://www.honeywallet.org/email";
 
 /// Renders one invite: logo, headline, place in line, store buttons, then the app hero.
-pub fn render(links: &Links, personal: &Personal) -> Email {
-    render_with_assets(links, personal, ASSET_BASE)
+pub fn render(links: &Links) -> Email {
+    render_with_assets(links, ASSET_BASE)
 }
 
 /// [`render`] with images from `asset_base` (local previews before the web deploy).
@@ -221,7 +200,7 @@ pub fn render(links: &Links, personal: &Personal) -> Email {
 /// screen with the store buttons above the fold. Everything is inline on nested tables
 /// with `bgcolor` fallbacks; dark-mode locks keep Gmail's apps from inverting it. URLs are operator config. Never
 /// contains the recipient's address.
-pub fn render_with_assets(links: &Links, personal: &Personal, asset_base: &str) -> Email {
+pub fn render_with_assets(links: &Links, asset_base: &str) -> Email {
     const BG: &str = "#1c1b1a";
     const CARD: &str = "#242220";
     const TEXT: &str = "#f6f3eb";
@@ -243,54 +222,39 @@ pub fn render_with_assets(links: &Links, personal: &Personal, asset_base: &str) 
         )
     };
     let (bg_lock, card_lock) = (lock(BG), lock(CARD));
-    let n = personal.position;
     let stores = links.stores();
-    let primary = stores
-        .first()
-        .map(|store| store.url)
-        .unwrap_or("https://www.honeywallet.org");
+    let get_url = links.get_url();
     let base = escape(asset_base.trim_end_matches('/'));
 
-    // Store buttons are images (pill, icon and label baked in), so no client can invert or
-    // restyle them, and they scale with width:100% instead of relying on media queries.
-    // Row 1: the first configured store, full-width honey. Row 2: the others, two dark
-    // half-width pills with an 8px gap, or one full-width dark pill.
-    let button = |store: &Store<'_>, file: &str, width: usize| {
+    // One CTA: "Get Honey" (an image, so no client can invert or restyle it) to the
+    // device-aware /get link. Specific stores follow as small grey text links.
+    let get_button = format!(
+        r#"<a href="{get_url}" target="_blank" style="text-decoration:none;"><img src="{base}/btn-get-honey.png" width="560" height="52" alt="Get Honey" style="display:block;width:100%;height:auto;border:0;color:{TEXT};font-family:{SANS};font-size:16px;"></a>"#
+    );
+    // The store line's descender space eats 2px of the 40px gap to the hero card.
+    let cta_bottom = if stores.is_empty() { 40 } else { 38 };
+    let store_links = if stores.is_empty() {
+        String::new()
+    } else {
+        let items: Vec<String> = stores
+            .iter()
+            .map(|store| {
+                format!(
+                    r#"<a href="{url}" target="_blank" style="color:{TEXT_2};text-decoration:underline;">{label}</a>"#,
+                    url = store.url,
+                    label = store.label,
+                )
+            })
+            .collect();
+        let line = blend(&format!("Or open {}", items.join(" &middot; ")));
         format!(
-            r#"<a href="{url}" target="_blank" style="text-decoration:none;"><img src="{base}/{file}" width="{width}" height="52" alt="{alt}" style="display:block;width:100%;height:auto;border:0;color:{TEXT};font-family:{SANS};font-size:14px;"></a>"#,
-            url = store.url,
-            alt = store.alt,
+            r#"<tr><td style="padding:11px 0 0 0;font-family:{SANS};font-size:13px;line-height:20px;color:{TEXT_2};">{line}</td></tr>"#
         )
     };
-    let mut buttons = String::new();
-    if let Some((first, rest)) = stores.split_first() {
-        let primary_button = button(first, &format!("{}-primary.png", first.button), 560);
-        let bottom = if rest.is_empty() { 0 } else { 8 };
-        buttons.push_str(&format!(
-            r#"<tr><td style="padding:0 0 {bottom}px 0;">{primary_button}</td></tr>"#
-        ));
-        match rest {
-            [only] => {
-                let wide = button(only, &format!("{}-wide.png", only.button), 560);
-                buttons.push_str(&format!(r#"<tr><td>{wide}</td></tr>"#));
-            }
-            [left, right, ..] => {
-                let left = button(left, &format!("{}.png", left.button), 276);
-                let right = button(right, &format!("{}.png", right.button), 276);
-                buttons.push_str(&format!(
-                    r#"<tr><td><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td width="50%" valign="top" style="padding:0 4px 0 0;">{left}</td><td width="50%" valign="top" style="padding:0 0 0 4px;">{right}</td></tr></table></td></tr>"#
-                ));
-            }
-            [] => {}
-        }
-    }
 
     let wordmark = blend("Honey");
     let headline = blend("You're in.");
-    // #N is bold white: colored text does not survive Gmail's inversion plus the blend.
-    let line = blend(&format!(
-        r#"You were <span style="color:{WHITE};font-weight:700;">#{n}</span> on the waitlist."#
-    ));
+    let line = blend("You're off the waitlist.");
     let sign_off = blend(SIGN_OFF);
     let footer = blend(&format!(
         r#"You joined the waitlist at <a href="https://www.honeywallet.org" target="_blank" style="color:{TEXT_2};text-decoration:none;">honeywallet.org</a>."#
@@ -300,21 +264,21 @@ pub fn render_with_assets(links: &Links, personal: &Personal, asset_base: &str) 
         r#"<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><meta name="supported-color-schemes" content="dark"><title>{SUBJECT}</title>{HEAD_STYLE}</head>
 <body class="body" bgcolor="{BG}" style="margin:0;padding:0;{bg_lock}color:{TEXT};font-family:{SANS};-webkit-text-size-adjust:100%;">
-<div style="display:none;max-height:0;overflow:hidden;mso-hide:all;">You were #{n} on the waitlist.</div>
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="{BG}" style="{bg_lock}"><tr><td align="center" bgcolor="{BG}" style="{bg_lock}padding:40px 16px 32px 16px;">
+<div style="display:none;max-height:0;overflow:hidden;mso-hide:all;">You're off the waitlist. Get Honey on your phone or in Chrome.</div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="{BG}" style="{bg_lock}"><tr><td align="center" bgcolor="{BG}" style="{bg_lock}padding:40px 24px 40px 24px;">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:560px;">
-<tr><td style="padding:0 0 48px 0;"><table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr><td style="padding:0 10px 0 0;vertical-align:middle;"><img src="{base}/icon-honey.png" width="32" height="28" alt="" style="display:block;border:0;"></td><td style="vertical-align:middle;font-family:{SANS};font-size:18px;line-height:28px;font-weight:700;color:{TEXT};">{wordmark}</td></tr></table></td></tr>
-<tr><td style="padding:0 0 12px 0;font-family:{SANS};font-size:44px;line-height:48px;font-weight:800;letter-spacing:-1.2px;color:{WHITE};">{headline}</td></tr>
-<tr><td style="padding:0 0 32px 0;font-family:{SANS};font-size:17px;line-height:26px;color:{TEXT_2};">{line}</td></tr>
-<tr><td style="padding:0 0 32px 0;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">{buttons}</table></td></tr>
-<tr><td bgcolor="{CARD}" style="{card_lock}border-radius:20px;padding:0;font-size:0;line-height:0;"><a href="{primary}" target="_blank" style="text-decoration:none;"><img src="{base}/invite-hero.png" width="560" height="340" alt="The Honey app: your wallet and a $500 basket from the thesis agent" style="display:block;width:100%;max-width:560px;height:auto;border:0;border-radius:20px;color:{TEXT_2};font-family:{SANS};font-size:13px;"></a></td></tr>
-<tr><td style="padding:32px 0 0 0;font-family:{SANS};font-size:15px;line-height:22px;color:{TEXT};">{sign_off}</td></tr>
-<tr><td style="padding:16px 0 0 0;font-family:{SANS};font-size:12px;line-height:18px;color:{TEXT_2};">{footer}</td></tr>
+<tr><td style="padding:0 0 33px 0;"><table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr><td style="padding:0 8px 0 0;vertical-align:middle;"><img src="{base}/icon-honey.png" width="32" height="28" alt="" style="display:block;border:0;"></td><td style="vertical-align:middle;font-family:{SANS};font-size:18px;line-height:28px;font-weight:700;color:{TEXT};">{wordmark}</td></tr></table></td></tr>
+<tr><td style="padding:0 0 5px 0;font-family:{SANS};font-size:44px;line-height:48px;font-weight:800;letter-spacing:-1.2px;color:{WHITE};">{headline}</td></tr>
+<tr><td style="padding:0 0 35px 0;font-family:{SANS};font-size:17px;line-height:24px;color:{TEXT_2};">{line}</td></tr>
+<tr><td style="padding:0 0 {cta_bottom}px 0;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td>{get_button}</td></tr>{store_links}</table></td></tr>
+<tr><td bgcolor="{CARD}" style="{card_lock}border-radius:20px;padding:0;font-size:0;line-height:0;"><a href="{get_url}" target="_blank" style="text-decoration:none;"><img src="{base}/invite-hero.png" width="560" height="340" alt="The Honey app: your wallet and a $500 basket from the thesis agent" style="display:block;width:100%;max-width:560px;height:auto;border:0;border-radius:20px;color:{TEXT_2};font-family:{SANS};font-size:13px;"></a></td></tr>
+<tr><td style="padding:35px 0 0 0;font-family:{SANS};font-size:15px;line-height:22px;color:{TEXT};">{sign_off}</td></tr>
+<tr><td style="padding:11px 0 0 0;font-family:{SANS};font-size:12px;line-height:18px;color:{TEXT_2};">{footer}</td></tr>
 </table></td></tr></table>
 </body></html>"#
     );
 
-    let mut text = format!("You're in.\nYou were #{n} on the waitlist.\n\n");
+    let mut text = format!("You're in.\nYou're off the waitlist.\n\nGet Honey: {get_url}\n");
     for store in &stores {
         text.push_str(&format!("{}: {}\n", store.label, store.url));
     }
@@ -441,7 +405,6 @@ impl ResendClient {
 pub struct Recipient {
     pub id: i64,
     pub email: String,
-    pub personal: Personal,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -464,12 +427,12 @@ where
     Fut: Future<Output = anyhow::Result<()>>,
 {
     let mut report = Report::default();
+    let email = render(links);
     for (index, recipient) in recipients.iter().enumerate() {
         if index > 0 {
             tokio::time::sleep(spacing).await;
         }
         let to = redact(&recipient.email);
-        let email = render(links, &recipient.personal);
         match client
             .send(&recipient.email, &idempotency_key(recipient.id), &email)
             .await
@@ -494,14 +457,8 @@ where
 }
 
 pub async fn pending(pool: &PgPool, options: &Options) -> sqlx::Result<Vec<Recipient>> {
-    // Place in line counts every current row, invited or not.
-    let rows: Vec<(i64, String, i64, String)> = sqlx::query_as(
-        "SELECT id, email, position, to_char(created_at AT TIME ZONE 'UTC', 'FMDD Mon')
-         FROM (
-             SELECT id, email, created_at, invited_at,
-                    row_number() OVER (ORDER BY created_at, id) AS position
-             FROM waitlist
-         ) ranked
+    let rows: Vec<(i64, String)> = sqlx::query_as(
+        "SELECT id, email FROM waitlist
          WHERE invited_at IS NULL AND ($2::text IS NULL OR email = $2)
          ORDER BY created_at, id
          LIMIT $1",
@@ -512,11 +469,7 @@ pub async fn pending(pool: &PgPool, options: &Options) -> sqlx::Result<Vec<Recip
     .await?;
     Ok(rows
         .into_iter()
-        .map(|(id, email, position, joined)| Recipient {
-            id,
-            email,
-            personal: Personal { position, joined },
-        })
+        .map(|(id, email)| Recipient { id, email })
         .collect())
 }
 
@@ -547,12 +500,7 @@ pub async fn run(
             recipients.len()
         );
         for recipient in &recipients {
-            println!(
-                "  {} #{} {}",
-                recipient.id,
-                recipient.personal.position,
-                redact(&recipient.email)
-            );
+            println!("  {} {}", recipient.id, redact(&recipient.email));
         }
         return Ok(Report::default());
     }
@@ -580,6 +528,7 @@ mod tests {
 
     fn links(ios: bool, android: bool, extension: bool) -> Links {
         Links {
+            get: None,
             ios: ios.then(|| "https://apps.apple.com/app/honey".to_owned()),
             android: android.then(|| "https://play.google.com/store/apps/honey".to_owned()),
             extension: extension
@@ -587,38 +536,33 @@ mod tests {
         }
     }
 
-    fn personal() -> Personal {
-        Personal {
-            position: 128,
-            joined: "21 Oct".into(),
-        }
-    }
-
     #[test]
-    fn render_has_a_button_per_configured_store() {
-        let email = render(&links(false, true, true), &personal());
+    fn one_get_honey_cta_and_subtle_store_links() {
+        let email = render(&links(false, true, true));
         assert_eq!(email.subject, "You're in: Honey is ready");
-        // iOS unset: no App Store button; hero links to the first available store.
+        // The button and the hero both go to the device-aware /get link.
+        assert!(email.html.contains(&format!(
+            "<a href=\"{DEFAULT_GET_URL}\" target=\"_blank\" style=\"text-decoration:none;\"><img src=\"{ASSET_BASE}/btn-get-honey.png\" width=\"560\" height=\"52\" alt=\"Get Honey\" style=\"display:block;width:100%;height:auto;"
+        )));
+        assert!(email.html.contains(&format!(
+            "<a href=\"{DEFAULT_GET_URL}\" target=\"_blank\" style=\"text-decoration:none;\"><img src=\"{ASSET_BASE}/invite-hero.png\""
+        )));
+        // Configured stores only, as small grey links after the CTA.
         let play = "https://play.google.com/store/apps/honey";
         assert!(email.html.contains(&format!(
-            "<a href=\"{play}\" target=\"_blank\" style=\"text-decoration:none;\"><img src=\"{ASSET_BASE}/invite-hero.png\""
+            "<div class=\"gmail-blend-difference\">Or open <a href=\"{play}\" target=\"_blank\" style=\"color:#a8a197;text-decoration:underline;\">Google Play</a> &middot; <a href=\"https://chromewebstore.google.com/detail/honey\""
         )));
         assert!(!email.html.contains("App Store"));
-        assert!(!email.html.contains("btn-app-store"));
-        // iOS unset: Google Play becomes the full-width honey primary, Chrome alone fills
-        // row 2 at full width. Images scale with width:100%.
-        assert!(email.html.contains(&format!(
-            "<a href=\"{play}\" target=\"_blank\" style=\"text-decoration:none;\"><img src=\"{ASSET_BASE}/btn-google-play-primary.png\" width=\"560\" height=\"52\" alt=\"Get it on Google Play\" style=\"display:block;width:100%;height:auto;"
+        assert!(
+            email.html.find("btn-get-honey.png").unwrap() < email.html.find("Or open").unwrap()
+        );
+        assert!(email.text.contains(&format!(
+            "Get Honey: {DEFAULT_GET_URL}\nGoogle Play: {play}\n"
         )));
-        assert!(email.html.contains(&format!(
-            "<img src=\"{ASSET_BASE}/btn-chrome-wide.png\" width=\"560\" height=\"52\" alt=\"Add to Chrome\""
-        )));
-        assert!(!email.html.contains("width=\"50%\""));
-        assert!(email.text.contains(&format!("Google Play: {play}\n")));
         assert!(!email.text.contains("App Store"));
-        // Logo, hero and two buttons; no inline icons left.
-        assert_eq!(email.html.matches("<img").count(), 4);
-        assert!(!email.html.contains("icon-play.png"));
+        // Logo, button and hero; no per-store button images.
+        assert_eq!(email.html.matches("<img").count(), 3);
+        assert!(!email.html.contains("btn-google-play"));
         assert!(email.html.contains(&format!(
             "<img src=\"{ASSET_BASE}/icon-honey.png\" width=\"32\" height=\"28\""
         )));
@@ -649,7 +593,8 @@ mod tests {
         for text in [
             "Honey",
             "You're in.",
-            "You were ",
+            "You're off the waitlist.",
+            "Or open ",
             "Hit reply",
             "You joined the waitlist",
         ] {
@@ -670,57 +615,66 @@ mod tests {
     }
 
     #[test]
-    fn buttons_come_before_the_hero() {
-        let email = render(&links(true, true, true), &personal());
-        let a = email.html.find("btn-app-store-primary.png").unwrap();
-        let b = email.html.find("btn-google-play.png").unwrap();
-        let c = email.html.find("btn-chrome.png").unwrap();
-        let hero = email.html.find("invite-hero.png").unwrap();
-        assert!(a < b && b < c && c < hero);
-        assert!(email.html.contains("alt=\"Download on the App Store\""));
-        assert_eq!(email.html.matches("-primary.png").count(), 1);
-        // Row 2: the two secondaries side by side, 50% each with an 8px gap.
-        assert!(email.html.contains(&format!(
-            "<td width=\"50%\" valign=\"top\" style=\"padding:0 4px 0 0;\"><a href=\"https://play.google.com/store/apps/honey\" target=\"_blank\" style=\"text-decoration:none;\"><img src=\"{ASSET_BASE}/btn-google-play.png\" width=\"276\" height=\"52\""
-        )));
-        assert!(email.html.contains(&format!(
-            "<td width=\"50%\" valign=\"top\" style=\"padding:0 0 0 4px;\"><a href=\"https://chromewebstore.google.com/detail/honey\" target=\"_blank\" style=\"text-decoration:none;\"><img src=\"{ASSET_BASE}/btn-chrome.png\" width=\"276\""
-        )));
-        assert!(!email.html.contains("-wide.png"));
-        assert!(email.html.contains(
-            "apple.com/app/honey\" target=\"_blank\" style=\"text-decoration:none;\"><img src=\"https://www.honeywallet.org/email/invite-hero.png\""
-        ));
-    }
-
-    #[test]
-    fn single_store_is_only_the_primary() {
-        let email = render(&links(false, false, true), &personal());
+    fn get_url_is_configurable_and_store_links_optional() {
+        let mut custom = links(false, false, false);
+        custom.get = Some("https://example.com/download".into());
+        let email = render(&custom);
         assert_eq!(
             email
                 .html
-                .matches("<img src=\"https://www.honeywallet.org/email/btn-")
+                .matches("href=\"https://example.com/download\"")
                 .count(),
-            1
+            2
         );
-        assert!(email.html.contains("btn-chrome-primary.png"));
+        assert!(!email.html.contains("Or open"));
         assert!(
             email
-                .html
-                .contains("<tr><td style=\"padding:0 0 0px 0;\"><a href")
+                .text
+                .contains("Get Honey: https://example.com/download\n\nHit reply")
+        );
+        let config = InviteConfig::from_lookup(
+            lookup(&[("INVITE_GET_URL", "https://example.com/download")]),
+            true,
+        )
+        .unwrap();
+        assert_eq!(config.links.get_url(), "https://example.com/download");
+        assert_eq!(
+            InviteConfig::from_lookup(lookup(&[]), true)
+                .unwrap()
+                .links
+                .get_url(),
+            DEFAULT_GET_URL
+        );
+        assert!(
+            InviteConfig::from_lookup(lookup(&[("INVITE_GET_URL", "http://x.y")]), true).is_err()
         );
     }
 
     #[test]
-    fn render_is_personal_and_signed() {
-        let email = render(&links(true, false, false), &personal());
-        assert!(email.html.contains(
-            "You were <span style=\"color:#ffffff;font-weight:700;\">#128</span> on the waitlist."
-        ));
+    fn all_three_store_links_in_order() {
+        let email = render(&links(true, true, true));
+        let a = email.html.find(">App Store</a>").unwrap();
+        let b = email.html.find(">Google Play</a>").unwrap();
+        let c = email.html.find(">Chrome</a>").unwrap();
+        assert!(a < b && b < c);
+        assert!(c < email.html.find("invite-hero.png").unwrap());
+    }
+
+    #[test]
+    fn copy_has_no_place_in_line_and_is_signed() {
+        let email = render(&links(true, false, false));
+        assert!(!email.html.contains("You were"));
+        assert!(!email.text.contains('#'));
+        assert!(
+            email
+                .html
+                .contains("You're off the waitlist. Get Honey on your phone or in Chrome.</div>")
+        );
         assert!(email.html.contains("color:#ffffff;\"><div class=\"gmail-blend-screen\"><div class=\"gmail-blend-difference\">You're in."));
         assert!(
             email
                 .text
-                .starts_with("You're in.\nYou were #128 on the waitlist.\n")
+                .starts_with("You're in.\nYou're off the waitlist.\n\nGet Honey: ")
         );
         assert!(
             email
@@ -732,7 +686,39 @@ mod tests {
                 .text
                 .contains("Hit reply, it comes to me. -- Abhishek\n")
         );
-        assert!(!email.html.contains("INVITE"));
+    }
+
+    #[test]
+    fn spacing_is_optically_even() {
+        // Visible gaps are 40 (section) and 16 (related); each padding is that gap minus
+        // the measured line-height leading of the text rows around it.
+        let email = render(&links(true, true, true));
+        assert!(email.html.contains("padding:40px 24px 40px 24px;"));
+        for (padding, gap) in [
+            ("padding:0 0 33px 0;", "logo to headline 40"),
+            ("padding:0 0 5px 0;font-family", "headline to subline 16"),
+            ("padding:0 0 35px 0;font-family", "subline to button 40"),
+            (
+                "padding:11px 0 0 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px",
+                "button to store links 16",
+            ),
+            ("padding:0 0 38px 0;", "store links to hero 40"),
+            ("padding:35px 0 0 0;font-family", "hero to sign-off 40"),
+            (
+                "padding:11px 0 0 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:12px",
+                "sign-off to footer 16",
+            ),
+            (
+                "padding:0 8px 0 0;vertical-align:middle;",
+                "logo mark to wordmark 8",
+            ),
+        ] {
+            assert!(email.html.contains(padding), "{gap}");
+        }
+        // Without store links the button sits a full 40 above the hero.
+        let bare = render(&Links::default());
+        assert!(bare.html.contains("padding:0 0 40px 0;"));
+        assert!(!bare.html.contains("Or open"));
     }
 
     /// Run with INVITE_PREVIEW_PATH=<file> (and optionally INVITE_PREVIEW_ASSETS=<base url>)
@@ -741,7 +727,7 @@ mod tests {
     fn write_preview() {
         if let Ok(path) = std::env::var("INVITE_PREVIEW_PATH") {
             let base = std::env::var("INVITE_PREVIEW_ASSETS").unwrap_or_else(|_| ASSET_BASE.into());
-            let email = render_with_assets(&links(true, true, true), &personal(), &base);
+            let email = render_with_assets(&links(true, true, true), &base);
             std::fs::write(path, email.html).unwrap();
         }
     }

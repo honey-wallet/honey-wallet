@@ -10,6 +10,13 @@ Public URLs (served from `apps/web`):
 - Terms: https://honeywallet.org/terms
 - Support: https://honeywallet.org/support
 - Account and data deletion: https://honeywallet.org/delete-account
+- Get the app: https://www.honeywallet.org/get. `apps/web/vercel.json` redirects it by
+  user agent with temporary (302) redirects: iPhone, iPad and iPod go to the App Store
+  (id6832346883), Android goes to Google Play (`com.honeywallet.app`), and everything
+  else goes to the home page until the Chrome Web Store listing exists. Then replace
+  that last destination with the listing URL. iPads that report a desktop Mac user
+  agent also land on the fallback. `apps/web/src/vercelConfig.test.ts` checks the
+  routing.
 - Contact: team@honeywallet.org
 
 What the code shows (the basis for every answer below):
