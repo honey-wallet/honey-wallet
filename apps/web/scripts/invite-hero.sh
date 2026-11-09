@@ -34,14 +34,13 @@ phone() { # src w h out
     -draw "roundrectangle 1,1 $((FW-2)),$((FH-2)) $((R+B)),$((R+B))" \
     "$T/screen.png" -geometry +$B+$B -compose Over -composite "$4"
 }
-# Proposal: splice out the "Sources / Sample prices (test mode)" rows (y 1040-1190) so the
-# card flows from the stats row into "Buy $500 / Edit" and the chips; pad the 150px back
-# with the screen's own background above the input bar so it keeps the full 1080x1920.
+# Proposal, kept visual: header, risk ring, $500.00 and the three picks with their bars
+# (y 0-870), then the "Buy $500 / Edit" row and card bottom (y 1185-1375). Fees, sources,
+# chips and the input bar are dropped; the app's plain background fills the full height.
 magick "$SRC/screenshot-2-proposal.jpg" \
-  \( -clone 0 -crop 1080x1040+0+0 +repage \) \
-  \( -clone 0 -crop 1080x510+0+1190 +repage \) \
-  \( -size 1080x150 xc:'#131313' \) \
-  \( -clone 0 -crop 1080x220+0+1700 +repage \) \
+  \( -clone 0 -crop 1080x870+0+0 +repage \) \
+  \( -clone 0 -crop 1080x190+0+1185 +repage \) \
+  \( -size 1080x860 xc:'#131313' \) \
   -delete 0 -append "$T/proposal.jpg"
 phone "$T/proposal.jpg" 380 676 "$T/proposal.png"
 magick "$T/proposal.png" -channel RGB -evaluate multiply 0.8 +channel "$T/proposal.png"
