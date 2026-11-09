@@ -8,7 +8,7 @@ use std::{
 
 use axum::{Json, Router, extract::State, http::HeaderMap, http::StatusCode, routing::post};
 use honey_server::waitlist_invites::{
-    InviteConfig, Links, Options, Recipient, ResendClient, deliver, render,
+    InviteConfig, Links, Options, Personal, Recipient, ResendClient, deliver,
 };
 use serde_json::{Value, json};
 
@@ -65,6 +65,18 @@ fn config(api_base: String) -> InviteConfig {
             ios: Some("https://apps.apple.com/app/honey".into()),
             ..Links::default()
         },
+        perks: vec!["Founding member badge".into()],
+    }
+}
+
+fn recipient(id: i64, email: &str) -> Recipient {
+    Recipient {
+        id,
+        email: email.into(),
+        personal: Personal {
+            position: id,
+            joined: "21 Oct".into(),
+        },
     }
 }
 
@@ -73,25 +85,16 @@ async fn sends_with_idempotency_and_continues_past_failures() {
     let seen = Seen::default();
     let config = config(start(seen.clone()).await);
     let client = ResendClient::new(&config).unwrap();
-    let email = render(&config.links);
     let recipients = [
-        Recipient {
-            id: 1,
-            email: "a@example.com".into(),
-        },
-        Recipient {
-            id: 2,
-            email: "bad@example.com".into(),
-        },
-        Recipient {
-            id: 3,
-            email: "c@example.com".into(),
-        },
+        recipient(1, "a@example.com"),
+        recipient(2, "bad@example.com"),
+        recipient(3, "c@example.com"),
     ];
     let marked = Arc::new(Mutex::new(Vec::new()));
     let report = deliver(
         &client,
-        &email,
+        &config.links,
+        &config.perks,
         &recipients,
         Duration::ZERO,
         |id, message_id| {
@@ -125,6 +128,9 @@ async fn sends_with_idempotency_and_continues_past_failures() {
         assert_eq!(body["reply_to"], "support@honeywallet.org");
         assert!(body["text"].as_str().unwrap().contains("apps.apple.com"));
         assert!(!body["html"].as_str().unwrap().contains("example.com"));
+        let text = body["text"].as_str().unwrap();
+        assert!(text.contains(&format!("You were #{id} on the waitlist.")));
+        assert!(text.contains("+ Founding member badge"));
     }
 }
 
@@ -133,13 +139,11 @@ async fn failed_record_counts_as_failure() {
     let seen = Seen::default();
     let config = config(start(seen.clone()).await);
     let client = ResendClient::new(&config).unwrap();
-    let recipients = [Recipient {
-        id: 9,
-        email: "a@example.com".into(),
-    }];
+    let recipients = [recipient(9, "a@example.com")];
     let report = deliver(
         &client,
-        &render(&config.links),
+        &config.links,
+        &config.perks,
         &recipients,
         Duration::ZERO,
         |_, _| async { anyhow::bail!("db down") },
@@ -177,6 +181,9 @@ async fn pending_is_oldest_uninvited_first_and_marking_sticks() {
     mark_invited(&db.pool, rows[0].id, "msg-1").await.unwrap();
     let rows = pending(&db.pool, &options).await.unwrap();
     assert_eq!(rows[0].email, "second@example.com");
+    // Place in line counts invited rows too.
+    assert_eq!(rows[0].personal.position, 2);
+    assert!(rows[0].personal.joined.contains(' '));
     let one = Options {
         email: Some("third@example.com".into()),
         ..options
