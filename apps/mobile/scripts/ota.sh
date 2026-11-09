@@ -23,6 +23,10 @@ eval "$(node -e '
 ')"
 if [ "$branch" = simulation ]; then export EXPO_PUBLIC_TEST_MODE=1; fi
 
-npx eas-cli update --branch "$branch" --message "$message" --environment production --non-interactive
+# Phones only: the web export is the extension's job (apps/extension), not an OTA update.
+for platform in ios android; do
+  npx eas-cli update --branch "$branch" --message "$message" --platform "$platform" \
+    --environment production --non-interactive
+done
 npx eas-cli channel:edit production --branch "$branch" --non-interactive
 echo "Channel production now serves branch $branch. Testers get it on the next app restart."
