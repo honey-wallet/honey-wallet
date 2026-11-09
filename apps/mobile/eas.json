@@ -56,13 +56,6 @@
         "EXPO_PUBLIC_AUTH_CHAIN_ID": "eip155:1"
       }
     },
-    "production-apk": {
-      "extends": "production",
-      "distribution": "internal",
-      "android": {
-        "buildType": "apk"
-      }
-    },
     "demo": {
       "distribution": "internal",
       "node": "22.22.3",
