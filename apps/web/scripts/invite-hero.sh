@@ -34,19 +34,24 @@ phone() { # src w h out
     -draw "roundrectangle 1,1 $((FW-2)),$((FH-2)) $((R+B)),$((R+B))" \
     "$T/screen.png" -geometry +$B+$B -compose Over -composite "$4"
 }
-# Proposal: drop the "Sources / Sample prices (test mode)" rows (y 1040-1190) and
-# everything below the card (from y 1370), so the basket and "Buy $500" read clearly.
+# Proposal: splice out the "Sources / Sample prices (test mode)" rows (y 1040-1190) so the
+# card flows from the stats row into "Buy $500 / Edit" and the chips; pad the 150px back
+# with the screen's own background above the input bar so it keeps the full 1080x1920.
 magick "$SRC/screenshot-2-proposal.jpg" \
   \( -clone 0 -crop 1080x1040+0+0 +repage \) \
-  \( -clone 0 -crop 1080x180+0+1190 +repage \) \
+  \( -clone 0 -crop 1080x510+0+1190 +repage \) \
+  \( -size 1080x150 xc:'#131313' \) \
+  \( -clone 0 -crop 1080x220+0+1700 +repage \) \
   -delete 0 -append "$T/proposal.jpg"
-# 1080x1220 -> 330x373
-phone "$T/proposal.jpg" 330 373 "$T/proposal.png"
-phone "$SRC/screenshot-4-home.jpg" 330 587 "$T/home.png"
+phone "$T/proposal.jpg" 380 676 "$T/proposal.png"
+magick "$T/proposal.png" -channel RGB -evaluate multiply 0.8 +channel "$T/proposal.png"
+phone "$SRC/screenshot-4-home.jpg" 380 676 "$T/home.png"
 
-# 1120x700 matte ink, two phones side by side with no overlap.
+# 1120x700 matte ink, thin honey arc behind; the proposal sits back-left and lower, and
+# the home phone in front-right overlaps only its right bezel. Both bleed off the bottom.
 magick -size 1120x700 xc:'#0b0b0a' \
-  "$T/proposal.png" -geometry +180+153 -compose Over -composite \
-  "$T/home.png" -geometry +590+46 -compose Over -composite \
+  -fill none -stroke '#f3c969' -strokewidth 3 -draw "circle 560,900 560,420" -stroke none \
+  "$T/proposal.png" -geometry +170+116 -compose Over -composite \
+  "$T/home.png" -geometry +548+56 -compose Over -composite \
   -strip +dither -colors 256 -define png:compression-level=9 "$OUT/invite-hero.png"
 rm -rf "$T"
