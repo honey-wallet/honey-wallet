@@ -297,6 +297,15 @@ html:has(.home) {
     background: none;
     border: 0;
   }
+  /* The row is no longer one capsule here, so its focus ring would draw a stray
+     oval around both pieces; ring the field itself instead. */
+  .home .landing-row:focus-within {
+    box-shadow: none;
+  }
+  .home .landing-input:focus {
+    border-color: var(--h-honey);
+    box-shadow: 0 0 0 3px rgba(243, 201, 105, 0.18);
+  }
   .home .landing-input {
     height: 52px;
     padding: 0 20px;

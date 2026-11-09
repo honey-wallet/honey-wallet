@@ -28,7 +28,24 @@ function errorMessage(status: number | null): string {
 
 // Plain fetch keeps the landing bundle small; the shape matches the API client's
 // `joinWaitlist` (POST /api/v1/waitlist -> WaitlistResponse).
+// A cold server or a dropped mobile connection fails the first try; joining is
+// idempotent on the server, so retry those (never 4xx answers such as 429) twice with a short pause.
+const RETRY_DELAYS_MS = [800, 2000];
+
 async function joinWaitlist(baseUrl: string, email: string): Promise<WaitlistResponse> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await postWaitlist(baseUrl, email);
+    } catch (error) {
+      const retryable = typeof error !== 'number' || error >= 500;
+      const delay = RETRY_DELAYS_MS[attempt];
+      if (!retryable || delay === undefined) throw error;
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+}
+
+async function postWaitlist(baseUrl: string, email: string): Promise<WaitlistResponse> {
   const response = await fetch(`${baseUrl}/api/v1/waitlist`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
