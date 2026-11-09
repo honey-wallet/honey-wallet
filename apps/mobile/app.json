@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "Honey Wallet",
+    "name": "Honey",
     "slug": "honey-wallet",
     "version": "0.1.0",
     "orientation": "portrait",
@@ -49,14 +49,14 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "Honey Wallet uses your photos so you can choose a profile picture."
+          "photosPermission": "Honey uses your photos so you can choose a profile picture."
         }
       ],
       "expo-font",
       [
         "expo-camera",
         {
-          "cameraPermission": "Honey Wallet uses the camera to scan wallet addresses and QR codes.",
+          "cameraPermission": "Honey uses the camera to scan wallet addresses and QR codes.",
           "microphonePermission": false,
           "recordAudioAndroid": false
         }

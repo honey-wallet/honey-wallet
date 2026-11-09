@@ -493,7 +493,7 @@ pub async fn run(
 ) -> anyhow::Result<Report> {
     let recipients = pending(pool, options)
         .await
-        .map_err(|_| anyhow::anyhow!("could not read the waitlist"))?;
+        .context("could not read the waitlist")?;
     if options.dry_run {
         println!(
             "dry run: {} uninvited address(es) would be emailed",

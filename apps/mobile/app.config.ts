@@ -25,13 +25,16 @@ export default ({ config }: ConfigContext): ExpoConfig => {
   if (channel) {
     if (!projectId)
       throw new Error('Set EAS_PROJECT_ID before building or publishing an OTA release.');
+    // HONEY_SIMULATION=1 opts an OTA update into test mode (sample money, every feature
+    // on) for testers; without it a release can never ship test mode by accident.
+    const testMode = process.env.HONEY_SIMULATION === '1' ? '1' : '0';
     if (
-      process.env.EXPO_PUBLIC_TEST_MODE !== '0' ||
+      process.env.EXPO_PUBLIC_TEST_MODE !== testMode ||
       process.env.EXPO_PUBLIC_E2E === '1' ||
       process.env.EXPO_PUBLIC_TARGET === 'extension'
     )
       throw new Error(
-        'Native releases require EXPO_PUBLIC_TEST_MODE=0 and no extension/E2E target.',
+        'Native releases require EXPO_PUBLIC_TEST_MODE=0 (or =1 with HONEY_SIMULATION=1) and no extension/E2E target.',
       );
     for (const name of ['EXPO_PUBLIC_API_URL', 'EXPO_PUBLIC_AUTH_ORIGIN']) {
       const value = process.env[name];
