@@ -546,7 +546,7 @@
 :root .noir-bar {
   background: #222222;
   border-color: transparent;
-  box-shadow: 0 14px 40px -22px rgba(0, 0, 0, 0.45);
+  box-shadow: none;
 }
 :root .noir-icon-btn {
   color: #f6f4f3;

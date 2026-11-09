@@ -11,18 +11,36 @@ type Route = { symbol: string; usd: number; slippage: number; legs: Leg[] };
 
 const CHAIN: Record<string, string> = {
   Ethereum: '#627EEA',
-  Base: '#0052FF',
+  Base: '#0000FF',
   Solana: '#9945FF',
   NEAR: '#00C08B',
 };
 const usd = (n: number) => `$${n.toLocaleString('en-US')}`;
+
+/* The chains a plan touches, as real marks ringed in the colour their bars use (the bars' legend). */
+export function ChainMarks({ chains }: { chains: string[] }) {
+  return (
+    <span className="rp-chains">
+      {chains.map((c) => (
+        <span key={c} className="rp-chain" title={c}>
+          <span
+            className="rp-ring"
+            style={{ boxShadow: `0 0 0 2px #131313, 0 0 0 4px ${CHAIN[c] ?? 'var(--fg)'}` }}
+          >
+            {logoFor(c) && <Logo id={logoFor(c)!} size="clamp(26px, 2.4vw, 36px)" />}
+          </span>
+          <small>{c}</small>
+        </span>
+      ))}
+    </span>
+  );
+}
 
 export default function RoutePlan({ routes, from }: { routes: Route[]; from: ReactNode }) {
   const { isStatic } = useDeck();
   const reduce = useReducedMotion();
   const animate = !isStatic && !reduce;
   const max = Math.max(...routes.map((r) => r.usd));
-  const chains = [...new Set(routes.flatMap((r) => r.legs.map((l) => l.chain)))];
   return (
     <div className="rp">
       <Reveal className="rp-from">
@@ -58,11 +76,15 @@ export default function RoutePlan({ routes, from }: { routes: Route[]; from: Rea
                     title={`${l.venue} on ${l.chain}`}
                     style={{ flex: l.usd, background: CHAIN[l.chain] ?? 'var(--fg)' }}
                   >
-                    <b>
-                      {logoFor(l.venue) && <Logo id={logoFor(l.venue)!} size="1.35em" />}
-                      {l.usd / r.usd >= 0.25 && l.venue}
-                    </b>{' '}
-                    {usd(l.usd)}
+                    {logoFor(l.venue) && (
+                      <Logo
+                        id={logoFor(l.venue)!}
+                        className="rp-venue-logo"
+                        size="clamp(32px, 3vw, 48px)"
+                      />
+                    )}
+                    {l.usd / r.usd >= 0.25 && <b className="rp-venue">{l.venue}</b>}
+                    <span className="rp-amt">{usd(l.usd)}</span>
                   </span>
                 ))}
               </motion.div>
@@ -73,20 +95,6 @@ export default function RoutePlan({ routes, from }: { routes: Route[]; from: Rea
           </Reveal>
         ))}
       </div>
-      <Reveal delay={0.5} className="rp-legend">
-        {chains.map((c) => (
-          <span key={c}>
-            {logoFor(c) ? (
-              <span className="rp-ring" style={{ boxShadow: `0 0 0 2px ${CHAIN[c]}` }}>
-                <Logo id={logoFor(c)!} size="20px" />
-              </span>
-            ) : (
-              <i style={{ background: CHAIN[c] }} />
-            )}
-            {c}
-          </span>
-        ))}
-      </Reveal>
     </div>
   );
 }

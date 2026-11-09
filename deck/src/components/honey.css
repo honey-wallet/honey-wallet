@@ -320,146 +320,6 @@
   font-size: clamp(15px, 1.35vw, 19px);
 }
 
-/* ── AgentRun ── */
-.ag {
-  display: grid;
-  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
-  gap: clamp(20px, 3vw, 56px);
-  align-items: center;
-  margin-block: auto;
-}
-.ag-head,
-.ag-kicker {
-  font-family: var(--font-mono);
-  font-size: clamp(12px, 1vw, 14px);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--fg-faint);
-}
-.ag-stages ol {
-  list-style: none;
-  margin: 14px 0 0;
-  padding: 0;
-  display: grid;
-  gap: clamp(10px, 2vh, 18px);
-}
-.ag-stages li {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  font-size: clamp(16px, 1.55vw, 23px);
-  color: var(--fg);
-}
-.ag-tick {
-  flex: none;
-  display: grid;
-  place-items: center;
-  width: 1.45em;
-  height: 1.45em;
-  border-radius: 50%;
-  background: var(--honey);
-  color: var(--accent-ink);
-  font-size: 0.8em;
-  font-weight: 700;
-}
-.ag-card {
-  padding: clamp(18px, 2.2vw, 32px);
-  border-radius: var(--radius-lg);
-  background: var(--surface-2);
-  box-shadow: var(--shadow);
-}
-.ag-thesis {
-  margin-top: 8px;
-  font-size: clamp(18px, 1.75vw, 26px);
-  font-weight: 600;
-  letter-spacing: -0.02em;
-  line-height: 1.25;
-}
-.ag-picks {
-  list-style: none;
-  margin: clamp(12px, 2vh, 20px) 0 0;
-  padding: 0;
-  display: grid;
-  gap: 4px;
-}
-.ag-picks li {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) clamp(90px, 9vw, 140px);
-  gap: 14px;
-  align-items: center;
-  padding: 10px 0;
-  border-top: 1px solid var(--hair-2);
-}
-.ag-picks li > i {
-  display: grid;
-  place-items: center;
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  color: #fff;
-  font-style: normal;
-  font-weight: 700;
-  font-size: 15px;
-}
-.ag-name b {
-  font-size: clamp(15px, 1.35vw, 19px);
-}
-.ag-chain {
-  margin-left: 6px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: var(--surface-3);
-  font-size: 12px;
-  color: var(--fg-muted);
-}
-.ag-name small {
-  display: block;
-  margin-top: 2px;
-  font-size: clamp(13px, 1.1vw, 15px);
-  color: var(--fg-muted);
-}
-.ag-weight {
-  display: grid;
-  gap: 6px;
-  text-align: right;
-}
-.ag-weight b {
-  font-size: clamp(16px, 1.5vw, 21px);
-  font-feature-settings: "tnum" 1;
-}
-.ag-weight span {
-  height: 6px;
-  border-radius: 3px;
-  background: var(--surface-3);
-  overflow: hidden;
-}
-.ag-weight em {
-  display: block;
-  height: 100%;
-  border-radius: 3px;
-}
-.ag-critic {
-  margin-top: 12px;
-  padding: 12px 14px;
-  border-radius: var(--radius-sm);
-  background: var(--honey-surface);
-  font-size: clamp(14px, 1.2vw, 17px);
-  line-height: 1.4;
-  color: var(--fg);
-}
-.ag-critic b {
-  margin-right: 6px;
-  color: var(--honey-text);
-}
-.ag-foot {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 16px;
-  margin-top: 12px;
-  font-size: 13px;
-  color: var(--fg-faint);
-}
-
 /* ── RoutePlan ── */
 .rp {
   display: grid;
@@ -623,92 +483,6 @@
   color: var(--fg);
 }
 
-/* ── TryIt ── */
-.ti {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: clamp(20px, 3vw, 48px);
-  align-items: center;
-  margin-block: auto;
-}
-.ti-term {
-  border-radius: var(--radius);
-  background: #0b0b0b;
-  color: #f6f3eb;
-  overflow: hidden;
-  box-shadow: var(--shadow);
-}
-.ti-bar {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 12px 16px;
-  background: #1b1b1b;
-}
-.ti-bar i {
-  width: 11px;
-  height: 11px;
-  border-radius: 50%;
-  background: #3a3a3a;
-}
-.ti-bar i:first-child {
-  background: var(--honey);
-}
-.ti-bar span {
-  margin-left: 8px;
-  font-size: 12px;
-  color: #a3a3a3;
-  font-family: var(--font-mono);
-}
-.ti-term pre {
-  margin: 0;
-  padding: clamp(16px, 2vw, 26px);
-  font-family: var(--font-mono);
-  font-size: clamp(12px, 1.08vw, 16px);
-  line-height: 1.8;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-.ti-ps {
-  color: var(--honey);
-}
-.ti-steps {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  gap: clamp(8px, 1.6vh, 14px);
-}
-.ti-step {
-  display: flex;
-  gap: 14px;
-  align-items: flex-start;
-}
-.ti-n {
-  flex: none;
-  display: grid;
-  place-items: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  background: var(--honey);
-  font-weight: 650;
-  font-size: 14px;
-  color: var(--accent-ink);
-}
-.ti-step b {
-  display: block;
-  font-size: clamp(16px, 1.45vw, 21px);
-  letter-spacing: -0.01em;
-}
-.ti-step div > span {
-  display: block;
-  margin-top: 2px;
-  font-size: clamp(13px, 1.15vw, 16px);
-  line-height: 1.4;
-  color: var(--fg-muted);
-}
-
 /* ── Phone-width layouts ── */
 @media (max-width: 760px) {
   .jf {
@@ -719,9 +493,7 @@
     grid-template-rows: auto auto;
   }
   .jf,
-  .ag,
-  .lg,
-  .ti {
+  .lg {
     grid-template-columns: 1fr;
   }
   .jy-step {
@@ -743,7 +515,7 @@
   border-radius: 50%;
 }
 .rp-ring .lo.sq {
-  border-radius: 22%;
+  border-radius: 14%;
 }
 .rp-ring:has(.sq) {
   border-radius: 5px;
@@ -752,20 +524,6 @@
   display: inline-flex;
   color: var(--fg);
   font-weight: 600;
-}
-.ag-head .lo-brand {
-  gap: 10px;
-  color: var(--fg-muted);
-}
-.ag-picks li > .lo {
-  width: 40px;
-  height: 40px;
-}
-.ag-chain {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  vertical-align: 2px;
 }
 .rp-pill {
   display: inline-flex;
@@ -890,7 +648,7 @@
 .hx-chip {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 0;
   padding: 10px 16px;
   border-radius: 999px;
   background: var(--surface-3);
@@ -979,4 +737,179 @@
 .pf-step span.lo {
   display: inline-grid;
   margin: 0;
+}
+
+/* ── Route plan logos: one solid frame for every mark (slide 6) ──
+   A dark backing hides the anti-aliased edge, and a solid ring frames it, so no colour bleeds grey. */
+.rp {
+  --lo-backing: #131313;
+}
+.rp .lo {
+  box-shadow:
+    0 0 0 2px #131313,
+    0 0 0 3.5px #3a3a3a;
+}
+.rp .rp-leg .lo {
+  width: 1.6em;
+  height: 1.6em;
+  box-shadow: 0 0 0 2.5px #131313;
+}
+.rp .rp-ring .lo {
+  box-shadow: none;
+}
+.rp .lo-stack .lo + .lo {
+  box-shadow:
+    0 0 0 2px #131313,
+    0 0 0 3.5px #3a3a3a;
+}
+.rp .rp-leg b {
+  padding: 4px;
+  margin: -4px;
+}
+
+/* ── Cover friends: faces inline in the headline, name tag on hover ── */
+.fr {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.1em;
+  margin-inline: 0.06em 0.12em;
+  vertical-align: -0.12em;
+}
+.fr-face {
+  position: relative;
+  display: inline-block;
+  width: 0.86em;
+  height: 0.86em;
+  border-radius: 50%;
+  outline: none;
+  cursor: default;
+  transition: transform 220ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.fr-face img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+}
+.fr-face:hover,
+.fr-face:focus-visible {
+  transform: translateY(-0.06em) scale(1.06);
+}
+.fr-face:focus-visible img {
+  box-shadow: 0 0 0 3px var(--honey);
+}
+.fr-tag {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 0.16em);
+  padding: 0.35em 0.8em;
+  border-radius: 999px;
+  background: var(--honey);
+  color: var(--accent-ink);
+  font-family: var(--font-body, inherit);
+  font-size: clamp(12px, 1.15vw, 18px);
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 1.2;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transform: translate(-50%, 6px) scale(0.92);
+  transform-origin: 50% 100%;
+  transition:
+    opacity 160ms ease-out,
+    transform 220ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.fr-face:hover .fr-tag,
+.fr-face:focus-visible .fr-tag {
+  opacity: 1;
+  transform: translate(-50%, 0) scale(1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .fr-face,
+  .fr-tag {
+    transition: opacity 160ms ease-out;
+  }
+  .fr-face:hover,
+  .fr-face:focus-visible {
+    transform: none;
+  }
+}
+
+/* ── Close: repo link with the GitHub mark ── */
+.cl-repo {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5em;
+  color: var(--honey-text);
+}
+.cl-repo .lo {
+  box-shadow: none;
+  border-radius: 0;
+}
+
+/* ── Market: real wallet marks beside "juggle 2+ wallets" ── */
+.bs-label:has(.lo-stack) {
+  display: flex;
+  align-items: center;
+  gap: 0.45em;
+}
+.bs-label .lo-stack .lo {
+  vertical-align: 0;
+}
+
+/* ── Route legs: logo left (centred in the bar), venue, amount on the right ── */
+.rp .rp-leg {
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
+  gap: clamp(8px, 0.8vw, 12px);
+  padding: 0 clamp(10px, 1vw, 16px) 0 clamp(8px, 0.8vw, 12px);
+}
+.rp .rp-leg .rp-venue-logo {
+  flex: none;
+  width: var(--lo-size);
+  height: var(--lo-size);
+  margin: 3px;
+  box-shadow: 0 0 0 2.5px #131313;
+}
+.rp .rp-leg .rp-venue {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: clamp(14px, 1.25vw, 18px);
+  font-weight: 600;
+}
+.rp .rp-leg .rp-amt {
+  margin-left: auto;
+  flex: none;
+  font-size: clamp(14px, 1.25vw, 18px);
+  font-weight: 600;
+  font-feature-settings: "tnum" 1;
+}
+.rp .rp-leg:not(:has(.rp-venue)) {
+  gap: 8px;
+  padding-inline: 8px 14px;
+  min-width: max-content;
+}
+
+/* ── "4 chains": the chain marks themselves, ringed in their bar colour ── */
+.rp-chains {
+  display: flex;
+  flex-wrap: wrap;
+  gap: clamp(14px, 1.6vw, 22px);
+  margin-top: 10px;
+}
+.rp-chain {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+.rp-chain .rp-ring .lo {
+  box-shadow: none;
+}
+.rp-chain small {
+  font-size: clamp(11px, 0.95vw, 13px);
+  color: var(--fg-muted);
 }

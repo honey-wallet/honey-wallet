@@ -7,7 +7,7 @@ test mode; every outside number is cited on its slide and listed on the Referenc
 ## Slides
 
 1. **Honey.** What it is.
-2. **The problem.** Eight steps to act on an idea today, three with Honey (one click-build).
+2. **The problem.** Eight icon-only steps on a tangled path today; one straight line through Honey to every chain.
 3. **The market.** 741M crypto owners, 62% juggling wallets, $33B+ through NEAR Intents.
 4. **Jars.** Write an idea, review the proposal, buy in one approval.
 5. **The agent.** Its six real progress steps, then the proposal with the critic's warning.
@@ -15,8 +15,7 @@ test mode; every outside number is cited on its slide and listed on the Referenc
 7. **NEAR.** What NEAR AI Cloud, NEAR Intents, the 1Click token list and NEAR accounts do, with code paths.
 8. **Safety.** The agent suggests, you sign.
 9. **Friends.** Shared, public and copyable jars.
-10. **Built.** During the hackathon window, and where it stands.
-11. **Try it.** Test mode in five minutes. 12. Close. 13. References.
+10. Close. 11. References.
 
 Honey's dark theme (colours from `apps/mobile/src/theme/index.ts`, the logo from `apps/web/public/honey-mark.svg`)
 is in `src/styles/tokens.css` and `src/components/honey.css`.
@@ -24,7 +23,7 @@ is in `src/styles/tokens.css` and `src/components/honey.css`.
 The three films in `public/video/` (Jars flow, NEAR route, friends) are made in `~/video-harness/films/honey-deck/`
 from real screenshots of the app in test mode (`capture/step.mjs`, `capture/record.mjs`). To change one, edit its
 `*.html` there, then render: `node render.mjs films/honey-deck/flow.html --fps 60 --sub 2 --out …` and copy the MP4
-and a poster still into `public/video/`.
+and a poster still into `public/video/`. Then bump `V` in `src/components/Clip.tsx` so browsers skip their cached copy.
 
 ---
 

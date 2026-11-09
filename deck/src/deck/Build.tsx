@@ -41,7 +41,6 @@ export default function Build({
       animate={{
         opacity: shown ? 1 : 0,
         y: shown ? 0 : y,
-        filter: shown ? 'blur(0px)' : 'blur(3px)',
       }}
       transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
     >

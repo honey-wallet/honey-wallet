@@ -1,27 +1,32 @@
 import type { CSSProperties, ReactNode } from 'react';
 import './logo.css';
 
-/* Real brand marks for every crypto project the deck names. Files live in public/logos
-   (sources in public/logos/SOURCES.md). `chip` sets a backing colour for marks that are
-   not already a filled coin; `square` keeps marks whose shape is the logo (Base). */
+/* Real brand marks for every crypto project the deck names, all drawn the way a wallet lists tokens:
+   one filled coin, same size, on the brand's own colour (never a white chip). Files live in public/logos
+   (sources in public/logos/SOURCES.md). `chip` fills the coin behind marks that are not already a coin. */
 type Mark = { name: string; src: string; chip?: string; pad?: number; square?: boolean };
 
 export const LOGOS = {
   near: { name: 'NEAR', src: '/logos/near.svg' },
-  ethereum: { name: 'Ethereum', src: '/logos/ethereum.svg', chip: '#fff', pad: 0.12 },
-  base: { name: 'Base', src: '/logos/base.svg', square: true },
-  solana: { name: 'Solana', src: '/logos/solana.svg', chip: '#000', pad: 0.2 },
+  ethereum: { name: 'Ethereum', src: '/logos/ethereum-coin.svg' },
+  base: { name: 'Base', src: '/logos/base-square.svg', square: true }, // Base's current mark: the blue square
+  solana: { name: 'Solana', src: '/logos/solana.svg', chip: '#000', pad: 0.22 },
   usdc: { name: 'USDC', src: '/logos/usdc.svg' },
-  bittensor: { name: 'Bittensor', src: '/logos/bittensor.svg' },
+  bittensor: { name: 'Bittensor', src: '/logos/bittensor-coin.svg' },
   render: { name: 'Render', src: '/logos/render.svg' },
   uniswap: { name: 'Uniswap', src: '/logos/uniswap.svg' },
-  aerodrome: { name: 'Aerodrome', src: '/logos/aerodrome.png', chip: '#fff', pad: 0.04 },
-  jupiter: { name: 'Jupiter', src: '/logos/jupiter.svg', chip: '#131313', pad: 0.08 },
-  ref: { name: 'Ref Finance', src: '/logos/ref.svg', chip: '#fff', pad: 0.1 },
+  aerodrome: { name: 'Aerodrome', src: '/logos/aerodrome.png', chip: '#0b1233', pad: 0 },
+  jupiter: { name: 'Jupiter', src: '/logos/jupiter-coin.svg' },
+  ref: { name: 'Ref Finance', src: '/logos/ref-coin.svg' },
   cryptocom: { name: 'Crypto.com', src: '/logos/crypto-com.svg' },
   reown: { name: 'Reown', src: '/logos/reown.png' },
   nansen: { name: 'Nansen', src: '/logos/nansen.png', chip: '#0b0f0e' },
-  honey: { name: 'Honey', src: '/honey-mark.svg', chip: '#29241b', pad: 0.14 },
+  honey: { name: 'Honey', src: '/honey-mark.svg', chip: '#000', pad: 0.14 },
+  metamask: { name: 'MetaMask', src: '/logos/wallet-metamask.svg' },
+  phantom: { name: 'Phantom', src: '/logos/wallet-phantom.svg' },
+  coinbasewallet: { name: 'Coinbase Wallet', src: '/logos/wallet-coinbase.svg' },
+  sender: { name: 'Sender', src: '/logos/wallet-sender.svg' },
+  github: { name: 'GitHub', src: '/logos/github.svg', chip: 'transparent' },
 } satisfies Record<string, Mark>;
 
 export type LogoId = keyof typeof LOGOS;
@@ -54,7 +59,7 @@ export default function Logo({
   const m: Mark = LOGOS[id];
   const style = {
     '--lo-size': size,
-    '--lo-chip': m.chip ?? 'transparent',
+    '--lo-chip': m.chip ?? 'var(--lo-backing, transparent)',
     '--lo-pad': m.pad ?? 0,
   } as CSSProperties;
   return (

@@ -1,0 +1,115 @@
+/* ── Try it (slide 10): a compact terminal beside three real app screens ── */
+.ti {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr);
+  gap: clamp(20px, 3vw, 48px);
+  align-items: center;
+  margin-block: auto;
+}
+
+/* terminal: sized to its four lines, flat hairline */
+.ti-term {
+  border-radius: var(--radius);
+  background: #0b0b0b;
+  box-shadow: 0 0 0 1px var(--hair-2, #2e2e2e);
+  overflow: hidden;
+}
+.ti-bar {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--hair-2, #2e2e2e);
+}
+.ti-bar i {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: #3a3a3a;
+}
+.ti-bar i:first-child {
+  background: var(--honey);
+}
+.ti-bar span {
+  margin-left: 8px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--fg-faint);
+}
+.ti-term pre {
+  margin: 0;
+  padding: clamp(16px, 1.8vw, 26px);
+  display: grid;
+  gap: clamp(8px, 1.4vh, 14px);
+  font-family: var(--font-mono);
+  font-size: clamp(11px, 0.95vw, 15px);
+  line-height: 1.5;
+  color: var(--fg);
+  white-space: pre-wrap;
+}
+.ti-term code {
+  display: block;
+  padding-left: 1.4em;
+  text-indent: -1.4em;
+} /* wrapped lines hang after the $ */
+.ti-w {
+  white-space: nowrap;
+} /* break between words, never inside a URL */
+.ti-ps {
+  display: inline-block;
+  width: 1.4em;
+  text-indent: 0;
+  color: var(--honey);
+}
+
+/* three app screens, full width, same shape */
+.ti-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: clamp(10px, 1.2vw, 18px);
+}
+.ti-step {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+.ti-shot {
+  display: block;
+  width: 100%;
+  aspect-ratio: 860 / 800;
+  object-fit: cover;
+  border-radius: 14px;
+  box-shadow: 0 0 0 1px var(--hair-2, #2e2e2e);
+}
+.ti-cap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--font-head);
+  font-size: clamp(14px, 1.3vw, 19px);
+  font-weight: 600;
+  color: var(--fg);
+  white-space: nowrap;
+}
+.ti-n {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--honey);
+  color: var(--accent-ink);
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1;
+}
+
+@media (max-width: 760px) {
+  .ti {
+    grid-template-columns: 1fr;
+  }
+}

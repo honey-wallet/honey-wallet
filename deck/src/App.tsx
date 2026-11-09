@@ -2,13 +2,10 @@ import AgentRun from './components/AgentRun';
 import ChartSlide, { AsideStat, BigStats } from './components/ChartSlide';
 import { cite } from './components/Cite';
 import Clip from './components/Clip';
-import { ApproveFigure, CheckFigure, ReadFigure, SettleFigure } from './components/HoneyFigures';
-import Journey from './components/Journey';
+import Friends from './components/Friends';
 import Logo, { Brand, LogoStack } from './components/Logo';
-import Process from './components/Process';
-import RoutePlan from './components/RoutePlan';
-import Timeline from './components/Timeline';
-import TryIt from './components/TryIt';
+import RoutePlan, { ChainMarks } from './components/RoutePlan';
+import Together from './components/Together';
 import { agentStages, samplePicks, sampleRoutes, sources } from './data/sources';
 import Deck from './deck/Deck';
 import Reveal from './deck/Reveal';
@@ -39,57 +36,45 @@ export default function App() {
           <Lockup big />
         </Reveal>
         <Reveal delay={0.08}>
-          <h1 className="display" style={{ marginTop: 28, maxWidth: '13ch', marginInline: 'auto' }}>
-            Invest in what you <span className="accent-text">believe</span>, with friends.
+          <h1
+            className="display"
+            style={{
+              marginTop: 28,
+              maxWidth: 'none',
+              fontSize: 'clamp(30px, 6.4vw, 104px)',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            Invest in what you <span className="accent-text">believe</span>,<br />
+            with <Friends /> friends.
           </h1>
-        </Reveal>
-        <Reveal delay={0.16}>
-          <p className="tagline">One idea becomes one cross-chain purchase.</p>
-          <p className="byline">Honey Wallet · NEAR Hackathon · November 2026</p>
-        </Reveal>
-        <Reveal delay={0.24}>
-          <div className="cv-chains">
-            <Brand id="ethereum" size="28px" />
-            <Brand id="base" size="28px" />
-            <Brand id="solana" size="28px" />
-            <Brand id="near" size="28px" />
-          </div>
         </Reveal>
       </Slide>
 
       <ChartSlide
         nav="The problem"
-        notes="Click once for the Honey row. Today a market view means researching tokens one by one, finding the chain each trades on, bridging and placing several swaps with different slippage. Most people give up, or buy one token and hope."
-        title="1. Acting on an idea takes eight steps."
+        notes="Today a market view means researching tokens one by one, finding the chain each trades on, bridging and placing several swaps with different slippage. Most people give up, or buy one token and hope."
+        title="1. One idea, eight steps."
         source={
           <>
-            <b>Figure 1.</b> Buying a basket for one market view, today and with Honey {cite(4)}.
+            <b>Figure 1.</b> Today vs Honey {cite(4)}.
           </>
         }
       >
-        <Journey
-          today={[
-            'Have an idea',
-            'Research tokens one by one',
-            'Find the chain each trades on',
-            'Set up a wallet per chain',
-            'Bridge funds',
-            'Get gas on each chain',
-            'Swap, one token at a time',
-            'Track it all',
-          ]}
-          honey={['Write the idea', 'Review the basket', 'Approve once']}
+        <Clip
+          name="problem"
+          label="Eight steps today: research, find chains, wallets, bridges, gas, three swaps. With Honey: approve once."
         />
       </ChartSlide>
 
       <ChartSlide
         nav="The market"
         notes="Crypto.com estimates 741 million owners at the end of 2025, up from 659 million. Reown and Nansen surveyed 1,038 active users in the US and UK: 62% use two or more wallets, and the top reason, at 48%, is reaching different chains. NEAR Intents is the rail that already moves this money across chains."
-        title="2. 741 million own crypto, spread across chains."
+        title="2. 741M own crypto, across chains."
         source={
           <>
-            <b>Figure 2.</b> Owners worldwide, end of 2025 {cite(1)}. Survey of 1,038 active users{' '}
-            {cite(2)}. NEAR Intents dashboard, 9 Nov 2026 {cite(3)}.
+            <b>Figure 2.</b> End of 2025 {cite(1)} · 1,038 active users {cite(2)} · 9 Nov 2026{' '}
+            {cite(3)}.
           </>
         }
       >
@@ -109,7 +94,15 @@ export default function App() {
                 </>
               ),
               value: '62%',
-              label: 'juggle two or more wallets',
+              label: (
+                <>
+                  <LogoStack
+                    ids={['metamask', 'phantom', 'coinbasewallet', 'sender']}
+                    size="1.3em"
+                  />{' '}
+                  juggle 2+ wallets
+                </>
+              ),
               source: cite(2),
             },
             {
@@ -119,7 +112,7 @@ export default function App() {
                 </Brand>
               ),
               value: '$33B+',
-              label: 'moved through NEAR Intents',
+              label: 'moved cross-chain',
               source: cite(3),
             },
           ]}
@@ -128,15 +121,15 @@ export default function App() {
 
       <ChartSlide
         nav="Jars"
-        notes="The real app, in test mode. Write an idea, or paste a post. The agent returns a basket with picks, weights and fees, ready to edit. One approval buys every pick on every chain, and the jar appears."
-        title="3. Jars: one idea, one basket, one approval."
+        notes="The real app, in test mode. Write an idea, or paste a post. The agent proposes a jar with picks, weights and fees, ready to edit. One approval buys every pick on every chain, and the jar goes live."
+        title="3. Meet Jars."
         source={
           <>
-            <b>Figure 3.</b> The Honey app in test mode, with sample prices.
+            <b>Figure 3.</b> Honey app, test mode.
           </>
         }
       >
-        <Clip name="flow" label="The Honey app: write an idea, review the basket, approve once" />
+        <Clip name="flow2" label="The Honey app: write an idea, review the jar, approve once" />
       </ChartSlide>
 
       <ChartSlide
@@ -145,8 +138,7 @@ export default function App() {
         title="4. The agent shows its work."
         source={
           <>
-            <b>Figure 4.</b> The agent’s steps, word for word from the app, and its proposal in test
-            mode for $500 at medium risk.
+            <b>Figure 4.</b> Honey app, test mode, $500.
           </>
         }
       >
@@ -165,21 +157,16 @@ export default function App() {
         title="5. One approval, every chain."
         source={
           <>
-            <b>Figure 5.</b> The route planner on a $5,000 jar, test-mode prices. Pools under $50k
-            are skipped.
+            <b>Figure 5.</b> Route planner, $5,000 jar, test-mode prices.
           </>
         }
         aside={
           <>
             <AsideStat
               value="4 chains"
-              label={
-                <>
-                  one approval, through <Brand id="near">NEAR Intents</Brand>
-                </>
-              }
+              label={<ChainMarks chains={['Ethereum', 'Base', 'Solana', 'NEAR']} />}
             />
-            <AsideStat value="1%" label="max slippage; worse fills are refused" />
+            <AsideStat value="1%" label="max slippage" />
           </>
         }
       >
@@ -187,7 +174,7 @@ export default function App() {
           routes={sampleRoutes}
           from={
             <>
-              <LogoStack ids={['usdc', 'base']} size="24px" />
+              <LogoStack ids={['base', 'usdc']} size="24px" />
               USDC on Base · $5,000
             </>
           }
@@ -197,17 +184,16 @@ export default function App() {
       <ChartSlide
         nav="NEAR"
         notes="NEAR AI Cloud runs the agent (apps/server/src/thesis/near_ai.rs). NEAR Intents 1Click quotes and settles every buy and bridge (providers/near_intents.rs, api-client/src/near-intents.ts); its token list is the only place a token address can come from (thesis/registry.rs). Native NEAR accounts live in packages/keyring. Quotes use dry runs until the user confirms."
-        title="6. What NEAR does here."
+        title="6. What NEAR does."
         source={
           <>
-            <b>Figure 6.</b> NEAR AI Cloud builds the basket; NEAR Intents fills it on every chain.
-            Amounts from the route planner, test-mode prices {cite(4)}.
+            <b>Figure 6.</b> Route planner amounts, test-mode prices {cite(4)}.
           </>
         }
       >
         <Clip
-          name="near"
-          label="An idea goes through NEAR AI Cloud into a basket, then NEAR Intents fills it on four chains"
+          name="near2"
+          label="An idea goes through NEAR AI Cloud into a jar, then NEAR Intents fills it on four chains"
         />
       </ChartSlide>
 
@@ -217,43 +203,13 @@ export default function App() {
         title="7. The agent suggests. You sign."
         source={
           <>
-            <b>Figure 7.</b> From idea to purchase, without giving the agent your money {cite(4)}.
+            <b>Figure 7.</b> Safeguards in the server code {cite(4)}.
           </>
         }
       >
-        <Process
-          privateLabel={
-            <>
-              <b>The agent</b> only suggests. It holds no keys.
-            </>
-          }
-          sharedLabel={
-            <>
-              <b>You</b> approve once, with limits you set.
-            </>
-          }
-          steps={[
-            { figure: ReadFigure, title: 'Read', body: 'Links are quotes, not orders.' },
-            {
-              figure: CheckFigure,
-              title: 'Check',
-              body: (
-                <>
-                  Strict schema. <Brand id="near">NEAR Intents</Brand> tokens only.
-                </>
-              ),
-            },
-            { figure: ApproveFigure, title: 'Approve', body: 'Set your limits. Approve once.' },
-            {
-              figure: SettleFigure,
-              title: 'Settle',
-              body: (
-                <>
-                  <Brand id="near">NEAR Intents</Brand> fills within them.
-                </>
-              ),
-            },
-          ]}
+        <Clip
+          name="safety"
+          label="Paste any post; hidden commands are ignored; the answer is checked; only real tokens; only you sign, because the agent holds no keys"
         />
       </ChartSlide>
 
@@ -263,82 +219,11 @@ export default function App() {
         title="8. Better with friends."
         source={
           <>
-            <b>Figure 8.</b> The Honey app’s launch screen, in test mode.
+            <b>Figure 8.</b> Honey app, test mode.
           </>
         }
       >
-        <Clip
-          name="friends"
-          label="Launching a jar with a friend: who's in, who can see it, and the creator's cut"
-        />
-      </ChartSlide>
-
-      <ChartSlide
-        nav="Built"
-        notes="Development started on 20 October. Everything shown was built in the hackathon window. Be plain about status: no users, no mainnet use by real users, not launched."
-        title="9. What we built for the hackathon."
-        source={
-          <>
-            <b>Figure 9.</b> Built during the hackathon window, from the README. No users yet; not
-            launched {cite(4)}.
-          </>
-        }
-      >
-        <Timeline
-          from={0}
-          to={32}
-          marks={[
-            { at: 0, date: '20 Oct', label: 'Work starts', honey: true },
-            { at: 32, date: '14 Nov', label: 'Submission', honey: true },
-          ]}
-          before={[]}
-          built={[
-            'Wallet app',
-            'Keyring',
-            'API server',
-            'Jars',
-            <>
-              <Brand id="near">NEAR AI Cloud</Brand> agent
-            </>,
-            <>
-              <Brand id="near">NEAR Intents</Brand>
-            </>,
-            <>
-              <Brand id="near">NEAR</Brand> accounts
-            </>,
-            'Route planner',
-            'Copy and creator fee',
-            'Sign-in and landing page',
-          ]}
-        />
-      </ChartSlide>
-
-      <ChartSlide
-        nav="Try it"
-        notes="Judges can run all of this in five minutes with no keys: test mode uses sample prices and fake money."
-        title="10. Try it in five minutes, with no keys."
-        source={
-          <>
-            <b>Steps</b> from the README {cite(4)}. Live mode needs NEAR AI Cloud, 1Click, Tavily
-            and CoinGecko keys.
-          </>
-        }
-      >
-        <TryIt
-          commands={[
-            'git clone https://github.com/honey-wallet/honey-wallet.git',
-            'cd honey-wallet && corepack enable && pnpm install',
-            'cd apps/mobile',
-            'EXPO_PUBLIC_TEST_MODE=1 pnpm exec expo start --web',
-          ]}
-          steps={[
-            { action: 'Tap the honey button' },
-            { action: 'Ask Honey an idea' },
-            { action: 'Edit the basket' },
-            { action: 'Buy $500 and launch' },
-            { action: 'Copy a jar with $100' },
-          ]}
-        />
+        <Together />
       </ChartSlide>
 
       <Slide center nav="Close" notes="Close on the line, then the repo.">
@@ -347,16 +232,13 @@ export default function App() {
         </Reveal>
         <Reveal delay={0.08}>
           <h2 className="display" style={{ marginTop: 28, maxWidth: '14ch', marginInline: 'auto' }}>
-            One idea. One basket. <span className="accent-text">One approval.</span>
+            One idea. One jar.
           </h2>
         </Reveal>
         <Reveal delay={0.16}>
-          <p className="tagline">
-            Built on <Brand id="near">NEAR AI Cloud</Brand> and NEAR Intents · DeFi and Agent
-            Economy tracks
-          </p>
           <p className="byline">
-            <a href={REPO} target="_blank" rel="noopener" style={{ color: 'var(--honey-text)' }}>
+            <a href={REPO} target="_blank" rel="noopener" className="cl-repo">
+              <Logo id="github" size="1.4em" />
               github.com/honey-wallet/honey-wallet
             </a>
           </p>

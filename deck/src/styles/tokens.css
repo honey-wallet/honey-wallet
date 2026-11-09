@@ -36,8 +36,8 @@
   --radius-sm: 14px;
   --radius-lg: 32px;
 
-  /* Depth: one soft lift for floating cards */
-  --shadow: 0 0 0 1px #2c2c2c, 0 20px 40px -20px rgba(0, 0, 0, 0.6);
+  /* Depth: none. Cards sit flat with a hairline edge; no glows, blurs or drop shadows. */
+  --shadow: 0 0 0 1px #2c2c2c;
   --glow: 0 0 0 transparent;
 
   /* Type: Apple's system face, as on the landing page; Inter where it isn't available.
