@@ -1,7 +1,7 @@
 #!/bin/sh
 # Builds the invite email images in apps/web/public/email/ with ImageMagick (macOS for the
-# Apple glyph font): invite-hero.png from real Play Store screenshots, and 2x white store
-# icons (icon-apple.png, icon-play.png, icon-chrome.png; shown at 20px).
+# Apple glyph font): invite-hero.png from real Play Store screenshots, icon-honey.png (logo)
+# and white store icons (icon-apple.png, icon-play.png, icon-chrome.png; shown at 16px).
 # Usage, from the repo root: sh apps/web/scripts/invite-hero.sh
 set -eu
 SRC=docs/launch/play-store
@@ -9,7 +9,7 @@ OUT=apps/web/public/email
 T="$(mktemp -d)"
 mkdir -p "$OUT"
 
-# --- Store icons: simple white marks, 40x40 (2x of 20px).
+# --- Store icons: simple white marks, 40x40.
 magick -background none -fill white -font /System/Library/Fonts/SFNS.ttf -pointsize 160 \
   label:"$(printf '\357\243\277')" -trim +repage -resize 34x34 -gravity center -extent 40x40 -strip "$OUT/icon-apple.png"
 magick -size 160x160 xc:none -fill white -draw "polygon 36,18 36,142 140,80" \
@@ -21,8 +21,13 @@ magick -size 160x160 xc:none -fill white -draw "circle 80,80 80,8" \
   -compose DstOut -composite -compose Over -fill white -draw "circle 80,80 80,52" \
   -resize 40x40 -strip "$OUT/icon-chrome.png"
 
-# --- Hero phones.
-B=10; R=44
+# --- Logo: the app icon at 56x56 (2x of 28px) with rounded corners.
+magick apps/web/public/apple-touch-icon.png -resize 56x56 -alpha set \
+  \( -size 56x56 xc:none -fill white -draw "roundrectangle 0,0 55,55 13,13" \) \
+  -compose DstIn -composite -strip "$OUT/icon-honey.png"
+
+# --- Hero phones (2x of 496x350, on the email card color #2a2826).
+B=11; R=50
 phone() { # src w h out
   W=$2; H=$3
   magick "$1" -resize ${W}x${H}! -alpha set \
@@ -30,7 +35,7 @@ phone() { # src w h out
     -compose DstIn -composite "$T/screen.png"
   FW=$((W+2*B)); FH=$((H+2*B))
   magick -size ${FW}x${FH} xc:none \
-    -fill '#1a1815' -stroke '#34302a' -strokewidth 2 \
+    -fill '#151413' -stroke '#3d3934' -strokewidth 2 \
     -draw "roundrectangle 1,1 $((FW-2)),$((FH-2)) $((R+B)),$((R+B))" \
     "$T/screen.png" -geometry +$B+$B -compose Over -composite "$4"
 }
@@ -42,15 +47,15 @@ magick "$SRC/screenshot-2-proposal.jpg" \
   \( -clone 0 -crop 1080x190+0+1185 +repage \) \
   \( -size 1080x860 xc:'#131313' \) \
   -delete 0 -append "$T/proposal.jpg"
-phone "$T/proposal.jpg" 380 676 "$T/proposal.png"
-magick "$T/proposal.png" -channel RGB -evaluate multiply 0.8 +channel "$T/proposal.png"
-phone "$SRC/screenshot-4-home.jpg" 380 676 "$T/home.png"
+phone "$T/proposal.jpg" 428 762 "$T/proposal.png"
+magick "$T/proposal.png" -channel RGB -evaluate multiply 0.85 +channel "$T/proposal.png"
+phone "$SRC/screenshot-4-home.jpg" 428 762 "$T/home.png"
 
-# 1120x700 matte ink, thin honey arc behind; the proposal sits back-left and lower, and
-# the home phone in front-right overlaps only its right bezel. Both bleed off the bottom.
-magick -size 1120x700 xc:'#0b0b0a' \
-  -fill none -stroke '#f3c969' -strokewidth 3 -draw "circle 560,900 560,420" -stroke none \
-  "$T/proposal.png" -geometry +170+116 -compose Over -composite \
-  "$T/home.png" -geometry +548+56 -compose Over -composite \
-  -strip +dither -colors 256 -define png:compression-level=9 "$OUT/invite-hero.png"
+# 992x700 on the card color; the proposal sits back-left and lower,
+# and the home phone in front-right overlaps only its right bezel. Both run off the bottom
+# edge, flush with the bottom of the email card (no bottom padding).
+magick -size 992x700 xc:'#2a2826' \
+  "$T/proposal.png" -geometry +58+100 -compose Over -composite \
+  "$T/home.png" -geometry +483+30 -compose Over -composite \
+  -strip +dither -colors 200 -define png:compression-level=9 "$OUT/invite-hero.png"
 rm -rf "$T"
