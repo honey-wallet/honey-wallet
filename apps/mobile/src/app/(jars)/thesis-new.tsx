@@ -4,17 +4,11 @@ import { ActivityIndicator, Keyboard, StyleSheet, Text, TextInput, View } from '
 import Animated, { FadeIn } from 'react-native-reanimated';
 import { DonutChart } from '@/components/charts/DonutChart';
 import { Icon, type IconName } from '@/components/Icon';
-import { HoldingRow, People, TokenStack } from '@/components/jars/JarParts';
+import { Facts, HoldingRow, People, TokenStack } from '@/components/jars/JarParts';
+import { PressableScale } from '@/components/motion/PressableScale';
+import { SegmentedTabs } from '@/components/motion/SegmentedTabs';
 import { PillButton } from '@/components/onboarding/PillButton';
-import { SheetRow, SheetScreen } from '@/components/sheets/Sheet';
-import {
-  AmountCard,
-  FieldLabel,
-  OptionChips,
-  Risk as RiskNote,
-  Summary,
-} from '@/components/trade/TradeForm';
-import { Chip } from '@/components/wallet/Chip';
+import { SheetScreen } from '@/components/sheets/Sheet';
 import { tap } from '@/lib/haptics';
 import { type BuyLeg, payJarBuy, quoteJarBuy } from '@/lib/jar-buy';
 import { describeRoute, useRoutes } from '@/lib/jar-routes';
@@ -234,18 +228,18 @@ export default function NewThesisSheet() {
         onBack={() => (fromChat ? router.back() : setStep('idea'))}
         footer={<PillButton label="Continue" onPress={() => setStep('jar')} />}
       >
-        <View style={styles.page}>
+        <View style={styles.gap}>
           <View style={styles.summary}>
             <DonutChart
-              size={72}
-              thickness={9}
+              size={84}
+              thickness={10}
               segments={proposal.picks.map((p) => ({
                 id: p.symbol,
                 value: p.weight,
                 color: p.color,
               }))}
             >
-              <TokenStack picks={proposal.picks} size={18} />
+              <TokenStack picks={proposal.picks} size={20} />
             </DonutChart>
             <View style={styles.flex}>
               <Text style={styles.summaryLabel}>You put in</Text>
@@ -269,72 +263,71 @@ export default function NewThesisSheet() {
               </Text>
             </View>
           </View>
-
-          <FieldLabel>Risk</FieldLabel>
-          <OptionChips<Risk>
-            options={RISKS}
+          <SegmentedTabs<Risk>
+            options={[...RISKS]}
+            labels={{ Low: 'Low risk', Medium: 'Medium', High: 'High risk' }}
             value={proposal.risk}
             onChange={(next) => void build(next)}
+            fill
           />
-          <Summary
-            rows={[
-              [
-                'Est. slippage',
-                `${(
+          <Facts
+            facts={[
+              {
+                label: 'Est. slippage',
+                value: `${(
                   (routes.reduce((s, r) => s + r.slippage * r.usd + r.bridgeUsd, 0) /
                     Math.max(proposal.amount, 1)) *
                     100
                 ).toFixed(2)}%`,
-              ],
-              ['Est. fees', formatUsd(proposal.feesUsd)],
-              [
-                'Fee share',
-                `${((proposal.feesUsd / Math.max(proposal.amount, 1)) * 100).toFixed(1)}%`,
-              ],
+              },
+              { label: 'Est. fees', value: formatUsd(proposal.feesUsd) },
+              {
+                label: 'Fee share',
+                value: `${((proposal.feesUsd / Math.max(proposal.amount, 1)) * 100).toFixed(1)}%`,
+              },
             ]}
           />
-
-          <FieldLabel>{`What it buys${liveRoutes ? '' : ' · sample routes'}`}</FieldLabel>
-          <View style={styles.list}>
-            {proposal.picks.map((p, i) => {
-              // Where this pick gets bought, split across chains for the best fill.
-              const route = routes.find((r) => r.symbol === p.symbol);
-              return (
-                <View key={p.symbol} style={[styles.pickBlock, i > 0 && styles.rule]}>
-                  <HoldingRow
-                    pick={p}
-                    total={proposal.amount}
-                    onStep={
-                      proposal.picks.length > 1
-                        ? (delta) => setProposal(withWeight(proposal, p.symbol, delta))
-                        : undefined
-                    }
-                    onRemove={
-                      proposal.picks.length > 1
-                        ? () => setProposal(withoutPick(proposal, p.symbol))
-                        : undefined
-                    }
-                  />
-                  {p.reason ? <Text style={styles.why}>{p.reason}</Text> : null}
-                  {route ? (
+          <Text style={styles.section}>What it buys{liveRoutes ? '' : ' · sample routes'}</Text>
+          <View style={styles.card}>
+            {proposal.picks.map((p) => (
+              <View key={p.symbol}>
+                <HoldingRow
+                  pick={p}
+                  total={proposal.amount}
+                  onStep={
+                    proposal.picks.length > 1
+                      ? (delta) => setProposal(withWeight(proposal, p.symbol, delta))
+                      : undefined
+                  }
+                  onRemove={
+                    proposal.picks.length > 1
+                      ? () => setProposal(withoutPick(proposal, p.symbol))
+                      : undefined
+                  }
+                />
+                <Text style={styles.why}>{p.reason}</Text>
+                {(() => {
+                  // Where this pick gets bought, split across chains for the best fill.
+                  const route = routes.find((r) => r.symbol === p.symbol);
+                  if (!route) return null;
+                  return (
                     <Text
                       style={[styles.why, route.status === 'thin' && { color: c.error }]}
                       numberOfLines={2}
                     >
                       {describeRoute(route)}
                     </Text>
-                  ) : null}
-                </View>
-              );
-            })}
+                  );
+                })()}
+              </View>
+            ))}
           </View>
-
           {proposal.unmatched.length ? (
             <>
-              <FieldLabel>Not buyable on chain</FieldLabel>
-              <View style={styles.list}>
-                {proposal.unmatched.map((u, i) => (
-                  <View key={u.idea} style={[styles.pick, i > 0 && styles.rule]}>
+              <Text style={styles.section}>Not buyable on chain</Text>
+              <View style={styles.card}>
+                {proposal.unmatched.map((u) => (
+                  <View key={u.idea} style={styles.pick}>
                     <Icon name="info" size={18} color={c.textSecondary} />
                     <View style={styles.flex}>
                       <Text style={styles.pickName}>{u.idea}</Text>
@@ -345,7 +338,10 @@ export default function NewThesisSheet() {
               </View>
             </>
           ) : null}
-          <RiskNote text={proposal.caution} />
+          <View style={[styles.card, styles.row]}>
+            <Icon name="warning" size={18} color={c.textSecondary} />
+            <Text style={[styles.flex, styles.pickReason]}>{proposal.caution}</Text>
+          </View>
         </View>
       </SheetScreen>
     );
@@ -379,7 +375,7 @@ export default function NewThesisSheet() {
           </View>
         }
       >
-        <View style={styles.page}>
+        <View style={styles.gap}>
           <View style={[styles.field, styles.nameField]}>
             <TokenStack picks={proposal.picks} size={26} />
             <TextInput
@@ -394,7 +390,7 @@ export default function NewThesisSheet() {
             <Icon name="pencil" size={14} color={c.textSecondary} />
           </View>
 
-          <FieldLabel>Who's in</FieldLabel>
+          <Text style={styles.section}>Who's in</Text>
           {multisig ? (
             <View style={styles.card}>
               <View style={styles.memberRow}>
@@ -452,67 +448,90 @@ export default function NewThesisSheet() {
             </View>
           )}
 
-          <FieldLabel>Who can see it</FieldLabel>
-          {VISIBILITY.map((v) => (
-            <SheetRow
-              key={v.id}
-              icon={v.icon}
-              title={v.title}
-              subtitle={v.hint}
-              accessory="check"
-              selected={visibility === v.id}
-              onPress={() => {
-                tap();
-                setVisibility(v.id);
-              }}
-            />
-          ))}
+          <Text style={styles.section}>Who can see it</Text>
+          <View style={styles.card}>
+            {VISIBILITY.map((v, i) => (
+              <Choice
+                key={v.id}
+                first={i === 0}
+                icon={v.icon}
+                title={v.title}
+                hint={v.hint}
+                selected={visibility === v.id}
+                onPress={() => setVisibility(v.id)}
+              />
+            ))}
+          </View>
 
           {copyable ? (
             <>
-              <FieldLabel>Your cut when people copy</FieldLabel>
-              <OptionChips
-                options={FEES.map(pctLabel)}
-                value={pctLabel(copyFee)}
-                onChange={(f) => setCopyFee(Number.parseFloat(f))}
-              />
-              <RiskNote text="Of copiers' profit only, never of a loss. Honey keeps 1.5%." />
+              <Text style={styles.section}>Your cut when people copy</Text>
+              <View style={styles.feeRow}>
+                {FEES.map((f) => (
+                  <PressableScale
+                    key={f}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: copyFee === f }}
+                    onPress={() => {
+                      tap();
+                      setCopyFee(f);
+                    }}
+                    style={[styles.choice, styles.flex, copyFee === f && styles.choiceOn]}
+                  >
+                    <Text style={styles.choiceText}>{f}%</Text>
+                  </PressableScale>
+                ))}
+              </View>
+              <Text style={styles.pickReason}>
+                Of copiers' profit only, never of a loss. Honey keeps 1.5%.
+              </Text>
             </>
           ) : null}
 
-          <FieldLabel>How to buy</FieldLabel>
-          <SheetRow
-            icon="clock"
-            title="Now"
-            subtitle={`At today's price, within ${maxSlip}% slippage, split across chains for the best fill`}
-            accessory="check"
-            selected={order === 'market'}
-            onPress={() => {
-              tap();
-              setOrder('market');
-            }}
-          />
-          <SheetRow
-            icon="target"
-            title="At a better price"
-            subtitle="Limit order 1% under today's price. Waits up to 24 hours; cancel anytime"
-            accessory="check"
-            selected={order === 'limit'}
-            onPress={() => {
-              tap();
-              setOrder('limit');
-            }}
-          />
+          <Text style={styles.section}>How to buy</Text>
+          <View style={styles.card}>
+            <Choice
+              first
+              icon="clock"
+              title="Now"
+              hint={`At today's price, within ${maxSlip}% slippage, split across chains for the best fill`}
+              selected={order === 'market'}
+              onPress={() => setOrder('market')}
+            />
+            <Choice
+              icon="target"
+              title="At a better price"
+              hint="Limit order 1% under today's price. Waits up to 24 hours; cancel anytime"
+              selected={order === 'limit'}
+              onPress={() => setOrder('limit')}
+            />
+          </View>
+          <Text style={styles.section}>Max slippage</Text>
+          <View style={styles.feeRow}>
+            {SLIPPAGES.map((sl) => (
+              <PressableScale
+                key={sl}
+                accessibilityRole="button"
+                accessibilityState={{ selected: maxSlip === sl }}
+                onPress={() => {
+                  tap();
+                  setMaxSlip(sl);
+                }}
+                style={[styles.choice, styles.flex, maxSlip === sl && styles.choiceOn]}
+              >
+                <Text style={styles.choiceText}>{sl}%</Text>
+              </PressableScale>
+            ))}
+          </View>
 
-          <FieldLabel>Max slippage</FieldLabel>
-          <OptionChips
-            options={SLIPPAGES.map(pctLabel)}
-            value={pctLabel(maxSlip)}
-            onChange={(sl) => setMaxSlip(Number.parseFloat(sl))}
-          />
-          <RiskNote
-            text={`Launching records that you called this idea on ${new Date().toLocaleDateString(undefined, { dateStyle: 'medium' })}. Your track record starts here.`}
-          />
+          <View style={[styles.card, styles.row]}>
+            <Icon name="verified" size={18} color={c.accentText} />
+            <Text style={[styles.pickReason, styles.flex]}>
+              Launching records that you called this idea on{' '}
+              {new Date().toLocaleDateString(undefined, { dateStyle: 'medium' })}. Your track record
+              starts here.
+            </Text>
+          </View>
         </View>
       </SheetScreen>
     );
@@ -532,7 +551,7 @@ export default function NewThesisSheet() {
         />
       }
     >
-      <View style={styles.page}>
+      <View style={styles.gap}>
         <View style={[styles.field, styles.idea]}>
           <TextInput
             value={text}
@@ -547,57 +566,88 @@ export default function NewThesisSheet() {
         {links.length ? (
           <View style={styles.chips}>
             {links.map((url) => (
-              <Chip
-                key={url}
-                label={hostOf(url)}
-                leading={<Icon name="link" size={13} color={c.textSecondary} />}
-              />
+              <View key={url} style={styles.chip}>
+                <Icon name="link" size={13} color={c.textSecondary} />
+                <Text style={styles.chipText} numberOfLines={1}>
+                  {hostOf(url)}
+                </Text>
+              </View>
             ))}
           </View>
         ) : null}
 
-        <AmountCard
-          label="Amount"
-          unit="USD"
-          value={amount}
-          onChange={(t) => setAmount(t.replace(/[^\d.]/g, ''))}
-        />
-        <View style={styles.chips}>
-          {AMOUNTS.map((a) => (
-            <Chip
-              key={a}
-              label={`$${a}`}
-              accessibilityRole="radio"
-              selected={value === a}
-              onPress={() => setAmount(String(a))}
+        <Text style={styles.section}>Amount</Text>
+        <View style={styles.row}>
+          <View style={[styles.field, styles.flex]}>
+            <TextInput
+              value={amount}
+              onChangeText={(t) => setAmount(t.replace(/[^\d.]/g, ''))}
+              keyboardType="decimal-pad"
+              style={styles.input}
+              accessibilityLabel="Amount in dollars"
             />
+          </View>
+          {AMOUNTS.map((a) => (
+            <PressableScale
+              key={a}
+              accessibilityRole="button"
+              accessibilityState={{ selected: value === a }}
+              onPress={() => {
+                tap();
+                setAmount(String(a));
+              }}
+              style={[styles.choice, value === a && styles.choiceOn]}
+            >
+              <Text style={styles.choiceText}>${a}</Text>
+            </PressableScale>
           ))}
         </View>
 
-        <FieldLabel>Risk</FieldLabel>
-        <OptionChips<Risk> options={RISKS} value={risk} onChange={setRisk} />
+        <Text style={styles.section}>Risk</Text>
+        <SegmentedTabs<Risk> options={[...RISKS]} value={risk} onChange={setRisk} fill />
       </View>
     </SheetScreen>
   );
 }
 
-/** A percentage option's label, "0.5%". */
-const pctLabel = (n: number) => `${n}%`;
-
 const useStyles = makeStyles((c) => ({
   flex: { flex: 1 },
-  page: { paddingBottom: 16 },
+  gap: { gap: 12, paddingBottom: 16 },
+  row: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  section: { marginTop: 8, color: c.textSecondary, fontSize: 15 },
   field: {
     minHeight: 52,
     justifyContent: 'center',
     paddingHorizontal: 14,
-    ...radius(16),
+    ...radius(14),
     backgroundColor: c.card,
   },
   input: { color: c.text, fontSize: 17 },
   idea: { minHeight: 140, paddingVertical: 12, justifyContent: 'flex-start' },
   ideaInput: { minHeight: 116, textAlignVertical: 'top' },
-  chips: { marginTop: 12, flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  chip: {
+    maxWidth: 200,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: c.card,
+  },
+  chipText: { color: c.text, fontSize: 14 },
+  choice: {
+    height: 52,
+    paddingHorizontal: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: c.divider,
+  },
+  choiceOn: { borderColor: c.text },
+  choiceText: { color: c.text, fontSize: 15, fontWeight: '600' },
   stages: { gap: 18, paddingTop: 12 },
   stage: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   pending: { width: 20, height: 20, borderRadius: 10, borderWidth: 1.5, borderColor: c.divider },
@@ -611,12 +661,10 @@ const useStyles = makeStyles((c) => ({
     ...radius(20),
     backgroundColor: c.card,
   },
-  summaryLabel: { color: c.textSecondary, fontSize: 15 },
-  summaryValue: { color: c.text, fontSize: 30, fontWeight: '500', fontVariant: ['tabular-nums'] },
+  summaryLabel: { color: c.textSecondary, fontSize: 13 },
   amountEdit: { flexDirection: 'row', alignItems: 'center', gap: 2 },
   amountInput: { minWidth: 60, padding: 0 },
-  quote: { marginTop: 4, color: c.textSecondary, fontSize: 14, lineHeight: 19 },
-  footer: { flex: 1, minWidth: 0, gap: 8 },
+  footer: { gap: 8 },
   footnote: { color: c.textSecondary, fontSize: 13, textAlign: 'center' },
   nameField: { flexDirection: 'row', alignItems: 'center', gap: 12, justifyContent: 'flex-start' },
   memberRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
@@ -629,13 +677,85 @@ const useStyles = makeStyles((c) => ({
     backgroundColor: c.canvas,
   },
   smallInput: { fontSize: 15 },
-  // A grey card of rows split by hairlines, as Predict lists a market's answers.
-  card: { padding: 16, gap: 12, ...radius(20), backgroundColor: c.card },
-  list: { paddingHorizontal: 16, paddingVertical: 4, ...radius(20), backgroundColor: c.card },
-  pickBlock: { paddingBottom: 8 },
-  rule: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: c.divider },
-  why: { marginLeft: 48, color: c.textSecondary, fontSize: 13, lineHeight: 18 },
-  pick: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12 },
-  pickName: { color: c.text, fontSize: 16, fontWeight: '600' },
+  feeRow: { flexDirection: 'row', gap: 8 },
+  choiceRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12 },
+  choiceBorder: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: c.divider },
+  choiceIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: c.raised,
+  },
+  choiceIconOn: { backgroundColor: c.accentSurface },
+  radio: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 1.5,
+    borderColor: c.divider,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  radioOn: { borderColor: c.primary, backgroundColor: c.primary },
+  summaryValue: { color: c.text, fontSize: 30, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  why: {
+    marginTop: -4,
+    marginBottom: 6,
+    marginLeft: 48,
+    color: c.textSecondary,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  quote: { marginTop: 4, color: c.textSecondary, fontSize: 14, lineHeight: 19 },
+  card: { padding: 16, gap: 14, ...radius(20), backgroundColor: c.card },
+  pick: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  dot: { width: 10, height: 10, borderRadius: 5 },
+  pickName: { color: c.text, fontSize: 15, fontWeight: '600' },
   pickReason: { marginTop: 2, color: c.textSecondary, fontSize: 14, lineHeight: 19 },
+  pickAmount: { color: c.text, fontSize: 15, fontVariant: ['tabular-nums'] },
+  fees: { color: c.textSecondary, fontSize: 13, textAlign: 'center' },
 }));
+
+/** One option in a list of choices: icon, title, one line, and a check when picked. */
+function Choice({
+  icon,
+  title,
+  hint,
+  selected,
+  onPress,
+  first,
+}: {
+  icon: IconName;
+  title: string;
+  hint: string;
+  selected: boolean;
+  onPress: () => void;
+  first?: boolean;
+}) {
+  const styles = useStyles();
+  const c = useTheme();
+  return (
+    <PressableScale
+      accessibilityRole="radio"
+      accessibilityState={{ selected }}
+      onPress={() => {
+        tap();
+        onPress();
+      }}
+      style={[styles.choiceRow, !first && styles.choiceBorder]}
+    >
+      <View style={[styles.choiceIcon, selected && styles.choiceIconOn]}>
+        <Icon name={icon} size={16} color={selected ? c.accentText : c.textSecondary} />
+      </View>
+      <View style={styles.flex}>
+        <Text style={styles.pickName}>{title}</Text>
+        <Text style={styles.pickReason}>{hint}</Text>
+      </View>
+      <View style={[styles.radio, selected && styles.radioOn]}>
+        {selected ? <Icon name="check" size={12} color={c.onPrimary} /> : null}
+      </View>
+    </PressableScale>
+  );
+}

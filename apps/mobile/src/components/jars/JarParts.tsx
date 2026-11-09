@@ -1,8 +1,8 @@
 // Jar pieces, built from the app's existing patterns rather than a look of their own:
-// rows are Perps' market rows and Home's token rows, the numbers are Perps' tile grid,
-// and holdings read like the related-market rows on a Perps or Predict page.
+// rows are Explore's top-token rows, the sideways cards are Explore's favourites, and
+// the numbers are Perps' tile grid. HoldingRow is the chat and strategy's own row.
 import { router } from 'expo-router';
-import { StyleSheet, Text, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Avatar } from '@/components/Avatar';
 import { DonutChart } from '@/components/charts/DonutChart';
 import { Icon } from '@/components/Icon';
@@ -201,9 +201,8 @@ export function PickIcon({ pick, size = 36 }: { pick: Pick; size?: number }) {
 }
 
 /**
- * A holding, laid out like the related-market rows on a Perps page: logo, symbol over
- * its name and network, then dollars over its share. `onStep` swaps the share for −/+
- * and `onRemove` adds a remove button (editing a strategy).
+ * The chat and strategy's asset row (Aave's): logo, name and network, a bar for its share, then the dollars and
+ * the share. `onRemove` adds a remove button (editing a proposal).
  */
 export function HoldingRow({
   pick,
@@ -223,52 +222,55 @@ export function HoldingRow({
     <View style={styles.holding}>
       <PickIcon pick={pick} />
       <View style={styles.flex}>
-        <Text style={styles.holdingName} numberOfLines={1}>
-          {pick.symbol}
-        </Text>
-        <Text style={styles.holdingSub} numberOfLines={1}>
-          {pick.match === 'proxy' ? 'Proxy · ' : ''}
-          {pick.name} · {pick.chain}
-        </Text>
-      </View>
-      {onStep ? (
-        <View style={styles.stepper}>
-          <PressableScale
-            accessibilityRole="button"
-            accessibilityLabel={`Less ${pick.symbol}`}
-            hitSlop={6}
-            onPress={() => {
-              tap();
-              onStep(-5);
-            }}
-            style={styles.stepButton}
-          >
-            <Text style={styles.stepGlyph}>−</Text>
-          </PressableScale>
-          <Text style={styles.stepValue}>{pick.weight}%</Text>
-          <PressableScale
-            accessibilityRole="button"
-            accessibilityLabel={`More ${pick.symbol}`}
-            hitSlop={6}
-            onPress={() => {
-              tap();
-              onStep(5);
-            }}
-            style={styles.stepButton}
-          >
-            <Text style={styles.stepGlyph}>+</Text>
-          </PressableScale>
-        </View>
-      ) : (
-        <View style={styles.end}>
+        <View style={styles.holdingTop}>
+          <Text style={styles.holdingName} numberOfLines={1}>
+            {pick.symbol}
+          </Text>
           {total !== undefined ? (
             <Text style={styles.holdingValue}>{formatUsd((total * pick.weight) / 100)}</Text>
           ) : null}
-          <Text style={total === undefined ? styles.holdingValue : styles.holdingSub}>
-            {pick.weight}%
-          </Text>
         </View>
-      )}
+        <View style={styles.holdingTop}>
+          <Text style={styles.holdingSub} numberOfLines={1}>
+            {pick.match === 'proxy' ? 'Proxy · ' : ''}
+            {pick.name} · {pick.chain}
+          </Text>
+          {onStep ? (
+            <View style={styles.stepper}>
+              <PressableScale
+                accessibilityRole="button"
+                accessibilityLabel={`Less ${pick.symbol}`}
+                hitSlop={6}
+                onPress={() => {
+                  tap();
+                  onStep(-5);
+                }}
+                style={styles.stepButton}
+              >
+                <Text style={styles.stepGlyph}>−</Text>
+              </PressableScale>
+              <Text style={styles.stepValue}>{pick.weight}%</Text>
+              <PressableScale
+                accessibilityRole="button"
+                accessibilityLabel={`More ${pick.symbol}`}
+                hitSlop={6}
+                onPress={() => {
+                  tap();
+                  onStep(5);
+                }}
+                style={styles.stepButton}
+              >
+                <Text style={styles.stepGlyph}>+</Text>
+              </PressableScale>
+            </View>
+          ) : (
+            <Text style={styles.holdingSub}>{pick.weight}%</Text>
+          )}
+        </View>
+        <View style={styles.track}>
+          <View style={[styles.fill, { width: `${pick.weight}%`, backgroundColor: pick.color }]} />
+        </View>
+      </View>
       {onRemove ? (
         <PressableScale
           accessibilityRole="button"
@@ -280,7 +282,7 @@ export function HoldingRow({
           }}
           style={styles.remove}
         >
-          <Icon name="close" size={12} color={c.textSecondary} />
+          <Icon name="close" size={14} color={c.textSecondary} />
         </PressableScale>
       ) : null}
     </View>
@@ -349,12 +351,12 @@ export function Facts({ facts }: { facts: { label: string; value: string }[] }) 
 }
 
 /**
- * A jar in a list, laid out like Home's token rows (and Perps' market rows): its
- * tokens (a lock when they're private), name and a quiet line about it, then value
- * and change.
- * Rows run edge to edge so the press highlight fills the width; `gutter` is the page's.
+ * A jar in a list, laid out like Explore's top-token rows (and Home's token rows): an
+ * optional rank, its tokens (a lock when they're private), name and a quiet line about
+ * it, then value (or copy fee) over its change. Rows run edge to edge so the press
+ * highlight fills the width; `gutter` is the page's.
  */
-export function JarRow({ jar, gutter }: { jar: ThesisJar; gutter: number }) {
+export function JarRow({ jar, gutter, rank }: { jar: ThesisJar; gutter: number; rank?: number }) {
   const styles = useStyles();
   const c = useTheme();
   const ret = jarReturn(jar);
@@ -363,13 +365,11 @@ export function JarRow({ jar, gutter }: { jar: ThesisJar; gutter: number }) {
     <PressableRow
       accessibilityRole="button"
       accessibilityLabel={`${jar.name}, ${signedPct(ret)}`}
-      onPress={() => {
-        tap();
-        router.push({ pathname: '/jar/[id]', params: { id: jar.id } });
-      }}
+      onPress={() => openJar(jar.id)}
       style={[styles.row, { marginHorizontal: -gutter, paddingHorizontal: gutter }]}
     >
-      <TokenStack picks={hidden ? [] : jar.picks} size={36} ring={c.canvas} />
+      {rank ? <Text style={styles.rank}>{rank}</Text> : null}
+      <TokenStack picks={hidden ? [] : jar.picks.slice(0, 2)} size={36} ring={c.canvas} />
       <View style={styles.flex}>
         <Text style={styles.name} numberOfLines={1}>
           {jar.name}
@@ -392,53 +392,133 @@ export function JarRow({ jar, gutter }: { jar: ThesisJar; gutter: number }) {
   );
 }
 
-/** Jars as a plain list of rows, like Home's tokens and the Perps markets. */
-export function JarList({ jars, gutter = 18 }: { jars: ThesisJar[]; gutter?: number }) {
+/** Jars as a plain list of rows, like Explore's top tokens; `ranked` numbers them. */
+export function JarList({
+  jars,
+  gutter = 18,
+  ranked,
+}: {
+  jars: ThesisJar[];
+  gutter?: number;
+  ranked?: boolean;
+}) {
   return (
     <View>
-      {jars.map((jar) => (
-        <JarRow key={jar.id} jar={jar} gutter={gutter} />
+      {jars.map((jar, i) => (
+        <JarRow key={jar.id} jar={jar} gutter={gutter} rank={ranked ? i + 1 : undefined} />
       ))}
     </View>
   );
 }
 
+/**
+ * Jars in one sideways row, as Explore shows favourite tokens: each card has the
+ * tokens and name, the return big, and how many copied it. `gutter` lines the first
+ * card up with the page while the row runs to the edges.
+ */
+export function JarCarousel({ jars, gutter }: { jars: ThesisJar[]; gutter: number }) {
+  const styles = useStyles();
+  return (
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      style={{ marginHorizontal: -gutter, marginTop: 10 }}
+      contentContainerStyle={[styles.carousel, { paddingHorizontal: gutter }]}
+    >
+      {jars.map((jar) => {
+        const ret = jarReturn(jar);
+        const hidden = !layersOf(jar);
+        return (
+          <PressableScale
+            key={jar.id}
+            accessibilityRole="button"
+            accessibilityLabel={`${jar.name}, ${signedPct(ret)}`}
+            onPress={() => openJar(jar.id)}
+            style={styles.feature}
+          >
+            <View style={styles.featureName}>
+              <TokenStack picks={hidden ? [] : jar.picks.slice(0, 2)} size={22} />
+              <Text style={styles.featureSymbol} numberOfLines={1}>
+                {jar.name}
+              </Text>
+            </View>
+            <Text style={styles.featureValue} numberOfLines={1}>
+              {signedPct(ret)}
+            </Text>
+            <Text style={styles.meta} numberOfLines={1}>
+              {jar.copiers} copied · {jar.copyFee}% fee
+            </Text>
+          </PressableScale>
+        );
+      })}
+    </ScrollView>
+  );
+}
+
+function openJar(id: string) {
+  tap();
+  router.push({ pathname: '/jar/[id]', params: { id } });
+}
+
 const useStyles = makeStyles((c) => ({
   flex: { flex: 1 },
   // Perps' market row.
+  // Explore's market row.
   row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10 },
-  name: { color: c.text, fontSize: 17, fontWeight: '600' },
+  rank: { width: 18, color: c.textSecondary, fontSize: 15 },
+  name: { color: c.text, fontSize: 16, fontWeight: '500' },
   meta: { marginTop: 2, color: c.textSecondary, fontSize: 14 },
   end: { alignItems: 'flex-end', gap: 2 },
   value: { color: c.text, fontSize: 16, fontWeight: '500', fontVariant: ['tabular-nums'] },
-  // Perps' related-market row.
-  holding: { minHeight: 60, flexDirection: 'row', alignItems: 'center', gap: 12 },
-  holdingName: { color: c.text, fontSize: 16, fontWeight: '600' },
-  holdingValue: { color: c.text, fontSize: 16, fontWeight: '600', fontVariant: ['tabular-nums'] },
-  holdingSub: {
-    marginTop: 2,
-    color: c.textSecondary,
-    fontSize: 13,
-    fontVariant: ['tabular-nums'],
-  },
+  // Explore's favourite-token cards.
+  carousel: { gap: 8 },
+  feature: { width: 168, height: 112, padding: 14, gap: 6, ...radius(20), backgroundColor: c.card },
+  featureName: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  featureSymbol: { flexShrink: 1, color: c.text, fontSize: 16, fontWeight: '500' },
+  featureValue: { color: c.text, fontSize: 24, fontWeight: '500', fontVariant: ['tabular-nums'] },
+  // The chat and strategy's asset row.
   stepper: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   stepButton: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: c.raised,
   },
   stepGlyph: { color: c.text, fontSize: 16, fontWeight: '600', lineHeight: 18 },
   stepValue: {
-    minWidth: 40,
+    minWidth: 36,
     textAlign: 'center',
     color: c.text,
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '600',
     fontVariant: ['tabular-nums'],
   },
+  holding: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10 },
+  holdingTop: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  holdingName: { flexShrink: 1, color: c.text, fontSize: 16, fontWeight: '600' },
+  holdingValue: { color: c.text, fontSize: 16, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  holdingSub: {
+    flexShrink: 1,
+    marginTop: 1,
+    color: c.textSecondary,
+    fontSize: 13,
+    fontVariant: ['tabular-nums'],
+  },
+  track: {
+    marginTop: 8,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: c.raised,
+    overflow: 'hidden',
+  },
+  fill: { height: 4, borderRadius: 2 },
   remove: {
     width: 28,
     height: 28,

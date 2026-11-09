@@ -4,9 +4,9 @@ import { Text, View } from 'react-native';
 import { PriceChart } from '@/components/charts/PriceChart';
 import { Icon, type IconName } from '@/components/Icon';
 import {
-  HoldingRow,
   layersOf,
   Owners,
+  PickIcon,
   signedPct,
   Tiles,
   TokenStack,
@@ -27,6 +27,7 @@ import { refreshJarBuy } from '@/lib/jar-buy';
 import { useDaoJar } from '@/lib/jar-dao';
 import { formatUsd } from '@/lib/mock-wallet';
 import { approvalsLeft, useMultisig, useProposal } from '@/lib/multisig';
+import type { Pick } from '@/lib/thesis';
 import { copyJar, jarReturn, jarValue, updateJarBuy, useThesisJars } from '@/lib/thesis';
 import { showToast } from '@/lib/toast';
 import { makeStyles, radius, useTheme } from '@/theme';
@@ -52,7 +53,7 @@ const CHART_HEIGHT = 220;
  * One jar, laid out like a Perps market page: what it is and its value (or, for
  * someone else's jar, its return) with the change, the chart across the full width and
  * its ranges, anything waiting on you, the jar's numbers as Perps' tiles, its holdings
- * as related-market rows, owners, and the idea as a Description. Copying sits at the
+ * as Home's token rows, owners, and the idea as a Description. Copying sits at the
  * bottom like an order. Private jars show other people only their returns.
  */
 export default function JarScreen() {
@@ -153,7 +154,11 @@ export default function JarScreen() {
         </View>
         {jar.mine ? (
           scrub === null ? (
-            <NumberPopIn value={formatUsd(shown)} style={styles.price} />
+            <NumberPopIn
+              value={formatUsd(shown)}
+              style={styles.price}
+              fractionStyle={styles.cents}
+            />
           ) : (
             <Text style={styles.price}>{formatUsd(shown)}</Text>
           )
@@ -291,7 +296,7 @@ export default function JarScreen() {
         <Text style={styles.heading}>Holdings</Text>
         {layers && jar.picks.length ? (
           jar.picks.map((p) => (
-            <HoldingRow key={p.symbol} pick={p} total={jar.mine ? shown : undefined} />
+            <Holding key={p.symbol} pick={p} total={jar.mine ? shown : undefined} />
           ))
         ) : (
           <View style={styles.card}>
@@ -320,6 +325,34 @@ export default function JarScreen() {
         Jars hold real tokens and can lose value. Past returns don't promise future ones.
       </Text>
     </PushedScreen>
+  );
+}
+
+/**
+ * A holding as Home lists a token: logo, name over its share and network, then the
+ * dollars (your own jar) or its share on the right.
+ */
+function Holding({ pick, total }: { pick: Pick; total?: number }) {
+  const styles = useStyles();
+  return (
+    <View style={styles.holding}>
+      <PickIcon pick={pick} size={40} />
+      <View style={styles.flex}>
+        <Text style={styles.rowTitle} numberOfLines={1}>
+          {pick.name}
+        </Text>
+        <Text style={styles.rowSubtitle} numberOfLines={1}>
+          {pick.symbol} · {pick.chain}
+          {pick.match === 'proxy' ? ' · proxy' : ''}
+        </Text>
+      </View>
+      <View style={styles.rowEnd}>
+        <Text style={styles.rowTitle}>
+          {total !== undefined ? formatUsd((total * pick.weight) / 100) : `${pick.weight}%`}
+        </Text>
+        {total !== undefined ? <Text style={styles.rowSubtitle}>{pick.weight}%</Text> : null}
+      </View>
+    </View>
   );
 }
 
@@ -391,6 +424,17 @@ const useStyles = makeStyles((c) => ({
     letterSpacing: -0.6,
     fontVariant: ['tabular-nums'],
   },
+  cents: { color: c.textSecondary },
+  // Home's token row.
+  holding: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10 },
+  rowTitle: { color: c.text, fontSize: 16, fontWeight: '500', fontVariant: ['tabular-nums'] },
+  rowSubtitle: {
+    marginTop: 2,
+    color: c.textSecondary,
+    fontSize: 15,
+    fontVariant: ['tabular-nums'],
+  },
+  rowEnd: { alignItems: 'flex-end', gap: 2 },
   changeRow: {
     marginTop: 2,
     marginBottom: 12,
