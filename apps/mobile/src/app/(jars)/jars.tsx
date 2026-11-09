@@ -1,28 +1,35 @@
 import { router } from 'expo-router';
 import { useState } from 'react';
-import { Text, TextInput, View } from 'react-native';
-import { Icon } from '@/components/Icon';
-import { JarList, Summary, signedPct } from '@/components/jars/JarParts';
-import { PressableScale } from '@/components/motion/PressableScale';
-import { SegmentedTabs } from '@/components/motion/SegmentedTabs';
+import { ScrollView, Text, View } from 'react-native';
+import { JarList } from '@/components/jars/JarParts';
+import { NumberPopIn } from '@/components/motion/NumberPopIn';
 import { UnderlineTabs } from '@/components/motion/UnderlineTabs';
-import { EmptyState, PushedScreen } from '@/components/wallet/parts';
+import { PillButton } from '@/components/onboarding/PillButton';
+import { Chip } from '@/components/wallet/Chip';
+import { Change, EmptyState, PushedScreen, SCREEN } from '@/components/wallet/parts';
+import { SearchField } from '@/components/wallet/SearchField';
 import { tap } from '@/lib/haptics';
 import { formatUsd } from '@/lib/mock-wallet';
 import { jarReturn, jarValue, useThesisJars } from '@/lib/thesis';
-import { makeStyles, radius, useTheme } from '@/theme';
+import { makeStyles } from '@/theme';
 
 type View_ = 'Yours' | 'Explore';
 type Filter = 'All' | 'Public' | 'Private';
+const FILTERS: Filter[] = ['All', 'Public', 'Private'];
+const FILTER_LABEL: Record<Filter, string> = {
+  All: 'All',
+  Public: 'Public',
+  Private: 'Returns only',
+};
 
 /**
  * Jars, opened from the honey button: a pushed page with a back button, not a tab.
- * Your portfolio across jars sits on top like Home's balance; below it, Yours and
- * Explore. The ask field is pinned to the bottom, where a chat's input lives.
+ * Built like Trade's Perps: the total up top as a Perps page shows its price, then
+ * Yours and Explore as underline tabs, with Explore's search, filter chips and rows
+ * as the markets list has them. The main action is the honey button at the bottom.
  */
 export default function JarsScreen() {
   const styles = useStyles();
-  const c = useTheme();
   const all = useThesisJars();
   // With nothing of your own yet, open on Explore.
   const [view, setView] = useState<View_>(() => (all.some((j) => j.mine) ? 'Yours' : 'Explore'));
@@ -41,14 +48,13 @@ export default function JarsScreen() {
         j.picks.some((p) => p.symbol.toLowerCase() === q || p.name.toLowerCase().includes(q)),
     )
     .sort((a, b) => jarReturn(b) - jarReturn(a));
+  const popular = all
+    .filter((j) => !j.mine)
+    .sort((a, b) => b.copiers - a.copiers)
+    .slice(0, 3);
   const total = mine.reduce((s, j) => s + jarValue(j), 0);
   const invested = mine.reduce((s, j) => s + j.invested, 0);
   const gain = total - invested;
-  // Every jar's value added up, point by point, aligned on the newest point.
-  const span = Math.max(0, ...mine.map((j) => j.history.length));
-  const history = Array.from({ length: span }, (_, i) =>
-    mine.reduce((sum, j) => sum + (j.history[j.history.length - span + i] ?? j.history[0] ?? 0), 0),
-  );
 
   const start = () => {
     tap();
@@ -59,108 +65,89 @@ export default function JarsScreen() {
     <PushedScreen
       title="Jars"
       fallback="/home"
-      footer={
-        <PressableScale
-          accessibilityRole="button"
-          accessibilityLabel="Ask Honey about an idea"
-          scaleTo={0.98}
-          onPress={start}
-          style={styles.ask}
-        >
-          <Icon name="sparkles" size={18} color={c.textSecondary} />
-          <Text style={styles.askText} numberOfLines={1}>
-            What do you believe in? Ask Honey
-          </Text>
-          <View style={styles.askGo}>
-            <Icon name="arrowUp" size={14} color={c.onPrimary} />
-          </View>
-        </PressableScale>
-      }
+      footer={<PillButton label="Start a jar from an idea" onPress={start} style={styles.flex} />}
     >
-      <View style={styles.page}>
-        {/* The portfolio first, like Home: one number for everything you hold in jars. */}
-        <Summary
-          label="Across your jars"
-          value={formatUsd(total)}
-          change={gain}
-          changeText={
-            mine.length
-              ? `${formatUsd(Math.abs(gain))} (${signedPct(gain / Math.max(invested, 1))}) all time`
-              : 'Start a jar to see it grow'
-          }
-          history={history}
-        />
+      <View style={styles.gutter}>
+        {/* One number for everything in your jars, as a Perps page shows its price. */}
+        <Text style={styles.label}>Across your jars</Text>
+        <NumberPopIn value={formatUsd(total)} style={styles.total} />
+        <View style={styles.changeRow}>
+          {mine.length ? (
+            <>
+              <Change value={(gain / Math.max(invested, 1)) * 100} />
+              <Text style={styles.changeLabel}>
+                {`${gain < 0 ? '−' : '+'}${formatUsd(Math.abs(gain))} all time`}
+              </Text>
+            </>
+          ) : (
+            <Text style={styles.changeLabel}>Start a jar to see it grow</Text>
+          )}
+        </View>
 
-        <UnderlineTabs<View_> options={['Yours', 'Explore']} value={view} onChange={setView} />
+        <View style={styles.tabs}>
+          <UnderlineTabs<View_> options={['Yours', 'Explore']} value={view} onChange={setView} />
+        </View>
 
         {view === 'Yours' ? (
           <>
             {mine.length ? (
-              <JarList jars={mine} />
+              <JarList jars={mine} gutter={SCREEN.gutter} />
             ) : (
-              <View style={styles.emptyCard}>
-                <EmptyState
-                  compact
-                  icon="pie"
-                  title="No jars yet"
-                  hint="Ask Honey below to start one from an idea, or copy a jar from Explore."
-                />
-              </View>
+              <EmptyState
+                compact
+                icon="pie"
+                title="No jars yet"
+                hint="Start one from an idea, or copy a jar people share."
+                action={{ label: 'Explore jars', onPress: () => setView('Explore') }}
+              />
             )}
-            <View style={styles.sectionHead}>
-              <Text style={styles.label}>Popular to copy</Text>
-              <PressableScale
-                accessibilityRole="button"
-                hitSlop={8}
-                onPress={() => {
-                  tap();
-                  setView('Explore');
-                }}
-              >
-                <Text style={styles.seeAll}>See all</Text>
-              </PressableScale>
-            </View>
-            <JarList
-              jars={all
-                .filter((j) => !j.mine)
-                .sort((a, b) => b.copiers - a.copiers)
-                .slice(0, 3)}
-            />
+            <Text style={[styles.heading, styles.section]}>Popular to copy</Text>
+            <JarList jars={popular} gutter={SCREEN.gutter} />
           </>
         ) : (
           <>
-            <View style={styles.search}>
-              <Icon name="search" size={16} color={c.textSecondary} />
-              <TextInput
-                value={query}
-                onChangeText={setQuery}
-                placeholder="Search jars or tokens"
-                placeholderTextColor={c.placeholder}
-                autoCapitalize="none"
-                autoCorrect={false}
-                returnKeyType="search"
-                style={styles.searchInput}
-                accessibilityLabel="Search jars or tokens"
-              />
-            </View>
-            <SegmentedTabs<Filter>
-              options={['All', 'Public', 'Private']}
-              labels={{ All: 'All', Public: 'Public', Private: 'Returns only' }}
-              value={filter}
-              onChange={setFilter}
-              bare
+            <SearchField
+              value={query}
+              onChangeText={setQuery}
+              placeholder="Search jars or tokens"
             />
-            {others.length ? (
-              <JarList jars={others} />
-            ) : (
-              <View style={styles.emptyCard}>
-                <EmptyState
-                  compact
-                  icon="binoculars"
-                  title="Nothing here yet"
-                  hint={q ? 'No jar matches that search.' : 'Jars people share show up here.'}
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={styles.chipScroll}
+              contentContainerStyle={styles.chips}
+            >
+              {FILTERS.map((option) => (
+                <Chip
+                  key={option}
+                  label={FILTER_LABEL[option]}
+                  accessibilityRole="radio"
+                  selected={option === filter}
+                  onPress={() => setFilter(option)}
                 />
-              </View>
+              ))}
+            </ScrollView>
+            <Text style={[styles.heading, styles.listHeader]}>
+              {`${others.length} ${others.length === 1 ? 'jar' : 'jars'}`}
+            </Text>
+            {others.length ? (
+              <JarList jars={others} gutter={SCREEN.gutter} />
+            ) : q ? (
+              <EmptyState
+                compact
+                icon="search"
+                title="No jars match"
+                hint="Try another name or token."
+                action={{ label: 'Clear search', onPress: () => setQuery('') }}
+              />
+            ) : (
+              <EmptyState
+                compact
+                icon="binoculars"
+                title="Nothing here yet"
+                hint="Jars people share show up here."
+                action={{ label: 'Show all jars', onPress: () => setFilter('All') }}
+              />
             )}
           </>
         )}
@@ -170,45 +157,22 @@ export default function JarsScreen() {
 }
 
 const useStyles = makeStyles((c) => ({
-  page: { paddingHorizontal: 16, gap: 14, paddingBottom: 12 },
-  sectionHead: {
-    marginTop: 8,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+  flex: { flex: 1 },
+  gutter: { paddingHorizontal: SCREEN.gutter },
+  label: { marginTop: 8, color: c.textSecondary, fontSize: 15 },
+  total: {
+    color: c.text,
+    fontSize: 36,
+    fontWeight: '500',
+    letterSpacing: -0.6,
+    fontVariant: ['tabular-nums'],
   },
-  label: { color: c.textSecondary, fontSize: 15 },
-  seeAll: { color: c.accentText, fontSize: 15, fontWeight: '600' },
-  // The footer is a row; the field fills it.
-  ask: {
-    flex: 1,
-    height: 52,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingLeft: 16,
-    paddingRight: 8,
-    borderRadius: 26,
-    backgroundColor: c.card,
-  },
-  askText: { flex: 1, color: c.placeholder, fontSize: 16 },
-  askGo: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: c.primary,
-  },
-  emptyCard: { ...radius(20), backgroundColor: c.card },
-  search: {
-    height: 44,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 14,
-    borderRadius: 22,
-    backgroundColor: c.card,
-  },
-  searchInput: { flex: 1, color: c.text, fontSize: 16 },
+  changeRow: { marginTop: 2, flexDirection: 'row', alignItems: 'center', gap: 6 },
+  changeLabel: { color: c.textSecondary, fontSize: 15, fontVariant: ['tabular-nums'] },
+  tabs: { marginTop: 20, marginBottom: 8 },
+  heading: { color: c.textSecondary, fontSize: 15 },
+  section: { marginTop: 28, marginBottom: 4 },
+  listHeader: { marginTop: 16, marginBottom: 4 },
+  chipScroll: { marginTop: 12, marginHorizontal: -SCREEN.gutter },
+  chips: { gap: 8, paddingHorizontal: SCREEN.gutter },
 }));

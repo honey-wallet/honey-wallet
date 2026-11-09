@@ -5,6 +5,7 @@ import { PressableScale } from '@/components/motion/PressableScale';
 import { TextSwap } from '@/components/motion/TextSwap';
 import { PillButton } from '@/components/onboarding/PillButton';
 import { closeSheet, SheetScreen } from '@/components/sheets/Sheet';
+import { Chip } from '@/components/wallet/Chip';
 import { applyKey, Keypad, TypedAmount } from '@/components/wallet/Keypad';
 import { TokenIcon } from '@/components/wallet/parts';
 import { tap } from '@/lib/haptics';
@@ -68,23 +69,21 @@ function NewJarSheetContent() {
         />
       </View>
 
+      {/* The token, as Perps' filter chips: a logo and its symbol. */}
       <View style={styles.tokens}>
         {JAR_TOKENS.map((s) => (
-          <PressableScale
+          <Chip
             key={s}
-            accessibilityRole="button"
-            accessibilityState={{ selected: s === symbol }}
+            label={s}
+            leading={<TokenIcon symbol={s} size={20} />}
+            accessibilityRole="radio"
+            selected={s === symbol}
             onPress={() => {
-              tap();
               Keyboard.dismiss();
               setSymbol(s);
               setGoal('');
             }}
-            style={[styles.token, s === symbol && styles.tokenActive]}
-          >
-            <TokenIcon symbol={s} size={22} />
-            <Text style={[styles.tokenLabel, s === symbol && styles.tokenLabelActive]}>{s}</Text>
-          </PressableScale>
+          />
         ))}
       </View>
 
@@ -115,7 +114,7 @@ const useStyles = makeStyles((c) => ({
     height: 52,
     justifyContent: 'center',
     paddingHorizontal: 14,
-    ...radius(14),
+    ...radius(16),
     backgroundColor: c.card,
   },
   input: {
@@ -126,29 +125,6 @@ const useStyles = makeStyles((c) => ({
     marginTop: 12,
     flexDirection: 'row',
     gap: 8,
-  },
-  token: {
-    flex: 1,
-    height: 40,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: c.divider,
-  },
-  tokenActive: {
-    borderColor: c.primary,
-    backgroundColor: c.accentSurface,
-  },
-  tokenLabel: {
-    color: c.textSecondary,
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  tokenLabelActive: {
-    color: c.text,
   },
   // Room around the goal even in a tray, where the sheet fits its content.
   amountArea: {
@@ -178,7 +154,7 @@ const useStyles = makeStyles((c) => ({
     fontSize: 15,
   },
   privateLink: {
-    color: c.primary,
+    color: c.accentText,
     fontSize: 15,
     fontWeight: '600',
   },
