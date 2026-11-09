@@ -135,25 +135,60 @@ Notes for the reviewer:
 **Do you provide a way for users to request that their data is deleted?** Yes:
 https://honeywallet.org/delete-account
 
-| Data type | Collected | Shared | Optional? | Purposes |
-| --- | --- | --- | --- | --- |
-| Personal info → Email address | Yes | No | Optional (waitlist / sign-in) | App functionality, Account management |
-| Personal info → User IDs | Yes | No | Optional (only with sign-in) | App functionality, Account management |
-| Financial info → Other financial info (wallet addresses, transactions) | Yes | Yes (NEAR Intents 1Click and RPC providers, to execute what the user requests) | Required for trading features | App functionality |
-| Messages / App activity → Other user-generated content (thesis text) | Yes, processed ephemerally | Yes (NEAR AI Cloud, Linkup) | Optional | App functionality |
-| Location, Photos and videos, Contacts, App activity (analytics), Web browsing, App info and performance, Device or other IDs | No | | | |
+**Account creation methods:** Username and other authentication (email one-time sign-in
+link), OAuth (Google, Apple). A recovery-phrase wallet needs no account.
+
+As submitted in Play Console on 9 November 2026:
+
+| Data type | Collected | Shared | Ephemeral | Required? | Purposes |
+| --- | --- | --- | --- | --- | --- |
+| Personal info → Name | Yes | No | No | Optional (only with Google/Apple sign-in) | Account management |
+| Personal info → Email address | Yes | No | No | Optional (waitlist / sign-in) | App functionality, Account management |
+| Personal info → User IDs | Yes | No | No | Optional (only with sign-in) | App functionality, Account management |
+| Financial info → Purchase history (swaps, transfers, jar buys) | Yes | Yes (NEAR Intents 1Click, RPC providers) | No | Required | App functionality |
+| Financial info → Other financial info (wallet addresses, signed transactions) | Yes | Yes (NEAR Intents 1Click, RPC providers) | No | Required | App functionality |
+| Messages → Other in-app messages (idea chat with the thesis agent) | Yes | Yes (NEAR AI Cloud, Linkup) | Yes | Optional | App functionality |
+| Device or other IDs (expo-updates `EAS-Client-ID`, WalletConnect client ID) | Yes | No | No | Required | App functionality |
+| Location, Photos and videos, Audio, Files and docs, Calendar, Contacts, App activity, Web browsing, App info and performance, Health and fitness | No | | | | |
 
 Notes:
 
 - "Shared" follows Play's definition. Transfers to service providers acting on our
-  behalf (Google Cloud, Firebase) are not "sharing". Transfers the user directs, such
-  as sending a swap to NEAR Intents, may also be exempt as user-initiated. Marking them
-  shared is the conservative choice.
+  behalf (Google Cloud, Firebase, Expo, Reown) are not "sharing". Transfers the user
+  directs, such as sending a swap to NEAR Intents, may also be exempt as user-initiated.
+  Marking them shared is the conservative choice.
+- Name: Firebase Auth keeps the Google account's display name on the user record
+  (`lib/identity-flows.ts`), so it is collected even though the app only shows it locally.
+- Device or other IDs: `expo-updates` sends a random per-install `EAS-Client-ID` header on
+  update checks, and WalletConnect creates a client ID for Reown's relay. Neither is an
+  advertising ID; `com.google.android.gms.permission.AD_ID` is blocked in `app.json`, and
+  "Does your app use an advertising ID?" is answered No.
+- App activity is empty: Explore search filters on the device, and jars (including public
+  ones) are stored on the device only. Tick "Other user-generated content" (shared) once
+  public jars are uploaded for other users to see.
 - Photos (profile picture) and camera (QR) are used on device only, so they are not
-  collected.
-- Data processed ephemerally: thesis text (tick "processed ephemerally").
+  collected. The in-app browser keeps no history and sends none to the server.
 - Security section: "Data is encrypted in transit" Yes; "You can request that data be
   deleted" Yes.
+
+## Google Play: other App content answers
+
+- App access: all functionality available without restrictions (a recovery-phrase wallet
+  needs no account).
+- Ads: No. Advertising ID: No. Government app: No. Health features: none.
+- Content rating questionnaire: All other app types; online content Yes (AI proposals,
+  news sources, live prices); controlled substances No; shares location No; digital
+  purchases Yes (crypto tokens), no chance-based items; cash or crypto rewards Yes (jar
+  creators' copy fee); wagering No; news or educational product No.
+- Financial features: Cryptocurrency wallet only (non-custodial; swaps run through the
+  third-party NEAR Intents protocol, so not an exchange).
+- Store settings: category Finance; contact team@honeywallet.org; website
+  https://honeywallet.org.
+- Re-answer the content rating, financial features and data safety forms before shipping
+  Predict or Perps (gambling-adjacent and leveraged products), public jars uploaded to the
+  server, or a paid creator fee.
+- Store graphics: `docs/launch/play-store/` (512 icon, 1024×500 feature graphic, four
+  1080×1920 screenshots from test mode).
 
 ---
 
