@@ -201,27 +201,41 @@ export function Coin({
   r,
   logo,
   chip,
+  square,
 }: {
   x: number;
   y: number;
   r: number;
   logo: string;
   chip?: string;
+  /** A square mark (Base's blue square) sits whole on a white coin instead of filling it. */
+  square?: boolean;
 }) {
   const pad = chip ? r * 0.42 : 0;
+  const side = r * 1.05;
   return (
     <g>
       <circle cx={x} cy={y + r * 0.14} fill="var(--art-rim)" r={r} />
       <circle cx={x} cy={y} fill={chip ?? '#fff'} r={r} />
-      <image
-        clipPath="url(#art-coin)"
-        height={r * 2 - pad}
-        href={`/logos/${logo}`}
-        preserveAspectRatio="xMidYMid slice"
-        width={r * 2 - pad}
-        x={x - r + pad / 2}
-        y={y - r + pad / 2}
-      />
+      {square ? (
+        <image
+          height={side}
+          href={`/logos/${logo}`}
+          width={side}
+          x={x - side / 2}
+          y={y - side / 2}
+        />
+      ) : (
+        <image
+          clipPath="url(#art-coin)"
+          height={r * 2 - pad}
+          href={`/logos/${logo}`}
+          preserveAspectRatio="xMidYMid slice"
+          width={r * 2 - pad}
+          x={x - r + pad / 2}
+          y={y - r + pad / 2}
+        />
+      )}
     </g>
   );
 }
@@ -641,7 +655,17 @@ export function CtaScene({ className }: { className?: string }) {
   return (
     <span aria-hidden="true" className={cn(styles.sectionScene, className)}>
       <Svg viewBox="0 0 640 400">
-        <path d="M40 360 Q160 300 300 330 T600 310 V400 H40Z" fill={TINT} />
+        {/* The ground fades out at its ends and foot instead of stopping at the frame. */}
+        <defs>
+          <radialGradient cx="0.5" cy="0.35" id="cta-ground-fade" r="0.5">
+            <stop offset="0.35" stopColor="#fff" />
+            <stop offset="1" stopColor="#fff" stopOpacity="0" />
+          </radialGradient>
+          <mask id="cta-ground">
+            <rect fill="url(#cta-ground-fade)" height="120" width="640" x="0" y="280" />
+          </mask>
+        </defs>
+        <path d="M40 360 Q160 300 300 330 T600 310 V400 H40Z" fill={TINT} mask="url(#cta-ground)" />
         <ellipse cx="470" cy="352" fill={CLOUD} rx="150" ry="30" />
         <path
           d="M80 260 C160 180, 240 260, 320 190 S460 150, 560 120"
@@ -652,7 +676,7 @@ export function CtaScene({ className }: { className?: string }) {
           strokeWidth="8"
         />
         <Coin logo="ethereum-coin.svg" r={22} x={100} y={240} />
-        <Coin logo="base-square.svg" r={20} x={200} y={232} />
+        <Coin logo="base-square.svg" r={20} square x={200} y={232} />
         <Coin chip="#000" logo="solana.svg" r={22} x={318} y={190} />
         <Coin logo="near.svg" r={24} x={556} y={118} />
         <Mascot blink left="hold" legs="walk" look={0.04} right="hold" w={150} x={360} y={190} />

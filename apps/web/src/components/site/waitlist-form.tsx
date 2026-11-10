@@ -77,10 +77,11 @@ export function WaitlistForm({ className }: { className?: string }) {
   }
 
   if (state.kind === 'joined') {
+    // mb-7 keeps the space the form's note line held (mt-2 + min-h-5), so what follows stays put.
     return (
       <p
         className={cn(
-          'inline-flex items-center gap-2.5 rounded-full bg-honey-tint px-5 py-3 font-medium text-brand',
+          'mb-7 inline-flex items-center gap-2.5 rounded-full bg-honey-tint px-5 py-3 font-medium text-brand',
           className,
         )}
         role="status"
