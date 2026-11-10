@@ -17,6 +17,7 @@ vi.mock('@/lib/dapp', () => ({
   },
 }));
 vi.mock('@/lib/platform', () => ({ isWeb: false }));
+vi.mock('@/lib/persistence', () => ({ persistence: { clear: vi.fn(async () => {}) } }));
 vi.mock('@/lib/profile', () => ({ setProfile: mocks.profile }));
 vi.mock('@/lib/store', () => ({ createStore: () => ({ set: vi.fn(), get: vi.fn() }) }));
 vi.mock('@/lib/toast', () => ({ showToast: vi.fn() }));

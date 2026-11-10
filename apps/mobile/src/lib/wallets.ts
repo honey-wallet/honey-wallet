@@ -1,5 +1,6 @@
 import type { Addresses } from '@honey-wallet/keyring';
 import { ADDRESS, BALANCE, otherWallets, type Wallet } from '@/lib/mock-wallet';
+import { persistence } from '@/lib/persistence';
 import { getProfile, useProfile } from '@/lib/profile';
 import { createStore } from '@/lib/store';
 import { TEST_MODE } from '@/lib/test-mode';
@@ -43,6 +44,8 @@ const fromVault = (account: VaultAccount): AddedWallet => ({
 export const walletLoad = createStore({ ready: false, error: false });
 export async function hydrateWallets() {
   try {
+    // Saved wallets (watched, burners, the active one) first, then the vault's on top.
+    await persistence.ready;
     await upgradeNearAccounts();
     let accounts = await loadAccounts();
     // Test mode behaves like the real app: with no wallet yet, make the main one silently.
@@ -106,7 +109,8 @@ export function allWallets(
  * wallets take the fixture flows, which end on success pages and never sign anything.
  */
 function withSampleMoney(name: string, added: AddedWallet[]): AddedWallet[] {
-  const own = added.map((w) => (w.watchOnly ? w : { ...w, demo: true }));
+  // Home shows the sample portfolio for these, so the switcher shows its total too.
+  const own = added.map((w) => (w.watchOnly ? w : { ...w, demo: true, usd: BALANCE }));
   const shared = otherWallets(name)
     .filter((w) => w.kind === 'multisig' && !added.some((a) => a.id === w.id))
     .map((w) => ({ ...w, demo: true }));

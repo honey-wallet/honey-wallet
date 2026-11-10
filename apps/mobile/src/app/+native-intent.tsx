@@ -10,8 +10,19 @@ export function redirectSystemPath({ path, initial }: { path: string; initial: b
   if (isAuthCallback(path)) return initial ? '/' : null;
   // A Firebase email sign-in link: the check-your-email screen finishes it.
   if (takeEmailLink(path)) return '/verify';
-  if (isSwitchedOffProduct(path)) return '/trade';
-  return withoutPaymentPrefill(path);
+  const inApp = withoutWebPrefix(path);
+  if (isSwitchedOffProduct(inApp)) return '/trade';
+  return withoutPaymentPrefill(inApp);
+}
+
+/**
+ * Website links (https://www.honeywallet.org/app/token/ETH) open the same screen in the
+ * app: the site keeps app screens under /app, the app has them at its root.
+ */
+export function withoutWebPrefix(path: string) {
+  const m = /^(?:https?:\/\/(?:www\.)?honeywallet\.org)?\/app(\/[^?#]*)?([?#].*)?$/i.exec(path);
+  if (!m) return path;
+  return `${m[1] && m[1] !== '/' ? m[1] : '/'}${m[2] ?? ''}`;
 }
 
 /** Perps and Predict are switched off (AVAILABLE_TRADE_MODES); links can't open them either. */

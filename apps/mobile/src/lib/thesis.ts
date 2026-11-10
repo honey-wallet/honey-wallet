@@ -409,7 +409,7 @@ async function runLive(
           at: Date.now(),
         },
         sources: (run.intent?.links ?? []).map((l) => ({
-          title: l.status === 'Read' && l.title ? l.title : hostOf(l.url),
+          title: l.status === 'read' && l.title ? l.title : hostOf(l.url),
           url: l.url,
         })),
       };

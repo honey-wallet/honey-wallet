@@ -126,7 +126,10 @@ export default function NewMultisigSheet() {
   const listCap = isWeb ? { maxHeight: Math.max(240, windowHeight - MEMBERS_CHROME) } : null;
 
   const [name, setName] = useState(NAME_IDEAS[0].name);
-  const [network, setNetwork] = useState<MultisigNetwork>(POPULAR_EVM[0]);
+  // Outside test mode only shared jars on NEAR are live, so start there.
+  const [network, setNetwork] = useState<MultisigNetwork>(
+    TEST_MODE ? POPULAR_EVM[0] : NEAR_NETWORK,
+  );
   const [members, setMembers] = useState<Member[]>([yourKey('You')]);
   // What it's for follows from who's in it: only your own keys is a vault.
   const purpose: MultisigPurpose = members.every((m) => m.kind !== 'person')
@@ -608,7 +611,9 @@ function NetworkPage({
   const evm = (searching ? (all ?? POPULAR_EVM) : POPULAR_EVM).filter((ch) =>
     matchesChain(ch, query),
   );
-  const showSolana = !searching || 'solana'.includes(query.trim().toLowerCase());
+  const q = query.trim().toLowerCase();
+  const showNear = !searching || 'near'.includes(q) || 'sputnik'.includes(q);
+  const showSolana = !searching || 'solana'.includes(q) || 'squads'.includes(q);
   const row = (n: MultisigNetwork & { color?: string }, hint: string) => {
     const active = n.chainId === selected.chainId && n.name === selected.name;
     return (
@@ -622,6 +627,16 @@ function NetworkPage({
       </PressableRow>
     );
   };
+
+  // Outside test mode only shared jars on NEAR are live: offer just that.
+  if (!TEST_MODE) {
+    return (
+      <ScrollView style={styles.flex} alwaysBounceVertical={false}>
+        {row(NEAR_NETWORK, `Sputnik DAO · ${setupCost(NEAR_NETWORK)} · Recommended`)}
+        <Text style={styles.note}>Shared wallets on Solana and EVM networks are coming soon.</Text>
+      </ScrollView>
+    );
+  }
 
   return (
     <>
@@ -637,7 +652,7 @@ function NetworkPage({
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
-        {showSolana ? row(NEAR_NETWORK, `Sputnik DAO · ${setupCost(NEAR_NETWORK)}`) : null}
+        {showNear ? row(NEAR_NETWORK, `Sputnik DAO · ${setupCost(NEAR_NETWORK)}`) : null}
         {showSolana ? row(SOLANA_NETWORK, `Squads · ${setupCost(SOLANA_NETWORK)}`) : null}
         <SheetSection title={searching ? 'EVM networks' : 'Popular EVM networks'} />
         {evm
@@ -662,7 +677,7 @@ function NetworkPage({
             action={{ label: 'Try again', onPress: () => setAttempt((n) => n + 1) }}
           />
         ) : null}
-        {searching && all && evm.length === 0 && !showSolana ? (
+        {searching && all && evm.length === 0 && !showSolana && !showNear ? (
           <EmptyState
             compact
             icon="search"

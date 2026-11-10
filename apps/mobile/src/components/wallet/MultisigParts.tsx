@@ -29,7 +29,12 @@ import {
 import { makeStyles, useTheme } from '@/theme';
 
 /** Networks with a coin logo of their own; the rest get a lettered badge. */
-const NETWORK_LOGO: Record<string, string> = { 1: 'ETH', 8453: 'BASE', solana: 'SOL' };
+const NETWORK_LOGO: Record<string, string> = {
+  1: 'ETH',
+  8453: 'BASE',
+  solana: 'SOL',
+  near: 'NEAR',
+};
 
 /** A network's logo, or a coloured circle with its first letter. */
 export function NetworkBadge({
@@ -39,7 +44,14 @@ export function NetworkBadge({
   network: Pick<EvmChain, 'name' | 'color'> & { chainId: number | null };
   size?: number;
 }) {
-  const logo = NETWORK_LOGO[network.chainId === null ? 'solana' : String(network.chainId)];
+  // NEAR and Solana both have no chain id; tell them apart by name.
+  const key =
+    network.chainId !== null
+      ? String(network.chainId)
+      : network.name === 'NEAR'
+        ? 'near'
+        : 'solana';
+  const logo = NETWORK_LOGO[key];
   if (logo) return <TokenIcon symbol={logo} size={size} />;
   const bg = network.color ?? '#8A8A8E';
   return (

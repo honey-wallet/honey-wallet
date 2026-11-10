@@ -1,0 +1,13 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.honeywallet.app",
+      "sha256_cert_fingerprints": [
+        "67:BA:E1:5A:B6:9C:AF:EF:E2:4D:A0:D4:7F:39:57:CD:6B:35:3F:0D:C8:6F:B0:88:0C:78:0B:24:CF:51:86:27",
+        "B1:C3:F8:BF:DD:99:84:60:85:6F:1D:11:04:38:7B:E3:A1:91:30:B6:3A:D4:91:AA:BB:F5:41:EB:5C:7E:B2:70"
+      ]
+    }
+  }
+]

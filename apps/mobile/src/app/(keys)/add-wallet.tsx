@@ -9,6 +9,7 @@ import { tap } from '@/lib/haptics';
 import { leaveSheetTo } from '@/lib/navigation';
 import { HERE, isWeb } from '@/lib/platform';
 import { getProfile } from '@/lib/profile';
+import { TEST_MODE } from '@/lib/test-mode';
 import { showErrorToast, showToast } from '@/lib/toast';
 import { createAccount } from '@/lib/vault';
 import { addVaultWallet, nextWalletLabel } from '@/lib/wallets';
@@ -87,14 +88,17 @@ export default function AddWalletSheet() {
                 onPress: open('/pair-phone'),
               },
             ]
-          : [
-              {
-                icon: 'hardware' as const,
-                title: 'Connect hardware wallet',
-                hint: 'Ledger or Keystone',
-                onPress: go('hardware'),
-              },
-            ]),
+          : TEST_MODE
+            ? [
+                {
+                  icon: 'hardware' as const,
+                  title: 'Connect hardware wallet',
+                  hint: 'Ledger or Keystone',
+                  onPress: go('hardware'),
+                },
+              ]
+            : // Hardware wallets are a demo until the Bluetooth flow ships.
+              []),
       ],
     },
     import: {

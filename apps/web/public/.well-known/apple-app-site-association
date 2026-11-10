@@ -1,0 +1,13 @@
+{
+  "applinks": {
+    "details": [
+      {
+        "appIDs": ["38V69R9TA5.com.honeywallet.app"],
+        "components": [{ "/": "/app", "comment": "Open Honey" }, { "/": "/app/*" }]
+      }
+    ]
+  },
+  "webcredentials": {
+    "apps": ["38V69R9TA5.com.honeywallet.app"]
+  }
+}

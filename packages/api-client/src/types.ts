@@ -709,12 +709,13 @@ export interface LinkContent {
   text: string;
   author: string | null;
   publishedAt: string | null;
-  fetchedVia: 'fxtwitter' | 'x_oembed' | 'jina_reader' | 'open_graph';
+  fetchedVia: 'fxtwitter' | 'x_oembed' | 'jina_reader' | 'open_graph' | 'linkup';
 }
 
+/** The server tags these in camelCase (`read`, `unreadable`). */
 export type LinkResult =
-  | ({ status: 'Read' } & LinkContent)
-  | { status: 'Unreadable'; url: string; reason: string };
+  | ({ status: 'read' } & LinkContent)
+  | { status: 'unreadable'; url: string; reason: string };
 
 /** IntentRecord/1 */
 export interface IntentRecord {

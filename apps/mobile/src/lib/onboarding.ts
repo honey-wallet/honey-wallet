@@ -4,6 +4,7 @@ import { forgetSavedBackendSession } from '@/lib/backend-session';
 import { forgetSites } from '@/lib/dapp';
 import { demoLabel } from '@/lib/demo-money-copy';
 import { signOutIdentity } from '@/lib/identity';
+import { persistence } from '@/lib/persistence';
 import { isWeb } from '@/lib/platform';
 import { setProfile } from '@/lib/profile';
 import { createStore } from '@/lib/store';
@@ -198,6 +199,8 @@ export async function signOut(confirmedAccountIds: readonly string[]) {
   await forgetSites();
   // And the Apple / Google / email account (best effort; it holds no keys).
   await signOutIdentity();
+  // Saved app state (jars, settings, wallets) leaves with the wallet.
+  await persistence.clear().catch(() => {});
   onboarding.set({ method: null, funded: false, done: [], credit: 0 });
   wallets.set({ activeId: 'main', added: [] });
   setProfile({ name: 'Honey', photo: null, avatarSeed: randomAvatarSeed() });
