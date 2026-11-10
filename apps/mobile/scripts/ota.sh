@@ -22,6 +22,10 @@ eval "$(node -e '
   for (const [k, v] of Object.entries(env)) console.log(`export ${k}=${JSON.stringify(v)}`);
 ')"
 if [ "$branch" = simulation ]; then export EXPO_PUBLIC_TEST_MODE=1; fi
+# Public WalletConnect project ID. Set here, not in eas.json: eas.json is part of the runtime
+# fingerprint, so editing it would cut today's store builds off from updates. Move it into
+# eas.json's build env at the next store build.
+export EXPO_PUBLIC_WALLETCONNECT_PROJECT_ID=8ad4a8c682ffb4d49ff4dda0dc14bb1c
 
 # Phones only: the web export is the extension's job (apps/extension), not an OTA update.
 for platform in ios android; do
