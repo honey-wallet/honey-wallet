@@ -202,19 +202,30 @@
 .choose .tabs {
   justify-content: center;
 }
+.options {
+  display: grid;
+  margin-top: 0.875rem;
+}
 .option {
   display: grid;
+  grid-area: 1 / 1;
   grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
   gap: 0.875rem;
-  margin-top: 0.875rem;
+  margin-top: 0;
+  transition:
+    opacity 240ms ease,
+    filter 240ms ease;
   padding: 1rem 1.125rem;
   border-radius: 1.25rem;
   background: var(--panel);
   box-shadow: 0 10px 24px -18px rgb(36 35 41 / 45%);
 }
 .option[hidden] {
-  display: none;
+  display: grid;
+  visibility: hidden;
+  opacity: 0;
+  filter: blur(6px);
 }
 .badge {
   display: grid;

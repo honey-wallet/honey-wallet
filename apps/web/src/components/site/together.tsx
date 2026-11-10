@@ -169,17 +169,21 @@ export function Together() {
                   </LiquidTabsTrigger>
                 ))}
               </LiquidTabsList>
-              {VISIBILITY.map((v) => (
-                <LiquidTabsContent className={styles.option} key={v.id} value={v.id}>
-                  <span className={styles.badge}>
-                    <Icon name={v.icon} />
-                  </span>
-                  <span className={styles.optionText}>
-                    <b>{v.title}</b>
-                    <small>{v.hint}</small>
-                  </span>
-                </LiquidTabsContent>
-              ))}
+              {/* All three stay laid out in one cell, sized to the tallest, so switching never
+                  moves the card; only the chosen one shows. */}
+              <div className={styles.options}>
+                {VISIBILITY.map((v) => (
+                  <LiquidTabsContent className={styles.option} forceMount key={v.id} value={v.id}>
+                    <span className={styles.badge}>
+                      <Icon name={v.icon} />
+                    </span>
+                    <span className={styles.optionText}>
+                      <b>{v.title}</b>
+                      <small>{v.hint}</small>
+                    </span>
+                  </LiquidTabsContent>
+                ))}
+              </div>
             </LiquidTabs>
           </div>
         </motion.article>

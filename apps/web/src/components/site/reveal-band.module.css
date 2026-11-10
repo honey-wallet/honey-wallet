@@ -111,7 +111,15 @@
   display: flex;
   gap: 4px;
   height: 100%;
-  transform-origin: left center;
+  will-change: clip-path, filter;
+}
+/* A leg's logo, venue and amount, laid out as the leg itself was. */
+.legInner {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: inherit;
+  min-width: 0;
 }
 .leg {
   display: flex;
@@ -154,7 +162,7 @@
   font-weight: 600;
   font-feature-settings: "tnum" 1;
 }
-.slip span {
+.slip > span:last-child {
   display: block;
   font-size: 13px;
   font-weight: 440;

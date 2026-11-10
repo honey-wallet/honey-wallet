@@ -1,6 +1,7 @@
 import { SymbolView, type SymbolViewProps } from 'expo-symbols';
 import { Platform } from 'react-native';
 import Svg, { Circle, Path } from 'react-native-svg';
+import { HoneyJar } from '@/components/logo/HoneyJar';
 
 /** SF Symbols on iOS, Material Symbols on Android and web. */
 const ICONS = {
@@ -123,7 +124,8 @@ type Props = {
 
 export function Icon({ name, size = 22, color }: Props) {
   if (name === 'piggyBank') return <PiggyBankIcon size={size} color={color} />;
-  if (name === 'jar') return <JarIcon size={size} color={color} />;
+  // The jar is Honey's one illustrated icon, in its own colours wherever it appears.
+  if (name === 'jar') return <HoneyJar size={size} />;
   // Material Symbols only come outlined here, so Home's actions are drawn filled to
   // match the phone's SF Symbols.
   if (Platform.OS !== 'ios' && name in FILLED) {
@@ -169,29 +171,6 @@ function TradeIcon({ size, color }: { size: number; color: string }) {
 }
 
 /** SF Symbols has no piggy bank, so it's drawn here to match the outline icons. */
-/** A jar: lid, neck, round body and a honey line with a drip, drawn to match the outline icons. */
-function JarIcon({ size, color }: { size: number; color: string }) {
-  const stroke = {
-    stroke: color,
-    strokeWidth: 1.8,
-    strokeLinecap: 'round',
-    strokeLinejoin: 'round',
-  } as const;
-  return (
-    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
-      <Path
-        d="M7.5 3.5h9a1 1 0 0 1 1 1v1.5a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1V4.5a1 1 0 0 1 1-1Z"
-        {...stroke}
-      />
-      <Path
-        d="M8.5 7v1.2C6.4 9.2 5 11 5 13.5v3.5a3.5 3.5 0 0 0 3.5 3.5h7a3.5 3.5 0 0 0 3.5-3.5v-3.5c0-2.5-1.4-4.3-3.5-5.3V7"
-        {...stroke}
-      />
-      <Path d="M5.3 13h13.4M14 13v1.6a1.2 1.2 0 0 0 2.4 0V13" {...stroke} />
-    </Svg>
-  );
-}
-
 function PiggyBankIcon({ size, color }: { size: number; color: string }) {
   const stroke = {
     stroke: color,

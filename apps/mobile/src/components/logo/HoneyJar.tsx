@@ -1,34 +1,38 @@
-import Svg, { Defs, Ellipse, LinearGradient, Path, Rect, Stop } from 'react-native-svg';
+import Svg, { G, Path } from 'react-native-svg';
+import { EYES_PATH, RING_PATH } from './paths';
 
-/**
- * A Honey Jar, drawn in the logo's language: a jar of deep amber honey (lighter at the
- * top, as light through glass), the mark's two eyes, a dark lid and a drip over the
- * rim. The same colours read on light and dark, so it needs no theme of its own.
+/*
+ * The Honey jar: a cream jar under a honey-coloured cloth lid, outlined in warm ink, with the
+ * Honey mark on its front and a soft shade on its right. One drawing for every jar in Honey
+ * (Home, the tab bar, the agent's chat; the website draws the same paths in art.tsx). The same
+ * colours read on light and dark, so it needs no theme of its own.
  */
+export const JAR_INK = '#3A2E28';
+export const JAR_BODY =
+  'M14 21C11 23 10 27 10 31V48C10 54 14 58 20 58H42C48 58 52 54 52 48V31C52 27 51 23 48 21Z';
+export const JAR_CLOTH =
+  'M14 15H48L55 23Q51 27 47 23Q43 27 39 23Q35 27 31 23Q27 27 23 23Q19 27 15 23Q11 27 7 23Z';
+export const JAR_LID = 'M17 8H45A3 3 0 0 1 48 11V15H14V11A3 3 0 0 1 17 8Z';
+/** The mark on the jar's front: 22 wide, centred at (31, 40), in the jar's 64 x 64 box. */
+export const JAR_MARK_TRANSFORM = 'translate(20 30.375) scale(0.055) translate(-244 -203)';
+
 export function HoneyJar({ size = 28 }: { size?: number }) {
+  const outline = { stroke: JAR_INK, strokeWidth: 2, strokeLinejoin: 'round' } as const;
   return (
-    <Svg width={size} height={size} viewBox="0 0 48 48">
-      <Defs>
-        <LinearGradient id="honey-jar" x1="0" y1="0" x2="0" y2="1">
-          <Stop offset="0" stopColor="#FFC93C" />
-          <Stop offset="1" stopColor="#DE8F0C" />
-        </LinearGradient>
-      </Defs>
-      {/* Lid and rim */}
-      <Rect x={12} y={5} width={24} height={8} rx={3.5} fill="#5B3A1E" />
-      <Rect x={15} y={12} width={18} height={4} rx={1.5} fill="#7A5230" />
-      {/* Body */}
-      <Path
-        d="M15 16h18a7 7 0 0 1 7 7v12a9 9 0 0 1-9 9H17a9 9 0 0 1-9-9V23a7 7 0 0 1 7-7z"
-        fill="url(#honey-jar)"
-      />
-      {/* Honey dripping over the rim */}
-      <Path d="M27 16h7v5.5a3.5 3.5 0 0 1-7 0z" fill="#E8A010" />
-      {/* Glass highlight */}
-      <Rect x={11.5} y={22} width={3} height={11} rx={1.5} fill="#FFFFFF" opacity={0.5} />
-      {/* The mark's eyes */}
-      <Ellipse cx={20.5} cy={31} rx={2.2} ry={3.2} fill="#4B2817" />
-      <Ellipse cx={28.5} cy={31} rx={2.2} ry={3.2} fill="#4B2817" />
+    <Svg width={size} height={size} viewBox="0 0 64 64">
+      {/* The shade, a step to the right */}
+      <G transform="translate(3 0)">
+        <Path d={JAR_BODY} fill="#D9B19A" />
+        <Path d={JAR_CLOTH} fill="#E0A04F" />
+        <Path d={JAR_LID} fill="#E0A04F" />
+      </G>
+      <Path d={JAR_BODY} fill="#FAEADF" {...outline} />
+      <Path d={JAR_CLOTH} fill="#F7C566" {...outline} />
+      <Path d={JAR_LID} fill="#F7C566" {...outline} />
+      <G transform={JAR_MARK_TRANSFORM}>
+        <Path d={RING_PATH} fill="#F5B92E" fillRule="evenodd" />
+        <Path d={EYES_PATH} fill={JAR_INK} />
+      </G>
     </Svg>
   );
 }

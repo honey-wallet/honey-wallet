@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { cn } from '@/lib/utils';
 import styles from './art.module.css';
+import { JAR_BODY, JAR_CLOTH, JAR_LID, JAR_OUTLINE, JarMark, JarShade } from './jar';
 import { EYES_PATH, MARK_ORIGIN, RING_PATH } from './mark-paths';
 
 /*
@@ -313,7 +314,7 @@ function Dash({
   );
 }
 
-/** A honey jar, filling with the tokens a jar buys. (x, y) is the top of the lid. */
+/** The Honey jar, filling with the tokens a jar buys. (x, y) is the top of the lid; w its cloth's width. */
 export function Jar({
   id,
   x,
@@ -327,36 +328,40 @@ export function Jar({
   w: number;
   coins?: { logo: string; chip?: string; u: number; v: number; r: number }[];
 }) {
-  const h = w * 1.2;
-  const lidH = w * 0.14;
-  const neck = w * 0.08;
-  const top = y + lidH + neck;
-  const bodyH = h - lidH - neck;
-  const fill = top + bodyH * 0.42;
-  const body = `M${x + w * 0.16} ${top} H${x + w * 0.84} Q${x + w} ${top} ${x + w} ${top + w * 0.2} V${top + bodyH - w * 0.16} Q${x + w} ${top + bodyH} ${x + w * 0.84} ${top + bodyH} H${x + w * 0.16} Q${x} ${top + bodyH} ${x} ${top + bodyH - w * 0.16} V${top + w * 0.2} Q${x} ${top} ${x + w * 0.16} ${top} Z`;
-  const wave = `M${x - 4} ${fill} Q${x + w * 0.2} ${fill - w * 0.07} ${x + w * 0.42} ${fill} T${x + w * 0.84} ${fill} T${x + w + 30} ${fill} V${top + bodyH + 10} H${x - 4} Z`;
+  const k = w / 48;
+  const place = `translate(${x - 7 * k} ${y - 8 * k}) scale(${k})`;
+  // The body, in page units: x 10 to 52 and y 21 to 58 of the jar's box.
+  const left = x + 3 * k;
+  const bw = 42 * k;
+  const top = y + 13 * k;
+  const bodyH = 37 * k;
+  const fill = top + bodyH * 0.5;
+  const wave = `M${left - 4} ${fill} Q${left + bw * 0.2} ${fill - bw * 0.07} ${left + bw * 0.42} ${fill} T${left + bw * 0.84} ${fill} T${left + bw + 30} ${fill} V${top + bodyH + 10} H${left - 4} Z`;
   return (
     <g>
       <defs>
         <clipPath id={`art-jar-${id}`}>
-          <path d={body} />
+          <path d={JAR_BODY} transform={place} />
         </clipPath>
       </defs>
       <ellipse
-        cx={x + w / 2}
-        cy={top + bodyH + w * 0.04}
+        cx={left + bw / 2 + 2 * k}
+        cy={top + bodyH + w * 0.03}
         fill="var(--art-shadow)"
-        rx={w * 0.56}
+        rx={w * 0.5}
         ry={w * 0.06}
       />
-      <path d={body} fill="var(--art-glass)" />
+      <g transform={place}>
+        <JarShade />
+        <path d={JAR_BODY} fill="#FAEADF" />
+      </g>
       <g clipPath={`url(#art-jar-${id})`}>
         <path d={wave} fill={HONEY} />
         <path
           d={wave}
           fill={HONEY_SOFT}
           opacity="0.55"
-          transform={`translate(${w * 0.12} ${-w * 0.02})`}
+          transform={`translate(${bw * 0.12} ${-bw * 0.02})`}
         />
         {coins.map((c) => (
           <Coin
@@ -364,36 +369,18 @@ export function Jar({
             key={c.logo}
             logo={c.logo}
             r={c.r}
-            x={x + c.u * w}
+            x={left + c.u * bw}
             y={top + c.v * bodyH}
           />
         ))}
-        <rect
-          fill="var(--art-shine)"
-          height={bodyH * 0.6}
-          rx={w * 0.03}
-          width={w * 0.06}
-          x={x + w * 0.1}
-          y={top + w * 0.12}
-        />
       </g>
-      <path d={body} fill="none" stroke="var(--art-glass-edge)" strokeWidth={w * 0.025} />
-      <rect
-        fill="var(--art-neck)"
-        height={neck + 2}
-        width={w * 0.7}
-        x={x + w * 0.15}
-        y={y + lidH - 1}
-      />
-      <rect fill={AMBER} height={lidH} rx={lidH * 0.32} width={w * 0.84} x={x + w * 0.08} y={y} />
-      <rect
-        fill="#d08c1c"
-        height={lidH * 0.22}
-        rx={lidH * 0.11}
-        width={w * 0.7}
-        x={x + w * 0.15}
-        y={y + lidH * 0.28}
-      />
+      <g transform={place}>
+        <path d={JAR_BODY} fill="none" {...JAR_OUTLINE} />
+        <path d={JAR_CLOTH} fill="#F7C566" {...JAR_OUTLINE} />
+        <path d={JAR_LID} fill="#F7C566" {...JAR_OUTLINE} />
+        {/* The mark on the jar's front, above the honey */}
+        <JarMark w={16} x={23.5} y={25.5} />
+      </g>
     </g>
   );
 }
