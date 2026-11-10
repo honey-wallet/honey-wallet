@@ -1,0 +1,159 @@
+.svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+  pointer-events: none;
+  user-select: none;
+}
+
+.sectionScene {
+  display: block;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* The hero: two flanks on a wide screen, one scene on a phone (same layout as the
+   illustrated hero this page was built from). */
+.scene {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  user-select: none;
+}
+
+.flank {
+  position: absolute;
+  bottom: 0;
+  width: min(70vw, 19rem);
+}
+
+.left {
+  left: 0;
+}
+
+.right {
+  right: 0;
+}
+
+@media (min-width: 48rem) {
+  .flank {
+    top: 50%;
+    bottom: auto;
+    /* Keep the desktop scenes at 75% of their original size. */
+    width: 31.5vw;
+    /* Sit a little below centre so the art clears the headline. */
+    transform: translateY(calc(-50% + 6rem));
+  }
+
+  .left {
+    left: -4.5rem;
+  }
+
+  .right {
+    right: -4.5rem;
+  }
+}
+
+@media (min-width: 75rem) {
+  .flank {
+    width: min(33vw, 34.5rem);
+  }
+
+  .left {
+    left: -0.75rem;
+  }
+
+  .right {
+    right: -0.75rem;
+  }
+}
+
+.phoneArt {
+  display: none;
+}
+
+@media (max-width: 47.999rem) {
+  .scene {
+    position: relative;
+    inset: auto;
+    flex-shrink: 0;
+    width: 100%;
+  }
+  .scene .left,
+  .scene .right {
+    display: none;
+  }
+  .phoneArt {
+    display: block;
+    width: 100%;
+    max-width: 22rem;
+    margin: 0.5rem auto 0.75rem;
+  }
+}
+
+/* Small life: the eyes blink, a coin drifts, a sparkle breathes. */
+.blink {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: art-blink 6.4s ease-in-out infinite;
+}
+@keyframes art-blink {
+  0%,
+  44%,
+  50%,
+  88%,
+  91%,
+  94%,
+  100% {
+    transform: scaleY(1);
+  }
+  47%,
+  92.5% {
+    transform: scaleY(0.1);
+  }
+}
+
+.float {
+  animation: art-float 5.5s ease-in-out infinite;
+}
+.floatSlow {
+  animation: art-float 7s ease-in-out -2s infinite;
+}
+@keyframes art-float {
+  50% {
+    transform: translateY(-10px);
+  }
+}
+
+.twinkle {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: art-twinkle 3.2s ease-in-out infinite;
+}
+@keyframes art-twinkle {
+  50% {
+    scale: 0.7;
+    opacity: 0.7;
+  }
+}
+
+.caret {
+  animation: art-caret 1.1s steps(1) infinite;
+}
+@keyframes art-caret {
+  50% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .blink,
+  .float,
+  .floatSlow,
+  .twinkle,
+  .caret {
+    animation: none;
+  }
+}

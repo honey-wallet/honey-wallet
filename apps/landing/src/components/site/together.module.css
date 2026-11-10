@@ -1,0 +1,394 @@
+/* Better with friends: the deck's three launch-screen steps as tiles in the features grid's style
+   (features.module.css): a grey tile with a hairline edge, its words, and a honey panel holding
+   white controls with the chosen one in honey. A small bento: "invest" and "earn" are wide,
+   "choose" is tall; each has one large sweeping corner on the page's outer edge. */
+.section {
+  width: min(80rem, calc(100% - 3rem));
+  margin: 4.5rem auto 0;
+  scroll-margin-top: 2rem;
+}
+.heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 2rem;
+  margin-bottom: 2rem;
+}
+.heading h2 {
+  max-width: 16ch;
+  font-size: clamp(2.5rem, 4vw, 3.75rem);
+  font-weight: 600;
+  line-height: 1.04;
+  letter-spacing: -0.055em;
+  text-wrap: balance;
+}
+.heading > p {
+  font-size: 1rem;
+  line-height: 1.6;
+  color: var(--fg-muted);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  grid-template-areas:
+    "invest invest invest invest invest invest invest choose choose choose choose choose"
+    "earn earn earn earn earn earn earn choose choose choose choose choose";
+  grid-template-rows: 19rem 19rem;
+  gap: 1rem;
+}
+
+.tile {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--card-edge);
+  border-radius: 2rem;
+  background: var(--surface);
+}
+.caption {
+  position: relative;
+  z-index: 1;
+  align-self: center;
+  padding: 1.75rem;
+  color: var(--fg);
+}
+.caption h3 {
+  max-width: 17ch;
+  margin-top: 0.875rem;
+  font-size: clamp(1.5rem, 2.1vw, 2rem);
+  font-weight: 600;
+  letter-spacing: -0.045em;
+  line-height: 1.1;
+  text-wrap: balance;
+}
+.caption p {
+  max-width: 36ch;
+  margin-top: 0.75rem;
+  font-size: 0.875rem;
+  line-height: 1.6;
+  color: var(--fg-muted);
+}
+/* the deck's numbered honey circle */
+.n {
+  display: inline-grid;
+  place-items: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 50%;
+  background: var(--honey);
+  color: var(--primary-foreground);
+  font-size: 0.875rem;
+  font-weight: 650;
+  font-feature-settings: "tnum" 1;
+}
+.art {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  align-items: center;
+  justify-content: center;
+  margin: 1rem;
+  overflow: hidden;
+  border-radius: 1.25rem;
+  background: var(--honey-surface);
+}
+.icon {
+  width: 1.15em;
+  height: 1.15em;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* 1 · invest: words left, panel right, the sweep on the outer top-left */
+.invest {
+  grid-area: invest;
+  grid-template-columns: 0.9fr 1.1fr;
+  border-radius: 3.5rem 2rem 2rem 2rem;
+}
+.members {
+  display: flex;
+  width: 100%;
+  max-width: 22rem;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.875rem;
+  padding: 1.5rem;
+  text-align: center;
+}
+.faces {
+  display: flex;
+}
+.faces img {
+  width: 4.25rem;
+  height: 4.25rem;
+  border-radius: 50%;
+  background: var(--panel);
+  box-shadow: 0 0 0 4px var(--honey-surface);
+}
+.faces img + img {
+  margin-left: -1rem;
+}
+.who {
+  display: grid;
+  gap: 2px;
+}
+.who b {
+  font-size: 1.25rem;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+.who span {
+  font-size: 0.9375rem;
+  color: var(--fg-muted);
+  font-feature-settings: "tnum" 1;
+}
+.split {
+  display: flex;
+  align-self: stretch;
+  gap: 4px;
+  height: 0.75rem;
+  margin-top: 0.25rem;
+}
+.split i {
+  flex: 1 1 0;
+  min-width: 0;
+  border-radius: 99px;
+  background: var(--honey);
+}
+.split i + i {
+  background: var(--panel);
+}
+
+/* 2 · choose: tall, words on top, the sweep across the top */
+.choose {
+  grid-area: choose;
+  grid-template-rows: auto minmax(0, 1fr);
+  border-radius: 6rem 6rem 2rem 2rem;
+}
+.choose .caption {
+  align-self: start;
+  padding-top: 3rem;
+  text-align: center;
+}
+.choose .caption h3,
+.choose .caption p {
+  margin-inline: auto;
+}
+/* Liquid Tabs' pressed glass is grey in dark mode by default; keep it honey, like light mode. */
+:global(.dark) .tabs :global(.liquid-tabs__refraction) {
+  background-image: linear-gradient(
+    90deg,
+    rgb(243 201 105 / 55%) 0 34%,
+    rgb(255 255 255 / 35%) 47% 53%,
+    rgb(243 201 105 / 55%) 66% 100%
+  );
+}
+
+/* The tabs and the chosen option under them */
+.tabs {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+}
+.choose .art {
+  align-items: stretch;
+  padding: 1.25rem;
+}
+.choose .tabs {
+  justify-content: center;
+}
+.option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.875rem;
+  margin-top: 0.875rem;
+  padding: 1rem 1.125rem;
+  border-radius: 1.25rem;
+  background: var(--panel);
+  box-shadow: 0 10px 24px -18px rgb(36 35 41 / 45%);
+}
+.option[hidden] {
+  display: none;
+}
+.badge {
+  display: grid;
+  place-items: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  border-radius: 50%;
+  background: var(--honey);
+  color: var(--primary-foreground);
+  font-size: 1.125rem;
+}
+.optionText {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+  line-height: 1.35;
+}
+.optionText b {
+  font-size: 1rem;
+  font-weight: 600;
+}
+.optionText small {
+  font-size: 0.875rem;
+  color: var(--fg-muted);
+}
+
+/* 3 · earn: panel left, words right, the sweep on the outer bottom-left */
+.earn {
+  grid-area: earn;
+  grid-template-columns: 1.1fr 0.9fr;
+  border-radius: 2rem 2rem 2rem 5rem;
+}
+.earn .art {
+  order: -1;
+  border-bottom-left-radius: 4rem;
+}
+.cut {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  gap: 0.875rem;
+  padding: 1.5rem 1.75rem;
+}
+.label,
+.foot {
+  font-size: 0.875rem;
+  color: var(--fg-muted);
+}
+.foot b {
+  color: var(--fg);
+  font-weight: 600;
+  font-feature-settings: "tnum" 1;
+}
+
+/* Tablet: two columns, choose beside invest, earn across */
+@media (min-width: 48rem) and (max-width: 74.999rem) {
+  .grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-areas:
+      "invest choose"
+      "earn earn";
+    grid-template-rows: auto auto;
+  }
+  .invest {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(13rem, 1fr);
+  }
+  .choose {
+    border-radius: 4rem 4rem 2rem 2rem;
+  }
+  .earn {
+    grid-template-columns: 1.1fr 0.9fr;
+    min-height: 18rem;
+  }
+}
+
+/* Desktop: one clear left-to-right sequence, sized by the content instead of
+   stretching the middle step across two rows. */
+@media (min-width: 75rem) {
+  .grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-areas: "invest choose earn";
+    grid-template-rows: auto;
+  }
+
+  .invest,
+  .choose,
+  .earn {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(13rem, 1fr);
+  }
+
+  .choose {
+    border-radius: 2rem;
+  }
+
+  .choose .caption {
+    align-self: start;
+    padding: 1.75rem 1.75rem 0;
+    text-align: left;
+  }
+
+  .choose .caption h3,
+  .choose .caption p {
+    margin-inline: 0;
+  }
+
+  .earn {
+    border-radius: 2rem 2rem 5rem;
+  }
+
+  .earn .art {
+    order: 0;
+    border-bottom-right-radius: 4rem;
+    border-bottom-left-radius: 1.25rem;
+  }
+}
+
+/* Phone: one column, words over the panel */
+@media (max-width: 47.999rem) {
+  .section {
+    width: calc(100% - 1.5rem);
+    margin-top: 3rem;
+  }
+  .heading {
+    flex-direction: column;
+    align-items: start;
+    gap: 0.875rem;
+    padding-inline: 0.5rem;
+    margin-bottom: 1.5rem;
+  }
+  .heading h2 {
+    font-size: 2.5rem;
+  }
+  .heading > p {
+    font-size: 0.9375rem;
+  }
+  .grid {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "invest"
+      "choose"
+      "earn";
+    grid-template-rows: none;
+  }
+  .tile,
+  .invest,
+  .earn {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto;
+  }
+  .caption {
+    padding: 1.5rem 1.5rem 0;
+  }
+  .caption h3 {
+    font-size: 1.75rem;
+  }
+  .invest {
+    border-top-left-radius: 3rem;
+  }
+  .choose {
+    border-radius: 4rem 4rem 1.75rem 1.75rem;
+  }
+  .choose .caption {
+    padding-top: 2rem;
+  }
+  .earn {
+    border-radius: 1.75rem 1.75rem 1.75rem 3.5rem;
+  }
+  .earn .art {
+    order: 0;
+    border-bottom-left-radius: 2.5rem;
+  }
+  .cut {
+    padding: 1.25rem;
+  }
+}

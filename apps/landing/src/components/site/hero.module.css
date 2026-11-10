@@ -1,0 +1,58 @@
+.stage {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  min-height: 38rem;
+  justify-content: center;
+  overflow: hidden;
+  padding: 3.5rem 1.25rem 19rem;
+}
+
+.content {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 36rem;
+  text-align: center;
+}
+
+.headline {
+  font-size: clamp(2.875rem, 6vw, 4.5rem);
+}
+
+@media (max-width: 47.999rem) {
+  .stage {
+    flex-direction: column;
+    align-items: center;
+    min-height: auto;
+    gap: 0.5rem;
+    padding: 0.5rem 1.25rem 2rem;
+  }
+
+  .headline {
+    font-size: 2.5rem;
+  }
+}
+
+@media (min-width: 48rem) {
+  .stage {
+    min-height: 38rem;
+    align-items: center;
+    padding: 5rem 1.5rem;
+  }
+
+  .content {
+    max-width: 33rem;
+    transform: translateY(-1.5rem);
+  }
+}
+
+@media (min-width: 75rem) {
+  .stage {
+    min-height: 40rem;
+  }
+
+  .content {
+    max-width: 36rem;
+  }
+}

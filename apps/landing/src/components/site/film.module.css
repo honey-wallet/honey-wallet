@@ -1,0 +1,43 @@
+/* The film sits in a screen of its own ground (white, or the deck's #131313), which its edges
+   feather into, so it reads as the deck slide does: no frame inside the frame. */
+.film {
+  overflow: hidden;
+  border: 1px solid var(--hairline);
+  border-radius: 1.75rem;
+  background: #fff;
+}
+
+.film video {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 5 / 2;
+  object-fit: cover;
+}
+
+.dark {
+  display: none !important;
+}
+
+:global(.dark) .film {
+  background: #131313;
+}
+
+:global(.dark) .light {
+  display: none !important;
+}
+
+:global(.dark) .dark {
+  display: block !important;
+}
+
+@media (max-width: 47.999rem) {
+  .film {
+    border-radius: 1.25rem;
+  }
+  /* The action lives in the middle of the 2000 x 800 frame (the jar card reaches x = 1713), so a
+     16:9 window on the centre loses only empty ground and draws the cards about 40% larger. */
+  .film video {
+    aspect-ratio: 16 / 9;
+  }
+}

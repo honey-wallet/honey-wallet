@@ -1,0 +1,78 @@
+/* The agent's chapter: the honey-tinted story card around the deck's AgentRun (agent-run.tsx). */
+.card {
+  --recede: 0;
+  padding: 2.75rem 3rem 2.25rem;
+  border: 1px solid var(--honey-card-edge);
+  border-radius: 2.5rem;
+  background: var(--honey-card);
+  transform: scale(calc(1 - var(--recede) * 0.045));
+  transform-origin: 50% 1.5rem;
+}
+.heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 2rem;
+}
+.heading h2 {
+  max-width: 19ch;
+  font-size: clamp(2.5rem, 4vw, 3.75rem);
+  line-height: 1.04;
+  letter-spacing: -0.055em;
+  font-weight: 600;
+  text-wrap: balance;
+}
+.heading p {
+  max-width: 44ch;
+  margin-top: 1rem;
+  color: var(--fg-muted);
+  font-size: 1rem;
+  line-height: 1.6;
+}
+.art {
+  width: 12rem;
+  flex-shrink: 0;
+}
+.demo {
+  margin-top: 1.5rem;
+}
+@media (min-width: 75rem) {
+  .heading p {
+    max-width: none;
+    white-space: nowrap;
+  }
+}
+@media (max-width: 63.999rem) {
+  .card {
+    padding: 2rem;
+  }
+  .heading h2 {
+    font-size: 3rem;
+  }
+  .art {
+    width: 10rem;
+  }
+}
+@media (max-width: 47.999rem) {
+  .card {
+    padding: 1.5rem 1rem;
+    border-radius: 1.75rem;
+  }
+  .heading h2 {
+    font-size: clamp(2.25rem, 9.5vw, 2.75rem);
+  }
+  .heading p {
+    font-size: 0.9375rem;
+  }
+  .art {
+    display: none;
+  }
+  .demo {
+    margin-top: 2rem;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .card {
+    transform: none;
+  }
+}

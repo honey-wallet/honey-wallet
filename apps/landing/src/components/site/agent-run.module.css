@@ -1,0 +1,278 @@
+/* AgentRun, ported from the deck (deck/src/components/agent.css): one step at a time on centre
+   stage, then steps left and proposal right. The deck's dark tokens are mapped onto the page's,
+   so the same layout reads in both themes:
+     deck --surface-2 (card)       -> --panel
+     deck --surface-3 (tracks)     -> --surface-2 (step bars), --surface-3 (pills, weight tracks)
+     deck --hair-2 / --shadow      -> --hairline
+     deck --fg-faint (labels)      -> --fg-subtle
+     deck --honey-text             -> --brand
+   The deck's px are written at 100% and scaled 1.25x by its build; they are scaled here by hand. */
+.ag2 {
+  --mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: center;
+  /* Both acts in one box, so the card does not change height when the proposal arrives. */
+  min-height: 27rem;
+}
+.ag2.done {
+  grid-template-columns: minmax(0, 0.62fr) minmax(0, 1.38fr);
+  gap: clamp(24px, 3.4vw, 56px);
+}
+
+/* Act 1: centre stage */
+.stage {
+  display: grid;
+  justify-items: center;
+  gap: clamp(20px, 4vh, 40px);
+  text-align: center;
+}
+.ag2.done .stage {
+  justify-items: start;
+  gap: clamp(14px, 2.4vh, 24px);
+  text-align: left;
+}
+.head {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+}
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  font-family: var(--mono);
+  font-size: clamp(13px, 1.1vw, 16px);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--fg-muted);
+}
+
+.now {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-height: clamp(90px, 16vh, 150px);
+  width: 100%;
+  overflow: hidden;
+}
+.line {
+  grid-area: 1 / 1;
+  margin: 0;
+  font-size: clamp(34px, 5vw, 76px);
+  font-weight: 600;
+  letter-spacing: -0.035em;
+  line-height: 1.05;
+  color: var(--fg);
+  white-space: nowrap;
+}
+.dots {
+  display: inline-flex;
+  gap: 0.12em;
+  margin-left: 0.12em;
+}
+.dots i {
+  width: 0.12em;
+  height: 0.12em;
+  border-radius: 50%;
+  background: var(--honey);
+  animation: ag2-pulse 1s ease-in-out infinite;
+}
+.dots i:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.dots i:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+.progress {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  width: min(560px, 80%);
+}
+.progress ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 6px;
+}
+.progress li {
+  position: relative;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.progress li.past {
+  background: var(--honey);
+}
+.progress li em {
+  position: absolute;
+  inset: 0;
+  background: var(--honey);
+  transform-origin: left center;
+}
+.progress > span {
+  font-family: var(--mono);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--fg-subtle);
+  font-feature-settings: "tnum" 1;
+}
+
+/* Act 2: steps folded into a numbered list */
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: clamp(8px, 1.7vh, 16px);
+}
+.list li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: clamp(15px, 1.35vw, 19px);
+  color: var(--fg-muted);
+}
+.n {
+  flex: none;
+  width: 1.6em;
+  font-family: var(--mono);
+  font-size: 0.8em;
+  color: var(--fg-subtle);
+  font-feature-settings: "tnum" 1;
+}
+
+/* Act 2: the proposal fills the right */
+.card {
+  padding: clamp(18px, 2.2vw, 36px);
+  border-radius: 2rem;
+  background: var(--panel);
+  box-shadow: 0 0 0 1px var(--hairline);
+}
+.kicker {
+  font-family: var(--mono);
+  font-size: clamp(12px, 1vw, 14px);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--fg-subtle);
+}
+.thesis {
+  margin-top: 8px;
+  font-size: clamp(19px, 1.8vw, 26px);
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  line-height: 1.2;
+}
+.picks {
+  list-style: none;
+  margin: clamp(10px, 2vh, 20px) 0 0;
+  padding: 0;
+  display: grid;
+}
+.picks li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) clamp(120px, 13vw, 200px);
+  gap: clamp(14px, 1.4vw, 22px);
+  align-items: center;
+  padding: clamp(8px, 1.4vh, 14px) 0;
+  border-top: 1px solid var(--hairline);
+}
+.coin {
+  width: clamp(40px, 3.6vw, 52px) !important;
+  height: clamp(40px, 3.6vw, 52px) !important;
+}
+.name {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.name b {
+  font-size: clamp(18px, 1.7vw, 24px);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+.chain {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px 4px 6px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  font-size: clamp(12px, 1vw, 14px);
+  color: var(--fg-muted);
+}
+.weight {
+  display: grid;
+  gap: 8px;
+  text-align: right;
+}
+.weight b {
+  font-size: clamp(20px, 1.9vw, 27px);
+  font-weight: 600;
+  font-feature-settings: "tnum" 1;
+}
+.weight span {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--surface-3);
+  overflow: hidden;
+}
+.weight em {
+  display: block;
+  height: 100%;
+  border-radius: 4px;
+  transform-origin: left center;
+}
+.critic {
+  margin-top: clamp(10px, 1.6vh, 18px);
+  padding: clamp(12px, 1.8vh, 18px) clamp(14px, 1.4vw, 20px);
+  border-radius: 14px;
+  background: var(--honey-surface);
+  font-size: clamp(15px, 1.3vw, 18px);
+  line-height: 1.4;
+  color: var(--fg);
+}
+.critic b {
+  margin-right: 8px;
+  font-weight: 600;
+  color: var(--brand);
+}
+
+@keyframes ag2-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dots i {
+    animation: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .ag2 {
+    min-height: 0;
+  }
+  .ag2.done {
+    grid-template-columns: 1fr;
+  }
+  .line {
+    white-space: normal;
+  }
+  .picks li {
+    grid-template-columns: auto minmax(0, 1fr) 90px;
+  }
+}

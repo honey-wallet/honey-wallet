@@ -1,0 +1,861 @@
+@import "tailwindcss";
+
+/* Geist Mono for the small uppercase labels the deck uses (agent-run.tsx). */
+@font-face {
+  font-family: "Geist Mono";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("/fonts/geist-mono.woff2") format("woff2");
+}
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --background: var(--color-white);
+  --foreground: var(--color-neutral-800);
+  --destructive-foreground: var(--color-red-700);
+  --info: var(--color-blue-500);
+  --info-foreground: var(--color-blue-700);
+  --success: var(--color-emerald-500);
+  --success-foreground: var(--color-emerald-700);
+  --warning: var(--color-amber-500);
+  --warning-foreground: var(--color-amber-700);
+  --accent: --alpha(var(--color-black) / 4%);
+  --accent-foreground: var(--color-neutral-800);
+  --border: --alpha(var(--color-black) / 8%);
+  --card: var(--color-white);
+  --card-foreground: var(--color-neutral-800);
+  --destructive: var(--color-red-500);
+  --input: --alpha(var(--color-black) / 10%);
+  --muted: --alpha(var(--color-black) / 4%);
+  --muted-foreground: color-mix(in srgb, var(--color-neutral-500) 90%, var(--color-black));
+  --popover: var(--color-white);
+  --popover-foreground: var(--color-neutral-800);
+  --primary: var(--color-neutral-800);
+  --primary-foreground: var(--color-neutral-50);
+  --ring: var(--color-neutral-400);
+  --secondary: --alpha(var(--color-black) / 4%);
+  --secondary-foreground: var(--color-neutral-800);
+  --chart-1: var(--color-orange-600);
+  --chart-2: var(--color-teal-600);
+  --chart-3: var(--color-cyan-900);
+  --chart-4: var(--color-amber-400);
+  --chart-5: var(--color-amber-500);
+  --code: var(--color-white);
+  --code-foreground: var(--foreground);
+  --code-highlight: --alpha(var(--color-black) / 4%);
+  --radius: 0.625rem;
+  --sidebar: var(--color-neutral-50);
+  --sidebar-accent: --alpha(var(--color-black) / 4%);
+  --sidebar-accent-foreground: var(--color-neutral-800);
+  --sidebar-border: --alpha(var(--color-black) / 6%);
+  --sidebar-foreground: color-mix(in srgb, var(--color-neutral-800) 64%, var(--sidebar));
+  --sidebar-primary: var(--color-neutral-800);
+  --sidebar-primary-foreground: var(--color-neutral-50);
+  --sidebar-ring: var(--color-neutral-400);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-sans);
+  --animate-skeleton: skeleton 2s -1s infinite linear;
+  --animate-caret-blink: 1s ease-out infinite caret-blink;
+  --animate-toast-success-odd: toast-success-odd 0.32s cubic-bezier(0.5, 1, 0.89, 1);
+  --animate-toast-success-even: toast-success-even 0.32s cubic-bezier(0.5, 1, 0.89, 1);
+  --animate-toast-error-odd: toast-error-odd 0.28s cubic-bezier(0.5, 1, 0.89, 1);
+  --animate-toast-error-even: toast-error-even 0.28s cubic-bezier(0.5, 1, 0.89, 1);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar: var(--sidebar);
+  --color-code-highlight: var(--code-highlight);
+  --code-foreground: var(--code-foreground);
+  --color-code: var(--code);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-ring: var(--ring);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-input: var(--input);
+  --color-destructive: var(--destructive);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-border: var(--border);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-warning: var(--warning);
+  --color-success-foreground: var(--success-foreground);
+  --color-success: var(--success);
+  --color-info-foreground: var(--info-foreground);
+  --color-info: var(--info);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+  @keyframes skeleton {
+    to {
+      background-position: -200% 0;
+    }
+  }
+  @keyframes caret-blink {
+    0%,
+    70%,
+    to {
+      opacity: 1;
+    }
+    20%,
+    50% {
+      opacity: 0;
+    }
+  }
+  @keyframes toast-success-odd {
+    0% {
+      scale: 1;
+    }
+    30% {
+      scale: 1.025;
+    }
+    60% {
+      scale: 0.99;
+    }
+    100% {
+      scale: 1;
+    }
+  }
+  @keyframes toast-error-odd {
+    0% {
+      translate: 0 0;
+    }
+    25% {
+      translate: -3px 0;
+    }
+    50% {
+      translate: 3px 0;
+    }
+    75% {
+      translate: -3px 0;
+    }
+    100% {
+      translate: 0 0;
+    }
+  }
+  @keyframes toast-success-even {
+    0% {
+      scale: 1;
+    }
+    30% {
+      scale: 1.025;
+    }
+    60% {
+      scale: 0.99;
+    }
+    100% {
+      scale: 1;
+    }
+  }
+  @keyframes toast-error-even {
+    0% {
+      translate: 0 0;
+    }
+    25% {
+      translate: -3px 0;
+    }
+    50% {
+      translate: 3px 0;
+    }
+    75% {
+      translate: -3px 0;
+    }
+    100% {
+      translate: 0 0;
+    }
+  }
+}
+
+/* Honey Wallet, light. The palette is the app's own (apps/mobile/src/theme/index.ts):
+   white canvas, Cloud cards, Honey as the one accent, and the app's ink and greys. */
+:root {
+  --bg: #ffffff;
+  --surface: #f5f5f5;
+  --surface-2: #efefef;
+  --surface-3: #ebebeb;
+  --hairline: #e6e6e6;
+
+  --radius: 0.4167rem;
+
+  /* Ink and the two greys. Secondary is the app's textSecondary. */
+  --fg: #242329;
+  --fg-muted: #716e78;
+  --fg-subtle: #77747e;
+  --focus: #716e78;
+
+  /* Honey. --brand is the text-safe amber (accentText, 5.6:1 on white); the fill is
+     the app's primary honey; --brand-deep is the jar amber. */
+  --brand: #8f6200;
+  --brand-soft: #f5c451;
+  --brand-deep: #b5730a;
+  --brand-dim: rgb(245 196 81 / 18%);
+  --honey: #f5c451;
+  --honey-tint: #fff1cb;
+  --honey-surface: #fff3d1;
+  --honey-yellow: #febe2b;
+  --honey-ink: #4b2817;
+
+  --up: #178548;
+  --up-mark: #178548;
+  --down: #d23b30;
+  --down-mark: #d23b30;
+
+  --grid-line: #f0f0f0;
+  --grid-dot: #e6e6e6;
+
+  --edge: #e6e6e6;
+  --edge-bright: #dcdcdc;
+  --sheen: transparent;
+
+  --shadow-card: 0 1px 6px rgb(36 35 41 / 4%), 0 0 24px rgb(36 35 41 / 5%);
+  --shadow-raised: var(--shadow-card);
+  --shadow-float: 0 4px 18px rgb(36 35 41 / 12%);
+  --shadow-brand: none;
+
+  --ring-1: #febe2b;
+  --ring-2: #f0a33a;
+  --ring-3: #ffe08a;
+
+  --glass: rgb(255 255 255 / 80%);
+  --glass-blur: blur(20px) saturate(180%);
+
+  --background: var(--bg);
+  --foreground: var(--fg);
+  --card: var(--surface);
+  --card-foreground: var(--fg);
+  --popover: var(--bg);
+  --popover-foreground: var(--fg);
+  --border: var(--hairline);
+  --input: var(--hairline);
+  --muted: var(--surface);
+  --muted-foreground: var(--fg-muted);
+  --secondary: var(--surface-2);
+  --secondary-foreground: var(--fg);
+  --accent: var(--surface-2);
+  --accent-foreground: var(--fg);
+  /* The app's primary button: honey with ink on it. */
+  --primary: #f5c451;
+  --primary-foreground: #242329;
+  --ring: var(--brand-deep);
+  --destructive: var(--down);
+  --destructive-foreground: var(--down);
+  --info: var(--brand);
+  --info-foreground: var(--brand);
+  --success: var(--up);
+  --success-foreground: var(--up);
+  --brand-foreground: #242329;
+  --warning: #b45309;
+  --warning-foreground: #b45309;
+  --code: var(--surface);
+  --code-foreground: var(--fg);
+  --code-highlight: var(--surface-2);
+
+  /* A panel sitting on a card, and the hairline around cards. */
+  --panel: #ffffff;
+  --card-edge: rgb(36 35 41 / 7%);
+  --fg-faint: #a9a6ae;
+  --primary-hover: #ebb73c;
+  /* The honey-tinted story card. */
+  --honey-card: #fff8e6;
+  --honey-card-edge: #f3e2ae;
+  --honey-line: #f0dfaa;
+
+  /* Illustration inks (art.tsx). Light: honey on paper. */
+  --art-tint: #fff1cb;
+  --art-cloud: #f2f2f2;
+  --art-grey: #e6e6e6;
+  --art-paper: #ffffff;
+  --art-paper-edge: #e6e6e6;
+  --art-limb: #4b2817;
+  --art-eyes: #4b2817;
+  --art-text: #242329;
+  --art-muted: #716e78;
+  --art-glass: #fffdf6;
+  --art-glass-edge: #efd99a;
+  --art-neck: #f6e6b8;
+  --art-shadow: rgb(36 35 41 / 8%);
+  --art-rim: rgb(36 35 41 / 16%);
+  --art-shine: rgb(255 255 255 / 55%);
+  --art-lens: rgb(255 255 255 / 70%);
+  color-scheme: light;
+}
+
+/*
+ * Dark. Same warm neutral family as the paper theme, one step down: the page
+ * ground is below the card fill so the dark cards still read as objects rather
+ * than merging into the background.
+ *
+ * Every value verified in scripts/check-contrast.mjs: muted ink 7.8:1 on the
+ * card, subtle 6.8:1, brand 8.1:1.
+ */
+.dark {
+  --bg: #131313;
+  --surface: #1b1b1b;
+  --surface-2: #262626;
+  --surface-3: #2c2c2c;
+  --hairline: rgb(255 255 255 / 10%);
+  --edge: rgb(255 255 255 / 10%);
+  --edge-bright: rgb(255 255 255 / 16%);
+
+  --fg: #f6f3eb;
+  --fg-muted: #a3a3a3;
+  --fg-subtle: #a3a3a3;
+  --focus: #a3a3a3;
+
+  --brand: #f3c969;
+  --brand-soft: #f3c969;
+  --brand-deep: #f0b347;
+  --brand-dim: rgb(243 201 105 / 16%);
+
+  --up: #4ade80;
+  --up-mark: #4ade80;
+  --down: #fb7185;
+  --down-mark: #fb7185;
+
+  --grid-line: rgb(255 255 255 / 6%);
+  --grid-dot: rgb(255 255 255 / 10%);
+
+  /* The paper shadows are invisible here; depth comes from the ring instead. */
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 40%), 0 8px 24px -12px rgb(0 0 0 / 60%);
+  --shadow-raised: var(--shadow-card);
+  --shadow-float: 0 2px 4px rgb(0 0 0 / 40%), 0 24px 64px -20px rgb(0 0 0 / 70%);
+  --shadow-brand: none;
+
+  --glass: rgb(46 42 38 / 88%);
+
+  --background: var(--bg);
+  --foreground: var(--fg);
+  --card: var(--surface);
+  --card-foreground: var(--fg);
+  --popover: var(--surface);
+  --popover-foreground: var(--fg);
+  --border: var(--hairline);
+  --input: var(--hairline);
+  --muted: var(--surface);
+  --muted-foreground: var(--fg-muted);
+  --secondary: var(--surface-2);
+  --secondary-foreground: var(--fg);
+  --accent: var(--surface-2);
+  --accent-foreground: var(--fg);
+  --primary: #f3c969;
+  --primary-foreground: #131313;
+  --ring: var(--brand);
+  --destructive: var(--down);
+  --destructive-foreground: var(--down);
+  --info: var(--brand);
+  --info-foreground: var(--brand);
+  --success: var(--up);
+  --success-foreground: var(--up);
+  --brand-foreground: #131313;
+  --warning: #fbbf24;
+  --warning-foreground: #fbbf24;
+  --code: var(--surface);
+  --code-foreground: var(--fg);
+  --code-highlight: var(--surface-2);
+
+  /* Honey's dark palette (apps/mobile/src/theme/index.ts, dark). */
+  --honey: #f3c969;
+  --honey-tint: #3b301c;
+  --honey-surface: #29241b;
+  --honey-yellow: #febe2b;
+  --honey-ink: #131313;
+  --panel: #232323;
+  --card-edge: rgb(255 255 255 / 7%);
+  --fg-faint: #5e5e5e;
+  --primary-hover: #e9bd5a;
+  --honey-card: #1d1a14;
+  --honey-card-edge: #3a311d;
+  --honey-line: #3a311d;
+
+  /* Illustration inks, dark: the paper goes to charcoal, the ink limbs go light so they
+     read on it, and the honey stays honey. */
+  --art-tint: #2e2618;
+  --art-cloud: #222222;
+  --art-grey: #333333;
+  --art-paper: #262626;
+  --art-paper-edge: #3a3a3a;
+  --art-limb: #e9d7ae;
+  --art-eyes: #131313;
+  --art-text: #f6f3eb;
+  --art-muted: #a3a3a3;
+  --art-glass: #2a261e;
+  --art-glass-edge: #5c4722;
+  --art-neck: #4a3a1e;
+  --art-shadow: rgb(0 0 0 / 35%);
+  --art-rim: rgb(0 0 0 / 45%);
+  --art-shine: rgb(255 255 255 / 10%);
+  --art-lens: rgb(255 255 255 / 14%);
+  color-scheme: dark;
+}
+
+@theme {
+  --color-brand: var(--brand);
+  --color-brand-soft: var(--brand-soft);
+  --color-brand-deep: var(--brand-deep);
+  --color-brand-dim: var(--brand-dim);
+  --color-honey: var(--honey);
+  --color-honey-tint: var(--honey-tint);
+  --color-honey-surface: var(--honey-surface);
+  --color-honey-ink: var(--honey-ink);
+  --color-panel: var(--panel);
+  --color-fg-faint: var(--fg-faint);
+  --color-primary-hover: var(--primary-hover);
+  --color-honey-card: var(--honey-card);
+  --color-up: var(--up);
+  --color-up-mark: var(--up-mark);
+  --color-down: var(--down);
+  --color-down-mark: var(--down-mark);
+  --color-fg-muted: var(--fg-muted);
+  --color-fg-subtle: var(--fg-subtle);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-edge: var(--edge);
+  --color-hairline: var(--hairline);
+
+  --shadow-card: var(--shadow-card);
+  --shadow-raised: var(--shadow-raised);
+  --shadow-float: var(--shadow-float);
+  --shadow-brand: var(--shadow-brand);
+
+  /* The type scale. Five steps, one face, and every step carries its own
+     size, line height, tracking and weight so a call site never sets them by
+     hand. `src/components/site/type.tsx` is the component for each step; the
+     two are meant to be edited together.
+
+     family.co's ramp, an iOS one: 17/26 body, 15/22 secondary, 13/18 caption.
+     Tracking is negative and paired to the size, not set once, because a face
+     that is fitted for a paragraph is too loose at 68px and one fitted for a
+     headline is too tight at 13.
+
+     Tracking was retuned when the headings moved from Figtree to Inter. Inter
+     is a narrower, more closely fitted drawing than Figtree at the same size,
+     so the old heading value of -0.0307em, which was compensating for
+     Figtree's wider geometric bowls, closed Inter's headings into each other.
+     The ramp now runs from -0.022em at display sizes to zero at kicker: large
+     text needs the optical correction and small text needs the space.
+
+     Weights run a step heavier than family.co's 500: headings at 600 and body
+     at 440. Inter is variable, so both are real weights and not synthesised. */
+  --text-display: clamp(2.75rem, 5.6vw, 4.25rem);
+  --text-display--line-height: 1.06;
+  --text-display--letter-spacing: -0.022em;
+  --text-display--font-weight: 600;
+
+  --text-heading: clamp(2rem, 3.4vw, 2.75rem);
+  --text-heading--line-height: 1.1;
+  --text-heading--letter-spacing: -0.019em;
+  --text-heading--font-weight: 600;
+
+  --text-title: 1.1875rem;
+  --text-title--line-height: 1.42;
+  --text-title--letter-spacing: -0.012em;
+  --text-title--font-weight: 600;
+
+  --text-body: 1.0625rem;
+  --text-body--line-height: 1.529;
+  --text-body--letter-spacing: -0.009em;
+  --text-body--font-weight: 440;
+
+  /* Caption and kicker are the same size and a different job, which is why
+     both exist. Kicker is a label at 600, skimmed and not read. Caption is
+     small prose at the body weight with leading to match, for the line of
+     fine print under a form or a figure.
+
+     Caption was being used before it existed: `text-caption` appeared twice in
+     the waitlist and was defined nowhere, so it emitted no CSS, and inside
+     `cn()` tailwind-merge read the unknown `text-*` as a colour and dropped it
+     against the `text-fg-subtle` beside it. It rendered at inherited body size
+     both ways. */
+  --text-caption: 0.8125rem;
+  --text-caption--line-height: 1.6;
+  --text-caption--letter-spacing: -0.006em;
+  --text-caption--font-weight: 440;
+
+  --text-kicker: 0.8125rem;
+  --text-kicker--line-height: 1.385;
+  --text-kicker--letter-spacing: 0em;
+  --text-kicker--font-weight: 600;
+
+  /* 100ms hover and press, 220ms transforms, one curve. Was 350-400ms. */
+  --duration-stagger: 50ms;
+  --duration-micro: 100ms;
+  --duration-quick: 180ms;
+  --duration-fast: 200ms;
+  --duration-medium: 220ms;
+  --duration-slow: 260ms;
+  --duration-very-slow: 520ms;
+
+  --transition-duration-micro: var(--duration-micro);
+  --transition-duration-quick: var(--duration-quick);
+  --transition-duration-fast: var(--duration-fast);
+  --transition-duration-medium: var(--duration-medium);
+  --transition-duration-slow: var(--duration-slow);
+  --transition-duration-very-slow: var(--duration-very-slow);
+
+  --ease-out-expo: cubic-bezier(0.19, 1, 0.22, 1);
+  --ease-smooth-out: cubic-bezier(0.19, 1, 0.22, 1);
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-bounce: cubic-bezier(0.34, 1.36, 0.64, 1);
+  --ease-bounce-strong: cubic-bezier(0.34, 1.8, 0.64, 1);
+  --animate-sheen: none;
+}
+
+/* 1024px of content in a 1072px box. */
+@utility container-x {
+  margin-inline: auto;
+  width: 100%;
+  max-width: 67rem;
+}
+
+@utility measure {
+  max-width: 62ch;
+}
+
+@utility font-pixel {
+  font-family: var(--font-pixel);
+  font-feature-settings: "tnum" 1;
+}
+
+/*
+ * Numbers that have to hold still.
+ *
+ * This is what the monospace face was actually for. A price ticking in place
+ * reflows on every frame if its digits are proportional, and a column of
+ * figures in a rail will not line up. Inter's tabular figures are equal-width,
+ * which fixes both without a second typeface.
+ *
+ * The slashed zero comes with it. These are prices and quantities, and 0 and O
+ * are worth telling apart when the number is the content.
+ *
+ * Numeric features only, deliberately. Resetting letter-spacing here too was
+ * tempting, since the body step's negative tracking is fitted to letters and
+ * squeezes a nine-character price, but it would then be competing with every
+ * call site that sets tracking on purpose, and which of the two wins comes
+ * down to utility ordering rather than intent. Where inherited tracking is
+ * wrong on a figure, `tracking-normal` says so at the call site.
+ */
+@utility figures {
+  font-variant-numeric: tabular-nums slashed-zero;
+}
+
+@utility bg-grid {
+  background-image:
+    linear-gradient(to right, var(--grid-line) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--grid-line) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+
+@utility bg-dots {
+  background-image: radial-gradient(circle at 1px 1px, var(--grid-dot) 1px, transparent 0);
+  background-size: 22px 22px;
+}
+
+/* Materials. A panel is a fill. The edge, sheen and shadow stack these used to
+   carry read as light on #09090b and as grime on paper. */
+@utility surface {
+  position: relative;
+  background: var(--surface);
+}
+
+@utility surface-raised {
+  position: relative;
+  background: var(--bg);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+}
+
+/* Translucent chrome over a chart. --glass is a token rather than a literal so
+   the readout follows whichever ground it is floating on. */
+@utility glass {
+  background: var(--glass);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+}
+
+/* Was a top-edge highlight. Kept as a positioning context so the markup that
+   still asks for it does not have to change. */
+@utility sheen-top {
+  position: relative;
+}
+
+@utility pressable {
+  transition: transform var(--duration-micro) ease;
+  &:active {
+    transform: scale(0.98);
+  }
+}
+
+/* The hairline dissolves as the fill arrives, so a card gains weight without
+   gaining depth and nothing moves. */
+@utility liftable {
+  transition:
+    box-shadow var(--duration-micro) ease,
+    background var(--duration-micro) ease;
+  &:hover {
+    background: var(--surface);
+    box-shadow: inset 0 0 0 0 var(--surface);
+  }
+}
+
+@keyframes hero-draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes hero-head-in {
+  to {
+    opacity: 1;
+  }
+}
+
+/* The wordmark in the nav, hovered: a small back-and-forth, as a sticker on a poster is nudged. */
+@keyframes logo-wiggle {
+  0%,
+  100% {
+    transform: rotate(0deg);
+  }
+  25% {
+    transform: rotate(-4deg);
+  }
+  75% {
+    transform: rotate(4deg);
+  }
+}
+
+/* Opacity and 14px. The blur is gone: on white it read as text out of focus. */
+@keyframes reveal-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.hero-stroke {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: hero-draw 1.3s var(--ease-out-expo) 0.25s forwards;
+}
+
+.hero-stroke-head {
+  opacity: 0;
+  animation: hero-head-in var(--duration-very-slow) var(--ease-out-expo) 1.35s forwards;
+}
+
+.stroke-draw path {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+}
+
+[data-drawn] .stroke-draw path {
+  animation: hero-draw 1.4s var(--ease-out-expo) forwards;
+}
+
+@keyframes ticket-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.ticket-in {
+  opacity: 0;
+  animation: ticket-in var(--duration-very-slow) var(--ease-out-expo) 1.15s forwards;
+}
+
+/* Bars land in sequence so playing a line out reads as time passing. The
+   stagger rides on a property so reduced motion can flatten the delay too. */
+@keyframes dc-bar {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scaleY(0.82);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.dc-bar {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: dc-bar 320ms var(--dc-d, 0ms) both var(--ease-out-expo);
+}
+
+/*
+ * The result arriving.
+ *
+ * Scale and blur together, not a plain fade: the card is a surface turning up,
+ * and a surface that only changes opacity reads as a decal. The scrim comes in
+ * on its own, slightly ahead, so the market is already going quiet by the time
+ * the figure lands.
+ */
+@keyframes dc-summary {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+    filter: blur(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+    filter: blur(0);
+  }
+}
+
+@keyframes dc-scrim {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.dc-summary {
+  animation: dc-summary var(--duration-fast) var(--ease-out-expo) both;
+}
+
+.dc-scrim {
+  animation: dc-scrim var(--duration-medium) var(--ease-out-expo) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dc-bar {
+    animation-delay: 0ms !important;
+  }
+  /* Reduced motion keeps the arrival, without the movement. */
+  .dc-summary {
+    animation: dc-scrim var(--duration-quick) both;
+  }
+}
+
+[data-reveal] {
+  opacity: 0;
+}
+
+[data-reveal][data-shown] {
+  animation: reveal-in var(--duration-very-slow) var(--ease-out-expo) forwards;
+  animation-delay: calc(var(--i, 0) * var(--duration-stagger));
+}
+
+/* Never animates: a ring that eases in lags behind the key that summoned it.
+   Grey, because a blue ring beside a blue link is two blues arguing. */
+[data-slot="button"] {
+  --tw-ring-offset-width: 2px;
+}
+
+:where(a, summary, button, [tabindex]:not([tabindex="-1"])):not([data-slot]):focus-visible {
+  transition: none;
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
+  border-radius: var(--radius-md);
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+    color-scheme: light;
+  }
+  html.dark {
+    color-scheme: dark;
+  }
+  /* No ambient wash. A tinted white looks like a gradient left in by mistake. */
+  body {
+    background: var(--bg);
+    font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+    font-weight: var(--text-body--font-weight);
+    font-optical-sizing: auto;
+  }
+  h1,
+  h2,
+  h3 {
+    font-optical-sizing: auto;
+    text-wrap: balance;
+  }
+  img,
+  svg {
+    -webkit-user-drag: none;
+    user-select: none;
+  }
+}
+
+hr {
+  margin: 0;
+  width: 100%;
+  height: 1px;
+  border: 0;
+  background: var(--hairline);
+}
+
+::selection {
+  background-color: var(--brand-dim);
+  color: var(--brand-deep);
+}
+
+::-moz-selection {
+  background-color: var(--brand-dim);
+  color: var(--brand-deep);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  [data-reveal] {
+    opacity: 1;
+  }
+  [data-reveal][data-shown] {
+    animation: none;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .glass {
+    background: var(--bg);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
