@@ -33,6 +33,10 @@ updates:
       - dependency-name: react-native-*
       - dependency-name: '@react-native/*'
       - dependency-name: '@types/react*'
+      # `catalog:` versions, shared by every package and bumped in pnpm-workspace.yaml.
+      # This per-directory job fails trying to resolve them on its own.
+      - dependency-name: typescript
+      - dependency-name: vitest
 
   - package-ecosystem: github-actions
     directory: /

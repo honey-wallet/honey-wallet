@@ -1,4 +1,4 @@
-import type { Ref } from 'react';
+import type { ComponentProps, Ref } from 'react';
 import {
   Pressable,
   type PressableProps,
@@ -15,6 +15,9 @@ import Animated, {
 import { DURATION, EASE, PRESS_SCALE } from '@/theme/motion';
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
+// Reanimated reads React's types from the workspace-hoisted @types/react, which can be a
+// different copy from the app's, so the two Ref<View> types don't line up structurally.
+type AnimatedPressableRef = ComponentProps<typeof AnimatedPressable>['ref'];
 
 type Props = Omit<PressableProps, 'style'> & {
   style?: StyleProp<ViewStyle>;
@@ -33,6 +36,7 @@ export function PressableScale({
   scaleTo = PRESS_SCALE,
   onPressIn,
   onPressOut,
+  ref,
   ...props
 }: Props) {
   const scale = useSharedValue(1);
@@ -42,6 +46,7 @@ export function PressableScale({
   return (
     <AnimatedPressable
       {...props}
+      ref={ref as AnimatedPressableRef}
       onPressIn={(event) => {
         if (!reduceMotion)
           scale.set(
