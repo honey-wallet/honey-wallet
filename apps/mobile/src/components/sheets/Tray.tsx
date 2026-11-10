@@ -67,6 +67,60 @@ const EXIT = {
 } as const;
 const RESIZE = { duration: DURATION.medium, easing: EASE.height } as const;
 
+/**
+ * Open trays, oldest first. A tray with another one above it steps back (smaller, its
+ * top edge peeking out), the iOS way of stacking sheets; it comes forward again when
+ * the one above closes.
+ */
+let trayStack: number[] = [];
+let nextTrayId = 0;
+/** Each open tray's card height, so the one behind can rise just above the one in front. */
+const trayHeights = new Map<number, number>();
+const stackListeners = new Set<() => void>();
+const setStack = (next: number[]) => {
+  trayStack = next;
+  for (const l of stackListeners) l();
+};
+/**
+ * Calls `onChange(above, frontHeight)` whenever the stack changes: how many trays sit
+ * above this one and the height of the one just in front. A callback, not state: the
+ * screen behind is frozen by navigation and doesn't re-render, but shared values set
+ * here still drive its animation.
+ */
+function useTrayStack(
+  id: number,
+  open: boolean,
+  onChange: (above: number, frontHeight: number) => void,
+) {
+  useEffect(() => {
+    if (!open) return;
+    setStack([...trayStack, id]);
+    const update = () => {
+      const i = trayStack.indexOf(id);
+      const front = i === -1 ? undefined : trayStack[i + 1];
+      onChange(
+        i === -1 ? 0 : trayStack.length - 1 - i,
+        front === undefined ? 0 : (trayHeights.get(front) ?? 0),
+      );
+    };
+    stackListeners.add(update);
+    update();
+    return () => {
+      stackListeners.delete(update);
+      trayHeights.delete(id);
+      setStack(trayStack.filter((x) => x !== id));
+    };
+  }, [id, open, onChange]);
+}
+const reportTrayHeight = (id: number, h: number) => {
+  if (trayHeights.get(id) === h) return;
+  trayHeights.set(id, h);
+  setStack(trayStack);
+};
+/** How far a tray behind steps back: scale and lift per tray above it. */
+const STACK_SCALE = 0.05;
+const STACK_LIFT = 14;
+
 /** True inside a tray, so sheet frames drop the grabber gap and leave room for the close button. */
 const TrayContext = createContext(false);
 export const useInTray = () => useContext(TrayContext);
@@ -112,6 +166,21 @@ function TrayFrame({
     return Math.min(height.value, Math.max(1, maxHeight - lift));
   });
   const measured = useRef(false);
+  const [trayId] = useState(() => nextTrayId++);
+  const behind = useSharedValue(0);
+  // How far this tray rises behind the one in front: just enough for its top to peek.
+  const rise = useSharedValue(0);
+  const onStack = useCallback(
+    (above: number, frontHeight: number) => {
+      const depth = Math.min(above, 2);
+      const own = trayHeights.get(trayId) ?? 0;
+      const target = above ? Math.max(STACK_LIFT, frontHeight - own + STACK_LIFT) : 0;
+      behind.value = reduceMotion ? depth : withTiming(depth, ENTER);
+      rise.value = reduceMotion ? target : withTiming(target, ENTER);
+    },
+    [behind, rise, reduceMotion, trayId],
+  );
+  useTrayStack(trayId, open, onStack);
 
   // Toasts shown while it's open go to the top, clear of its title.
   useEffect(() => (open ? trayOpened() : undefined), [open]);
@@ -120,6 +189,7 @@ function TrayFrame({
     const natural = e.nativeEvent.layout.height;
     const h = Math.min(natural, maxHeight);
     contentHeight.value = natural;
+    reportTrayHeight(trayId, h);
     if (!measured.current) {
       measured.current = true;
       height.value = h;
@@ -194,8 +264,16 @@ function TrayFrame({
       transform: [
         {
           translateY:
-            (reduceMotion ? 0 : (1 - shown.value) * offscreen) + drag.value - (lift - TRAY_INSET),
+            (reduceMotion ? 0 : (1 - shown.value) * offscreen) +
+            drag.value -
+            (lift - TRAY_INSET) -
+            rise.value,
         },
+        // Behind another tray: a little narrower, scaled from its bottom edge so it stays
+        // on the screen edge while its top peeks out above the tray in front.
+        { translateY: viewport.value / 2 },
+        { scale: 1 - behind.value * STACK_SCALE },
+        { translateY: -viewport.value / 2 },
       ],
     };
   });
