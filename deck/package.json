@@ -10,7 +10,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit -p .",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "build:web": "DECK_BASE=/deck/ vite build --outDir ../apps/web/public/deck --emptyOutDir"
   },
   "dependencies": {
     "framer-motion": "^11.3.0",

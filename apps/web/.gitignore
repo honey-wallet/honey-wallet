@@ -43,3 +43,6 @@ next-env.d.ts
 
 # Third-party design reference. Look at it, do not ship it.
 design-reference/
+
+# The pitch deck, built from deck/ by `pnpm build`
+/public/deck/

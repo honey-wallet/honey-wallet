@@ -2,6 +2,7 @@ import { motion, useReducedMotion } from 'framer-motion';
 import type { ReactNode } from 'react';
 import { useDeck } from '../deck/DeckContext';
 import './together.css';
+import { asset } from '../asset';
 
 /* Jars with friends: the app's launch screen as three panels across the slide, built left to right.
    Every card has the same shape: a visual in the middle, one line of the app's own copy at the foot.
@@ -66,9 +67,9 @@ export default function Together() {
         <div className="tg-card">
           <div className="tg-visual tg-members">
             <div className="tg-faces">
-              <img src="/avatars/friend-1.svg" alt="You" />
+              <img src={asset('avatars/friend-1.svg')} alt="You" />
               <motion.img
-                src="/avatars/friend-2.svg"
+                src={asset('avatars/friend-2.svg')}
                 alt="A friend"
                 initial={animate ? { opacity: 0, x: -24 } : false}
                 animate={{ opacity: 1, x: 0 }}

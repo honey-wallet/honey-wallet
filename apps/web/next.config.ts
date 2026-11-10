@@ -11,6 +11,10 @@ const nextConfig: NextConfig = {
      */
     qualities: [75, 96],
   },
+  // The pitch deck (deck/, built into public/deck by `pnpm build`) at /deck.
+  async rewrites() {
+    return [{ source: '/deck', destination: '/deck/index.html' }];
+  },
 };
 
 export default nextConfig;

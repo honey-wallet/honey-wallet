@@ -1,11 +1,12 @@
 import './honey.css';
+import { asset } from '../asset';
 
 /* Three friends' faces inline in a headline. Hover (or focus) a face to see its name in a honey tag.
    Faces are the app's own DiceBear "Dylan" avatars (public/avatars/SOURCES.md). */
 const FRIENDS = [
-  { name: 'Swayam', src: '/avatars/friend-1.svg' },
-  { name: 'Vivek', src: '/avatars/friend-2.svg' },
-  { name: 'Abhishek', src: '/avatars/friend-3.svg' },
+  { name: 'Swayam', src: asset('avatars/friend-1.svg') },
+  { name: 'Vivek', src: asset('avatars/friend-2.svg') },
+  { name: 'Abhishek', src: asset('avatars/friend-3.svg') },
 ];
 
 export default function Friends() {

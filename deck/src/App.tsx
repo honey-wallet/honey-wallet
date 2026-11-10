@@ -11,6 +11,7 @@ import Deck from './deck/Deck';
 import Reveal from './deck/Reveal';
 import Slide from './deck/Slide';
 import './components/honey.css';
+import { asset } from './asset';
 
 /* Honey Wallet: Jars, for the NEAR Hackathon judges. Every outside number is cited;
    product facts come from the honey-wallet repository and its test mode. */
@@ -19,7 +20,7 @@ const REPO = 'https://github.com/honey-wallet/honey-wallet';
 
 const Lockup = ({ big }: { big?: boolean }) => (
   <div className={`hl${big ? ' big' : ''}`}>
-    <img src="/honey-mark.svg" alt="" />
+    <img src={asset('honey-mark.svg')} alt="" />
     Honey
   </div>
 );

@@ -1,6 +1,7 @@
 import { useDeck } from '../deck/DeckContext';
 import Reveal from '../deck/Reveal';
 import './honey.css';
+import { asset } from '../asset';
 
 // Bump after re-rendering a film so browsers fetch the new file instead of a cached one.
 const V = '2026-11-10a';
@@ -12,12 +13,12 @@ export default function Clip({ name, label }: { name: string; label: string }) {
   return (
     <Reveal className="clip-wrap">
       {isStatic ? (
-        <img className="clip" src={`/video/${name}.jpg?v=${V}`} alt={label} />
+        <img className="clip" src={asset(`video/${name}.jpg?v=${V}`)} alt={label} />
       ) : (
         <video
           className="clip"
-          src={`/video/${name}.mp4?v=${V}`}
-          poster={`/video/${name}.jpg?v=${V}`}
+          src={asset(`video/${name}.mp4?v=${V}`)}
+          poster={asset(`video/${name}.jpg?v=${V}`)}
           autoPlay
           muted
           loop

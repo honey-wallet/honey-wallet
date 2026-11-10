@@ -5,7 +5,7 @@
   "license": "PolyForm-Noncommercial-1.0.0",
   "scripts": {
     "dev": "next dev --port ${PORT:-3200}",
-    "build": "next build",
+    "build": "pnpm --filter @honey-wallet/deck run build:web && next build",
     "start": "next start --port ${PORT:-3200}",
     "typecheck": "next typegen && tsc --noEmit",
     "clean": "rm -rf .next"

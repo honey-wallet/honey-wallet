@@ -24,6 +24,8 @@ const scalePx = {
 };
 
 export default defineConfig({
+  // "/" on its own; the website builds it under /deck/ (DECK_BASE, see apps/web build).
+  base: process.env.DECK_BASE ?? '/',
   build: { outDir: 'dist', emptyOutDir: true },
   server: { port: 5175 },
   plugins: [react() as Plugin[]],
