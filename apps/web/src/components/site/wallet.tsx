@@ -1,9 +1,7 @@
 'use client';
 
 import { motion, useReducedMotion } from 'framer-motion';
-import { LockIcon } from 'lucide-react';
 import Image from 'next/image';
-import { TokenStack } from './token';
 import styles from './wallet.module.css';
 
 /*
@@ -64,7 +62,6 @@ export function Wallet() {
         </div>
 
         <div className={styles.stage}>
-          <span aria-hidden="true" className={styles.glow} />
           <motion.figure
             className={styles.device}
             {...(reduce
@@ -134,21 +131,6 @@ export function Wallet() {
               />
             </svg>
           </motion.figure>
-
-          <motion.span className={`${styles.chip} ${styles.chipChains}`} {...rise(0.45, 12)}>
-            <TokenStack
-              ids={['Ethereum', 'Base', 'Solana', 'NEAR']}
-              ring="var(--panel)"
-              size={22}
-            />
-            Every chain, one balance
-          </motion.span>
-          <motion.span className={`${styles.chip} ${styles.chipKeys}`} {...rise(0.6, 12)}>
-            <span className={styles.lock}>
-              <LockIcon aria-hidden="true" />
-            </span>
-            Keys stay on your phone
-          </motion.span>
         </div>
       </div>
     </section>

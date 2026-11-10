@@ -1,8 +1,7 @@
 'use client';
 
-import { MoonIcon } from 'lucide-react';
+import { MoonIcon, SunIcon } from 'lucide-react';
 import { useLayoutEffect, useState } from 'react';
-import { LiquidSwitch } from '../liquid/components/ui/liquid-switch';
 
 const KEY = 'theme';
 
@@ -17,10 +16,10 @@ function resolved(): 'light' | 'dark' {
 }
 
 /**
- * Light and dark, as a Liquid Glass switch (Liquid UI's LiquidSwitch, tinted honey): on is dark.
+ * Light and dark, as one round button: the moon in light mode, the sun in dark; a tap switches.
  *
  * The class on <html> is set by an inline script in the head (app/layout.tsx), so the right theme
- * is painted first; this reads it back, keeps the switch in step, and flips it. The
+ * is painted first; this reads it back, keeps the icon in step, and flips it. The
  * `useLayoutEffect` re-applies the class before paint because React's Strict Mode remount in
  * development resets <html> to its JSX attributes.
  */
@@ -33,7 +32,8 @@ export function ThemeToggle() {
     setDark(isDark);
   }, []);
 
-  const set = (next: boolean) => {
+  const flip = () => {
+    const next = !dark;
     setDark(next);
     document.documentElement.classList.toggle('dark', next);
     document
@@ -46,16 +46,15 @@ export function ThemeToggle() {
     }
   };
 
+  const Icon = dark ? SunIcon : MoonIcon;
   return (
-    <span className="inline-flex items-center gap-1.5">
-      <MoonIcon aria-hidden="true" className="size-3.5 text-fg-subtle max-sm:hidden" />
-      <LiquidSwitch
-        aria-label="Dark mode"
-        checked={dark}
-        onCheckedChange={set}
-        size="small"
-        tint="#f5c451"
-      />
-    </span>
+    <button
+      aria-label={dark ? 'Switch to light mode' : 'Switch to dark mode'}
+      className="pressable grid size-10 shrink-0 place-items-center rounded-full text-fg-muted outline-none transition-colors duration-fast hover:bg-surface-2 hover:text-foreground focus-visible:ring-2 focus-visible:ring-brand"
+      onClick={flip}
+      type="button"
+    >
+      <Icon aria-hidden="true" className="size-[18px]" strokeWidth={2} />
+    </button>
   );
 }

@@ -17,8 +17,14 @@ import { ThemeToggle } from './theme-toggle';
  */
 export function SiteNav() {
   const [scrolled, setScrolled] = useState(false);
+  // The hero has its own call to action; the nav's appears once the hero has scrolled away.
+  const [pastHero, setPastHero] = useState(false);
   useEffect(() => {
-    const look = () => setScrolled(window.scrollY > 8);
+    const look = () => {
+      setScrolled(window.scrollY > 8);
+      const hero = document.getElementById('top');
+      setPastHero(hero ? hero.getBoundingClientRect().bottom < 96 : window.scrollY > 400);
+    };
     look();
     window.addEventListener('scroll', look, { passive: true });
     return () => window.removeEventListener('scroll', look);
@@ -31,10 +37,14 @@ export function SiteNav() {
       )}
     >
       <div className="container-x flex items-center gap-3 px-4 py-2.5 sm:px-6 md:py-3.5 lg:px-8">
-        <LogoLink className="motion-safe:hover:[&_svg]:animate-[logo-wiggle_420ms_ease-in-out_infinite]" />
+        <LogoLink
+          className="motion-safe:hover:[&_svg]:animate-[logo-wiggle_420ms_ease-in-out_infinite]"
+          large
+        />
 
         <div className="ml-auto flex items-center gap-3">
-          <div className="group relative">
+          {/* On a phone there's room for one: the face, then the button once past the hero. */}
+          <div className={cn('group relative', pastHero && 'max-sm:hidden')}>
             <a
               aria-label={`Talk to ${FOUNDER.name}, a founder, on Telegram`}
               className="pressable relative block rounded-full outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2"
@@ -90,7 +100,21 @@ export function SiteNav() {
               </div>
             </div>
           </div>
-          <JoinWaitlist className="shrink-0 text-[0.9375rem] [--liquid-button-height:40px] [--liquid-button-padding:20px] max-sm:[--liquid-button-padding:16px]" />
+          {/* Opens its own width as it fades in, so nothing jumps; out of the tab order while hidden. */}
+          <div
+            aria-hidden={!pastHero}
+            className={cn(
+              'grid transition-[grid-template-columns,opacity,translate] duration-500 ease-smooth-out motion-reduce:transition-none',
+              pastHero
+                ? 'grid-cols-[1fr] opacity-100'
+                : 'pointer-events-none -ml-3 grid-cols-[0fr] translate-y-1 opacity-0 max-sm:hidden',
+            )}
+            inert={!pastHero}
+          >
+            <div className="-m-1 min-w-0 overflow-hidden p-1">
+              <JoinWaitlist className="shrink-0 whitespace-nowrap text-[0.9375rem] [--liquid-button-height:40px] [--liquid-button-padding:20px] max-sm:[--liquid-button-padding:16px]" />
+            </div>
+          </div>
           <ThemeToggle />
         </div>
       </div>

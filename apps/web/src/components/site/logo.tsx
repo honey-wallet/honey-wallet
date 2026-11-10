@@ -19,15 +19,27 @@ export function LogoMark({ className, blink = false }: { className?: string; bli
  * The mark and the wordmark, linking home. Used by the nav and the footer. The wordmark
  * is lowercase, as on the app icon and the store listing.
  */
-export function LogoLink({ className }: { className?: string }) {
+export function LogoLink({ className, large = false }: { className?: string; large?: boolean }) {
   return (
     <Link
       aria-label="Honey Wallet home"
-      className={cn('pressable flex items-center gap-2 text-foreground', className)}
+      className={cn(
+        'pressable flex items-center text-foreground',
+        large ? 'gap-2.5' : 'gap-2',
+        className,
+      )}
       href="/"
     >
-      <LogoMark blink className="h-[22px] w-[25px]" />
-      <span className="font-semibold text-[1.0625rem] tracking-[-0.025em]">honey</span>
+      {/* Large (the nav): the mark as tall as the bar's buttons, 40px. */}
+      <LogoMark blink className={large ? 'h-8 w-9 sm:h-10 sm:w-[45px]' : 'h-[22px] w-[25px]'} />
+      <span
+        className={cn(
+          'font-semibold tracking-[-0.025em]',
+          large ? 'text-[1.375rem] sm:text-[1.625rem]' : 'text-[1.0625rem]',
+        )}
+      >
+        honey
+      </span>
     </Link>
   );
 }

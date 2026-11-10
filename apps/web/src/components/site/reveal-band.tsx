@@ -19,7 +19,8 @@ const CHAIN_OF = Object.fromEntries(PROPOSAL.picks.map((p) => [p.symbol, p.chain
 export function RevealBand() {
   const reduce = useReducedMotion() ?? false;
   const max = Math.max(...ROUTES.map((r) => r.usd));
-  // Arrive once, when the chart is in front of the reader.
+  // Arrive once, when the chart is in front of the reader: slowly, a row at a time, so the
+  // route reads as it builds (the pace of the deck's films).
   const arrive = (delay: number) =>
     reduce
       ? {}
@@ -27,7 +28,7 @@ export function RevealBand() {
           initial: { opacity: 0, y: 14 },
           whileInView: { opacity: 1, y: 0 },
           viewport: { once: true, margin: '0px 0px -15% 0px' },
-          transition: { delay, duration: 0.6, ease: EASE },
+          transition: { delay, duration: 1.2, ease: EASE },
         };
 
   return (
@@ -52,7 +53,7 @@ export function RevealBand() {
           </motion.div>
           <div className={styles.rows}>
             {ROUTES.map((r, i) => (
-              <motion.div className={styles.row} key={r.symbol} {...arrive(0.1 + i * 0.1)}>
+              <motion.div className={styles.row} key={r.symbol} {...arrive(0.3 + i * 0.3)}>
                 <div className={styles.sym}>
                   <OnChain
                     chain={CHAIN_OF[r.symbol] ?? r.legs[0].chain}
@@ -76,7 +77,7 @@ export function RevealBand() {
                           initial: { scaleX: 0 },
                           whileInView: { scaleX: 1 },
                           viewport: { once: true, margin: '0px 0px -15% 0px' },
-                          transition: { delay: 0.35 + i * 0.12, duration: 0.8, ease: EASE },
+                          transition: { delay: 0.8 + i * 0.4, duration: 1.6, ease: EASE },
                         })}
                   >
                     {r.legs.map((l) => (
@@ -108,7 +109,7 @@ export function RevealBand() {
         </div>
 
         <div className={styles.aside}>
-          <motion.div className={styles.as} {...arrive(0.2)}>
+          <motion.div className={styles.as} {...arrive(0.6)}>
             <div className={styles.asValue}>4 chains</div>
             <div className={styles.chains}>
               {CHAINS.map((c) => (
@@ -124,7 +125,7 @@ export function RevealBand() {
               ))}
             </div>
           </motion.div>
-          <motion.div className={styles.as} {...arrive(0.3)}>
+          <motion.div className={styles.as} {...arrive(0.9)}>
             <div className={styles.asValue}>1%</div>
             <div className={styles.asLabel}>max slippage</div>
           </motion.div>
