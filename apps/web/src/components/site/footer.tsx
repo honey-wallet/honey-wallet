@@ -14,7 +14,7 @@ const LEGAL = [
 ] as const;
 
 const linkClass =
-  'rounded-full px-3.5 py-2 text-fg-muted text-sm transition-colors duration-fast ease-smooth-out hover:bg-surface-2 hover:text-foreground';
+  'rounded-full px-3.5 py-2 max-sm:py-2.5 text-fg-muted text-sm transition-colors duration-fast ease-smooth-out hover:bg-surface-2 hover:text-foreground';
 
 /**
  * Minimal on purpose: the code, X and support. Only the legal
@@ -52,7 +52,7 @@ export function SiteFooter() {
               {LEGAL.map((link) => (
                 <li key={link.href}>
                   <a
-                    className="inline-block py-1 text-fg-subtle underline-offset-4 transition-colors duration-fast hover:text-foreground hover:underline"
+                    className="inline-block py-1 max-sm:py-2.5 text-fg-subtle underline-offset-4 transition-colors duration-fast hover:text-foreground hover:underline"
                     href={link.href}
                   >
                     {link.label}

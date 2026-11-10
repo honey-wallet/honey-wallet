@@ -269,6 +269,10 @@
   .ag2.done {
     grid-template-columns: 1fr;
   }
+  /* On a phone the steps have just played one by one; once done, only the proposal stays. */
+  .ag2.done .stage {
+    display: none;
+  }
   .line {
     white-space: normal;
   }

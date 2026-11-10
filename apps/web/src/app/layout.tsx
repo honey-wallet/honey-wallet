@@ -1,6 +1,5 @@
 import type { Metadata, Viewport } from 'next';
 import { Inter } from 'next/font/google';
-import { ArtDefs } from '@/components/site/art';
 import { SoonNotices } from '@/components/site/soon';
 import './globals.css';
 
@@ -109,7 +108,6 @@ export default function RootLayout({ children }: LayoutProps<'/'>) {
         <script dangerouslySetInnerHTML={{ __html: THEME_BOOT }} />
       </head>
       <body className="flex min-h-full flex-col bg-background font-sans text-foreground">
-        <ArtDefs />
         {children}
         <SoonNotices />
       </body>

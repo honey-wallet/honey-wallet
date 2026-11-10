@@ -16,7 +16,8 @@ export function StoryStack({ children }: { children: ReactNode }) {
 
     const update = () => {
       frame = 0;
-      const enabled = !motion.matches && innerWidth >= 1024;
+      // On every screen size, phones included; only Reduce Motion turns it off.
+      const enabled = !motion.matches;
       sections.forEach((section, index) => {
         const card = section.querySelector<HTMLElement>('[data-story-card]');
         if (!card) return;

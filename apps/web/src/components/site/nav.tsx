@@ -36,15 +36,21 @@ export function SiteNav() {
         scrolled && 'border-border/70 bg-background/70',
       )}
     >
-      <div className="container-x flex items-center gap-3 px-4 py-2.5 sm:px-6 md:py-3.5 lg:px-8">
+      <div className="container-x flex items-center gap-2 px-3.5 py-2.5 sm:gap-3 sm:px-6 md:py-3.5 lg:px-8">
         <LogoLink
           className="motion-safe:hover:[&_svg]:animate-[logo-wiggle_420ms_ease-in-out_infinite]"
           large
         />
 
-        <div className="ml-auto flex items-center gap-3">
-          {/* On a phone there's room for one: the face, then the button once past the hero. */}
-          <div className={cn('group relative', pastHero && 'max-sm:hidden')}>
+        <div className="ml-auto flex items-center gap-2 sm:gap-3">
+          {/* On a phone there's room for one: the face, then the button once past the hero.
+              Below 375px there is no room for the face beside the switch at all. */}
+          <div
+            className={cn(
+              'group relative shrink-0 max-[374px]:hidden',
+              pastHero && 'max-sm:hidden',
+            )}
+          >
             <a
               aria-label={`Talk to ${FOUNDER.name}, a founder, on Telegram`}
               className="pressable relative block rounded-full outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2"
@@ -112,7 +118,7 @@ export function SiteNav() {
             inert={!pastHero}
           >
             <div className="-m-1 min-w-0 overflow-hidden p-1">
-              <JoinWaitlist className="shrink-0 whitespace-nowrap text-[0.9375rem] [--liquid-button-height:40px] [--liquid-button-padding:20px] max-sm:[--liquid-button-padding:16px]" />
+              <JoinWaitlist className="shrink-0 whitespace-nowrap text-[0.9375rem] [--liquid-button-height:40px] [--liquid-button-padding:20px] max-sm:text-[0.875rem] max-sm:[--liquid-button-padding:14px]" />
             </div>
           </div>
           <ThemeToggle />

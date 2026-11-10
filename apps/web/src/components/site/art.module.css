@@ -1,10 +1,44 @@
-.svg {
+/* One scene: the light and the dark file, one shown per theme. */
+.frame {
+  position: relative;
   display: block;
+  /* Coins are sized from the picture's drawn width (cqw). */
+  container-type: inline-size;
+}
+.frame img {
   width: 100%;
   height: auto;
-  overflow: visible;
   pointer-events: none;
   user-select: none;
+}
+.onLight {
+  display: block;
+}
+.onDark {
+  display: none;
+}
+:global(.dark) .onLight {
+  display: none;
+}
+:global(.dark) .onDark {
+  display: block;
+}
+
+/* A wide scene with its art in one half: keep that square. */
+.left,
+.right {
+  aspect-ratio: 1;
+}
+.left img,
+.right img {
+  height: 100%;
+  object-fit: cover;
+}
+.left img {
+  object-position: left center;
+}
+.right img {
+  object-position: right center;
 }
 
 .sectionScene {
@@ -29,43 +63,45 @@
   width: min(70vw, 19rem);
 }
 
-.left {
+.flankLeft {
   left: 0;
 }
 
-.right {
+.flankRight {
   right: 0;
 }
 
-@media (min-width: 48rem) {
+/* The flanks need a wide screen; below 64rem the stacked phone scene is used instead. */
+@media (min-width: 64rem) {
   .flank {
     top: 50%;
     bottom: auto;
-    /* Keep the desktop scenes at 75% of their original size. */
-    width: 31.5vw;
+    /* Square scenes that fill their frame: small enough to clear the headline. */
+    width: 22vw;
     /* Sit a little below centre so the art clears the headline. */
     transform: translateY(calc(-50% + 6rem));
   }
 
-  .left {
-    left: -4.5rem;
+  /* Flush with the edges on a small laptop, so the jar on the right is not cut in half. */
+  .flankLeft {
+    left: 0;
   }
 
-  .right {
-    right: -4.5rem;
+  .flankRight {
+    right: 0;
   }
 }
 
 @media (min-width: 75rem) {
   .flank {
-    width: min(33vw, 34.5rem);
+    width: min(25vw, 26rem);
   }
 
-  .left {
+  .flankLeft {
     left: -0.75rem;
   }
 
-  .right {
+  .flankRight {
     right: -0.75rem;
   }
 }
@@ -74,15 +110,15 @@
   display: none;
 }
 
-@media (max-width: 47.999rem) {
+@media (max-width: 63.999rem) {
   .scene {
     position: relative;
     inset: auto;
     flex-shrink: 0;
     width: 100%;
   }
-  .scene .left,
-  .scene .right {
+  .scene .flankLeft,
+  .scene .flankRight {
     display: none;
   }
   .phoneArt {
@@ -92,12 +128,33 @@
     margin: 0.5rem auto 0.75rem;
   }
 }
+@media (min-width: 48rem) and (max-width: 63.999rem) {
+  .phoneArt {
+    max-width: 28rem;
+    margin-top: 1.5rem;
+  }
+}
+/* Phones: no illustration; the headline leads the page. */
+@media (max-width: 47.999rem) {
+  .phoneArt {
+    display: none;
+  }
+}
 
-/* Small life: the eyes blink, a coin drifts, a sparkle breathes. */
+/* The blink and the protocol coins, drawn over the picture in the scene's own units. */
+.overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
 .blink {
   transform-box: fill-box;
   transform-origin: center;
-  animation: art-blink 6.4s ease-in-out infinite;
+  animation: art-blink 6.4s ease-in-out var(--blink-delay, 0s) infinite;
 }
 @keyframes art-blink {
   0%,
@@ -115,45 +172,66 @@
   }
 }
 
-.float {
-  animation: art-float 5.5s ease-in-out infinite;
+/* A token's coin. One size for every coin on the page: 8% of the picture's width, never under
+   22px (still legible on a small section picture) or over 40px (never louder than Honey). */
+.coin {
+  --coin: clamp(22px, 8cqw, 40px);
+  position: absolute;
+  box-sizing: border-box;
+  width: var(--coin);
+  height: var(--coin);
+  translate: -50% -50%;
+  overflow: hidden;
+  border-radius: 50%;
+  background: #fff;
+  /* A white rim and a soft shadow lift it off the honey, the tint and a dark page alike. */
+  box-shadow:
+    0 0 0 max(2px, calc(var(--coin) * 0.07)) #fff,
+    0 2px 6px rgb(36 35 41 / 22%);
+  pointer-events: none;
 }
-.floatSlow {
-  animation: art-float 7s ease-in-out -2s infinite;
+.coin img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
-@keyframes art-float {
-  50% {
-    transform: translateY(-10px);
-  }
+/* A mark that does not fill its circle (Solana) sits on its own disc. */
+.coinChip {
+  padding: calc(var(--coin) * 0.2);
+  background: var(--chip);
+}
+/* A square mark (Base) stays a rounded square on the white coin. */
+.coinSquare {
+  padding: calc(var(--coin) * 0.22);
+}
+.coinSquare img {
+  border-radius: 22%;
+}
+:global(.dark) .coin {
+  box-shadow:
+    0 0 0 max(2px, calc(var(--coin) * 0.07)) #fff,
+    0 2px 8px rgb(0 0 0 / 50%);
 }
 
-.twinkle {
-  transform-box: fill-box;
-  transform-origin: center;
-  animation: art-twinkle 3.2s ease-in-out infinite;
+/* The only motion besides the blink: a coin in a jar's honey bobs and tilts a little, as if
+   afloat. Coins anywhere else stay still. */
+.bob {
+  animation: art-bob 4.2s ease-in-out infinite;
 }
-@keyframes art-twinkle {
-  50% {
-    scale: 0.7;
-    opacity: 0.7;
+@keyframes art-bob {
+  0%,
+  100% {
+    transform: translateY(0) rotate(0deg);
   }
-}
-
-.caret {
-  animation: art-caret 1.1s steps(1) infinite;
-}
-@keyframes art-caret {
   50% {
-    opacity: 0;
+    transform: translateY(calc(var(--coin) * -0.1)) rotate(-6deg);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .blink,
-  .float,
-  .floatSlow,
-  .twinkle,
-  .caret {
+  .bob {
     animation: none;
   }
 }

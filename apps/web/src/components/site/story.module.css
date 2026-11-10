@@ -208,11 +208,9 @@
   justify-self: center;
 }
 
-@media (min-width: 64rem) {
-  .chapter[data-pinned="true"] {
-    position: sticky;
-    top: var(--pin-top, 1.5rem);
-  }
+.chapter[data-pinned="true"] {
+  position: sticky;
+  top: var(--pin-top, 1.5rem);
 }
 
 @media (max-width: 63.999rem) {
@@ -309,10 +307,11 @@
     padding: 1.5rem;
     border-radius: 1.75rem;
   }
+  /* A small mark on a phone, so the questions start on the first screen of the card. */
   .faqArt {
-    width: 80%;
-    max-width: 18rem;
-    margin: 0.5rem auto;
+    width: 55%;
+    max-width: 12rem;
+    margin: 0.25rem auto 0.5rem;
   }
   .ctaCard {
     grid-template-columns: 1fr;
@@ -473,4 +472,14 @@
   width: 0.875rem;
   height: 0.875rem;
   margin-top: 0.2rem;
+}
+
+/* Tablets: the closing card stacks too, so the platforms and the form keep the full width. */
+@media (max-width: 63.999rem) {
+  .ctaCard {
+    grid-template-columns: 1fr;
+  }
+  .ctaArt {
+    max-width: 22rem;
+  }
 }

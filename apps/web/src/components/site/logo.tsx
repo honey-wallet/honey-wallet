@@ -24,7 +24,7 @@ export function LogoLink({ className, large = false }: { className?: string; lar
     <Link
       aria-label="Honey Wallet home"
       className={cn(
-        'pressable flex items-center text-foreground',
+        'pressable -my-2 flex items-center py-2 text-foreground',
         large ? 'gap-2.5' : 'gap-2',
         className,
       )}

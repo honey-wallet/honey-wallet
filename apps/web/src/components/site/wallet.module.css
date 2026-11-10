@@ -180,6 +180,8 @@
   }
   .device {
     width: 30rem;
+    /* The phone sits at 44% of the image (the hand fills the right), so centre on the phone. */
+    translate: -44% 0;
   }
 }
 
@@ -187,6 +189,10 @@
   .section {
     width: calc(100% - 1.5rem);
     margin-top: 3rem;
+  }
+  /* On a phone the title, the line under it and the phone shot say enough. */
+  .list {
+    display: none;
   }
   .card {
     border-radius: 1.75rem;
