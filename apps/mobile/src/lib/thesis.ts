@@ -380,11 +380,13 @@ async function runLive(
       risk: input.risk.toLowerCase() as 'low' | 'medium' | 'high',
     },
   });
-  const deadline = Date.now() + 75_000;
+  // The server allows a run three minutes (the model may think for a while).
+  const deadline = Date.now() + 190_000;
   while (Date.now() < deadline) {
     const run = await api.thesis(token, runId);
     onStage(Math.min(STAGE_INDEX[run.stage], STAGES.length - 1));
-    if (run.stage === 'failed') throw new Error('The agent stopped');
+    if (run.stage === 'failed')
+      throw new Error(run.progress.at(-1)?.message ?? 'The agent stopped');
     if (run.stage === 'done' && run.proposal) {
       const strategy = run.proposal;
       return {

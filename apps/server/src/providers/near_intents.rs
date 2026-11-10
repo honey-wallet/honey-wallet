@@ -115,6 +115,10 @@ impl NearIntents {
             .await
             .map_err(|_| AppError::Busy)?;
         if !response.status().is_success() {
+            tracing::warn!(
+                status = response.status().as_u16(),
+                "near intents request failed"
+            );
             if response.status() == StatusCode::TOO_MANY_REQUESTS
                 || response.status().is_server_error()
             {
@@ -193,7 +197,9 @@ impl NearIntents {
         let now = OffsetDateTime::now_utc();
         let payload = provider_payload(input, owner, now)?;
         let response = self.request(Some(&payload)).await?;
-        validate_response(&response, &payload, now, MANAGER_KEY)
+        validate_response(&response, &payload, now, MANAGER_KEY).inspect_err(|_| {
+            tracing::warn!("near intents quote failed validation");
+        })
     }
 }
 
@@ -265,8 +271,27 @@ fn provider_payload(
         "originAsset": input.origin_asset, "destinationAsset": input.destination_asset,
         "amount": input.amount, "recipient": input.recipient, "refundTo": owner,
         "slippageTolerance": input.slippage_tolerance,
-        "deadline": (now.replace_nanosecond(0).map_err(|_| AppError::Busy)? + time::Duration::minutes(10)).format(&Rfc3339).map_err(|_| AppError::Busy)?
+        "deadline": deadline(now)?
     }))
+}
+
+/// Ten minutes out, in the millisecond form 1Click echoes and signs (`…:00.000Z`).
+/// A bare `…:00Z` comes back rewritten, fails the echo check and breaks the signature.
+fn deadline(now: OffsetDateTime) -> Result<String, AppError> {
+    let at = now
+        .to_offset(time::UtcOffset::UTC)
+        .replace_nanosecond(0)
+        .map_err(|_| AppError::Busy)?
+        + time::Duration::minutes(10);
+    Ok(format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.000Z",
+        at.year(),
+        u8::from(at.month()),
+        at.day(),
+        at.hour(),
+        at.minute(),
+        at.second()
+    ))
 }
 
 fn validate_response(
@@ -408,6 +433,50 @@ mod tests {
         (response, payload, now)
     }
     const STAGING_KEY: &str = "5J5tkaxyPoR3Q9S8LXfo5bWnXK5Z2bctJ4mB9gENh7co";
+
+    #[test]
+    fn live_production_quote_verifies_with_our_payload() {
+        // A real dry quote from 1click.chaindefuser.com (2026-11-10), signed by the
+        // production manager key. Our payload, deadline included, must echo exactly.
+        let response: Value =
+            serde_json::from_str(include_str!("near_intents/live-dry-quote.fixture.json")).unwrap();
+        let now = OffsetDateTime::parse(response["timestamp"].as_str().unwrap(), &Rfc3339).unwrap();
+        let input = QuoteRequest {
+            origin_asset: "nep141:eth.omft.near".into(),
+            destination_asset: "nep141:base.omft.near".into(),
+            amount: "2000000000000000".into(),
+            recipient: "0x97a5C31bFbFA1809CF20454F2aaEFA05932Ab18E".into(),
+            slippage_tolerance: 100,
+        };
+        let deadline_at = OffsetDateTime::parse(
+            response["quoteRequest"]["deadline"].as_str().unwrap(),
+            &Rfc3339,
+        )
+        .unwrap()
+            - time::Duration::minutes(10);
+        let payload = provider_payload(
+            &input,
+            "0x97a5C31bFbFA1809CF20454F2aaEFA05932Ab18E",
+            deadline_at,
+        )
+        .unwrap();
+        let preview = validate_response(&response, &payload, now, MANAGER_KEY).unwrap();
+        assert_eq!(preview.amount_out, "1999036020801959");
+    }
+
+    #[test]
+    fn deadline_uses_the_millisecond_form_1click_echoes() {
+        let now = OffsetDateTime::parse("2026-11-10T18:39:48.734Z", &Rfc3339).unwrap();
+        assert_eq!(deadline(now).unwrap(), "2026-11-10T18:49:48.000Z");
+        // The fixture's own deadline is in this form.
+        let (response, _, _) = fixture();
+        assert!(
+            response["quoteRequest"]["deadline"]
+                .as_str()
+                .unwrap()
+                .ends_with(".000Z")
+        );
+    }
 
     #[test]
     fn official_signature_vector_matches_and_execution_fields_never_escape() {

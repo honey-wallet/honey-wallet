@@ -24,7 +24,7 @@ const MAX_TEXT: usize = 4_000;
 const MAX_RUNS: usize = 5_000;
 /// Model calls per run: understand (+retry) and room for specialists later.
 const CALLS_PER_RUN: u32 = 10;
-const RUN_DEADLINE: Duration = Duration::from_secs(60);
+const RUN_DEADLINE: Duration = Duration::from_secs(180);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -395,22 +395,39 @@ impl ThesisService {
         // Stage 2: understand.
         self.progress(id, Stage::Understand, "Understanding your idea")
             .await;
-        let thesis = self.understand(id, &intent, &budget).await;
+        let assets = self.registry.assets().await;
+        let Some(thesis) = self.understand(id, &intent, &budget, &assets).await else {
+            // Never pass sample output off as a real answer.
+            self.progress(
+                id,
+                Stage::Failed,
+                "The AI didn't answer. Try again in a minute.",
+            )
+            .await;
+            return;
+        };
         self.record(id, "Thesis", json!(thesis)).await;
 
         // Stage 4: strategize from the registry only (no quotes yet).
         self.progress(id, Stage::Strategize, "Finding tokens you can buy")
             .await;
-        let assets = self.registry.assets().await;
         let strategy = strategize(&thesis, &assets, intent.amount_usd, intent.risk);
         self.record(id, "Strategy", json!(strategy)).await;
 
         self.progress(id, Stage::Done, "Strategy ready").await;
     }
 
-    async fn understand(&self, id: Uuid, intent: &IntentRecord, budget: &RunBudget) -> Thesis {
+    /// The thesis, or `None` when the model never produced a valid one. Fixtures only
+    /// without a key (DRY_RUN), never as a silent fallback for a failed call.
+    async fn understand(
+        &self,
+        id: Uuid,
+        intent: &IntentRecord,
+        budget: &RunBudget,
+        assets: &[RegistryAsset],
+    ) -> Option<Thesis> {
         if !self.ai.enabled() {
-            return fixture_thesis(&intent.text);
+            return Some(fixture_thesis(&intent.text));
         }
         let mut sources = String::new();
         for link in &intent.links {
@@ -425,8 +442,12 @@ impl ThesisService {
             near_ai::UNTRUSTED_RULE
         );
         let user = format!(
-            "Idea (from the user): {}\nAmount: ${:.0}. Risk: {:?}.\n{}",
-            intent.text, intent.amount_usd, intent.risk, sources
+            "Idea (from the user): {}\nAmount: ${:.0}. Risk: {:?}.\n{}\n{}",
+            intent.text,
+            intent.amount_usd,
+            intent.risk,
+            buyable_line(assets),
+            sources
         );
         let out = self
             .ai
@@ -444,10 +465,28 @@ impl ThesisService {
             )
             .await;
         self.record(id, "ModelCall", json!(out.call)).await;
-        out.value
-            .and_then(|v| serde_json::from_value(v).ok())
-            .unwrap_or_else(|| fixture_thesis(&intent.text))
+        out.value.and_then(|v| serde_json::from_value(v).ok())
     }
+}
+
+/// The tickers Honey can actually buy, so the model names instruments that resolve.
+/// Symbols only (never addresses), deduplicated across chains, stablecoins left out.
+fn buyable_line(assets: &[RegistryAsset]) -> String {
+    let mut symbols: Vec<&str> = assets
+        .iter()
+        .filter(|a| a.symbol.len() <= 16 && a.symbol.bytes().all(|b| b.is_ascii_alphanumeric()))
+        .map(|a| a.symbol.as_str())
+        .collect();
+    symbols.sort_unstable();
+    symbols.dedup();
+    if symbols.is_empty() {
+        return String::new();
+    }
+    format!(
+        "Buyable tickers (use only these in instruments; an exposure with none of them may \
+         have an empty list): {}",
+        symbols.join(", ")
+    )
 }
 
 pub fn build_intent(text: &str, links: Vec<LinkResult>, params: &Params) -> IntentRecord {
@@ -618,7 +657,8 @@ fn rules(risk: Risk) -> RiskRules {
 }
 
 /// Minimum order so fees stay a small share of each order (R-RK-2).
-const MIN_ORDER_USD: f64 = 25.0;
+/// Small enough that a $5 test run can still split into a few picks.
+const MIN_ORDER_USD: f64 = 1.0;
 
 /// Stage 4 (placeholder until quotes land): resolve instrument names to registry assets
 /// by exact symbol, apply the risk caps and split the amount. Every asset comes from the
@@ -786,9 +826,17 @@ mod tests {
 
     #[test]
     fn small_amounts_use_fewer_assets() {
-        let s = strategize(&fixture_thesis("AI"), &assets(), 30.0, Risk::High);
+        // $1.50 can't fund two $1 orders, so it buys one thing.
+        let s = strategize(&fixture_thesis("AI"), &assets(), 1.5, Risk::High);
         assert_eq!(s.picks.len(), 1);
         assert_eq!(s.picks[0].weight_pct, 100);
+        // $5 splits across the thesis.
+        assert!(
+            strategize(&fixture_thesis("AI"), &assets(), 5.0, Risk::High)
+                .picks
+                .len()
+                > 1
+        );
     }
 
     #[test]
