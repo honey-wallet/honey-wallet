@@ -61,8 +61,9 @@
   .heading h2 {
     font-size: clamp(2.25rem, 9.5vw, 2.75rem);
   }
+  /* On a phone the agent run below says it; the lead is extra reading. */
   .heading p {
-    font-size: 0.9375rem;
+    display: none;
   }
   .art {
     display: none;

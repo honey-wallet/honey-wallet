@@ -1,4 +1,4 @@
-import { EYES_PATH, RING_PATH } from './mark-paths';
+import { RING_PATH } from './mark-paths';
 
 /*
  * The Honey jar (apps/mobile/src/components/logo/HoneyJar.tsx): a jar under a honey cloth lid,
@@ -25,16 +25,6 @@ export function JarShade() {
       <path d={JAR_BODY} fill="var(--jar-shade)" />
       <path d={JAR_CLOTH} fill="var(--jar-cloth-shade)" />
       <path d={JAR_LID} fill="var(--jar-cloth-shade)" />
-    </g>
-  );
-}
-
-/** The mark on the jar's front, `w` wide with its top-left at (x, y) in the jar's box. */
-export function JarMark({ x, y, w }: { x: number; y: number; w: number }) {
-  return (
-    <g transform={`translate(${x} ${y}) scale(${w / 400}) translate(-244 -203)`}>
-      <path d={RING_PATH} fill="var(--jar-ring)" fillRule="evenodd" />
-      <path d={EYES_PATH} fill="var(--jar-eyes)" />
     </g>
   );
 }

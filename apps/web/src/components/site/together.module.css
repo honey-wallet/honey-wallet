@@ -221,8 +221,8 @@
   background: var(--panel);
   box-shadow: 0 10px 24px -18px rgb(36 35 41 / 45%);
 }
-.option[hidden] {
-  display: grid;
+/* forceMount keeps every option laid out (Radix never sets `hidden` then), so hide by state. */
+.option[data-state="inactive"] {
   visibility: hidden;
   opacity: 0;
   filter: blur(6px);

@@ -14,7 +14,7 @@ const LEGAL = [
 ] as const;
 
 const linkClass =
-  'rounded-full px-3.5 py-2 max-sm:py-2.5 text-fg-muted text-sm transition-colors duration-fast ease-smooth-out hover:bg-surface-2 hover:text-foreground';
+  'rounded-full px-3.5 py-2 max-sm:px-2.5 max-sm:py-2.5 text-fg-muted text-sm transition-colors duration-fast ease-smooth-out hover:bg-surface-2 hover:text-foreground';
 
 /**
  * Minimal on purpose: the code, X and support. Only the legal
@@ -23,11 +23,12 @@ const linkClass =
 export function SiteFooter() {
   return (
     <footer className="container-x px-4 pt-6 pb-10 sm:px-6 lg:px-8">
-      <div className="flex flex-col gap-6 px-2 md:flex-row md:items-center md:justify-between">
+      {/* One row at every width: the mark on the left, the links on the right. */}
+      <div className="flex items-center justify-between gap-4 px-2">
         <LogoLink />
 
         <nav aria-label="Footer">
-          <ul className="flex items-center gap-2">
+          <ul className="flex items-center gap-2 max-sm:-mr-2.5 max-sm:gap-0.5">
             {LINKS.map((link) => (
               <li key={link.label}>
                 <a
@@ -44,8 +45,9 @@ export function SiteFooter() {
         </nav>
       </div>
 
-      <div className="mt-8 flex flex-col gap-3 px-2 md:flex-row md:items-center md:justify-between">
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+      {/* On a phone the legal links come first and the copyright closes the page. */}
+      <div className="mt-6 px-2 sm:mt-8">
+        <div className="flex flex-col-reverse gap-1 sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-4 sm:gap-y-2">
           <p className="text-fg-subtle text-xs">&copy; {new Date().getFullYear()} Honey Wallet</p>
           <nav aria-label="Legal">
             <ul className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
