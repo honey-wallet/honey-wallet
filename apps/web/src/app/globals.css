@@ -300,6 +300,14 @@
   --art-glass-edge: #efd99a;
   --art-neck: #f6e6b8;
   --art-shadow: rgb(36 35 41 / 8%);
+  /* The Honey jar (components/site/jar.tsx): cream, outlined in ink. */
+  --jar-ink: #3a2e28;
+  --jar-body: #fff4e8;
+  --jar-shade: #ebcdb5;
+  --jar-cloth: #f7c566;
+  --jar-cloth-shade: #e2a447;
+  --jar-ring: #f5b92e;
+  --jar-eyes: #3a2e28;
   --art-rim: rgb(36 35 41 / 16%);
   --art-shine: rgb(255 255 255 / 55%);
   --art-lens: rgb(255 255 255 / 70%);
@@ -408,6 +416,14 @@
   --art-glass-edge: #5c4722;
   --art-neck: #4a3a1e;
   --art-shadow: rgb(0 0 0 / 35%);
+  /* The Honey jar, dark: a dark jar outlined in cream. */
+  --jar-ink: #f2e4cf;
+  --jar-body: #2e2621;
+  --jar-shade: #5b4433;
+  --jar-cloth: #f5c451;
+  --jar-cloth-shade: #b47d2b;
+  --jar-ring: #f5c451;
+  --jar-eyes: #2e2621;
   --art-rim: rgb(0 0 0 / 45%);
   --art-shine: rgb(255 255 255 / 10%);
   --art-lens: rgb(255 255 255 / 14%);

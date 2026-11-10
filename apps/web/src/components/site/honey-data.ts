@@ -84,6 +84,14 @@ export const CHAIN_COLOR: Record<string, string> = {
   Base: '#0000FF',
   Solana: '#9945FF',
   NEAR: '#00C08B',
+  Arbitrum: '#12AAFF',
+  Optimism: '#FF0420',
+  Polygon: '#7B3FE4',
+  BNB: '#F0B90B',
+  Avalanche: '#E84142',
+  Gnosis: '#3E6957',
+  Linea: '#61DFFF',
+  Scroll: '#EB7106',
 };
 
 export const usd = (n: number) => `$${n.toLocaleString('en-US')}`;

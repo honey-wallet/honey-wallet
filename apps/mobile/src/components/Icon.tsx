@@ -124,8 +124,8 @@ type Props = {
 
 export function Icon({ name, size = 22, color }: Props) {
   if (name === 'piggyBank') return <PiggyBankIcon size={size} color={color} />;
-  // The jar is Honey's one illustrated icon, in its own colours wherever it appears.
-  if (name === 'jar') return <HoneyJar size={size} />;
+  // The Honey jar's outline, in the icon's colour (the full-colour jar is <HoneyJar />).
+  if (name === 'jar') return <HoneyJar size={size} color={color} />;
   // Material Symbols only come outlined here, so Home's actions are drawn filled to
   // match the phone's SF Symbols.
   if (Platform.OS !== 'ios' && name in FILLED) {

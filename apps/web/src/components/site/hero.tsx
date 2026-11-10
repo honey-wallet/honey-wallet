@@ -2,7 +2,7 @@ import { JoinWaitlist } from './app-link';
 import { HeroScene } from './art';
 import { Friends } from './friends';
 import styles from './hero.module.css';
-import { HoneyJar } from './jar';
+import { JarGlyph } from './jar';
 import { Reveal } from './motion';
 import { Display } from './type';
 
@@ -28,7 +28,7 @@ export function Hero() {
         <Reveal index={2}>
           <div className="mt-8 flex justify-center">
             <JoinWaitlist className="text-[0.9375rem] [--liquid-button-height:48px] [--liquid-button-padding:24px]">
-              <HoneyJar className="size-6" />
+              <JarGlyph className="size-6" />
             </JoinWaitlist>
           </div>
         </Reveal>

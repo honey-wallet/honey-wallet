@@ -353,7 +353,7 @@ export function Jar({
       />
       <g transform={place}>
         <JarShade />
-        <path d={JAR_BODY} fill="#FAEADF" />
+        <path d={JAR_BODY} fill="var(--jar-body)" />
       </g>
       <g clipPath={`url(#art-jar-${id})`}>
         <path d={wave} fill={HONEY} />
@@ -376,8 +376,8 @@ export function Jar({
       </g>
       <g transform={place}>
         <path d={JAR_BODY} fill="none" {...JAR_OUTLINE} />
-        <path d={JAR_CLOTH} fill="#F7C566" {...JAR_OUTLINE} />
-        <path d={JAR_LID} fill="#F7C566" {...JAR_OUTLINE} />
+        <path d={JAR_CLOTH} fill="var(--jar-cloth)" {...JAR_OUTLINE} />
+        <path d={JAR_LID} fill="var(--jar-cloth)" {...JAR_OUTLINE} />
         {/* The mark on the jar's front, above the honey */}
         <JarMark w={16} x={23.5} y={25.5} />
       </g>

@@ -13,7 +13,7 @@ const EASE = [0.16, 1, 0.3, 1] as const;
 
 const POINTS = [
   'Send, receive, buy and sell.',
-  'Ethereum, Base, Solana and NEAR in one balance.',
+  'Ten EVM chains, from Ethereum and Base to Arbitrum and Polygon, plus Solana and NEAR.',
   'Your recovery phrase is made and kept on your phone. No account needed.',
   'A Chrome extension that pairs with your phone and connects to websites.',
 ];

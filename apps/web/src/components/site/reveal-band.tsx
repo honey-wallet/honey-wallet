@@ -33,7 +33,22 @@ const BAR_S = 1.5;
 const COUNT_S = 1.6;
 
 const whole = (n: number) => usd(Math.round(n));
-const CHAINS = ['Ethereum', 'Base', 'Solana', 'NEAR'];
+/* Every chain Honey holds and sends on (packages/keyring/src/networks.ts): ten EVM chains, one
+   address across all of them, plus Solana and NEAR. */
+const CHAINS = [
+  'Ethereum',
+  'Base',
+  'Arbitrum',
+  'Optimism',
+  'Polygon',
+  'BNB',
+  'Avalanche',
+  'Gnosis',
+  'Linea',
+  'Scroll',
+  'Solana',
+  'NEAR',
+];
 /* Which chain each pick is bought as (the proposal's own chain column). */
 const CHAIN_OF = Object.fromEntries(PROPOSAL.picks.map((p) => [p.symbol, p.chain]));
 
@@ -180,7 +195,13 @@ export function RevealBand() {
         <div className={styles.aside}>
           <motion.div className={styles.as} {...focus(T.aside)}>
             <div className={styles.asValue}>
-              <Count format={(n) => `${Math.round(n)}`} run={show} start={T.aside} to={4} /> chains
+              <Count
+                format={(n) => `${Math.round(n)}`}
+                run={show}
+                start={T.aside}
+                to={CHAINS.length}
+              />{' '}
+              chains
             </div>
             <div className={styles.chains}>
               {CHAINS.map((c, i) => (
@@ -194,7 +215,7 @@ export function RevealBand() {
                         initial: { opacity: 0, scale: 0.6, filter: 'blur(8px)' },
                         animate: show ? { opacity: 1, scale: 1, filter: 'blur(0px)' } : undefined,
                         transition: {
-                          delay: T.aside + 0.3 + i * 0.12,
+                          delay: T.aside + 0.3 + i * 0.07,
                           type: 'spring',
                           stiffness: 260,
                           damping: 20,
@@ -205,7 +226,7 @@ export function RevealBand() {
                     className={`${styles.ring}${c === 'Base' ? ` ${styles.sq}` : ''}`}
                     style={{ boxShadow: `0 0 0 2px var(--surface), 0 0 0 4px ${CHAIN_COLOR[c]}` }}
                   >
-                    <Token id={c} size={36} />
+                    <Token id={c} size={30} />
                   </span>
                   <small>{c}</small>
                 </motion.span>

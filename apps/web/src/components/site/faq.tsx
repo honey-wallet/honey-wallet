@@ -15,7 +15,7 @@ const FAQS = [
   },
   {
     q: 'Which chains does it buy on?',
-    a: 'Ethereum, Base, Solana and NEAR. NEAR Intents quotes and settles each buy and bridge, so one approval fills picks on all of them.',
+    a: 'Ethereum, Base, Arbitrum, Optimism, Polygon, BNB Chain, Avalanche and Gnosis, plus Solana and NEAR. NEAR Intents quotes and settles each buy and bridge, so one approval fills picks across all of them. Your wallet also holds and sends on Linea and Scroll.',
   },
   {
     q: 'Can the agent get it wrong?',
