@@ -232,30 +232,34 @@ fn validate_input(input: &QuoteRequest) -> Result<(), AppError> {
     }
     Ok(())
 }
+/// EVM networks a signed-in EOA can quote from, by 1Click blockchain name.
+const EVM_ORIGINS: [(&str, &str); 8] = [
+    ("eip155:1", "eth"),
+    ("eip155:8453", "base"),
+    ("eip155:42161", "arb"),
+    ("eip155:10", "op"),
+    ("eip155:137", "pol"),
+    ("eip155:56", "bsc"),
+    ("eip155:43114", "avax"),
+    ("eip155:100", "gnosis"),
+];
+
 fn validate_origin(tokens: &[Token], input: &QuoteRequest, chain: &str) -> Result<(), AppError> {
-    // Authentication currently proves EVM ownership only. Catalog IDs are never parsed as chain IDs.
-    let blockchain = match chain {
-        "eip155:1" => "eth",
-        "eip155:8453" => "base",
-        "eip155:42161" => "arb",
-        "eip155:10" => "op",
-        "eip155:137" => "pol",
-        "eip155:56" => "bsc",
-        "eip155:43114" => "avax",
-        "eip155:100" => "gnosis",
-        _ => {
-            return Err(AppError::Unsupported(
-                "NEAR Intents previews require a supported EVM origin wallet".into(),
-            ));
-        }
-    };
-    if !tokens
-        .iter()
-        .any(|t| t.asset_id == input.origin_asset && t.blockchain == blockchain)
-        || !tokens.iter().any(|t| t.asset_id == input.destination_asset)
+    // Authentication proves ownership of an EOA, and an EOA has the same address on every
+    // EVM network, so a session on any supported EVM chain may quote from any of them
+    // (refunds go to that address). Non-EVM origins and unknown chains stay refused.
+    // Catalog IDs are never parsed as chain IDs.
+    if !EVM_ORIGINS.iter().any(|(id, _)| *id == chain) {
+        return Err(AppError::Unsupported(
+            "NEAR Intents previews require a supported EVM origin wallet".into(),
+        ));
+    }
+    if !tokens.iter().any(|t| {
+        t.asset_id == input.origin_asset && EVM_ORIGINS.iter().any(|(_, b)| *b == t.blockchain)
+    }) || !tokens.iter().any(|t| t.asset_id == input.destination_asset)
     {
         return Err(AppError::BadRequest(
-            "assets must be supported and origin must match the signed-in chain".into(),
+            "assets must be supported and the origin must be on an EVM network".into(),
         ));
     }
     Ok(())
@@ -557,7 +561,7 @@ mod tests {
     }
 
     #[test]
-    fn catalog_must_bind_origin_to_authenticated_chain() {
+    fn origin_must_be_evm_for_an_evm_session() {
         let tokens = vec![
             Token {
                 asset_id: "nep141:eth.omft.near".into(),
@@ -574,9 +578,19 @@ mod tests {
                 contract_address: None,
             },
         ];
-        assert!(validate_origin(&tokens, &input(), "eip155:1").is_ok());
-        for chain in ["eip155:8453", "near:mainnet", "eip155:31337"] {
+        // Any supported EVM session may quote an EVM origin (same EOA address everywhere).
+        for chain in ["eip155:1", "eip155:8453"] {
+            assert!(validate_origin(&tokens, &input(), chain).is_ok());
+        }
+        for chain in ["near:mainnet", "eip155:31337"] {
             assert!(validate_origin(&tokens, &input(), chain).is_err());
         }
+        // A non-EVM origin is refused even for an EVM session.
+        let near_origin = QuoteRequest {
+            origin_asset: "nep141:wrap.near".into(),
+            destination_asset: "nep141:eth.omft.near".into(),
+            ..input()
+        };
+        assert!(validate_origin(&tokens, &near_origin, "eip155:1").is_err());
     }
 }
