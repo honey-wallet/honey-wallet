@@ -15,7 +15,7 @@
       "!**/*.svg",
       "!**/*.generated.ts",
       "!**/google-services.json",
-      "!apps/landing/src/components/liquid"
+      "!apps/web/src/components/liquid"
     ]
   },
   "formatter": {
@@ -53,7 +53,7 @@
       }
     },
     {
-      "includes": ["apps/landing/**/*.css"],
+      "includes": ["apps/web/**/*.css"],
       "css": {
         "parser": {
           "tailwindDirectives": true,

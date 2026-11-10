@@ -9,7 +9,7 @@ updates:
         update-types: [minor, patch]
 
   - package-ecosystem: npm
-    directories: [/, /apps/web, /packages/*]
+    directories: [/, /apps/web, /apps/console, /packages/*]
     schedule:
       interval: weekly
     groups:

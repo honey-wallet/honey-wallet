@@ -15,7 +15,7 @@ Public URLs (served from `apps/web`):
   (id6832346883), Android goes to Google Play (`com.honeywallet.app`), and everything
   else goes to the home page until the Chrome Web Store listing exists. Then replace
   that last destination with the listing URL. iPads that report a desktop Mac user
-  agent also land on the fallback. `apps/web/src/vercelConfig.test.ts` checks the
+  agent also land on the fallback. `apps/console/src/vercelConfig.test.ts` checks the
   routing.
 - Contact: team@honeywallet.org
 
