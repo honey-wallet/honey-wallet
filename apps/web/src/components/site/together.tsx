@@ -1,7 +1,7 @@
 'use client';
 
 import { motion, type TargetAndTransition, useReducedMotion } from 'framer-motion';
-import { type ReactNode, useEffect, useState } from 'react';
+import { type CSSProperties, type ReactNode, useEffect, useState } from 'react';
 import {
   LiquidTabs,
   LiquidTabsContent,
@@ -14,8 +14,8 @@ import styles from './together.module.css';
 /*
  * Better with friends: the deck's slide 8 (deck/src/components/Together.tsx), the app's launch
  * screen in three steps, drawn as tiles in the features grid's style: a grey tile, its words, and a
- * honey panel. "Choose who sees it" and "Earn when others copy" are real controls, Liquid Glass tabs
- * (Liquid UI's LiquidTabs, tinted honey) the reader can press or drag across. Copy and options are
+ * honey panel. "Choose who sees it" and "Earn when others copy" are real controls: Liquid Glass tabs
+ * (Liquid UI's LiquidTabs, tinted honey) for who sees it, and a 1–50% slider for the cut. Copy is
  * the app's own (apps/mobile/src/app/(jars)/thesis-new.tsx); faces are its DiceBear avatars.
  */
 
@@ -46,7 +46,9 @@ const VISIBILITY = [
     hint: 'The idea and holdings are public; anyone can copy',
   },
 ] as const;
-const FEES = [5, 10, 15, 20];
+/** The cut runs 1–50% of copiers' profit, picked on a slider. */
+const FEE_MIN = 1;
+const FEE_MAX = 50;
 const EXAMPLE_PROFIT = 1000; // an illustrative copiers' profit, in dollars
 
 const ICON: Record<string, ReactNode> = {
@@ -86,7 +88,7 @@ export function Together() {
   const [ref, inView] = useInView<HTMLDivElement>(0, '0px 0px -20% 0px');
   const [seen, setSeen] = useState(false);
   const [visibility, setVisibility] = useState<string>('public');
-  const [fee, setFee] = useState('15');
+  const [fee, setFee] = useState(15);
   useEffect(() => {
     if (inView) setSeen(true);
   }, [inView]);
@@ -200,29 +202,36 @@ export function Together() {
           </div>
           <div className={styles.art}>
             <div className={styles.cut}>
-              <span className={styles.label}>Your cut when people copy</span>
-              <LiquidTabs className={styles.tabs} onValueChange={setFee} value={fee}>
-                <LiquidTabsList
-                  aria-label="Your cut"
-                  className={TABS_LIST}
-                  size="large"
-                  tint="var(--honey)"
-                >
-                  {FEES.map((f) => (
-                    <LiquidTabsTrigger
-                      className={`${TABS_TRIGGER} text-[1rem]`}
-                      key={f}
-                      value={String(f)}
-                    >
-                      {f}%
-                    </LiquidTabsTrigger>
-                  ))}
-                </LiquidTabsList>
-              </LiquidTabs>
+              <div className={styles.cutHead}>
+                <label className={styles.label} htmlFor="copy-cut">
+                  Your cut when people copy
+                </label>
+                <output className={styles.cutValue} htmlFor="copy-cut">
+                  {fee}%
+                </output>
+              </div>
+              <input
+                aria-valuetext={`${fee}%`}
+                className={styles.slider}
+                id="copy-cut"
+                max={FEE_MAX}
+                min={FEE_MIN}
+                onChange={(e) => setFee(Number(e.target.value))}
+                step={1}
+                style={
+                  { '--fill': `${((fee - FEE_MIN) / (FEE_MAX - FEE_MIN)) * 100}%` } as CSSProperties
+                }
+                type="range"
+                value={fee}
+              />
+              <div aria-hidden className={styles.ends}>
+                <span>{FEE_MIN}%</span>
+                <span>{FEE_MAX}%</span>
+              </div>
               <span className={styles.foot}>
                 On ${EXAMPLE_PROFIT.toLocaleString('en-US')} of copiers’ profit, you’d get{' '}
-                <b>${((EXAMPLE_PROFIT * Number(fee)) / 100).toLocaleString('en-US')}</b>. Never a
-                cut of a loss.
+                <b>${((EXAMPLE_PROFIT * fee) / 100).toLocaleString('en-US')}</b>. Never a cut of a
+                loss.
               </span>
             </div>
           </div>
