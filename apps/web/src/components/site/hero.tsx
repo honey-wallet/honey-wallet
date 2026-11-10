@@ -1,5 +1,4 @@
 import { JoinWaitlist } from './app-link';
-import { HeroScene } from './art';
 import { Friends } from './friends';
 import styles from './hero.module.css';
 import { JarGlyph } from './jar';
@@ -10,13 +9,11 @@ import { Display } from './type';
 export function Hero() {
   return (
     <section aria-labelledby="hero-title" className={styles.stage} id="top">
-      <HeroScene />
-
       <div className={styles.content}>
         <Reveal index={1}>
           <Display className={styles.headline} id="hero-title">
-            <span className="block">Invest in what</span>
-            <span className="block">
+            <span className="block whitespace-nowrap">
+              Invest in what <br className="md:hidden" />
               you <span className="text-brand-deep">believe</span>,
             </span>
             <span className="block whitespace-nowrap">

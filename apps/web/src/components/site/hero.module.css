@@ -12,12 +12,14 @@
   position: relative;
   z-index: 1;
   width: 100%;
-  max-width: 36rem;
   text-align: center;
 }
 
+/* From a tablet up the headline is two lines, and the wider one ("Invest in what you
+   believe,") is about 11.25em, so the size follows the viewport: that line takes about
+   three quarters of the width, leaving room on both sides, up to 6.75rem on a wide screen. */
 .headline {
-  font-size: clamp(2.875rem, 6vw, 4.5rem);
+  font-size: min(6.75rem, calc((100vw - 4rem) / 15.2));
 }
 
 @media (max-width: 63.999rem) {
@@ -25,18 +27,13 @@
     flex-direction: column;
     align-items: center;
     min-height: auto;
-    gap: 0.5rem;
-    padding: 0.5rem 1.25rem 2rem;
+    padding: 3.5rem 1.25rem 3rem;
   }
 }
 
-/* Phones: the widest line ("with [faces] friends.") is 8.46em and never wraps, so the size
-   follows the width it has (the stage's 1.25rem gutters), up to 2.5rem. */
+/* Phones: the first line breaks before "you", so the widest line is "with [faces] friends."
+   (8.46em, never wraps) and the size follows the width it has (1.25rem gutters), up to 2.5rem. */
 @media (max-width: 47.999rem) {
-  /* No illustration above the headline on a phone, so the copy gets the room instead. */
-  .stage {
-    padding: 3.5rem 1.25rem 3rem;
-  }
   .headline {
     font-size: min(2.5rem, calc((100vw - 2.5rem) / 8.6));
   }
@@ -50,7 +47,7 @@
   }
 
   .content {
-    max-width: 33rem;
+    max-width: none;
     transform: translateY(-1.5rem);
   }
 }
@@ -58,9 +55,5 @@
 @media (min-width: 75rem) {
   .stage {
     min-height: 40rem;
-  }
-
-  .content {
-    max-width: 36rem;
   }
 }

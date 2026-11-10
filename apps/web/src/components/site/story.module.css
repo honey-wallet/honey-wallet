@@ -252,7 +252,7 @@
   .chapter {
     margin-bottom: 1rem;
   }
-  /* On a phone the film and its three-step caption say it; the lead is extra reading. */
+  /* On a phone the film says it; the lead is extra reading. */
   .lead {
     display: none;
   }
@@ -390,46 +390,9 @@
   }
 }
 
-/* The deck's film in the first chapter, with its three beats named underneath. */
+/* The deck's film in the first chapter. */
 .filmFigure {
   margin: 0;
-}
-.filmCaption {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 0.5rem 1.5rem;
-  margin-top: 1rem;
-  padding-inline: 0.5rem;
-  font-size: 0.9375rem;
-  font-weight: 500;
-  color: var(--fg);
-}
-.filmCaption span::before {
-  content: "";
-  display: inline-block;
-  width: 0.5rem;
-  height: 0.5rem;
-  margin-right: 0.5rem;
-  border-radius: 50%;
-  background: var(--honey);
-  vertical-align: 0.08em;
-}
-.filmCaption small {
-  margin-left: auto;
-  font-size: 0.8125rem;
-  font-weight: 440;
-  color: var(--fg-subtle);
-}
-@media (max-width: 47.999rem) {
-  .filmCaption {
-    gap: 0.375rem 1rem;
-    font-size: 0.875rem;
-  }
-  .filmCaption small {
-    margin-left: 0;
-    flex-basis: 100%;
-  }
 }
 
 /* "Coming to [iPhone] [Android] [Chrome]" with each platform's mark. */

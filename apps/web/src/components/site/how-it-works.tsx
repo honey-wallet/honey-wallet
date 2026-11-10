@@ -18,11 +18,6 @@ export function HowItWorks() {
     >
       <figure className={styles.filmFigure}>
         <Film label="The Honey app: write an idea, review the jar, approve once" name="flow" />
-        <figcaption className={styles.filmCaption}>
-          <span>Write an idea.</span>
-          <span>Review the jar.</span>
-          <span>Approve once.</span>
-        </figcaption>
       </figure>
     </StorySection>
   );
