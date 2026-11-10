@@ -20,6 +20,16 @@ import { api } from '@/lib/api';
 import { confirmOwner } from '@/lib/auth';
 import { backendSessionToken } from '@/lib/backend-session';
 import { prepareEvmSend } from '@/lib/dapp-sign';
+import {
+  atomic,
+  quoteChanged as changed,
+  checkDeadline,
+  checkOneClickRecord,
+  MAX_SLIPPAGE_BPS,
+  minWithinSlippage,
+  recipientOn,
+  sameAddress,
+} from '@/lib/intents-quote';
 import type { Route } from '@/lib/jar-routes';
 import { TEST_MODE } from '@/lib/test-mode';
 import { privateKeyOf } from '@/lib/vault';
@@ -31,12 +41,7 @@ export const USDC_BASE = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 export const USDC_BASE_ASSET = 'nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near';
 const USDC_DECIMALS = 6;
 
-/** Highest slippage the app ever asks for or accepts, matching the server. */
-export const MAX_SLIPPAGE_BPS = 300;
-/** A quote must leave at least this long to sign and land the deposit. */
-const DEADLINE_MARGIN_MS = 60_000;
-/** The server asks for 15-minute quotes; anything far longer was not ours. */
-const MAX_DEADLINE_MS = 30 * 60_000;
+export { checkDeadline, MAX_SLIPPAGE_BPS };
 /** Hard client-side ceiling, whatever cap the server reports. */
 export const MAX_BUY_USD = 1_000;
 
@@ -62,22 +67,9 @@ export type AskedLeg = {
   recipient: string;
 };
 
-/** Your address on each chain a jar can deliver to. */
-function recipientOn(chain: string, addresses: { evm?: string; solana?: string; near?: string }) {
-  if (chain === 'Solana') return addresses.solana;
-  if (chain === 'NEAR') return addresses.near;
-  return addresses.evm;
-}
-
 /** Dollars to integer micro-USDC. Every sum happens on these, never on floats. */
 export const toMicro = (usd: number) => BigInt(Math.round(usd * 10 ** USDC_DECIMALS));
 const fromMicro = (micro: bigint) => Number(micro) / 10 ** USDC_DECIMALS;
-const atomic = (s: unknown) =>
-  typeof s === 'string' && /^[0-9]{1,38}$/.test(s) ? BigInt(s) : null;
-const sameAddress = (a: unknown, b: string) =>
-  typeof a === 'string' &&
-  (a.startsWith('0x') && b.startsWith('0x') ? a.toLowerCase() === b.toLowerCase() : a === b);
-const changed = () => new Error('The quote changed. Review again.');
 
 /** The active wallet, if it can pay: keys on this device and not a demo or watch. */
 function payer() {
@@ -149,13 +141,6 @@ export async function quoteJarBuy(routes: Route[], slippage: number) {
   };
 }
 
-/** Throws unless the deadline leaves time to pay and is not implausibly far off. */
-export function checkDeadline(deadline: string, now = Date.now()) {
-  const at = Date.parse(deadline);
-  if (!Number.isFinite(at) || at < now + DEADLINE_MARGIN_MS || at > now + MAX_DEADLINE_MS)
-    throw new Error('The quote expired. Review again.');
-}
-
 /**
  * The server's answer must match what was asked, leg for leg, before anything is
  * signed: same assets and amounts, payout and refund to this wallet, a minimum
@@ -171,8 +156,6 @@ export function checkQuote(
   let total = 0n;
   quote.legs.forEach((q, i) => {
     const asked = legs[i];
-    const out = atomic(q.amountOut);
-    const min = atomic(q.minAmountOut);
     if (
       !asked ||
       q.destinationAsset !== asked.assetId ||
@@ -182,11 +165,7 @@ export function checkQuote(
       !sameAddress(q.recipient, asked.recipient) ||
       !sameAddress(q.refundTo, opts.refundTo) ||
       q.slippageBps !== opts.slippageBps ||
-      out === null ||
-      min === null ||
-      min <= 0n ||
-      min > out ||
-      min * 10_000n < out * BigInt(10_000 - opts.slippageBps)
+      !minWithinSlippage(atomic(q.amountOut), atomic(q.minAmountOut), opts.slippageBps)
     )
       throw changed();
     checkDeadline(q.deadline, opts.now);
@@ -208,17 +187,14 @@ export async function verifyWithOneClick(
 ) {
   const record = await fetchOneClickStatus(leg.depositAddress, fetcher);
   if (!record) throw new Error("Couldn't confirm the swap with NEAR Intents. Try again.");
-  const { quoteRequest: req, quote: q } = record;
-  if (
-    !sameAddress(q.depositAddress, leg.depositAddress) ||
-    !sameAddress(req.recipient, leg.recipient) ||
-    !sameAddress(req.refundTo, refundTo) ||
-    req.originAsset !== USDC_BASE_ASSET ||
-    req.destinationAsset !== leg.destinationAsset ||
-    String(req.amount) !== leg.amountIn ||
-    String(q.amountIn) !== leg.amountIn
-  )
-    throw changed();
+  checkOneClickRecord(record, {
+    depositAddress: leg.depositAddress,
+    recipient: leg.recipient,
+    refundTo,
+    originAsset: USDC_BASE_ASSET,
+    destinationAsset: leg.destinationAsset,
+    amountIn: leg.amountIn,
+  });
 }
 
 /**
