@@ -359,7 +359,7 @@ function FlowDot({ index, t, still }: { index: number; t: SharedValue<number>; s
 }
 
 /** A honey arc turning in a faint ring: the step that's running. */
-function Spinner() {
+export function Spinner() {
   const c = useTheme();
   const reduceMotion = useReducedMotion();
   const turn = useSharedValue(0);

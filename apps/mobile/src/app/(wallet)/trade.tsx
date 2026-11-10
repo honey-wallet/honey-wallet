@@ -17,7 +17,7 @@ import { Sticky } from '@/components/motion/Sticky';
 import { TextSwap } from '@/components/motion/TextSwap';
 import { UnderlineTabs } from '@/components/motion/UnderlineTabs';
 import { PillButton } from '@/components/onboarding/PillButton';
-import { LiveSwapQuotes } from '@/components/trade/LiveSwapQuotes';
+import { IntentsSwap } from '@/components/trade/IntentsSwap';
 import { PerpsMarkets } from '@/components/trade/PerpsMarkets';
 import { PredictFeed } from '@/components/trade/PredictFeed';
 import { SwapReview } from '@/components/trade/SwapReview';
@@ -149,7 +149,10 @@ function TradeScreen() {
         </Sticky>
       )}
       <ContentSwap id={mode} index={tabs.indexOf(mode)} fill={mode === 'Swap'}>
-        {mode === 'Swap' && (wallet.demo ? <SwapForm /> : <LiveSwapQuotes />)}
+        {/* Real wallets swap through NEAR Intents (IntentsSwap). LiveSwapQuotes, the Uniswap
+            flow, stays in the codebase but isn't shown: it only works on a local fork
+            (chain 31337) and production has no Uniswap config, so it offered nothing usable. */}
+        {mode === 'Swap' && (wallet.demo ? <SwapForm /> : <IntentsSwap />)}
         {sharedOnly ? (
           <EmptyState
             icon="multisig"

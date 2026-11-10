@@ -13,6 +13,12 @@ const EXPLORERS: Record<Chain, { name: string; tx: (hash: string) => string }> =
   'XRP Ledger': { name: 'XRPScan', tx: (h) => `https://xrpscan.com/tx/${h}` },
 };
 
+/** Where a real transaction on `chain` is looked up. */
+export function explorerTx(chain: Chain, hash: string) {
+  const explorer = EXPLORERS[chain];
+  return { name: explorer.name, url: explorer.tx(hash) };
+}
+
 /**
  * A just-sent transaction's id and where to see it. Demo data until sends hit a real
  * chain: a hash in that chain's format, derived from `seed` so it stays put on re-render.
