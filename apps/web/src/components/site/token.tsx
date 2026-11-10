@@ -2,7 +2,9 @@ import type { CSSProperties } from 'react';
 import { cn } from '@/lib/utils';
 
 /* Brand marks for chains, tokens and venues (from deck/public/logos; sources in
-   deck/public/logos/SOURCES.md). A round coin by default; Base is a rounded square. */
+   deck/public/logos/SOURCES.md). The Arbitrum, Optimism, Polygon, BNB Chain, Avalanche, Gnosis,
+   Linea and Scroll marks are the official logos from @web3icons/core 4.0.59 (MIT), "background"
+   style. A round coin by default; Base is a rounded square. */
 type Mark = { name: string; src: string; chip?: string; pad?: number; square?: boolean };
 
 const MARKS: Record<string, Mark> = {

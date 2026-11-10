@@ -28,7 +28,7 @@ export function Hero() {
         <Reveal index={2}>
           <div className="mt-8 flex justify-center">
             <JoinWaitlist className="text-[0.9375rem] [--liquid-button-height:48px] [--liquid-button-padding:24px]">
-              <JarGlyph className="size-6" />
+              <JarGlyph className="-my-1 size-8!" />
             </JoinWaitlist>
           </div>
         </Reveal>
