@@ -78,3 +78,26 @@ export function checkOneClickRecord(
   )
     throw quoteChanged();
 }
+
+/**
+ * 1Click's own terms for a deposit address: an exact-input swap paid on the origin chain,
+ * paying out and refunding on-chain, at the slippage and minimum this app asked for.
+ */
+export function checkOneClickTerms(
+  record: OneClickStatus,
+  expected: { slippageBps: number; minAmountOut: string },
+) {
+  const { quoteRequest: req, quote: q } = record;
+  const absentOr = (v: unknown, want: string) =>
+    v === undefined || v === null || String(v) === want;
+  if (
+    req.swapType !== 'EXACT_INPUT' ||
+    req.depositType !== 'ORIGIN_CHAIN' ||
+    req.recipientType !== 'DESTINATION_CHAIN' ||
+    !absentOr(req.refundType, 'ORIGIN_CHAIN') ||
+    !absentOr(req.slippageTolerance, String(expected.slippageBps)) ||
+    !absentOr(q.minAmountOut, expected.minAmountOut) ||
+    q.depositMemo
+  )
+    throw quoteChanged();
+}

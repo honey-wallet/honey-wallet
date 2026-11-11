@@ -29,6 +29,7 @@ import {
   atomic,
   checkDeadline,
   checkOneClickRecord,
+  checkOneClickTerms,
   MAX_SLIPPAGE_BPS,
   minWithinSlippage,
   quoteChanged,
@@ -345,24 +346,15 @@ type Verifiable = Pick<
 export async function verifySwapWithOneClick(
   swap: Verifiable,
   fetcher: typeof fetch = fetch,
+  opts: { unpaid?: boolean } = {},
 ): Promise<number | null> {
   const record = await fetchOneClickStatus(swap.depositAddress, fetcher);
   if (!record) throw new Error('Couldn’t confirm the swap with NEAR Intents. Try again.');
   checkOneClickRecord(record, swap);
-  const { quoteRequest: req, quote: q } = record;
-  const absentOr = (v: unknown, want: string) =>
-    v === undefined || v === null || String(v) === want;
-  if (
-    req.swapType !== 'EXACT_INPUT' ||
-    req.depositType !== 'ORIGIN_CHAIN' ||
-    req.recipientType !== 'DESTINATION_CHAIN' ||
-    !absentOr(req.refundType, 'ORIGIN_CHAIN') ||
-    !absentOr(req.slippageTolerance, String(swap.slippageBps)) ||
-    !absentOr(q.minAmountOut, swap.minAmountOut) ||
-    q.depositMemo
-  )
-    throw quoteChanged();
-  const t = q.timeEstimate;
+  // Before paying: 1Click must still be waiting for this deposit, never already paid.
+  if (opts.unpaid && record.status !== 'PENDING_DEPOSIT') throw alreadyUsed();
+  checkOneClickTerms(record, swap);
+  const t = record.quote.timeEstimate;
   return typeof t === 'number' && Number.isFinite(t) && t > 0 && t < 24 * 3600 ? t : null;
 }
 
@@ -470,6 +462,9 @@ export async function quoteSwap(
   return swap;
 }
 
+const alreadyUsed = () =>
+  new Error('This quote was already used. Check Activity, then get a new quote.');
+
 /** Atomic units as exact decimal text ("1500000", 6 → "1.5"). */
 export const unitsText = (units: string, decimals: number) => formatUnits(BigInt(units), decimals);
 
@@ -487,10 +482,14 @@ export async function prepareSwapPayment(
   const wallet = payer();
   if (wallet.id !== swap.walletId) throw new Error('Wallet changed. Get a new quote.');
   checkDeadline(swap.deadline, d.now());
+  // A quote is paid at most once: anything past QUOTED on this device may already have
+  // gone out (a broadcast can land even when the app saw an error).
+  const known = intentsSwaps.get()[swap.depositAddress];
+  if (known && known.status !== 'QUOTED') throw alreadyUsed();
   const own = ownAddresses(wallet, swap.sell, swap.buy);
   if (!sameAddress(swap.refundTo, own.refundTo) || !sameAddress(swap.recipient, own.recipient))
     throw quoteChanged();
-  await verifySwapWithOneClick(swap, d.fetcher);
+  await verifySwapWithOneClick(swap, d.fetcher, { unpaid: true });
   const amount = unitsText(swap.amountIn, swap.sellDecimals);
   const plan = await d.prepare(wallet, {
     chain: swap.sell.chain,

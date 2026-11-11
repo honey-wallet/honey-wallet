@@ -176,22 +176,42 @@ export default function NewThesisSheet() {
     };
     // Real buys: on your own, at market, outside test mode. Everything else is saved
     // as a plan (shared and limit buys aren't live yet).
-    const real = !TEST_MODE && order === 'market' && !options.friends.length;
+    // A sample strategy (the live agent didn't answer) is never bought with real money.
+    const sample = proposal.provenance.sample;
+    const real = !TEST_MODE && !sample && order === 'market' && !options.friends.length;
     let buy: BuyLeg[] | undefined;
+    let toast =
+      sample && !TEST_MODE
+        ? 'Saved as a plan. The agent didn’t answer, so nothing was bought'
+        : 'Jar created';
     if (real) {
       setBuying(true);
+      // Legs already paid, kept even if a later leg fails, so the money stays tracked.
+      let sent: BuyLeg[] = [];
+      let legCount = 0;
       try {
         const quoted = await quoteJarBuy(routes, maxSlip / 100);
-        buy = await payJarBuy(quoted.legs);
+        legCount = quoted.legs.length;
+        buy = await payJarBuy(quoted.legs, (legs) => {
+          sent = legs.filter((l) => l.txHash);
+        });
+        toast = 'Paid. Swaps are on their way';
       } catch (error) {
         setBuying(false);
-        showToast(error instanceof Error ? error.message : 'Buy failed');
-        return;
+        const text = error instanceof Error ? error.message : 'Buy failed';
+        if (!sent.length) {
+          showToast(text);
+          return;
+        }
+        // Some swaps went out: save the jar with them instead of losing track (and
+        // never re-pay them on a retry).
+        buy = sent;
+        toast = `Paid ${sent.length} of ${legCount} swaps. ${text}`;
       }
       setBuying(false);
     }
     const id = createThesisJar(proposal, { ...options, buy });
-    showToast(buy ? 'Paid. Swaps are on their way' : 'Jar created');
+    showToast(toast);
     router.replace({ pathname: '/jar/[id]', params: { id } });
   };
 

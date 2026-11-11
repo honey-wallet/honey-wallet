@@ -427,6 +427,28 @@ describe('quote → pay', () => {
       ).rejects.toThrow('The quote changed');
   });
 
+  it('never pays a quote twice', async () => {
+    const prepare = vi.fn(async () => plan());
+    // 1Click already saw a deposit (an earlier send landed though the app saw an error).
+    const paidFetcher = vi.fn(async (url: string) => {
+      const res = await oneClick()(url);
+      const body = await res.json();
+      return new Response(JSON.stringify({ ...body, status: 'KNOWN_DEPOSIT_TX' }));
+    });
+    await expect(
+      prepareSwapPayment(swap(), { fetcher: paidFetcher as never, prepare, now: () => NOW }),
+    ).rejects.toThrow('already used');
+    // This device already tried to send it.
+    for (const status of ['SENDING', 'NOT_SENT', 'KNOWN_DEPOSIT_TX'] as const) {
+      intentsSwaps.set({ [DEPOSIT]: swap({ status }) });
+      await expect(
+        prepareSwapPayment(swap(), { fetcher: oneClick(), prepare, now: () => NOW }),
+      ).rejects.toThrow('already used');
+    }
+    intentsSwaps.set({});
+    expect(prepare).not.toHaveBeenCalled();
+  });
+
   it('refuses when the wallet changed or the quote ran out', async () => {
     const prepare = vi.fn();
     await expect(

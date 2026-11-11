@@ -98,6 +98,11 @@ describe('verifyWithOneClick', () => {
               amount: '5000000',
               recipient: 'me.near',
               refundTo: ME,
+              swapType: 'EXACT_INPUT',
+              depositType: 'ORIGIN_CHAIN',
+              recipientType: 'DESTINATION_CHAIN',
+              refundType: 'ORIGIN_CHAIN',
+              slippageTolerance: 100,
               ...req,
             },
             quote: {
@@ -111,6 +116,18 @@ describe('verifyWithOneClick', () => {
 
   it('accepts a deposit address 1Click says pays this wallet', async () => {
     await expect(verifyWithOneClick(leg(), ME, status({}))).resolves.toBeUndefined();
+  });
+
+  it('refuses terms the app didn’t ask for (slippage, minimum, swap type)', async () => {
+    for (const [req, q] of [
+      [{ slippageTolerance: 5000 }, {}],
+      [{ swapType: 'EXACT_OUTPUT' }, {}],
+      [{ refundType: 'INTENTS' }, {}],
+      [{}, { minAmountOut: '1' }],
+    ] as const)
+      await expect(verifyWithOneClick(leg(), ME, status(req, q))).rejects.toThrow(
+        'The quote changed',
+      );
   });
 
   it('refuses when 1Click says the address pays or refunds someone else, or is down', async () => {

@@ -25,6 +25,7 @@ import {
   quoteChanged as changed,
   checkDeadline,
   checkOneClickRecord,
+  checkOneClickTerms,
   MAX_SLIPPAGE_BPS,
   minWithinSlippage,
   recipientOn,
@@ -178,7 +179,8 @@ export function checkQuote(
 
 /**
  * Asks 1Click itself which quote a deposit address belongs to, and refuses unless it
- * pays this wallet, refunds this wallet, and matches the asset and amount.
+ * pays this wallet, refunds this wallet, and matches the asset, amount, slippage and
+ * minimum payout.
  */
 export async function verifyWithOneClick(
   leg: JarBuyLeg,
@@ -195,6 +197,7 @@ export async function verifyWithOneClick(
     destinationAsset: leg.destinationAsset,
     amountIn: leg.amountIn,
   });
+  checkOneClickTerms(record, leg);
 }
 
 /**

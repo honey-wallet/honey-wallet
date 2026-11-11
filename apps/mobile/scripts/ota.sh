@@ -32,5 +32,12 @@ for platform in ios android; do
   npx eas-cli update --branch "$branch" --message "$message" --platform "$platform" \
     --environment production --non-interactive
 done
+# Pointing the store channel at the simulation branch puts every installed app on sample
+# money, so it needs an explicit yes; a plain simulation run only publishes the branch.
+if [ "$branch" = simulation ] && [ "${HONEY_POINT_STORE_AT_SIMULATION:-}" != yes ]; then
+  echo "Published branch simulation. The store channel still serves its current branch."
+  echo "To switch every store install to sample money: HONEY_POINT_STORE_AT_SIMULATION=yes $0 simulation \"...\""
+  exit 0
+fi
 npx eas-cli channel:edit production --branch "$branch" --non-interactive
-echo "Channel production now serves branch $branch. Testers get it on the next app restart."
+echo "Channel production now serves branch $branch. Every store install gets it on the next restart."

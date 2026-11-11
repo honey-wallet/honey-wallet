@@ -201,6 +201,8 @@ function IntentsSwapForm() {
   }, [moving]);
 
   const [tray, setTray] = useState<TrayState | null>(null);
+  // One payment at a time: a second tap must never start a second send.
+  const paying = useRef(false);
 
   const cta = !signedIn
     ? { label: 'Sign in to swap', onPress: () => router.push('/wallet-sign-in'), disabled: false }
@@ -360,6 +362,8 @@ function IntentsSwapForm() {
                   note={tray.note}
                   onBack={() => setTray(null)}
                   onConfirm={(plan) => {
+                    if (paying.current) return;
+                    paying.current = true;
                     const swap = tray.swap;
                     setTray({ kind: 'progress', swap });
                     const walletId = wallet.id;
@@ -371,8 +375,17 @@ function IntentsSwapForm() {
                       .catch((e) => {
                         const text = message(e, 'The swap didn’t send.');
                         // Cancelled at the prompt: back to the review, nothing sent.
-                        if (/cancelled/i.test(text)) setTray({ kind: 'review', swap, note: text });
-                        else setTray({ kind: 'progress', swap, error: text });
+                        if (/cancelled/i.test(text)) {
+                          setTray({ kind: 'review', swap, note: text });
+                          return;
+                        }
+                        // Anything else may have reached the network: never offer this
+                        // quote again, so it can't be paid twice.
+                        setQuote(null);
+                        setTray({ kind: 'progress', swap, error: text });
+                      })
+                      .finally(() => {
+                        paying.current = false;
                       });
                   }}
                 />
@@ -399,8 +412,10 @@ function IntentsSwapForm() {
 const liveStatus = (all: Record<string, Swap>, swap: Swap) =>
   all[swap.depositAddress]?.status ?? swap.status;
 
+/** Truncates (never rounds up past what the wallet holds) to `decimals` places. */
 const trimTo = (n: number, decimals: number) => {
-  const s = n.toFixed(decimals);
+  const f = 10 ** decimals;
+  const s = (Math.floor(n * f) / f).toFixed(decimals);
   return s.includes('.') ? s.replace(/0+$/, '').replace(/\.$/, '') : s;
 };
 
