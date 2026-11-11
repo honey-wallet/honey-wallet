@@ -109,4 +109,5 @@ jobs:
           EXPO_PUBLIC_API_URL: https://api.honeywallet.org
       - name: Expo doctor
         working-directory: apps/mobile
-        run: pnpm dlx expo-doctor
+        # expo-doctor 1.21.7 requires @expo/env without depending on it, so install both.
+        run: pnpm --package=expo-doctor --package=@expo/env dlx expo-doctor
