@@ -1,11 +1,10 @@
 /* The agent's chapter: the honey-tinted story card around the deck's AgentRun (agent-run.tsx). */
 .card {
-  --recede: 0;
   padding: 2.75rem 3rem 2.25rem;
   border: 1px solid var(--honey-card-edge);
   border-radius: 2.5rem;
   background: var(--honey-card);
-  transform: scale(calc(1 - var(--recede) * 0.045));
+  /* Scaled by story-stack.tsx if a chapter ever follows it. */
   transform-origin: 50% 1.5rem;
 }
 .heading {
@@ -70,10 +69,5 @@
   }
   .demo {
     margin-top: 2rem;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .card {
-    transform: none;
   }
 }

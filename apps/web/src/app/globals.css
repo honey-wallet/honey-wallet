@@ -662,6 +662,14 @@
   }
 }
 
+/* The nav's face and its waitlist button trading places on a phone (nav.tsx). */
+@keyframes nav-swap {
+  from {
+    opacity: 0;
+    transform: scale(0.94);
+  }
+}
+
 /* Opacity and 14px. The blur is gone: on white it read as text out of focus. */
 @keyframes reveal-in {
   from {
@@ -777,13 +785,66 @@
   }
 }
 
-[data-reveal] {
+/*
+ * Scroll reveals (motion.tsx's <Reveal>). The hidden pre-state only applies once the head script
+ * has marked the page with `data-js`, so without JavaScript every section is simply there. It
+ * is set before the body is parsed, so a reveal never paints visible and then hides. (An
+ * attribute rather than a class: React rewrites <html>'s className when it remounts.)
+ */
+:root[data-js] [data-reveal]:not([data-shown]) {
   opacity: 0;
 }
 
 [data-reveal][data-shown] {
-  animation: reveal-in var(--duration-very-slow) var(--ease-out-expo) forwards;
+  animation: reveal-in var(--duration-very-slow) var(--ease-out-expo) both;
   animation-delay: calc(var(--i, 0) * var(--duration-stagger));
+}
+
+/*
+ * The hero's arrival. Pure CSS, so it starts on first paint instead of waiting for hydration:
+ * the hero used to sit at opacity 0 until React had loaded (two seconds on a slow phone) and then
+ * jump in half-finished. Opacity and transform only, so it stays on the compositor while the
+ * main thread is busy hydrating.
+ */
+.intro {
+  animation: reveal-in var(--duration-very-slow) var(--ease-out-expo) both;
+  animation-delay: calc(80ms + var(--i, 0) * 70ms);
+}
+
+/* The Honey mark's eyes (logo.tsx), blinking now and then like the mascot's (art.module.css). */
+.honey-blink {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: honey-blink 7s ease-in-out infinite;
+}
+@keyframes honey-blink {
+  0%,
+  46%,
+  50%,
+  100% {
+    transform: scaleY(1);
+  }
+  48% {
+    transform: scaleY(0.1);
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Theme switches are instant: with transitions live, the few elements that ease their colour
+   lagged behind the rest of the page, which read as a flicker. theme-toggle.tsx sets this for
+   one frame around the switch. */
+:root[data-theme-switching] *,
+:root[data-theme-switching] *::before,
+:root[data-theme-switching] *::after {
+  transition: none !important;
 }
 
 /* Never animates: a ring that eases in lags behind the key that summoned it.
@@ -801,8 +862,12 @@
 
 @layer base {
   html {
-    scroll-behavior: smooth;
     color-scheme: light;
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    html {
+      scroll-behavior: smooth;
+    }
   }
   html.dark {
     color-scheme: dark;
@@ -846,21 +911,19 @@ hr {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  html {
-    scroll-behavior: auto;
-  }
-  [data-reveal] {
-    opacity: 1;
-  }
-  [data-reveal][data-shown] {
-    animation: none;
-  }
   *,
   *::before,
   *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+  /* Gentler, not zero: arrivals keep a short fade and lose the movement. More specific than the
+     blanket rule above, so these win it. */
+  [data-reveal][data-shown],
+  .intro {
+    animation: fade-in var(--duration-slow) ease both !important;
+    animation-delay: 0ms !important;
   }
 }
 

@@ -488,46 +488,13 @@ export function SectionScene({
   );
 }
 
-/** The close: the mascot carrying a full jar along a path of chains. */
+/** The close: just the mascot, waving, on its patch of ground. */
 export function CtaScene({ className }: { className?: string }) {
   return (
     <span aria-hidden="true" className={cn(styles.sectionScene, className)}>
-      <Svg viewBox="0 0 640 400">
-        {/* The ground fades out at its ends and foot instead of stopping at the frame. */}
-        <defs>
-          <radialGradient cx="0.5" cy="0.35" id="cta-ground-fade" r="0.5">
-            <stop offset="0.35" stopColor="#fff" />
-            <stop offset="1" stopColor="#fff" stopOpacity="0" />
-          </radialGradient>
-          <mask id="cta-ground">
-            <rect fill="url(#cta-ground-fade)" height="120" width="640" x="0" y="280" />
-          </mask>
-        </defs>
-        <path d="M40 360 Q160 300 300 330 T600 310 V400 H40Z" fill={TINT} mask="url(#cta-ground)" />
-        <ellipse cx="470" cy="352" fill={CLOUD} rx="150" ry="30" />
-        <path
-          d="M80 260 C160 180, 240 260, 320 190 S460 150, 560 120"
-          fill="none"
-          stroke={HONEY}
-          strokeDasharray="1 18"
-          strokeLinecap="round"
-          strokeWidth="8"
-        />
-        <Coin logo="ethereum-coin.svg" r={22} x={100} y={240} />
-        <Coin logo="base-square.svg" r={20} square x={200} y={232} />
-        <Coin chip="#000" logo="solana.svg" r={22} x={318} y={190} />
-        <Coin logo="near.svg" r={24} x={556} y={118} />
-        <Mascot blink left="hold" legs="walk" look={0.04} right="hold" w={150} x={360} y={190} />
-        <Jar
-          id="j3"
-          coins={[
-            { logo: 'near.svg', u: 0.32, v: 0.62, r: 14 },
-            { logo: 'usdc.svg', u: 0.66, v: 0.72, r: 12 },
-          ]}
-          w={88}
-          x={392}
-          y={250}
-        />
+      <Svg viewBox="80 120 480 260">
+        <ellipse cx="320" cy="352" fill={CLOUD} rx="150" ry="24" />
+        <Mascot blink left="wave" legs="stand" look={0.03} right="down" w={180} x={230} y={150} />
       </Svg>
     </span>
   );

@@ -55,7 +55,7 @@ export function Faq() {
             name="faq"
             open={i === 0}
           >
-            <summary className="flex flex-1 cursor-pointer list-none items-start justify-between gap-4 rounded-md py-5 text-left font-medium text-body text-foreground outline-none transition-all focus-visible:ring-[3px] focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+            <summary className="flex flex-1 cursor-pointer list-none items-start justify-between gap-4 rounded-md py-5 text-left font-medium text-body text-foreground outline-none transition-[box-shadow] duration-fast focus-visible:ring-[3px] focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
               {item.q}
               <ChevronDownIcon
                 aria-hidden="true"

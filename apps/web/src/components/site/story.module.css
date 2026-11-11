@@ -22,7 +22,6 @@
 }
 
 .card {
-  --recede: 0;
   display: grid;
   grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.6fr);
   gap: 2rem;
@@ -30,8 +29,10 @@
   padding: 2.5rem;
   border-radius: 2.5rem;
   background: var(--surface);
-  transform: scale(calc(1 - var(--recede) * 0.045));
+  /* story-stack.tsx scales the card down as the next chapter covers it: scrubbed by scroll, so
+     it earns its own layer. */
   transform-origin: 50% 1.5rem;
+  will-change: transform;
 }
 
 .steps {
@@ -208,9 +209,13 @@
   justify-self: center;
 }
 
-.chapter[data-pinned="true"] {
-  position: sticky;
-  top: var(--pin-top, 1.5rem);
+/* Chapters pin from the first paint (story-stack.tsx only tunes --pin-top), so hydrating never
+   moves them. Reduce Motion leaves them in the flow. */
+@media (prefers-reduced-motion: no-preference) {
+  .chapter {
+    position: sticky;
+    top: var(--pin-top, 1.5rem);
+  }
 }
 
 @media (max-width: 63.999rem) {
@@ -327,11 +332,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .card {
-    transform: none;
-  }
-  .chapter[data-pinned="true"] {
-    position: relative;
-    top: auto;
+    will-change: auto;
   }
 }
 

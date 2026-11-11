@@ -93,8 +93,11 @@ export const viewport: Viewport = {
  *
  * Falls back to the system setting when nothing has been chosen, which is why
  * it cannot simply be rendered server-side: neither value exists there.
+ *
+ * It also marks the page `data-js`, which is what lets scroll reveals start hidden
+ * (globals.css): with no script, nothing waits to be revealed.
  */
-const THEME_BOOT = `(function(){try{var t=localStorage.getItem("theme");var d=t?t==="dark":matchMedia("(prefers-color-scheme: dark)").matches;document.documentElement.classList.toggle("dark",d);var m=document.querySelector('meta[name="theme-color"]');if(m)m.content=d?"#131313":"#ffffff"}catch(e){}})()`;
+const THEME_BOOT = `(function(){document.documentElement.setAttribute("data-js","");try{var t=localStorage.getItem("theme");var d=t?t==="dark":matchMedia("(prefers-color-scheme: dark)").matches;document.documentElement.classList.toggle("dark",d);var m=document.querySelector('meta[name="theme-color"]');if(m)m.content=d?"#131313":"#ffffff"}catch(e){}})()`;
 
 export default function RootLayout({ children }: LayoutProps<'/'>) {
   return (

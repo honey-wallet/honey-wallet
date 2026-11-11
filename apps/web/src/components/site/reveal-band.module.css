@@ -111,7 +111,6 @@
   display: flex;
   gap: 4px;
   height: 100%;
-  will-change: clip-path, filter;
 }
 /* A leg's logo, venue and amount, laid out as the leg itself was. */
 .legInner {

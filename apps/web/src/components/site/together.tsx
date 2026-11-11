@@ -20,8 +20,18 @@ import styles from './together.module.css';
  */
 
 const EASE = [0.16, 1, 0.3, 1] as const;
-const T0 = 0.2;
-const COL = 0.9; // one tile after another
+const T0 = 0.1;
+/* One tile after another, as one gesture. Was 0.9s apiece, so the third tile turned up two seconds
+   after the section did and read as missing. */
+const COL = 0.12;
+/* The contribution bar: you start with all of it, then your friend's half slides in. Both bars
+   span the track and are clipped, rather than resized, so the change never touches layout. The
+   4px gap between them is the 1.2% in the middle. */
+const SPLIT_YOU = ['inset(0% 0% 0% 0% round 99px)', 'inset(0% 50.6% 0% 0% round 99px)'] as const;
+const SPLIT_FRIEND = [
+  'inset(0% 0% 0% 100% round 99px)',
+  'inset(0% 0% 0% 50.6% round 99px)',
+] as const;
 
 const VISIBILITY = [
   {
@@ -133,7 +143,7 @@ export function Together() {
                 <motion.img
                   alt="A friend"
                   src="/avatars/friend-2.svg"
-                  {...play({ opacity: 0, x: -24 }, { opacity: 1, x: 0 }, beat(0, 0.5), 0.5)}
+                  {...play({ opacity: 0, x: -20 }, { opacity: 1, x: 0 }, beat(0, 0.4), 0.5)}
                 />
               </div>
               <div className={styles.who}>
@@ -141,8 +151,22 @@ export function Together() {
                 <span>$250.00 each</span>
               </div>
               <div aria-hidden="true" className={styles.split}>
-                <motion.i {...play({ flexGrow: 1 }, { flexGrow: 0.5 }, beat(0, 0.7), 0.7)} />
-                <motion.i {...play({ flexGrow: 0 }, { flexGrow: 0.5 }, beat(0, 0.7), 0.7)} />
+                <motion.i
+                  {...play(
+                    { clipPath: SPLIT_YOU[0] },
+                    { clipPath: SPLIT_YOU[1] },
+                    beat(0, 0.55),
+                    0.7,
+                  )}
+                />
+                <motion.i
+                  {...play(
+                    { clipPath: SPLIT_FRIEND[0] },
+                    { clipPath: SPLIT_FRIEND[1] },
+                    beat(0, 0.55),
+                    0.7,
+                  )}
+                />
               </div>
             </div>
           </div>

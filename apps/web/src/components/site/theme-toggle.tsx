@@ -35,7 +35,14 @@ export function ThemeToggle() {
   const flip = () => {
     const next = !dark;
     setDark(next);
-    document.documentElement.classList.toggle('dark', next);
+    // Every colour changes in the same frame: transitions are off across the switch, then back
+    // on after the new theme has painted (globals.css, [data-theme-switching]).
+    const html = document.documentElement;
+    html.setAttribute('data-theme-switching', '');
+    html.classList.toggle('dark', next);
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => html.removeAttribute('data-theme-switching')),
+    );
     document
       .querySelector('meta[name="theme-color"]')
       ?.setAttribute('content', next ? '#131313' : '#ffffff');
@@ -46,7 +53,8 @@ export function ThemeToggle() {
     }
   };
 
-  const Icon = dark ? SunIcon : MoonIcon;
+  // Both icons are rendered and the theme class picks one, so the server's markup is already
+  // right in dark mode: choosing in React swapped the moon for the sun at hydration.
   return (
     <button
       aria-label={dark ? 'Switch to light mode' : 'Switch to dark mode'}
@@ -54,7 +62,8 @@ export function ThemeToggle() {
       onClick={flip}
       type="button"
     >
-      <Icon aria-hidden="true" className="size-[18px]" strokeWidth={2} />
+      <MoonIcon aria-hidden="true" className="size-[18px] dark:hidden" strokeWidth={2} />
+      <SunIcon aria-hidden="true" className="hidden size-[18px] dark:block" strokeWidth={2} />
     </button>
   );
 }

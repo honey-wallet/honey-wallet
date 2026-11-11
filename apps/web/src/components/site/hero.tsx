@@ -1,16 +1,22 @@
+import type { CSSProperties } from 'react';
 import { JoinWaitlist } from './app-link';
 import { Friends } from './friends';
 import styles from './hero.module.css';
 import { JarGlyph } from './jar';
-import { Reveal } from './motion';
 import { Display } from './type';
+
+/*
+ * The hero arrives with a CSS intro (`.intro`, globals.css) rather than a scroll reveal: it is on
+ * screen at load, so it plays on first paint instead of waiting for React to hydrate.
+ */
+const at = (i: number) => ({ '--i': i }) as CSSProperties;
 
 /** A full-width illustrated introduction, and the way onto the waitlist. */
 export function Hero() {
   return (
     <section aria-labelledby="hero-title" className={styles.stage} id="top">
       <div className={styles.content}>
-        <Reveal index={1}>
+        <div className="intro" style={at(0)}>
           <Display className={styles.headline} id="hero-title">
             <span className="block whitespace-nowrap">
               Invest in what <br className="md:hidden" />
@@ -20,15 +26,13 @@ export function Hero() {
               with <Friends /> friends.
             </span>
           </Display>
-        </Reveal>
+        </div>
 
-        <Reveal index={2}>
-          <div className="mt-8 flex justify-center">
-            <JoinWaitlist className="text-[0.9375rem] [--liquid-button-height:48px] [--liquid-button-padding:24px]">
-              <JarGlyph className="-my-1 size-8!" />
-            </JoinWaitlist>
-          </div>
-        </Reveal>
+        <div className="intro mt-8 flex justify-center" style={at(1)}>
+          <JoinWaitlist className="text-[0.9375rem] [--liquid-button-height:48px] [--liquid-button-padding:24px]">
+            <JarGlyph className="-my-1 size-8!" />
+          </JoinWaitlist>
+        </div>
       </div>
     </section>
   );

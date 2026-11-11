@@ -10,7 +10,14 @@ import styles from './film.module.css';
  * has a portrait cut for phones (flow2-portrait.html, flow2-light-portrait.html). Both are in
  * the markup and CSS shows the one for the current theme; only that one is loaded and played, and
  * only while it is on screen.
+ *
+ * Each cut opens and closes on an empty screen (so the loop joins cleanly), and its poster is a
+ * frame from the middle. Played from 0, the card went poster, then blank, then the film: a flash
+ * every time it came on screen. So the first play starts on the poster's own frame, where the film
+ * holds still for a beat, and the hand-off is invisible. Measured against the posters with ffmpeg:
+ * the hold runs 8.6-10.9s in the wide cuts and 4.7-6.1s in the portrait ones.
  */
+const POSTER_AT = { wide: 8.7, tall: 4.8 } as const;
 export function Film({
   name,
   label,
@@ -33,7 +40,10 @@ export function Film({
       for (const v of videos) {
         const shown = v.offsetParent !== null;
         if (shown && onScreen && !reduce.matches) {
-          if (v.preload !== 'auto') v.preload = 'auto';
+          if (v.preload !== 'auto') {
+            v.preload = 'auto';
+            v.currentTime = Number(v.dataset.posterAt ?? 0);
+          }
           v.play().catch(() => {});
         } else v.pause();
       }
@@ -69,6 +79,7 @@ export function Film({
             <video
               aria-label={label}
               className={cn(styles[theme], styles[shape])}
+              data-poster-at={POSTER_AT[shape]}
               key={`${theme}-${shape}`}
               loop
               muted

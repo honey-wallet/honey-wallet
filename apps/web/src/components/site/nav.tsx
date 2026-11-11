@@ -32,23 +32,26 @@ export function SiteNav() {
   return (
     <header
       className={cn(
-        'sticky top-0 z-50 border-b border-transparent bg-background/55 backdrop-blur-xl backdrop-saturate-150 transition-[border-color,background-color] duration-fast',
+        'sticky top-0 z-50 border-b border-transparent bg-background/55 backdrop-blur-md backdrop-saturate-150 transition-[border-color,background-color] duration-fast',
         scrolled && 'border-border/70 bg-background/70',
       )}
     >
       <div className="container-x flex items-center gap-2 px-3.5 py-2.5 sm:gap-3 sm:px-6 md:py-3.5 lg:px-8">
         <LogoLink
-          className="motion-safe:hover:[&_svg]:animate-[logo-wiggle_420ms_ease-in-out_infinite]"
+          className="motion-safe:[@media(hover:hover)]:hover:[&_svg]:animate-[logo-wiggle_420ms_ease-in-out]"
           large
         />
 
         <div className="ml-auto flex items-center gap-2 sm:gap-3">
           {/* On a phone there's room for one: the face, then the button once past the hero.
-              Below 375px there is no room for the face beside the switch at all. */}
+              Below 375px there is no room for the face beside the switch at all. The two swap
+              with a short fade (nav-swap), since one leaves the layout as the other joins it. */}
           <div
             className={cn(
               'group relative shrink-0 max-[374px]:hidden',
-              pastHero && 'max-sm:hidden',
+              pastHero
+                ? 'max-sm:hidden'
+                : 'max-sm:motion-safe:animate-[nav-swap_240ms_cubic-bezier(0.19,1,0.22,1)]',
             )}
           >
             <a
@@ -117,7 +120,7 @@ export function SiteNav() {
             )}
             inert={!pastHero}
           >
-            <div className="-m-1 min-w-0 overflow-hidden p-1">
+            <div className="-m-1 min-w-0 overflow-hidden p-1 max-sm:motion-safe:animate-[nav-swap_240ms_cubic-bezier(0.19,1,0.22,1)]">
               <JoinWaitlist className="shrink-0 whitespace-nowrap text-[0.9375rem] [--liquid-button-height:40px] [--liquid-button-padding:20px] max-sm:text-[0.875rem] max-sm:[--liquid-button-padding:14px]" />
             </div>
           </div>

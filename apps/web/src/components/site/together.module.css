@@ -148,15 +148,15 @@
   font-feature-settings: "tnum" 1;
 }
 .split {
-  display: flex;
+  position: relative;
   align-self: stretch;
-  gap: 4px;
   height: 0.75rem;
   margin-top: 0.25rem;
 }
+/* Both halves span the track; together.tsx clips each to its share. */
 .split i {
-  flex: 1 1 0;
-  min-width: 0;
+  position: absolute;
+  inset: 0;
   border-radius: 99px;
   background: var(--honey);
 }
@@ -213,9 +213,12 @@
   align-items: center;
   gap: 0.875rem;
   margin-top: 0;
+  /* Crossfade, the outgoing option fading as the new one arrives: visibility waits for the fade
+     before it hides, where it used to cut the old one off on the first frame. Opacity only; the
+     6px blur it also animated cost a filter on every switch for a change nobody could see. */
   transition:
-    opacity 240ms ease,
-    filter 240ms ease;
+    opacity 200ms ease,
+    visibility 0s linear 0s;
   padding: 1rem 1.125rem;
   border-radius: 1.25rem;
   background: var(--panel);
@@ -225,7 +228,9 @@
 .option[data-state="inactive"] {
   visibility: hidden;
   opacity: 0;
-  filter: blur(6px);
+  transition:
+    opacity 200ms ease,
+    visibility 0s linear 200ms;
 }
 .badge {
   display: grid;

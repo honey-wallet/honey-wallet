@@ -17,20 +17,24 @@ const EASE = [0.16, 1, 0.3, 1] as const;
 const SETTLE = [0.22, 1, 0.36, 1] as const;
 
 /*
- * The timeline, in seconds from the moment the chart is in view. Each part arrives out of a
- * blur (focus pulling in as it lands), the bars wipe in left to right, and every number counts
- * up to its value as its bar fills.
+ * The timeline, in seconds from the moment the chart is in view. Each part rises and fades in,
+ * the bars wipe in left to right, and every number counts up to its value as its bar fills.
+ *
+ * Opacity, transform and the bars' clip only. Each part used to arrive out of an 8-12px blur: a
+ * dozen animated filters at once, several the width of the card, which dropped frames on phones
+ * and in Safari. And it is all done in about two seconds; the slowest row used to land after 3.5,
+ * when the reader had long since scrolled on.
  */
 const T = {
   from: 0,
-  one: 0.35,
-  row: (i: number) => 0.6 + i * 0.32,
-  bar: (i: number) => 0.85 + i * 0.32,
-  aside: 1.1,
-  slip: 2.2,
+  one: 0.2,
+  row: (i: number) => 0.3 + i * 0.14,
+  bar: (i: number) => 0.4 + i * 0.14,
+  aside: 0.55,
+  slip: 1.1,
 };
-const BAR_S = 1.5;
-const COUNT_S = 1.6;
+const BAR_S = 1;
+const COUNT_S = 1.1;
 
 const whole = (n: number) => usd(Math.round(n));
 /* Every chain Honey holds and sends on (packages/keyring/src/networks.ts): ten EVM chains, one
@@ -59,14 +63,14 @@ export function RevealBand() {
   const run = useInView(figure, { once: true, margin: '0px 0px -20% 0px' });
   const show = run || reduce;
 
-  /** Out of a blur, rising a little: how each part arrives. */
-  const focus = (delay: number, y = 16) =>
+  /** Rising a little as it fades in: how each part arrives. */
+  const focus = (delay: number, y = 14) =>
     reduce
       ? {}
       : {
-          initial: { opacity: 0, y, filter: 'blur(12px)' },
-          animate: show ? { opacity: 1, y: 0, filter: 'blur(0px)' } : undefined,
-          transition: { delay, duration: 1.1, ease: SETTLE },
+          initial: { opacity: 0, y },
+          animate: show ? { opacity: 1, y: 0 } : undefined,
+          transition: { delay, duration: 0.7, ease: SETTLE },
         };
 
   return (
@@ -94,9 +98,9 @@ export function RevealBand() {
               {...(reduce
                 ? {}
                 : {
-                    initial: { opacity: 0, scale: 0.86, filter: 'blur(10px)' },
-                    animate: show ? { opacity: 1, scale: 1, filter: 'blur(0px)' } : undefined,
-                    transition: { delay: T.one, type: 'spring', stiffness: 220, damping: 22 },
+                    initial: { opacity: 0, scale: 0.92 },
+                    animate: show ? { opacity: 1, scale: 1 } : undefined,
+                    transition: { delay: T.one, type: 'spring', duration: 0.5, bounce: 0.15 },
                   })}
             >
               One approval
@@ -119,21 +123,15 @@ export function RevealBand() {
                   </div>
                 </motion.div>
                 <div className={styles.track}>
-                  {/* Wiped in from the left (no squash: the logos and labels keep their shape),
-                      its contents pulling into focus as it opens. */}
+                  {/* Wiped in from the left (no squash: the logos and labels keep their shape). */}
                   <motion.div
                     className={styles.bar}
                     style={{ width: `${(r.usd / max) * 100}%` }}
                     {...(reduce
                       ? {}
                       : {
-                          initial: {
-                            clipPath: 'inset(0% 100% 0% 0% round 18px)',
-                            filter: 'blur(8px)',
-                          },
-                          animate: show
-                            ? { clipPath: 'inset(0% 0% 0% 0% round 18px)', filter: 'blur(0px)' }
-                            : undefined,
+                          initial: { clipPath: 'inset(0% 100% 0% 0% round 18px)' },
+                          animate: show ? { clipPath: 'inset(0% 0% 0% 0% round 18px)' } : undefined,
                           transition: { delay: T.bar(i), duration: BAR_S, ease: SETTLE },
                         })}
                   >
@@ -149,11 +147,11 @@ export function RevealBand() {
                           {...(reduce
                             ? {}
                             : {
-                                initial: { opacity: 0, x: -14 },
+                                initial: { opacity: 0, x: -12 },
                                 animate: show ? { opacity: 1, x: 0 } : undefined,
                                 transition: {
-                                  delay: T.bar(i) + 0.25 + j * 0.35,
-                                  duration: 0.9,
+                                  delay: T.bar(i) + 0.15 + j * 0.2,
+                                  duration: 0.6,
                                   ease: SETTLE,
                                 },
                               })}
@@ -170,7 +168,7 @@ export function RevealBand() {
                             className={styles.amt}
                             format={whole}
                             run={show}
-                            start={T.bar(i) + 0.2 + j * 0.35}
+                            start={T.bar(i) + 0.15 + j * 0.2}
                             to={l.usd}
                           />
                         </motion.span>
@@ -178,11 +176,11 @@ export function RevealBand() {
                     ))}
                   </motion.div>
                 </div>
-                <motion.div className={styles.slip} {...focus(T.slip + i * 0.15, 8)}>
+                <motion.div className={styles.slip} {...focus(T.slip + i * 0.1, 8)}>
                   <Count
                     format={(n) => `${n.toFixed(2)}%`}
                     run={show}
-                    start={T.slip + i * 0.15}
+                    start={T.slip + i * 0.1}
                     to={r.slippage}
                   />
                   <span>est. slippage</span>
@@ -212,13 +210,13 @@ export function RevealBand() {
                   {...(reduce
                     ? {}
                     : {
-                        initial: { opacity: 0, scale: 0.6, filter: 'blur(8px)' },
-                        animate: show ? { opacity: 1, scale: 1, filter: 'blur(0px)' } : undefined,
+                        initial: { opacity: 0, scale: 0.85 },
+                        animate: show ? { opacity: 1, scale: 1 } : undefined,
                         transition: {
-                          delay: T.aside + 0.3 + i * 0.07,
+                          delay: T.aside + 0.2 + i * 0.04,
                           type: 'spring',
-                          stiffness: 260,
-                          damping: 20,
+                          duration: 0.5,
+                          bounce: 0.2,
                         },
                       })}
                 >
@@ -233,12 +231,12 @@ export function RevealBand() {
               ))}
             </div>
           </motion.div>
-          <motion.div className={styles.as} {...focus(T.aside + 0.5)}>
+          <motion.div className={styles.as} {...focus(T.aside + 0.3)}>
             <div className={styles.asValue}>
               <Count
                 format={(n) => `${n >= 0.995 ? '1' : n.toFixed(1)}%`}
                 run={show}
-                start={T.aside + 0.5}
+                start={T.aside + 0.3}
                 to={1}
               />
             </div>

@@ -1,7 +1,7 @@
 'use client';
 
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import styles from './agent-run.module.css';
 import { AGENT_STAGES, PROPOSAL } from './honey-data';
 import { useInView } from './motion';
@@ -12,7 +12,9 @@ import { Token } from './token';
  * slide 4, "The agent shows its work"):
  *   1. Centre stage: the app's real progress steps, one at a time, big enough to read.
  *   2. The steps fold into a quiet list on the left and the proposal takes the rest of the card.
- * It starts when the card is properly on screen, and plays again each time it comes back.
+ * It starts when the card is properly on screen and plays once. It used to start over each time
+ * it came back on screen, which snapped a finished proposal back to step one, and reflowed the
+ * card, while the reader was scrolling past it.
  */
 
 const STEP_MS = 1250; // long enough to read each step aloud
@@ -24,23 +26,14 @@ export function AgentRun() {
   const [ref, inView] = useInView<HTMLDivElement>(0, '-20% 0px -25% 0px');
   const [step, setStep] = useState(0);
   const [started, setStarted] = useState(false);
-  const left = useRef(false);
   const stages = AGENT_STAGES;
   const shown = animate ? step : stages.length;
   const done = shown >= stages.length;
 
-  // Start on arrival; after leaving a finished run, start again on the way back.
+  // Start on arrival, once.
   useEffect(() => {
-    if (!inView) {
-      if (started) left.current = true;
-      return;
-    }
-    if (!started) setStarted(true);
-    else if (left.current && step >= AGENT_STAGES.length) {
-      left.current = false;
-      setStep(0);
-    }
-  }, [inView, started, step]);
+    if (inView) setStarted(true);
+  }, [inView]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: step re-arms the timer once per stage
   useEffect(() => {
