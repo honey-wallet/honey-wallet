@@ -22,7 +22,8 @@
         "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "466723419259-v0c9favnkoadjms79i6c4lfnb52ec335.apps.googleusercontent.com",
         "EXPO_PUBLIC_API_URL": "https://api.honeywallet.org",
         "EXPO_PUBLIC_AUTH_ORIGIN": "https://honeywallet.org",
-        "EXPO_PUBLIC_AUTH_CHAIN_ID": "eip155:1"
+        "EXPO_PUBLIC_AUTH_CHAIN_ID": "eip155:1",
+        "EXPO_PUBLIC_WALLETCONNECT_PROJECT_ID": "8ad4a8c682ffb4d49ff4dda0dc14bb1c"
       },
       "android": {
         "buildType": "apk"
@@ -53,7 +54,8 @@
         "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "466723419259-v0c9favnkoadjms79i6c4lfnb52ec335.apps.googleusercontent.com",
         "EXPO_PUBLIC_API_URL": "https://api.honeywallet.org",
         "EXPO_PUBLIC_AUTH_ORIGIN": "https://honeywallet.org",
-        "EXPO_PUBLIC_AUTH_CHAIN_ID": "eip155:1"
+        "EXPO_PUBLIC_AUTH_CHAIN_ID": "eip155:1",
+        "EXPO_PUBLIC_WALLETCONNECT_PROJECT_ID": "8ad4a8c682ffb4d49ff4dda0dc14bb1c"
       }
     },
     "demo": {
