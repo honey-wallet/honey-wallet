@@ -107,6 +107,11 @@ if (!existsSync(join(out, 'manifest.json'))) throw new Error('manifest.json miss
 
 // The extension popup calls the API directly. MV3 host permissions are part of the
 // installed package, so keep them in sync with the URL embedded in the Expo bundle.
+// A store package must never fall back to localhost silently: only an --e2e build may.
+if (!process.env.EXPO_PUBLIC_API_URL && !process.argv.includes('--e2e'))
+  throw new Error(
+    'Set EXPO_PUBLIC_API_URL (apps/extension/.env.local), e.g. https://api.honeywallet.org',
+  );
 const apiUrl = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:8080';
 const api = new URL(apiUrl);
 if (

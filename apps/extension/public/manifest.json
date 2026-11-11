@@ -18,11 +18,7 @@
     }
   },
   "permissions": ["storage"],
-  "host_permissions": [
-    "https://api.honeywallet.org/*",
-    "https://rpc.mainnet.near.org/*",
-    "https://rpc.testnet.near.org/*"
-  ],
+  "host_permissions": ["https://api.honeywallet.org/*", "https://rpc.mainnet.near.org/*"],
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'self'"
   },
