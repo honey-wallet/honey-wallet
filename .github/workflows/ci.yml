@@ -104,6 +104,9 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec biome ci .
       - run: pnpm turbo run typecheck test build --filter=!@honey-wallet/server
+        env:
+          # The extension build refuses to run without an API to talk to.
+          EXPO_PUBLIC_API_URL: https://api.honeywallet.org
       - name: Expo doctor
         working-directory: apps/mobile
         run: pnpm dlx expo-doctor
