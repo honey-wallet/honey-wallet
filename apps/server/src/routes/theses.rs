@@ -1,6 +1,7 @@
 //! Thesis runs: start one, read its state and artifacts, follow its progress over SSE.
 //! Signed-in wallets only; a run is visible to the user who started it.
 
+use super::jar_buys::Quota;
 use crate::{
     error::AppError,
     identity::Identity,
@@ -17,6 +18,14 @@ use futures_util::stream::{self, Stream, StreamExt};
 use serde::Serialize;
 use std::{convert::Infallible, sync::Arc, time::Duration};
 use uuid::Uuid;
+
+/// Thesis runs per minute: a few per user, and a global ceiling sized for the
+/// hackathon demo (runs are process-local and each spends up to 10 model calls).
+const RUNS: Quota = Quota {
+    domain: "thesis_run",
+    global: 20,
+    per_user: 5,
+};
 
 #[derive(Clone)]
 struct StateData {
@@ -59,10 +68,9 @@ async fn start(
 ) -> Result<(StatusCode, Json<Started>), AppError> {
     let owner = user(&state, &headers).await?;
     let identity = state.identity.as_ref().ok_or(AppError::Unauthorized)?;
-    // Each run spends model calls and link fetches (R-PF-4, R-IN-10).
-    identity
-        .rate_limit_scoped("thesis_run", &owner.to_string(), 30)
-        .await?;
+    // Each run spends model calls, news searches and link fetches on Honey's keys
+    // (R-PF-4, R-IN-10): a per-user budget under a global ceiling.
+    RUNS.charge(identity, &owner.to_string()).await?;
     let Json(input) = body.map_err(|_| AppError::BadRequest("invalid thesis request".into()))?;
     let run_id = state
         .service
@@ -146,4 +154,15 @@ async fn events(
     });
     Ok(Sse::new(stream::iter(past).chain(live))
         .keep_alive(KeepAlive::new().interval(Duration::from_secs(15))))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn thesis_runs_have_a_global_ceiling() {
+        super::super::jar_buys::tests::assert_valid(RUNS);
+        assert_eq!(RUNS.global, 20);
+    }
 }

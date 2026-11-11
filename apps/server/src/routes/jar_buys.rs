@@ -30,23 +30,49 @@ pub fn router(identity: Option<Identity>, buys: Arc<JarBuys>) -> Router {
 }
 
 /// Quotes create live 1Click deposit addresses under the partner key, so each user
-/// gets a small budget per minute; status polling gets a larger one.
-pub(crate) const QUOTES_PER_MINUTE: i32 = 6;
-const LOOKUPS_PER_MINUTE: i32 = 120;
+/// gets a small budget per minute and all users together share a ceiling (the same
+/// 240/min the NEAR Intents preview route uses); status polling gets a larger one.
+/// `/jar-dao/buy-quote` charges the same quota.
+pub(crate) const QUOTES: Quota = Quota {
+    domain: "jar-buy-quote",
+    global: 240,
+    per_user: 6,
+};
+const LOOKUPS: Quota = Quota {
+    domain: "jar-buy-lookup",
+    global: 1_200,
+    per_user: 120,
+};
 
-/// The signed-in user's id, after charging `domain`'s per-user quota.
+/// A per-user budget plus a global ceiling for calls that spend Honey's partner key.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Quota {
+    pub domain: &'static str,
+    pub global: i32,
+    pub per_user: i32,
+}
+
+impl Quota {
+    /// Charges both counters as one admission decision (Redis when configured).
+    pub(crate) async fn charge(self, identity: &Identity, user: &str) -> Result<(), AppError> {
+        identity
+            .rate_limit_shared(self.domain, user, self.global, self.per_user)
+            .await
+    }
+}
+
+/// The signed-in user's id, after charging `quota`.
 async fn signed_in(
     state: &StateData,
     headers: &HeaderMap,
-    domain: &'static str,
-    limit: i32,
+    quota: Quota,
 ) -> Result<String, AppError> {
     let identity = state.identity.as_ref().ok_or(AppError::Unauthorized)?;
     let profile = identity
         .authenticate(super::identity::bearer(headers)?)
         .await?;
     let user = profile.user_id.to_string();
-    identity.rate_limit_scoped(domain, &user, limit).await?;
+    quota.charge(identity, &user).await?;
     Ok(user)
 }
 
@@ -60,7 +86,7 @@ async fn quote(
     headers: HeaderMap,
     input: Result<Json<BuyRequest>, JsonRejection>,
 ) -> Result<Json<BuyQuote>, AppError> {
-    let user = signed_in(&state, &headers, "jar-buy-quote", QUOTES_PER_MINUTE).await?;
+    let user = signed_in(&state, &headers, QUOTES).await?;
     state.buys.quote(&user, body(input)?).await.map(Json)
 }
 
@@ -69,7 +95,7 @@ async fn deposit(
     headers: HeaderMap,
     input: Result<Json<DepositRequest>, JsonRejection>,
 ) -> Result<StatusCode, AppError> {
-    let user = signed_in(&state, &headers, "jar-buy-lookup", LOOKUPS_PER_MINUTE).await?;
+    let user = signed_in(&state, &headers, LOOKUPS).await?;
     state.buys.deposit(&user, body(input)?).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -85,6 +111,35 @@ async fn status(
     headers: HeaderMap,
     Query(q): Query<StatusQuery>,
 ) -> Result<Json<LegStatus>, AppError> {
-    let user = signed_in(&state, &headers, "jar-buy-lookup", LOOKUPS_PER_MINUTE).await?;
+    let user = signed_in(&state, &headers, LOOKUPS).await?;
     state.buys.status(&user, &q.deposit_address).await.map(Json)
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+
+    /// Same shape rule as the Redis limiter (lowercase ASCII, digits, `_` or `-`).
+    pub(crate) fn assert_valid(q: Quota) {
+        assert!(q.domain.len() <= 32 && q.domain.as_bytes()[0].is_ascii_lowercase());
+        assert!(
+            q.domain
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"_-".contains(&b))
+        );
+        assert!(q.per_user > 0, "{} has no per-user budget", q.domain);
+        assert!(
+            q.global > q.per_user,
+            "{} global ceiling must sit above one user's budget",
+            q.domain
+        );
+    }
+
+    #[test]
+    fn partner_key_quotes_have_a_global_ceiling() {
+        assert_valid(QUOTES);
+        assert_valid(LOOKUPS);
+        assert_eq!(QUOTES.global, 240);
+        assert_eq!(QUOTES.per_user, 6);
+    }
 }

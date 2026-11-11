@@ -110,7 +110,7 @@ impl NearIntents {
         };
         let mut response = request
             .header(header::ACCEPT, "application/json")
-            .header("x-api-key", self.api_key.as_str())
+            .header(crate::jar_buys::PARTNER_KEY_HEADER, self.api_key.as_str())
             .send()
             .await
             .map_err(|_| AppError::Busy)?;

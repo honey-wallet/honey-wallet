@@ -407,6 +407,10 @@ impl ThesisService {
             return;
         };
         self.record(id, "Thesis", json!(thesis)).await;
+        if let Some(message) = stop_message(&thesis) {
+            self.progress(id, Stage::Failed, message).await;
+            return;
+        }
 
         // Stage 4: strategize from the registry only (no quotes yet).
         self.progress(id, Stage::Strategize, "Finding tokens you can buy")
@@ -525,26 +529,49 @@ pub fn build_intent(text: &str, links: Vec<LinkResult>, params: &Params) -> Inte
     }
 }
 
+/// Allowed values and bounds, shared by the schema the model sees and `validate_thesis`
+/// (the model no longer gets strict `json_schema` mode, so code enforces them).
+const DIRECTIONS: &[&str] = &[
+    "bullish",
+    "bearish",
+    "relative",
+    "unsupported_direction",
+    "rejected",
+];
+/// Directions that end the run without a strategy.
+const STOP_DIRECTIONS: &[&str] = &["unsupported_direction", "rejected"];
+const CONVICTIONS: &[&str] = &["low", "medium", "high"];
+const MAX_EXPOSURES: usize = 8;
+const MAX_INSTRUMENTS: usize = 8;
+const MAX_SHORT_TEXT: usize = 200;
+const MAX_RATIONALE: usize = 4_000;
+const MAX_INSTRUMENT_NAME: usize = 64;
+
 pub fn thesis_schema() -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
         "required": ["theme", "direction", "rationale", "horizon", "conviction", "exposures"],
         "properties": {
-            "theme": {"type": "string"},
-            "direction": {"type": "string", "enum": ["bullish", "bearish", "relative", "unsupported_direction", "rejected"]},
-            "rationale": {"type": "string"},
-            "horizon": {"type": "string"},
-            "conviction": {"type": "string", "enum": ["low", "medium", "high"]},
+            "theme": {"type": "string", "maxLength": MAX_SHORT_TEXT},
+            "direction": {"type": "string", "enum": DIRECTIONS},
+            "rationale": {"type": "string", "maxLength": MAX_RATIONALE},
+            "horizon": {"type": "string", "maxLength": MAX_SHORT_TEXT},
+            "conviction": {"type": "string", "enum": CONVICTIONS},
             "exposures": {
                 "type": "array",
+                "maxItems": MAX_EXPOSURES,
                 "items": {
                     "type": "object",
                     "additionalProperties": false,
                     "required": ["label", "instruments"],
                     "properties": {
-                        "label": {"type": "string"},
-                        "instruments": {"type": "array", "items": {"type": "string"}}
+                        "label": {"type": "string", "maxLength": MAX_SHORT_TEXT},
+                        "instruments": {
+                            "type": "array",
+                            "maxItems": MAX_INSTRUMENTS,
+                            "items": {"type": "string", "maxLength": MAX_INSTRUMENT_NAME}
+                        }
                     }
                 }
             }
@@ -555,13 +582,68 @@ pub fn thesis_schema() -> Value {
 pub fn validate_thesis(value: &Value) -> Result<(), String> {
     let thesis: Thesis =
         serde_json::from_value(value.clone()).map_err(|e| format!("schema mismatch: {e}"))?;
-    if thesis.exposures.is_empty() || thesis.exposures.len() > 8 {
-        return Err("needs 1-8 exposures".into());
+    if !DIRECTIONS.contains(&thesis.direction.as_str()) {
+        return Err(format!(
+            "direction must be one of {}",
+            DIRECTIONS.join(", ")
+        ));
+    }
+    if !CONVICTIONS.contains(&thesis.conviction.as_str()) {
+        return Err(format!(
+            "conviction must be one of {}",
+            CONVICTIONS.join(", ")
+        ));
+    }
+    // A refused idea may come back with no exposures; everything else needs some.
+    let min = usize::from(!stops(&thesis));
+    if thesis.exposures.len() < min || thesis.exposures.len() > MAX_EXPOSURES {
+        return Err(format!("needs {min}-{MAX_EXPOSURES} exposures"));
     }
     if thesis.theme.trim().is_empty() {
         return Err("empty theme".into());
     }
+    let too_long = |s: &str, max: usize| s.chars().count() > max;
+    if too_long(&thesis.theme, MAX_SHORT_TEXT)
+        || too_long(&thesis.horizon, MAX_SHORT_TEXT)
+        || too_long(&thesis.rationale, MAX_RATIONALE)
+    {
+        return Err("theme, horizon or rationale is too long".into());
+    }
+    for exposure in &thesis.exposures {
+        if too_long(&exposure.label, MAX_SHORT_TEXT) {
+            return Err("exposure label is too long".into());
+        }
+        if exposure.instruments.len() > MAX_INSTRUMENTS {
+            return Err(format!(
+                "at most {MAX_INSTRUMENTS} instruments per exposure"
+            ));
+        }
+        if exposure
+            .instruments
+            .iter()
+            .any(|i| too_long(i, MAX_INSTRUMENT_NAME))
+        {
+            return Err("instrument name is too long".into());
+        }
+    }
     Ok(())
+}
+
+/// Whether the model declined the idea: the run stops without a strategy.
+fn stops(thesis: &Thesis) -> bool {
+    STOP_DIRECTIONS.contains(&thesis.direction.as_str())
+}
+
+/// What the user reads when the run stops on a declined idea.
+fn stop_message(thesis: &Thesis) -> Option<&'static str> {
+    match thesis.direction.as_str() {
+        "unsupported_direction" => Some(
+            "Honey can only buy tokens, so it can't express this idea's direction. Try \
+             framing it as something to own.",
+        ),
+        "rejected" => Some("This idea can't be turned into a strategy. Try a different one."),
+        _ => None,
+    }
 }
 
 /// DRY_RUN thesis: deterministic, so judges and tests see the same output.
@@ -852,6 +934,103 @@ mod tests {
         assert_eq!(i.amount_usd, 100.0);
         assert!(i.assumed.iter().any(|a| a.starts_with("amount")));
         assert_eq!(i.hash.len(), 64);
+    }
+
+    #[test]
+    fn thesis_check_enforces_enums_and_bounds() {
+        let base = json!(fixture_thesis("AI"));
+        for (field, value) in [
+            ("direction", json!("short")),
+            ("conviction", json!("certain")),
+            ("theme", json!("x".repeat(MAX_SHORT_TEXT + 1))),
+            ("exposures", json!([])),
+            (
+                "exposures",
+                json!(vec![
+                    json!({"label": "a", "instruments": []});
+                    MAX_EXPOSURES + 1
+                ]),
+            ),
+            (
+                "exposures",
+                json!([{"label": "a", "instruments": vec!["ETH"; MAX_INSTRUMENTS + 1]}]),
+            ),
+            (
+                "exposures",
+                json!([{"label": "a", "instruments": ["E".repeat(MAX_INSTRUMENT_NAME + 1)]}]),
+            ),
+        ] {
+            let mut thesis = base.clone();
+            thesis[field] = value;
+            assert!(validate_thesis(&thesis).is_err(), "{field} accepted");
+        }
+        // A declined idea may carry no exposures, and it stops the run.
+        for direction in STOP_DIRECTIONS {
+            let mut thesis = base.clone();
+            thesis["direction"] = json!(direction);
+            thesis["exposures"] = json!([]);
+            assert!(validate_thesis(&thesis).is_ok());
+            let parsed: Thesis = serde_json::from_value(thesis).unwrap();
+            assert!(stop_message(&parsed).is_some());
+        }
+        assert!(stop_message(&fixture_thesis("AI")).is_none());
+        let schema = thesis_schema();
+        assert_eq!(schema["properties"]["direction"]["enum"], json!(DIRECTIONS));
+        assert_eq!(
+            schema["properties"]["exposures"]["maxItems"],
+            json!(MAX_EXPOSURES)
+        );
+    }
+
+    /// A model that declines the idea ends the run as Failed, with no strategy.
+    #[tokio::test]
+    async fn declined_thesis_fails_the_run_without_a_strategy() {
+        use axum::{Json, Router, routing::post};
+        let mut declined = json!(fixture_thesis("AI"));
+        declined["direction"] = json!("rejected");
+        declined["exposures"] = json!([]);
+        let content = declined.to_string();
+        let app = Router::new().route(
+            "/chat/completions",
+            post(move || {
+                let content = content.clone();
+                async move { Json(json!({"choices": [{"message": {"content": content}}]})) }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let service = Arc::new(ThesisService::with_parts(
+            Registry::with_assets(assets()),
+            Intake::new().unwrap(),
+            NearAi::new(
+                reqwest::Client::new(),
+                format!("http://{addr}"),
+                Some("k".into()),
+            ),
+        ));
+        let owner = Uuid::new_v4();
+        let id = service
+            .start(
+                owner,
+                StartThesis {
+                    text: Some("buy my friend's memecoin".into()),
+                    links: vec![],
+                    params: Params::default(),
+                },
+            )
+            .await
+            .unwrap();
+        for _ in 0..200 {
+            if service.view(owner, id).await.unwrap().stage == Stage::Failed {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let view = service.view(owner, id).await.unwrap();
+        assert_eq!(view.stage, Stage::Failed);
+        assert!(view.proposal.is_none());
+        assert!(view.progress.last().unwrap().message.contains("can't"));
     }
 
     #[test]

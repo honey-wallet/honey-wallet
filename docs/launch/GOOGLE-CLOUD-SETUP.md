@@ -55,10 +55,35 @@ Run a Serverless VPC connector (or Direct VPC egress) and set
 ## 4. Cloud Run (API server)
 
 CI publishes the image to `ghcr.io/honey-wallet/honey-wallet-server`. Copy it to
-Artifact Registry (Cloud Run pulls from there), then deploy with the environment from
-`apps/server/.env.example`. Secrets come from Secret Manager, never plain env:
-`DATABASE_URL`, `NEAR_AI_API_KEY`, `LINKUP_API_KEY`, `NEAR_INTENTS_API_KEY` (optional).
-Point the app's `EXPO_PUBLIC_API_URL` at the service's HTTPS URL.
+Artifact Registry (Cloud Run pulls from there), then deploy. `apps/server/.env.example`
+lists every variable, but its values are for local development (`HOST=127.0.0.1`,
+localhost CORS, `TRUST_PROXY_HEADERS=false`). On Cloud Run, change these:
+
+| Variable | Cloud Run value | Why |
+| --- | --- | --- |
+| `HOST` | `0.0.0.0` | Cloud Run sends traffic to the container's external interface; a loopback bind never answers. `PORT` comes from Cloud Run (8080). |
+| `CORS_ALLOWED_ORIGINS` | `https://www.honeywallet.org,https://honeywallet.org,chrome-extension://njnjgdockcpegkmeimngbdklilelfnpp` | The site (both hosts) and the Chrome extension. Exact origins, comma-separated, no trailing slash. Any `AUTH_ORIGIN`/`AUTH_ADDITIONAL_ORIGINS` must also be in this list. |
+| `TRUST_PROXY_HEADERS` | `true` | Google's front end terminates TLS; without this every quota is keyed by the front end's address instead of the user's. |
+| `TRUSTED_PROXY_CIDRS` | `169.254.0.0/16` | Google's front end reaches the container from the link-local range and appends the real client IP to `X-Forwarded-For`. The server takes the rightmost entry that isn't in these ranges, so a client-forged prefix is ignored. Behind an external HTTPS load balancer, also list its frontend IP (e.g. `169.254.0.0/16,<lb-ip>/32`) and restrict ingress to the load balancer. Startup refuses `TRUST_PROXY_HEADERS=true` with no CIDRs. |
+| `REQUIRE_INFRASTRUCTURE` | `true` | Startup fails if `DATABASE_URL` or `REDIS_URL` is missing instead of running without them. |
+
+Secrets come from Secret Manager, never plain env: `DATABASE_URL`, `REDIS_URL`,
+`NEAR_AI_API_KEY`, `LINKUP_API_KEY`, `NEAR_INTENTS_API_KEY` (optional).
+
+Thesis runs (`/api/v1/theses`) live in the memory of the instance that started them,
+and the run keeps working after the `POST` returns. Until runs move to shared storage,
+deploy a single instance with CPU always allocated, so every poll and SSE stream reaches
+the instance that holds the run and the background work isn't throttled between requests:
+
+```sh
+gcloud run deploy honey-api --image <artifact-registry-image> --region <region> \
+  --max-instances=1 --no-cpu-throttling \
+  --set-env-vars '^;^HOST=0.0.0.0;TRUST_PROXY_HEADERS=true;TRUSTED_PROXY_CIDRS=169.254.0.0/16;REQUIRE_INFRASTRUCTURE=true;CORS_ALLOWED_ORIGINS=https://www.honeywallet.org,https://honeywallet.org,chrome-extension://njnjgdockcpegkmeimngbdklilelfnpp'
+```
+
+(The `^;^` prefix makes `;` gcloud's separator, so the commas stay inside the CORS value.)
+Add the remaining variables and the Secret Manager references (`--set-secrets`) the
+same way. Point the app's `EXPO_PUBLIC_API_URL` at the service's HTTPS URL.
 
 ## 5. Vercel (website)
 

@@ -3,7 +3,10 @@
 //! every deposit, and funds never touch the server. Unfilled swaps refund to the
 //! user's own address automatically.
 
-use crate::{error::AppError, market_data::MarketData};
+use crate::{
+    error::AppError,
+    market_data::{MarketData, OneClickToken},
+};
 use reqwest::header;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -17,6 +20,8 @@ use zeroize::Zeroizing;
 
 use crate::json_rpc::ONE_CLICK_ORIGIN as ORIGIN;
 pub const DEFAULT_CAP_USD: f64 = 25.0;
+/// The header 1Click documents for the partner JWT, used by every partner-key call.
+pub const PARTNER_KEY_HEADER: &str = "X-API-Key";
 const MAX_LEGS: usize = 8;
 const MAX_SLIPPAGE_BPS: u16 = 300;
 /// Quotes must be used within this window; the deposit address expires after it.
@@ -168,6 +173,31 @@ pub struct JarBuys {
     cap_usd: f64,
 }
 
+/// The per-quote USD cap (`JAR_BUY_CAP_USD`, default $25), shared by jar buys and the
+/// Confidential Intents quote proxy.
+pub fn cap_usd_from_env() -> anyhow::Result<f64> {
+    match std::env::var("JAR_BUY_CAP_USD")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+    {
+        Some(v) => v
+            .parse::<f64>()
+            .ok()
+            .filter(|c| c.is_finite() && *c > 0.0 && *c <= 1_000.0)
+            .ok_or_else(|| anyhow::anyhow!("JAR_BUY_CAP_USD must be between 0 and 1000")),
+        None => Ok(DEFAULT_CAP_USD),
+    }
+}
+
+/// USD value of `amount` atomic units of `asset`, from the 1Click token list's price.
+/// `None` when the asset is unknown, unpriced or the amount isn't a positive integer.
+pub fn usd_value(tokens: &[OneClickToken], asset: &str, amount: &str) -> Option<f64> {
+    let token = tokens.iter().find(|t| t.asset_id == asset)?;
+    let price = token.price.filter(|p| p.is_finite() && *p > 0.0)?;
+    let amount = atomic(amount)?;
+    Some(amount as f64 / 10f64.powi(token.decimals as i32) * price)
+}
+
 fn safe(s: &str, max: usize) -> bool {
     !s.is_empty() && s.len() <= max && s.bytes().all(|b| b.is_ascii_graphic())
 }
@@ -182,19 +212,11 @@ fn atomic(s: &str) -> Option<u128> {
 impl JarBuys {
     pub fn from_env(market: Arc<MarketData>) -> anyhow::Result<Self> {
         let var = |k: &str| std::env::var(k).ok().filter(|v| !v.trim().is_empty());
-        let cap_usd = match var("JAR_BUY_CAP_USD") {
-            Some(v) => v
-                .parse::<f64>()
-                .ok()
-                .filter(|c| c.is_finite() && *c > 0.0 && *c <= 1_000.0)
-                .ok_or_else(|| anyhow::anyhow!("JAR_BUY_CAP_USD must be between 0 and 1000"))?,
-            None => DEFAULT_CAP_USD,
-        };
         Self::new(
             ORIGIN.into(),
             var("NEAR_INTENTS_API_KEY").map(Zeroizing::new),
             market,
-            cap_usd,
+            cap_usd_from_env()?,
         )
     }
 
@@ -230,7 +252,9 @@ impl JarBuys {
     async fn call(&self, request: reqwest::RequestBuilder) -> Result<Value, AppError> {
         let mut request = request.header(header::ACCEPT, "application/json");
         if let Some(key) = &self.api_key {
-            request = request.bearer_auth(key.as_str());
+            // 1Click's documented partner-key header (docs.near-intents.org, 1Click API >
+            // Authentication); `Authorization: Bearer` is reserved for user-session tokens.
+            request = request.header(PARTNER_KEY_HEADER, key.as_str());
         }
         let response = request.send().await.map_err(|_| AppError::Busy)?;
         let status = response.status();
@@ -392,10 +416,23 @@ fn check_quote(body: &Value, payload: &Value) -> Result<LegQuote, AppError> {
         "refundTo",
         "slippageTolerance",
         "dry",
+        "swapType",
         "depositType",
         "recipientType",
+        "refundType",
     ] {
         if request.get(field) != payload.get(field) {
+            return Err(AppError::Busy);
+        }
+    }
+    // 1Click may re-format the timestamp (e.g. add milliseconds), so compare instants.
+    let instant = |v: Option<&Value>| {
+        v.and_then(Value::as_str)
+            .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
+    };
+    if payload.get("deadline").is_some() {
+        let asked = instant(payload.get("deadline")).ok_or(AppError::Busy)?;
+        if instant(request.get("deadline")) != Some(asked) {
             return Err(AppError::Busy);
         }
     }
@@ -548,6 +585,52 @@ mod tests {
         let mut no_address = reply(&p, "1336500000000000000000000");
         no_address["quote"]["depositAddress"] = Value::Null;
         assert!(check_quote(&no_address, &p).is_err());
+    }
+
+    #[test]
+    fn rejects_changed_refund_swap_type_or_deadline() {
+        let r = request();
+        let p = payload(&r, &r.legs[0], "2026-11-08T12:15:00Z");
+        let ok = "1336500000000000000000000";
+        for (field, value) in [
+            ("refundType", json!("INTENTS")),
+            ("swapType", json!("EXACT_OUTPUT")),
+            ("deadline", json!("2026-11-09T12:15:00Z")),
+            ("deadline", Value::Null),
+        ] {
+            let mut changed = reply(&p, ok);
+            changed["quoteRequest"][field] = value;
+            assert!(
+                check_quote(&changed, &p).is_err(),
+                "{field} change accepted"
+            );
+        }
+        let mut missing = reply(&p, ok);
+        missing["quoteRequest"]
+            .as_object_mut()
+            .unwrap()
+            .remove("refundType");
+        assert!(check_quote(&missing, &p).is_err());
+        // The same instant written with milliseconds is still the same deadline.
+        let mut reformatted = reply(&p, ok);
+        reformatted["quoteRequest"]["deadline"] = json!("2026-11-08T12:15:00.000Z");
+        assert!(check_quote(&reformatted, &p).is_ok());
+    }
+
+    #[test]
+    fn usd_value_uses_token_price_and_decimals() {
+        let tokens = vec![OneClickToken {
+            asset_id: "nep141:usdc".into(),
+            blockchain: "near".into(),
+            symbol: "USDC".into(),
+            decimals: 6,
+            price: Some(1.0),
+            contract_address: None,
+            coingecko_id: None,
+        }];
+        assert_eq!(usd_value(&tokens, "nep141:usdc", "25000000"), Some(25.0));
+        assert_eq!(usd_value(&tokens, "nep141:other", "1"), None);
+        assert_eq!(usd_value(&tokens, "nep141:usdc", "0"), None);
     }
 
     #[test]

@@ -112,11 +112,10 @@ async fn buy_quote(
     input: Result<Json<DaoBuyRequest>, JsonRejection>,
 ) -> Result<Json<BuyQuote>, AppError> {
     let user = signed_in(&s, &headers).await?;
-    // Same per-user budget as /jar-buys/quote: each quote mints live 1Click deposit addresses.
+    // Same quota as /jar-buys/quote (per user and global): each quote mints live 1Click
+    // deposit addresses under the partner key.
     if let Some(identity) = s.identity.as_ref() {
-        identity
-            .rate_limit_scoped("jar-buy-quote", &user, super::jar_buys::QUOTES_PER_MINUTE)
-            .await?;
+        super::jar_buys::QUOTES.charge(identity, &user).await?;
     }
     let Json(input) = input.map_err(|e| AppError::BadRequest(e.body_text()))?;
     if !is_jar_dao(&input.dao) {

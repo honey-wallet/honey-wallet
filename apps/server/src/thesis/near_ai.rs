@@ -119,6 +119,14 @@ impl NearAi {
         let Some(key) = &self.api_key else {
             return Completion { value: None, call };
         };
+        // No response_format, the schema goes in the instructions instead: NEAR AI's strict
+        // `json_schema` mode never answered for DeepSeek (every call ran into the
+        // timeout), while the same model answers a plain request in about a second.
+        // `parse_checked` still validates the reply, and an invalid one is retried once.
+        let system = format!(
+            "{system}\nReply with one JSON object only, no prose and no code fences. It must \
+             match this JSON Schema ({schema_name}):\n{schema}"
+        );
         let mut messages = vec![
             json!({"role": "system", "content": system}),
             json!({"role": "user", "content": user}),
@@ -131,11 +139,7 @@ impl NearAi {
             let body = json!({
                 "model": model,
                 "messages": messages,
-                "temperature": 0.2,
-                "response_format": {
-                    "type": "json_schema",
-                    "json_schema": {"name": schema_name, "strict": true, "schema": schema}
-                }
+                "temperature": 0.2
             });
             let response = self
                 .client
