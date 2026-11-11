@@ -19,6 +19,7 @@ import { UnderlineTabs } from '@/components/motion/UnderlineTabs';
 import { PillButton } from '@/components/onboarding/PillButton';
 import { IntentsSwap } from '@/components/trade/IntentsSwap';
 import { PerpsMarkets } from '@/components/trade/PerpsMarkets';
+import { PopularPairs } from '@/components/trade/PopularPairs';
 import { PredictFeed } from '@/components/trade/PredictFeed';
 import { SwapReview } from '@/components/trade/SwapReview';
 import {
@@ -39,7 +40,7 @@ import {
   TypedAmount,
   trimNumber,
 } from '@/components/wallet/Keypad';
-import { EmptyState, HeaderIconButton, TokenIcon } from '@/components/wallet/parts';
+import { EmptyState, HeaderIconButton, SCREEN, TokenIcon } from '@/components/wallet/parts';
 import { SearchField } from '@/components/wallet/SearchField';
 import { TabScreen } from '@/components/wallet/TabScreen';
 import { tap } from '@/lib/haptics';
@@ -464,45 +465,54 @@ function SwapForm() {
 
       {/* In the browser the closed panel still took its room, a gap above the chips: mount it only with a quote. */}
       {isWeb && !quoted ? null : (
-        <PanelReveal open={quoted} style={styles.details}>
-          {isWeb ? (
-            // One line, the route and its cost; tap for the rest (review: in the popup the
-            // full panel pushed Review swap off the bottom).
-            <>
-              <PressableScale
-                accessibilityRole="button"
-                accessibilityState={{ expanded: detailsOpen }}
-                accessibilityLabel="Swap details"
-                scaleTo={1}
-                onPress={() => {
-                  tap();
-                  setDetailsOpen((v) => !v);
-                }}
-                style={styles.detailRow}
-              >
-                <Text style={styles.meta}>{route}</Text>
-                <View style={styles.detailSummary}>
-                  <Text style={styles.detailValue}>{networkCost}</Text>
-                  <AccordionChevron open={detailsOpen} size={11} color={c.textSecondary} />
-                </View>
-              </PressableScale>
-              <Accordion open={detailsOpen}>
-                <View style={styles.detailMore}>
-                  <DetailRow label="Network cost" value={networkCost} />
-                  <DetailRow label="Max slippage" value="Auto · 5.5%" />
-                  <DetailRow label="Price impact" value="<0.01%" />
-                </View>
-              </Accordion>
-            </>
-          ) : (
-            <>
-              <DetailRow label="Route" value={route} />
-              <DetailRow label="Network cost" value={networkCost} />
-              <DetailRow label="Max slippage" value="Auto · 5.5%" />
-              <DetailRow label="Price impact" value="<0.01%" />
-            </>
+        <View>
+          <PanelReveal open={quoted} style={styles.details}>
+            {isWeb ? (
+              // One line, the route and its cost; tap for the rest (review: in the popup the
+              // full panel pushed Review swap off the bottom).
+              <>
+                <PressableScale
+                  accessibilityRole="button"
+                  accessibilityState={{ expanded: detailsOpen }}
+                  accessibilityLabel="Swap details"
+                  scaleTo={1}
+                  onPress={() => {
+                    tap();
+                    setDetailsOpen((v) => !v);
+                  }}
+                  style={styles.detailRow}
+                >
+                  <Text style={styles.meta}>{route}</Text>
+                  <View style={styles.detailSummary}>
+                    <Text style={styles.detailValue}>{networkCost}</Text>
+                    <AccordionChevron open={detailsOpen} size={11} color={c.textSecondary} />
+                  </View>
+                </PressableScale>
+                <Accordion open={detailsOpen}>
+                  <View style={styles.detailMore}>
+                    <DetailRow label="Network cost" value={networkCost} />
+                    <DetailRow label="Max slippage" value="Auto · 5.5%" />
+                    <DetailRow label="Price impact" value="<0.01%" />
+                  </View>
+                </Accordion>
+              </>
+            ) : (
+              <>
+                <DetailRow label="Route" value={route} />
+                <DetailRow label="Network cost" value={networkCost} />
+                <DetailRow label="Max slippage" value="Auto · 5.5%" />
+                <DetailRow label="Price impact" value="<0.01%" />
+              </>
+            )}
+          </PanelReveal>
+          {/* The closed panel keeps its room so the keys don't jump when a quote lands;
+              before an amount is typed, popular pairs fill that room (review). */}
+          {amount || multisig ? null : (
+            <View style={styles.pairsSlot}>
+              <PopularPairs current={pair} gutter={SCREEN.gutter} />
+            </View>
           )}
-        </PanelReveal>
+        </View>
       )}
 
       {/* As in Uniswap: cards at the top, keypad and button at the bottom, open space
@@ -764,6 +774,7 @@ const useStyles = makeStyles((c) => ({
     alignItems: 'center',
     gap: 8,
   },
+  pairsSlot: { position: 'absolute', top: 0, left: 0, right: 0 },
   details: {
     marginTop: 12,
     paddingVertical: 12,

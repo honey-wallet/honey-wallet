@@ -4,10 +4,10 @@ import { Text, View } from 'react-native';
 import { PriceChart } from '@/components/charts/PriceChart';
 import { Icon, type IconName } from '@/components/Icon';
 import {
+  HoldingRow,
   JarIcon,
   layersOf,
   Owners,
-  PickIcon,
   signedPct,
   Tiles,
   visibilityLabel,
@@ -17,7 +17,6 @@ import { PressableScale } from '@/components/motion/PressableScale';
 import { SegmentedTabs } from '@/components/motion/SegmentedTabs';
 import { TextSwap } from '@/components/motion/TextSwap';
 import { PillButton } from '@/components/onboarding/PillButton';
-import { Description } from '@/components/sheets/Description';
 import { DetailGroup, StatusPill } from '@/components/sheets/Details';
 import { StatRow } from '@/components/sheets/Sheet';
 import { OptionChips } from '@/components/trade/TradeForm';
@@ -27,7 +26,6 @@ import { refreshJarBuy } from '@/lib/jar-buy';
 import { useDaoJar } from '@/lib/jar-dao';
 import { formatUsd } from '@/lib/mock-wallet';
 import { approvalsLeft, useMultisig, useProposal } from '@/lib/multisig';
-import type { Pick } from '@/lib/thesis';
 import { copyJar, jarReturn, jarValue, updateJarBuy, useThesisJars } from '@/lib/thesis';
 import { showToast } from '@/lib/toast';
 import { makeStyles, radius, useTheme } from '@/theme';
@@ -53,7 +51,7 @@ const CHART_HEIGHT = 220;
  * One jar, laid out like a Perps market page: what it is and its value (or, for
  * someone else's jar, its return) with the change, the chart across the full width and
  * its ranges, anything waiting on you, the jar's numbers as Perps' tiles, its holdings
- * as Home's token rows, owners, and the idea as a Description. Copying sits at the
+ * with share bars, owners, and the idea in a honey card under the chart. Copying sits at the
  * bottom like an order. Private jars show other people only their returns.
  */
 export default function JarScreen() {
@@ -124,7 +122,7 @@ export default function JarScreen() {
       fallback="/jars"
       title={
         <>
-          {layers ? <JarIcon jar={jar} size={20} ring={c.canvas} /> : null}
+          <JarIcon jar={jar} size={26} />
           <Text style={styles.headerTitle} numberOfLines={1}>
             {jar.name}
           </Text>
@@ -198,6 +196,17 @@ export default function JarScreen() {
         </View>
       )}
 
+      {/* The idea comes first: it's why the jar exists, and what you're copying. */}
+      <View style={[styles.section, styles.gutter]}>
+        <View style={styles.idea}>
+          <Text style={styles.ideaLabel}>The idea</Text>
+          <Text style={styles.ideaText}>{jar.thesis}</Text>
+          <Text style={styles.ideaBy}>
+            {jar.mine ? 'Your jar' : `By ${jar.creator}`} · started {started}
+          </Text>
+        </View>
+      </View>
+
       {/* Anything still waiting: an approval, a limit order, friends' shares. */}
       {jar.sharedWallet && approval && approval.status !== 'executed' ? (
         <View style={[styles.section, styles.gutter]}>
@@ -238,7 +247,7 @@ export default function JarScreen() {
 
       {/* The jar's numbers, as a Perps market's four tiles */}
       <View style={[styles.section, styles.gutter]}>
-        <Text style={styles.heading}>Jar</Text>
+        <Text style={styles.heading}>Stats</Text>
         <Tiles
           tiles={[
             {
@@ -295,17 +304,18 @@ export default function JarScreen() {
       <View style={[styles.section, styles.gutter]}>
         <Text style={styles.heading}>Holdings</Text>
         {layers && jar.picks.length ? (
+          // Each holding with a bar for its share, so the mix reads at a glance.
           jar.picks.map((p) => (
-            <Holding key={p.symbol} pick={p} total={jar.mine ? shown : undefined} />
+            <HoldingRow key={p.symbol} pick={p} total={jar.mine ? shown : undefined} />
           ))
         ) : (
-          <View style={styles.card}>
-            <EmptyState
-              compact
-              icon="eyeSlash"
-              title="Holdings are private"
-              hint="Only its members see what this jar holds. Copy it to hold the same mix."
-            />
+          <View style={styles.private}>
+            <View style={styles.privateWell}>
+              <Icon name="eyeSlash" size={16} color={c.accentText} />
+            </View>
+            <Text style={[styles.flex, styles.privateText]}>
+              Only its members see what this jar holds. Copying it buys the same mix.
+            </Text>
           </View>
         )}
       </View>
@@ -317,42 +327,10 @@ export default function JarScreen() {
         </View>
       ) : null}
 
-      <View style={[styles.section, styles.gutter]}>
-        <Description title="The idea" text={jar.thesis} />
-      </View>
-
       <Text style={[styles.gutter, styles.disclaimer]}>
         Jars hold real tokens and can lose value. Past returns don't promise future ones.
       </Text>
     </PushedScreen>
-  );
-}
-
-/**
- * A holding as Home lists a token: logo, name over its share and network, then the
- * dollars (your own jar) or its share on the right.
- */
-function Holding({ pick, total }: { pick: Pick; total?: number }) {
-  const styles = useStyles();
-  return (
-    <View style={styles.holding}>
-      <PickIcon pick={pick} size={40} />
-      <View style={styles.flex}>
-        <Text style={styles.rowTitle} numberOfLines={1}>
-          {pick.name}
-        </Text>
-        <Text style={styles.rowSubtitle} numberOfLines={1}>
-          {pick.symbol} · {pick.chain}
-          {pick.match === 'proxy' ? ' · proxy' : ''}
-        </Text>
-      </View>
-      <View style={styles.rowEnd}>
-        <Text style={styles.rowTitle}>
-          {total !== undefined ? formatUsd((total * pick.weight) / 100) : `${pick.weight}%`}
-        </Text>
-        {total !== undefined ? <Text style={styles.rowSubtitle}>{pick.weight}%</Text> : null}
-      </View>
-    </View>
   );
 }
 
@@ -449,6 +427,28 @@ const useStyles = makeStyles((c) => ({
   detail: { marginTop: 12 },
   heading: { marginBottom: 10, color: c.textSecondary, fontSize: 15 },
   card: { ...radius(20), backgroundColor: c.card },
+  // The idea, set apart in honey: the thesis in the jar's own words.
+  idea: { padding: 16, gap: 6, ...radius(20), backgroundColor: c.accentSurface },
+  ideaLabel: { color: c.accentText, fontSize: 13, fontWeight: '600', letterSpacing: 0.3 },
+  ideaText: { color: c.text, fontSize: 18, lineHeight: 25, fontWeight: '500' },
+  ideaBy: { marginTop: 2, color: c.textSecondary, fontSize: 13 },
+  private: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    padding: 14,
+    ...radius(18),
+    backgroundColor: c.card,
+  },
+  privateWell: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: c.accentSurface,
+  },
+  privateText: { color: c.textSecondary, fontSize: 14, lineHeight: 19 },
   notice: {
     flexDirection: 'row',
     alignItems: 'center',

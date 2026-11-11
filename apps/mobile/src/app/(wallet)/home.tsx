@@ -24,7 +24,7 @@ import {
 import { NftGallery } from '@/components/home/NftGallery';
 import { TradesList, useHasTrades } from '@/components/home/PositionsList';
 import { Icon, type IconName } from '@/components/Icon';
-import { JarList, NewJarCard } from '@/components/jars/JarParts';
+import { JarList } from '@/components/jars/JarParts';
 import { HoneyJar } from '@/components/logo/HoneyJar';
 import { Accordion, AccordionChevron } from '@/components/motion/Accordion';
 import { ContentSwap } from '@/components/motion/ContentSwap';
@@ -867,7 +867,6 @@ function HomeJars() {
     <View>
       <JarList jars={mine} />
       <View style={homeJars.links}>
-        <NewJarCard />
         <PressableRow
           accessibilityRole="button"
           onPress={() => {

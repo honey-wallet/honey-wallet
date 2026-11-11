@@ -9,9 +9,10 @@ import { PillButton } from '@/components/onboarding/PillButton';
 import { Copyable, ExplorerLink } from '@/components/sheets/Details';
 import { SheetHeader } from '@/components/sheets/Sheet';
 import { InlineTray } from '@/components/sheets/Tray';
+import { PopularPairs } from '@/components/trade/PopularPairs';
 import { Spinner } from '@/components/trade/SwapReview';
 import { applyKey, Keypad, PercentChips, TypedAmount } from '@/components/wallet/Keypad';
-import { TokenIcon } from '@/components/wallet/parts';
+import { SCREEN, TokenIcon } from '@/components/wallet/parts';
 import { backendSession, backendSessionToken } from '@/lib/backend-session';
 import { success, tap } from '@/lib/haptics';
 import {
@@ -328,7 +329,10 @@ function IntentsSwapForm() {
           <DetailRow label="Max slippage" value={`${current.slippageBps / 100}%`} />
           <DetailRow label="Quote good for" value={countdown(left)} />
         </View>
-      ) : null}
+      ) : amount ? null : (
+        // Before an amount is typed, popular pairs fill the room above the keypad (review).
+        <PopularPairs current={{ sell, buy }} gutter={SCREEN.gutter} />
+      )}
 
       <View style={styles.flex} />
       <PercentChips

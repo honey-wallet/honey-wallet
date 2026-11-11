@@ -73,12 +73,18 @@ export function StepScreen({ title, leading = 'back', children, footer, help }: 
 
 /** Styles shared by the individual step screens. */
 export const useStepStyles = makeStyles((c) => ({
+  // A visible box, so it's clear where to type (review: the bare line read as no field).
   input: {
     marginTop: 26,
     paddingVertical: 0,
-    height: 30,
+    paddingHorizontal: 16,
+    height: 56,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: c.divider,
+    backgroundColor: c.card,
     color: c.text,
-    fontSize: 22,
+    fontSize: 20,
     fontWeight: '500',
   },
   hint: {
@@ -87,14 +93,6 @@ export const useStepStyles = makeStyles((c) => ({
     fontSize: 12,
     lineHeight: 16,
     letterSpacing: 0.2,
-  },
-  footerRow: {
-    flexDirection: 'row',
-    // review: tighter in the 393px popup, where "Choose Photo" wrapped onto two lines.
-    gap: isWeb ? 12 : 17,
-  },
-  footerButton: {
-    flex: 1,
   },
 }));
 

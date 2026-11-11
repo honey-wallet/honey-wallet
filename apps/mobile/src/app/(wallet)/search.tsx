@@ -17,6 +17,7 @@ import { HeaderActions } from '@/components/wallet/HeaderActions';
 import { Change, EmptyState, NetworkGrid, TokenIcon } from '@/components/wallet/parts';
 import { SearchField } from '@/components/wallet/SearchField';
 import { TabScreen } from '@/components/wallet/TabScreen';
+import { WalletButton } from '@/components/wallet/WalletButton';
 import { hostOfUrl, toUrl } from '@/lib/browser';
 import { POSITIONS } from '@/lib/collectibles';
 import { reorderFavorites, toggleFavorite, useFavorites } from '@/lib/favorites';
@@ -149,6 +150,7 @@ export default function SearchScreen() {
       {/* The search bar stays at the top while results scroll. */}
       <Sticky id="search">
         <View style={styles.top}>
+          <WalletButton />
           <View style={styles.flex}>
             <SearchField
               value={query}

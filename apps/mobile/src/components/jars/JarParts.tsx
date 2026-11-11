@@ -2,13 +2,15 @@
 // rows are Explore's top-token rows, the sideways cards are Explore's favourites, and
 // the numbers are Perps' tile grid. HoldingRow is the chat and strategy's own row.
 import { router } from 'expo-router';
+import { useId } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import Svg, { Circle, Defs, LinearGradient, Path, Rect, Stop } from 'react-native-svg';
 import { Avatar } from '@/components/Avatar';
 import { DonutChart } from '@/components/charts/DonutChart';
 import { Icon } from '@/components/Icon';
 import { PressableRow } from '@/components/motion/PressableRow';
 import { PressableScale } from '@/components/motion/PressableScale';
-import { Change, TokenIcon } from '@/components/wallet/parts';
+import { Change, Sparkline, TokenIcon } from '@/components/wallet/parts';
 import { TOKEN_IMAGES } from '@/components/wallet/token-images';
 import { TOKEN_LOGOS } from '@/components/wallet/token-logos';
 import { tap } from '@/lib/haptics';
@@ -24,37 +26,189 @@ export const layersOf = (jar: ThesisJar) =>
     : undefined;
 
 /**
- * A jar's picture: the logos of what it holds, overlapping, or a lock when its holdings
- * are hidden. It keeps the width of a full stack so names line up in a list. `ring` is
- * the surface behind it.
+ * A jar's picture: a ring split by what it holds, in each holding's colour, with the
+ * biggest holding's logo in the middle. Hidden holdings show a grey ring and a lock. One
+ * clean mark per jar, so jars tell apart at a glance in a list.
  */
-export function JarIcon({
-  jar,
-  size = 32,
-  max = 3,
-  ring,
-}: {
-  jar: ThesisJar;
-  size?: number;
-  max?: number;
-  ring?: string;
-}) {
-  const picks = layersOf(jar) ? jar.picks.slice(0, max) : [];
-  const width = size + (max - 1) * size * 0.62;
+export function JarIcon({ jar, size = 40 }: { jar: ThesisJar; size?: number }) {
+  const c = useTheme();
+  const picks = layersOf(jar) ? jar.picks : [];
+  const stroke = Math.max(3, Math.round(size * 0.09));
+  const r = (size - stroke) / 2;
+  const mid = size / 2;
+  const total = picks.reduce((sum, p) => sum + p.weight, 0);
+  // A small gap between slices, in radians; none for a single slice.
+  const gap = picks.length > 1 ? Math.min(0.35, (stroke * 1.2) / r) : 0;
+  let at = -Math.PI / 2;
+  const arcs = picks.map((p) => {
+    const sweep = (p.weight / (total || 1)) * Math.PI * 2;
+    const a0 = at + gap / 2;
+    const a1 = at + sweep - gap / 2;
+    at += sweep;
+    const x0 = mid + r * Math.cos(a0);
+    const y0 = mid + r * Math.sin(a0);
+    const x1 = mid + r * Math.cos(a1);
+    const y1 = mid + r * Math.sin(a1);
+    const large = a1 - a0 > Math.PI ? 1 : 0;
+    return { key: p.symbol, color: p.color, d: `M${x0} ${y0} A${r} ${r} 0 ${large} 1 ${x1} ${y1}` };
+  });
+  const inner = size - stroke * 2 - Math.max(2, size * 0.06) * 2;
+  const top = [...picks].sort((a, b) => b.weight - a.weight)[0];
   return (
-    <View style={{ width, alignItems: 'flex-start' }}>
-      <TokenStack picks={picks} size={size} ring={ring} />
+    <View style={{ width: size, height: size, alignItems: 'center', justifyContent: 'center' }}>
+      <Svg width={size} height={size} style={StyleSheet.absoluteFill}>
+        {arcs.length === 1 ? (
+          <Circle
+            cx={mid}
+            cy={mid}
+            r={r}
+            stroke={arcs[0]?.color}
+            strokeWidth={stroke}
+            fill="none"
+          />
+        ) : arcs.length ? (
+          arcs.map((a) => (
+            <Path
+              key={a.key}
+              d={a.d}
+              stroke={a.color}
+              strokeWidth={stroke}
+              strokeLinecap="round"
+              fill="none"
+            />
+          ))
+        ) : (
+          <Circle cx={mid} cy={mid} r={r} stroke={c.raised} strokeWidth={stroke} fill="none" />
+        )}
+      </Svg>
+      {top ? (
+        <PickIcon pick={top} size={inner} />
+      ) : (
+        <View
+          style={{
+            width: inner,
+            height: inner,
+            borderRadius: inner / 2,
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: c.accentSurface,
+          }}
+        >
+          <Icon name="lock" size={inner * 0.45} color={c.accentText} />
+        </View>
+      )}
     </View>
   );
 }
 
 /** Ideas to start from, shared by the Jars page and the empty chat. */
-export const IDEAS = [
-  { title: 'AI keeps eating the world', hint: '$500 across AI infra tokens' },
-  { title: 'Privacy coins come back', hint: 'Bet on private money' },
-  { title: 'NS is entering Kazakhstan', hint: 'What can I actually buy?' },
-  { title: 'Gold over dollars', hint: 'Hedge a weaker dollar, low risk' },
+export const IDEAS: {
+  title: string;
+  hint: string;
+  /** The picture: a two-stop gradient, and the tokens the idea would likely buy. */
+  art: { from: string; to: string; tokens: string[]; sun?: boolean };
+}[] = [
+  {
+    title: 'AI keeps eating the world',
+    hint: '$500 across AI compute and model tokens',
+    art: { from: '#312E81', to: '#7C3AED', tokens: ['TAO', 'RENDER', 'NEAR'] },
+  },
+  {
+    title: 'Privacy coins come back',
+    hint: 'Bet on money nobody can watch',
+    art: { from: '#111827', to: '#4B5563', tokens: ['ZEC'] },
+  },
+  {
+    title: 'NS is entering Kazakhstan',
+    hint: 'What can I actually buy around it?',
+    art: { from: '#0EA5C6', to: '#38BDF8', tokens: [], sun: true },
+  },
+  {
+    title: 'Gold over dollars',
+    hint: 'Hedge a weaker dollar, low risk',
+    art: { from: '#B7791F', to: '#F6C453', tokens: ['PAXG', 'USDC'] },
+  },
 ];
+
+/**
+ * An idea's picture: a small tile in its own colours with the tokens it points at, or,
+ * for a place, a sun over the sky (Kazakhstan's flag colours, not its flag).
+ */
+function IdeaArt({ art, size = 68 }: { art: (typeof IDEAS)[number]['art']; size?: number }) {
+  const uid = `idea${useId().replace(/[^\w]/g, '')}`;
+  const coin = art.tokens.length > 2 ? size * 0.4 : size * 0.48;
+  return (
+    <View style={{ width: size, height: size, borderRadius: 16, overflow: 'hidden' }}>
+      <Svg width={size} height={size} style={StyleSheet.absoluteFill}>
+        <Defs>
+          <LinearGradient id={uid} x1="0" y1="0" x2="1" y2="1">
+            <Stop offset="0" stopColor={art.from} />
+            <Stop offset="1" stopColor={art.to} />
+          </LinearGradient>
+        </Defs>
+        <Rect width={size} height={size} fill={`url(#${uid})`} />
+        {/* A soft glow in the corner, so the tile reads as light on glass. */}
+        <Circle cx={size * 0.85} cy={size * 0.1} r={size * 0.45} fill="#FFFFFF" opacity={0.12} />
+        {art.sun ? (
+          <>
+            {Array.from({ length: 16 }, (_, i) => {
+              const a = (i / 16) * Math.PI * 2;
+              const r0 = size * 0.2;
+              const r1 = size * 0.3;
+              return (
+                <Path
+                  key={a}
+                  d={`M${size / 2 + r0 * Math.cos(a)} ${size * 0.46 + r0 * Math.sin(a)} L${size / 2 + r1 * Math.cos(a)} ${size * 0.46 + r1 * Math.sin(a)}`}
+                  stroke="#FCD34D"
+                  strokeWidth={2}
+                  strokeLinecap="round"
+                />
+              );
+            })}
+            <Circle cx={size / 2} cy={size * 0.46} r={size * 0.15} fill="#FCD34D" />
+            <Path
+              d={`M0 ${size * 0.86} Q${size * 0.3} ${size * 0.74} ${size * 0.55} ${size * 0.84} T${size} ${size * 0.8} V${size} H0Z`}
+              fill="#FFFFFF"
+              opacity={0.28}
+            />
+          </>
+        ) : null}
+      </Svg>
+      {art.tokens.length ? (
+        <View style={styles_ideaCoins.wrap}>
+          {art.tokens.map((symbol, i) => (
+            <View
+              key={symbol}
+              style={{
+                marginLeft: i ? -coin * 0.42 : 0,
+                borderRadius: coin,
+                borderWidth: 2,
+                borderColor: 'rgba(255,255,255,0.85)',
+                backgroundColor: '#FFFFFF',
+                zIndex: art.tokens.length - i,
+              }}
+            >
+              <TokenIcon symbol={symbol} size={coin} />
+            </View>
+          ))}
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+const styles_ideaCoins = StyleSheet.create({
+  wrap: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+});
 
 /** Who can see a jar, in the words the launch step uses. */
 export const visibilityLabel = (jar: ThesisJar) =>
@@ -215,8 +369,16 @@ export function Owners({ jar }: { jar: ThesisJar }) {
 
 /** A pick's logo: the token's own when Honey has one, else its initial on its colour. */
 export function PickIcon({ pick, size = 36 }: { pick: Pick; size?: number }) {
-  if (TOKEN_LOGOS[pick.symbol] || TOKEN_IMAGES[pick.symbol])
-    return <TokenIcon symbol={pick.symbol} size={size} />;
+  if (TOKEN_LOGOS[pick.symbol]) return <TokenIcon symbol={pick.symbol} size={size} />;
+  // Bitmap marks sit on a light coin: some (TAO's bare T) have no circle of their own.
+  if (TOKEN_IMAGES[pick.symbol])
+    return (
+      <View
+        style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: '#E2E2E2' }}
+      >
+        <TokenIcon symbol={pick.symbol} size={size} />
+      </View>
+    );
   return (
     <View
       style={{
@@ -399,7 +561,6 @@ export function Facts({ facts }: { facts: { label: string; value: string }[] }) 
  */
 export function JarRow({ jar, gutter, rank }: { jar: ThesisJar; gutter: number; rank?: number }) {
   const styles = useStyles();
-  const c = useTheme();
   const ret = jarReturn(jar);
   const hidden = !layersOf(jar);
   const tokens = hidden ? 'Holdings hidden' : jar.picks.map((p) => p.symbol).join(', ');
@@ -411,7 +572,7 @@ export function JarRow({ jar, gutter, rank }: { jar: ThesisJar; gutter: number; 
       style={[styles.row, { marginHorizontal: -gutter, paddingHorizontal: gutter }]}
     >
       {rank ? <Text style={styles.rank}>{rank}</Text> : null}
-      <JarIcon jar={jar} size={32} max={2} ring={c.canvas} />
+      <JarIcon jar={jar} size={40} />
       <View style={styles.flex}>
         <Text style={styles.name} numberOfLines={1}>
           {jar.name}
@@ -420,12 +581,18 @@ export function JarRow({ jar, gutter, rank }: { jar: ThesisJar; gutter: number; 
           {jar.mine ? `${people(jar)} · ${tokens}` : `${jar.creator} · ${jar.copiers} copied`}
         </Text>
       </View>
-      <View style={styles.end}>
-        <Text style={styles.value}>
-          {jar.mine ? formatUsd(jarValue(jar)) : `${jar.copyFee}% fee`}
-        </Text>
-        <Change value={ret * 100} />
-      </View>
+      {jar.mine ? (
+        <View style={styles.end}>
+          <Text style={styles.value}>{formatUsd(jarValue(jar))}</Text>
+          <Change value={ret * 100} />
+        </View>
+      ) : (
+        // Someone else's jar leads with how it did; its fee is the small print.
+        <View style={styles.end}>
+          <Text style={[styles.value, ret < 0 ? styles.down : styles.up]}>{signedPct(ret)}</Text>
+          <Text style={styles.fee}>{jar.copyFee}% fee</Text>
+        </View>
+      )}
     </PressableRow>
   );
 }
@@ -474,17 +641,21 @@ export function JarCarousel({ jars, gutter }: { jars: ThesisJar[]; gutter: numbe
             style={styles.feature}
           >
             <View style={styles.featureTop}>
-              <JarIcon jar={jar} size={28} />
+              <JarIcon jar={jar} size={36} />
               <Text style={[styles.featureValue, ret < 0 ? styles.down : styles.up]}>
                 {signedPct(ret)}
               </Text>
             </View>
-            <Text style={styles.featureSymbol} numberOfLines={2}>
+            <Text style={styles.featureSymbol} numberOfLines={1}>
               {jar.name}
             </Text>
             <Text style={styles.featureMeta} numberOfLines={1}>
               {jar.creator} · {jar.copiers} copied
             </Text>
+            {/* How it got there: the month's line, so a card reads as a market at a glance. */}
+            <View style={styles.featureLine}>
+              <Sparkline data={jar.history.slice(-30)} width={136} height={34} />
+            </View>
           </PressableScale>
         );
       })}
@@ -537,7 +708,7 @@ export function JarCard({ jar }: { jar: ThesisJar }) {
       style={styles.card}
     >
       <View style={styles.cardTop}>
-        <JarIcon jar={jar} size={36} max={jar.picks.length > 2 ? 3 : 2} />
+        <JarIcon jar={jar} size={52} />
         <View style={styles.flex}>
           <Text style={styles.cardName} numberOfLines={2}>
             {jar.name}
@@ -558,35 +729,6 @@ export function JarCard({ jar }: { jar: ThesisJar }) {
           {formatUsd(jar.openOrder.amount)} limit order waiting to fill
         </Text>
       ) : null}
-    </PressableScale>
-  );
-}
-
-/** The last card on your shelf: an empty jar that opens the idea chat. */
-export function NewJarCard() {
-  const styles = useStyles();
-  const c = useTheme();
-  return (
-    <PressableScale
-      accessibilityRole="button"
-      accessibilityLabel="Start a new jar"
-      scaleTo={0.98}
-      onPress={() => {
-        tap();
-        router.push('/thesis-chat');
-      }}
-      style={styles.newCard}
-    >
-      <View style={styles.newIcon}>
-        <Icon name="sparkles" size={18} color={c.accentText} />
-      </View>
-      <View style={styles.flex}>
-        <Text style={styles.name}>Start a new jar</Text>
-        <Text style={styles.meta}>Tell Honey an idea. It picks the tokens.</Text>
-      </View>
-      <View style={styles.newPlus}>
-        <Icon name="plus" size={16} color={c.onPrimary} />
-      </View>
     </PressableScale>
   );
 }
@@ -621,7 +763,7 @@ export function Exposure({ jars }: { jars: ThesisJar[] }) {
   );
 }
 
-/** Ideas to start a jar from, two to a row; each opens the chat with it asked. */
+/** Ideas to start a jar from, one card each with its picture; each opens the chat with it asked. */
 export function IdeaGrid() {
   const styles = useStyles();
   return (
@@ -637,12 +779,15 @@ export function IdeaGrid() {
           }}
           style={styles.idea}
         >
-          <Text style={styles.ideaTitle} numberOfLines={2}>
-            {idea.title}
-          </Text>
-          <Text style={styles.ideaHint} numberOfLines={2}>
-            {idea.hint}
-          </Text>
+          <IdeaArt art={idea.art} />
+          <View style={styles.flex}>
+            <Text style={styles.ideaTitle} numberOfLines={2}>
+              {idea.title}
+            </Text>
+            <Text style={styles.ideaHint} numberOfLines={2}>
+              {idea.hint}
+            </Text>
+          </View>
         </PressableScale>
       ))}
     </View>
@@ -673,7 +818,9 @@ const useStyles = makeStyles((c) => ({
     alignItems: 'flex-start',
     justifyContent: 'space-between',
   },
-  featureSymbol: { minHeight: 40, color: c.text, fontSize: 16, fontWeight: '500', lineHeight: 20 },
+  featureSymbol: { color: c.text, fontSize: 16, fontWeight: '600', lineHeight: 20 },
+  featureLine: { marginTop: 8 },
+  fee: { color: c.textSecondary, fontSize: 13, fontVariant: ['tabular-nums'] },
   featureValue: { fontSize: 17, fontWeight: '600', fontVariant: ['tabular-nums'] },
   featureMeta: { color: c.textSecondary, fontSize: 13 },
   up: { color: c.success },
@@ -690,47 +837,19 @@ const useStyles = makeStyles((c) => ({
   mixItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   mixText: { color: c.text, fontSize: 13, fontWeight: '500' },
   mixPct: { color: c.textSecondary, fontWeight: '400', fontVariant: ['tabular-nums'] },
-  newCard: {
+  // Ideas to start from, as the empty chat shows them.
+  ideas: { gap: 10 },
+  idea: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    ...radius(22),
-    borderWidth: 1.5,
-    borderStyle: 'dashed',
-    borderColor: c.divider,
-  },
-  newIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: c.accentSurface,
-  },
-  newPlus: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: c.primary,
-  },
-  // Ideas to start from, as the empty chat shows them.
-  ideas: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  idea: {
-    flexGrow: 1,
-    flexBasis: '45%',
-    minHeight: 84,
-    padding: 14,
-    gap: 4,
-    ...radius(18),
+    gap: 14,
+    padding: 12,
+    ...radius(20),
     borderWidth: 1,
     borderColor: c.divider,
   },
-  ideaTitle: { color: c.text, fontSize: 15, fontWeight: '600' },
-  ideaHint: { color: c.textSecondary, fontSize: 13, lineHeight: 18 },
+  ideaTitle: { color: c.text, fontSize: 16, fontWeight: '600', lineHeight: 21 },
+  ideaHint: { marginTop: 3, color: c.textSecondary, fontSize: 14, lineHeight: 19 },
   // The chat and strategy's asset row.
   stepper: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   stepButton: {

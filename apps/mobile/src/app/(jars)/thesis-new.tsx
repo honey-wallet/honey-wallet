@@ -558,19 +558,7 @@ export default function NewThesisSheet() {
   }
 
   return (
-    <SheetScreen
-      title="New idea"
-      size="fill"
-      footer={
-        <PillButton
-          label={
-            !text.trim() ? 'Describe your idea' : !value ? 'Set an amount' : 'Find what to buy'
-          }
-          disabled={!text.trim() || !value}
-          onPress={() => void build()}
-        />
-      }
-    >
+    <SheetScreen title="New idea" size="fill">
       <View style={styles.gap}>
         <View style={[styles.field, styles.idea]}>
           <TextInput
@@ -625,6 +613,18 @@ export default function NewThesisSheet() {
 
         <Text style={styles.section}>Risk</Text>
         <SegmentedTabs<Risk> options={[...RISKS]} value={risk} onChange={setRisk} fill />
+
+        {/* Right under the choices, not pinned to the sheet's bottom: the idea field opens
+            the keyboard at once, and a bottom button sat behind it with a gap above (review). */}
+        <View style={styles.go}>
+          <PillButton
+            label={
+              !text.trim() ? 'Describe your idea' : !value ? 'Set an amount' : 'Find what to buy'
+            }
+            disabled={!text.trim() || !value}
+            onPress={() => void build()}
+          />
+        </View>
       </View>
     </SheetScreen>
   );
@@ -643,8 +643,8 @@ const useStyles = makeStyles((c) => ({
     backgroundColor: c.card,
   },
   input: { color: c.text, fontSize: 17 },
-  idea: { minHeight: 140, paddingVertical: 12, justifyContent: 'flex-start' },
-  ideaInput: { minHeight: 116, textAlignVertical: 'top' },
+  idea: { minHeight: 96, paddingVertical: 12, justifyContent: 'flex-start' },
+  ideaInput: { minHeight: 72, textAlignVertical: 'top' },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   chip: {
     maxWidth: 200,
@@ -685,6 +685,7 @@ const useStyles = makeStyles((c) => ({
   amountEdit: { flexDirection: 'row', alignItems: 'center', gap: 2 },
   amountInput: { minWidth: 60, padding: 0 },
   footer: { gap: 8 },
+  go: { marginTop: 16 },
   footnote: { color: c.textSecondary, fontSize: 13, textAlign: 'center' },
   nameField: { flexDirection: 'row', alignItems: 'center', gap: 12, justifyContent: 'flex-start' },
   memberRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },

@@ -11,6 +11,7 @@ import { ProposalRow, ProposalRowSkeleton } from '@/components/wallet/MultisigPa
 import { EmptyState, TokenIcon } from '@/components/wallet/parts';
 import { SearchField } from '@/components/wallet/SearchField';
 import { TabScreen } from '@/components/wallet/TabScreen';
+import { WalletButton } from '@/components/wallet/WalletButton';
 import { tap } from '@/lib/haptics';
 import { LOADS } from '@/lib/loads';
 import { ACTIVITY, type Activity } from '@/lib/mock-wallet';
@@ -73,6 +74,7 @@ export default function ActivityScreen() {
     // The same top bar as Search: a search field, then the balance and settings.
     <TabScreen>
       <View style={styles.top}>
+        <WalletButton />
         <View style={styles.flex}>
           <SearchField value={query} onChangeText={setQuery} placeholder="Search activity" />
         </View>

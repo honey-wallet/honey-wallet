@@ -2,14 +2,7 @@ import { router } from 'expo-router';
 import { useState } from 'react';
 import { ScrollView, Text, View } from 'react-native';
 import { Icon } from '@/components/Icon';
-import {
-  Exposure,
-  IdeaGrid,
-  JarCard,
-  JarCarousel,
-  JarList,
-  NewJarCard,
-} from '@/components/jars/JarParts';
+import { Exposure, IdeaGrid, JarCard, JarCarousel, JarList } from '@/components/jars/JarParts';
 import { NumberPopIn } from '@/components/motion/NumberPopIn';
 import { PressableScale } from '@/components/motion/PressableScale';
 import { UnderlineTabs } from '@/components/motion/UnderlineTabs';
@@ -143,7 +136,6 @@ export default function JarsScreen() {
                 {mine.map((jar) => (
                   <JarCard key={jar.id} jar={jar} />
                 ))}
-                <NewJarCard />
               </View>
             ) : (
               <View style={styles.empty}>
@@ -177,7 +169,10 @@ export default function JarsScreen() {
                 <Text style={styles.seeAll}>See all</Text>
               </PressableScale>
             </View>
-            <JarCarousel jars={popular} gutter={SCREEN.gutter} />
+            {/* A list, not sideways cards: every jar is in view, nothing hides off the edge. */}
+            <View style={styles.listGap}>
+              <JarList jars={popular} gutter={SCREEN.gutter} />
+            </View>
             <Text style={[styles.heading, styles.section, styles.headingGap]}>
               Start from an idea
             </Text>
@@ -262,6 +257,7 @@ const useStyles = makeStyles((c) => ({
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   heading: { color: c.textSecondary, fontSize: 15 },
   headingGap: { marginBottom: 10 },
+  listGap: { marginTop: 4 },
   shelf: { marginTop: 8, gap: 10 },
   empty: { alignItems: 'center', gap: 8, paddingTop: 16, paddingHorizontal: 12 },
   emptyIcon: {

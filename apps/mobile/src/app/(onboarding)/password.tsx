@@ -61,16 +61,27 @@ export default function PasswordScreen() {
 }
 
 const useStyles = makeStyles((c) => ({
+  // The box is the row, so the eye sits inside it beside the text.
   field: {
+    marginTop: 26,
+    height: 56,
     flexDirection: 'row',
-    alignItems: 'flex-end',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: c.divider,
+    backgroundColor: c.card,
   },
   input: {
     flex: 1,
+    marginTop: 0,
+    paddingHorizontal: 0,
+    borderWidth: 0,
+    backgroundColor: 'transparent',
   },
   eye: {
     marginLeft: 12,
-    marginBottom: 4,
   },
   forgot: {
     marginTop: 38,

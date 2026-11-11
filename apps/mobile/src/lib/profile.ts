@@ -12,6 +12,8 @@ export type Profile = {
   photo: string | null;
   /** DiceBear seed for the generated avatar, used when there's no photo. */
   avatarSeed: string;
+  /** A line about yourself, shown with your name. Older saved profiles may not have one. */
+  bio?: string;
   haptics: boolean;
 };
 

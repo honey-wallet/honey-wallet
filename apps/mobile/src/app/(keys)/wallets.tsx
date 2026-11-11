@@ -11,6 +11,7 @@ import { PillButton } from '@/components/onboarding/PillButton';
 import { closeSheet, SHEET, SheetRow, SheetScreen, SheetSection } from '@/components/sheets/Sheet';
 import { TRAY_CLOSE } from '@/components/sheets/Tray';
 import { ChainIcons } from '@/components/wallet/ChainIcons';
+import { TokenIcon } from '@/components/wallet/parts';
 import { useCopy } from '@/lib/copy';
 import { tap } from '@/lib/haptics';
 import { LOADS } from '@/lib/loads';
@@ -296,6 +297,17 @@ export default function WalletsSheet() {
           onPress={() => open('/add-wallet')}
         />
       </View>
+
+      {/* The open wallet's address on each network, one tap to copy: a profile has
+          several, so they live here rather than on the profile (review). */}
+      {activeAddresses.length ? (
+        <>
+          <SheetSection title={`${active.label} addresses`} />
+          {activeAddresses.map((a) => (
+            <AddressRow key={a.family} title={a.title} symbol={a.symbol} address={a.address} />
+          ))}
+        </>
+      ) : null}
     </SheetScreen>
   );
 }
@@ -435,6 +447,30 @@ function WalletRow({
           </View>
         </View>
       }
+    />
+  );
+}
+
+/** One network's address: its coin, the network and the short address; tap to copy. */
+function AddressRow({
+  title,
+  symbol,
+  address,
+}: {
+  title: string;
+  symbol: string;
+  address: string;
+}) {
+  const c = useTheme();
+  const { copied, copy } = useCopy(address, 'Address copied');
+  return (
+    <SheetRow
+      leading={<TokenIcon symbol={symbol} size={34} />}
+      title={title}
+      subtitle={shortAddress(address, 6, 4)}
+      accessibilityLabel={`Copy ${title} address`}
+      accessory={<IconSwap name={copied ? 'check' : 'copy'} size={16} color={c.textSecondary} />}
+      onPress={copy}
     />
   );
 }

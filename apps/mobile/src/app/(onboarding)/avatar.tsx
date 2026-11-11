@@ -48,14 +48,14 @@ export default function AvatarScreen() {
     <StepScreen
       title="Add a profile picture"
       footer={
-        <View style={stepStyles.footerRow}>
+        // Stacked, full width: side by side the photo button's label wrapped (review).
+        <View style={styles.footer}>
           <PillButton
             variant="secondary"
-            label={photo ? 'Change Photo' : 'Choose Photo'}
+            label={photo ? 'Change photo' : 'Choose photo'}
             onPress={choosePhoto}
-            style={stepStyles.footerButton}
           />
-          <PillButton label="Continue" onPress={finish} style={stepStyles.footerButton} />
+          <PillButton label="Continue" onPress={finish} />
         </View>
       }
     >
@@ -123,5 +123,8 @@ const useStyles = makeStyles((c) => ({
     color: c.text,
     fontSize: 22,
     fontWeight: '600',
+  },
+  footer: {
+    gap: 10,
   },
 }));

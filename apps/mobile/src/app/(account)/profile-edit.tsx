@@ -3,41 +3,40 @@ import { useState } from 'react';
 import { Text, TextInput, View } from 'react-native';
 import { Avatar, randomAvatarSeed } from '@/components/Avatar';
 import { Icon, type IconName } from '@/components/Icon';
-import { IconSwap, Swap } from '@/components/motion/IconSwap';
+import { Swap } from '@/components/motion/IconSwap';
 import { PressableScale } from '@/components/motion/PressableScale';
 import { TextSwap } from '@/components/motion/TextSwap';
 import { PillButton } from '@/components/onboarding/PillButton';
 import { closeSheet, SheetHeader, SheetScreen } from '@/components/sheets/Sheet';
-import { useCopy } from '@/lib/copy';
 import { tap } from '@/lib/haptics';
-import { shortAddress } from '@/lib/mock-wallet';
 import { setProfile, useProfile } from '@/lib/profile';
-import { receiveAddresses } from '@/lib/receive';
 import { showToast } from '@/lib/toast';
-import { useActiveWallet } from '@/lib/wallets';
 import { makeStyles, radius, useTheme } from '@/theme';
 
 const AVATAR = 104;
 const MAX_NAME = 32;
+const MAX_BIO = 120;
 
 /**
- * Edit the name and photo: all a wallet profile needs, and all anyone sees. Photo
+ * Edit the name, photo and a short bio: what friends see of you. Addresses live under
+ * Receive, since a profile has many. Photo
  * actions sit in plain sight under the avatar rather than behind a ••• menu.
  */
 export default function ProfileEditSheet() {
   const styles = useStyles();
-  const wallet = useActiveWallet();
   const c = useTheme();
   const profile = useProfile();
   const [name, setName] = useState(profile.name);
   const [photo, setPhoto] = useState(profile.photo);
   const [seed, setSeed] = useState(profile.avatarSeed);
-  const address = receiveAddresses(wallet)[0]?.address ?? '';
-  const { copied, copy } = useCopy(address, 'Address copied');
+  const [bio, setBio] = useState(profile.bio ?? '');
 
   const trimmed = name.trim();
   const changed =
-    trimmed !== profile.name || photo !== profile.photo || seed !== profile.avatarSeed;
+    trimmed !== profile.name ||
+    photo !== profile.photo ||
+    seed !== profile.avatarSeed ||
+    bio.trim() !== (profile.bio ?? '');
   const valid = trimmed.length > 0;
 
   const choosePhoto = async () => {
@@ -59,7 +58,7 @@ export default function ProfileEditSheet() {
 
   const save = () => {
     tap();
-    setProfile({ name: trimmed, photo, avatarSeed: seed });
+    setProfile({ name: trimmed, photo, avatarSeed: seed, bio: bio.trim() });
     showToast('Profile saved');
     closeSheet();
   };
@@ -140,24 +139,27 @@ export default function ProfileEditSheet() {
         </Text>
       </View>
 
-      <PressableScale
-        accessibilityRole="button"
-        accessibilityLabel="Copy wallet address"
-        onPress={copy}
-        scaleTo={0.98}
-        style={styles.address}
-      >
-        <View style={styles.addressWell}>
-          <Icon name="wallet" size={16} color={c.accentText} />
-        </View>
-        <View style={styles.flex}>
-          <Text style={styles.addressLabel}>Wallet address</Text>
-          <Text style={styles.addressValue}>
-            {address ? shortAddress(address, 6, 4) : 'Receive unavailable'}
-          </Text>
-        </View>
-        <IconSwap name={copied ? 'check' : 'copy'} size={16} color={c.textSecondary} />
-      </PressableScale>
+      <Text style={styles.section}>Bio</Text>
+      <View style={[styles.field, styles.bioField]}>
+        <TextInput
+          value={bio}
+          onChangeText={setBio}
+          placeholder="What you're into, what you're building"
+          placeholderTextColor={c.placeholder}
+          style={[styles.input, styles.bioInput]}
+          selectionColor={c.primary}
+          cursorColor={c.accentText}
+          maxLength={MAX_BIO}
+          multiline
+          accessibilityLabel="Bio"
+        />
+      </View>
+      <View style={styles.hintRow}>
+        <Text style={styles.hint}>Friends see it with your name</Text>
+        <Text style={styles.count}>
+          {bio.length}/{MAX_BIO}
+        </Text>
+      </View>
 
       <PillButton label="Save" disabled={!changed || !valid} onPress={save} style={styles.save} />
     </SheetScreen>
@@ -232,6 +234,18 @@ const useStyles = makeStyles((c) => ({
     borderColor: 'transparent',
     backgroundColor: c.card,
   },
+  bioField: {
+    height: undefined,
+    minHeight: 76,
+    alignItems: 'flex-start',
+    paddingVertical: 14,
+  },
+  bioInput: {
+    fontSize: 16,
+    fontWeight: '400',
+    lineHeight: 21,
+    textAlignVertical: 'top',
+  },
   fieldError: {
     borderColor: c.error,
   },
@@ -264,34 +278,6 @@ const useStyles = makeStyles((c) => ({
   count: {
     color: c.textSecondary,
     fontSize: 13,
-    fontVariant: ['tabular-nums'],
-  },
-  address: {
-    marginTop: 20,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    padding: 14,
-    ...radius(20),
-    backgroundColor: c.card,
-  },
-  addressWell: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: c.accentSurface,
-  },
-  addressLabel: {
-    color: c.textSecondary,
-    fontSize: 13,
-  },
-  addressValue: {
-    marginTop: 2,
-    color: c.text,
-    fontSize: 16,
-    fontWeight: '500',
     fontVariant: ['tabular-nums'],
   },
   save: {
