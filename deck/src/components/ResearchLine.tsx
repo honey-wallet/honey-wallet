@@ -159,7 +159,7 @@ export default function ResearchLine({
               d={path(s.points)}
               initial={animate ? { pathLength: 0 } : false}
               animate={{ pathLength: inView ? 1 : 0 }}
-              transition={{ duration: 1.4, ease: [0.16, 1, 0.3, 1] }}
+              transition={{ duration: 2.1, ease: [0.16, 1, 0.3, 1] }}
             />
           ))}
           {series.map((s) => {
@@ -169,7 +169,7 @@ export default function ResearchLine({
                 key={s.name}
                 initial={animate ? { opacity: 0 } : false}
                 animate={{ opacity: inView ? 1 : 0 }}
-                transition={{ delay: 1.1 }}
+                transition={{ delay: 1.65 }}
               >
                 <circle className={`rl-dot ${s.tone}`} cx={X(lx)} cy={Y(ly)} r={5 * SCALE} />
                 <text className={`rl-end ${s.tone}`} x={X(lx) + 12 * SCALE} y={Y(ly) - 2 * SCALE}>

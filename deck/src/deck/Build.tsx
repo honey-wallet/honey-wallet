@@ -42,7 +42,7 @@ export default function Build({
         opacity: shown ? 1 : 0,
         y: shown ? 0 : y,
       }}
-      transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
+      transition={{ duration: 0.7, ease: [0.16, 1, 0.3, 1] }}
     >
       {children}
     </motion.div>

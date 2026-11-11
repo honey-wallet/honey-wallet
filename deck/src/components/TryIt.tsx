@@ -15,7 +15,7 @@ export default function TryIt({ commands, steps }: { commands: string[]; steps: 
   const rise = (i: number) => ({
     initial: animate ? { opacity: 0, y: 18 } : false,
     animate: { opacity: 1, y: 0 },
-    transition: { delay: animate ? 0.2 + i * 0.12 : 0, duration: 0.55, ease: EASE },
+    transition: { delay: animate ? 0.3 + i * 0.18 : 0, duration: 0.83, ease: EASE },
   });
 
   return (

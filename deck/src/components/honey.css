@@ -913,3 +913,67 @@
   font-size: clamp(11px, 0.95vw, 13px);
   color: var(--fg-muted);
 }
+
+/* The chain list on the Routes slide: all of them, four to a row. */
+.rp-chains.dense {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px 6px;
+}
+.rp-chains.dense small {
+  font-size: 0.72em;
+  white-space: nowrap;
+}
+
+/* Contacts on the close and thank-you slides: icon, small label, the address. */
+.ct {
+  list-style: none;
+  margin: 36px auto 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, max-content));
+  justify-content: center;
+  gap: 22px 44px;
+  text-align: left;
+}
+.ct-compact {
+  margin-top: 28px;
+}
+.ct a {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  color: var(--fg);
+  text-decoration: none;
+}
+.ct-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  background: rgb(255 255 255 / 6%);
+  border: 1px solid rgb(255 255 255 / 10%);
+  color: var(--primary);
+}
+.ct-icon svg {
+  width: 20px;
+  height: 20px;
+}
+.ct-text {
+  display: grid;
+  gap: 2px;
+}
+.ct-text small {
+  font-size: 13px;
+  color: var(--muted, #9a9a9a);
+}
+.ct-text b {
+  font-size: 18px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.ct a:hover b {
+  color: var(--primary);
+}

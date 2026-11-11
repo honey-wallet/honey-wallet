@@ -28,6 +28,16 @@ export const LOGOS = {
   coinbasewallet: { name: 'Coinbase Wallet', src: asset('logos/wallet-coinbase.svg') },
   sender: { name: 'Sender', src: asset('logos/wallet-sender.svg') },
   github: { name: 'GitHub', src: asset('logos/github.svg'), chip: 'transparent' },
+  // Official network marks, @web3icons/core 4.0.59 (MIT), "background" style.
+  arbitrum: { name: 'Arbitrum', src: asset('logos/arbitrum.svg') },
+  optimism: { name: 'Optimism', src: asset('logos/optimism.svg') },
+  polygon: { name: 'Polygon', src: asset('logos/polygon.svg') },
+  bnb: { name: 'BNB Chain', src: asset('logos/bnb-chain.svg') },
+  avalanche: { name: 'Avalanche', src: asset('logos/avalanche.svg') },
+  gnosis: { name: 'Gnosis', src: asset('logos/gnosis.svg') },
+  linea: { name: 'Linea', src: asset('logos/linea.svg') },
+  scroll: { name: 'Scroll', src: asset('logos/scroll.svg') },
+  injective: { name: 'Injective', src: asset('logos/injective.svg') },
 } satisfies Record<string, Mark>;
 
 export type LogoId = keyof typeof LOGOS;
@@ -45,6 +55,15 @@ const ALIAS: Record<string, LogoId> = {
   Aerodrome: 'aerodrome',
   Jupiter: 'jupiter',
   Ref: 'ref',
+  Arbitrum: 'arbitrum',
+  Optimism: 'optimism',
+  Polygon: 'polygon',
+  BNB: 'bnb',
+  Avalanche: 'avalanche',
+  Gnosis: 'gnosis',
+  Linea: 'linea',
+  Scroll: 'scroll',
+  Injective: 'injective',
 };
 export const logoFor = (key: string): LogoId | undefined => ALIAS[key];
 

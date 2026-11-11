@@ -31,7 +31,7 @@ export default function HBars({
               className={`hb-bar${r.value < muteBelow ? ' muted' : ''}`}
               initial={animate ? { width: 0 } : false}
               animate={{ width: inView ? `${r.value}%` : 0 }}
-              transition={{ duration: 0.9, delay: i * 0.08, ease: [0.16, 1, 0.3, 1] }}
+              transition={{ duration: 1.35, delay: i * 0.12, ease: [0.16, 1, 0.3, 1] }}
             />
           </span>
           <span className="hb-value">{Math.round(r.value)}%</span>

@@ -16,7 +16,7 @@ type Pick = {
   color: string;
 };
 
-const STEP_MS = 1250; // long enough to read each step aloud
+const STEP_MS = 1850; // long enough to read each step aloud
 const EASE = [0.16, 1, 0.3, 1] as const;
 
 export default function AgentRun({
@@ -50,12 +50,12 @@ export default function AgentRun({
         <motion.div
           layout="position"
           className="ag2-stage"
-          transition={{ duration: 0.8, ease: EASE }}
+          transition={{ duration: 1.2, ease: EASE }}
         >
           <motion.div
             layout="position"
             className="ag2-head"
-            transition={{ duration: 0.8, ease: EASE }}
+            transition={{ duration: 1.2, ease: EASE }}
           >
             <Brand id="near" size={done ? '28px' : '40px'}>
               NEAR AI Cloud
@@ -73,12 +73,12 @@ export default function AgentRun({
                     animate={{
                       opacity: 1,
                       y: 0,
-                      transition: { delay: 0.18, duration: 0.5, ease: EASE },
+                      transition: { delay: 0.27, duration: 0.75, ease: EASE },
                     }}
                     exit={{
                       opacity: 0,
                       y: -28,
-                      transition: { duration: 0.25, ease: [0.4, 0, 1, 1] },
+                      transition: { duration: 0.38, ease: [0.4, 0, 1, 1] },
                     }}
                   >
                     {stages[step]}
@@ -116,7 +116,7 @@ export default function AgentRun({
                   key={s}
                   initial={animate ? { opacity: 0, x: -16 } : false}
                   animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: animate ? 0.35 + i * 0.06 : 0, duration: 0.4, ease: EASE }}
+                  transition={{ delay: animate ? 0.52 + i * 0.09 : 0, duration: 0.6, ease: EASE }}
                 >
                   <span className="ag2-n" aria-hidden>
                     {i + 1}
@@ -134,7 +134,7 @@ export default function AgentRun({
               className="ag2-card"
               initial={animate ? { opacity: 0, x: 80, scale: 0.97 } : false}
               animate={{ opacity: 1, x: 0, scale: 1 }}
-              transition={{ delay: animate ? 0.25 : 0, duration: 0.8, ease: EASE }}
+              transition={{ delay: animate ? 0.38 : 0, duration: 1.2, ease: EASE }}
             >
               <div className="ag2-kicker">Proposal</div>
               <div className="ag2-thesis">{thesis}</div>
@@ -144,7 +144,11 @@ export default function AgentRun({
                     key={p.symbol}
                     initial={animate ? { opacity: 0, y: 14 } : false}
                     animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: animate ? 0.55 + i * 0.1 : 0, duration: 0.45, ease: EASE }}
+                    transition={{
+                      delay: animate ? 0.83 + i * 0.15 : 0,
+                      duration: 0.68,
+                      ease: EASE,
+                    }}
                   >
                     {logoFor(p.symbol) ? (
                       <Logo id={logoFor(p.symbol)!} size="clamp(40px, 3.6vw, 56px)" />
@@ -168,8 +172,8 @@ export default function AgentRun({
                           initial={animate ? { scaleX: 0 } : false}
                           animate={{ scaleX: 1 }}
                           transition={{
-                            delay: animate ? 0.75 + i * 0.1 : 0,
-                            duration: 0.7,
+                            delay: animate ? 1.12 + i * 0.15 : 0,
+                            duration: 1.05,
                             ease: EASE,
                           }}
                         />
@@ -182,7 +186,7 @@ export default function AgentRun({
                 className="ag2-critic"
                 initial={animate ? { opacity: 0, y: 10 } : false}
                 animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: animate ? 1.15 : 0, duration: 0.45, ease: EASE }}
+                transition={{ delay: animate ? 1.72 : 0, duration: 0.68, ease: EASE }}
               >
                 <b>Critic</b> {caution}
               </motion.div>

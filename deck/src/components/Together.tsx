@@ -9,8 +9,8 @@ import { asset } from '../asset';
    Copy is from apps/mobile/src/app/(jars)/thesis-new.tsx; faces are the app's DiceBear avatars. */
 
 const EASE = [0.16, 1, 0.3, 1] as const;
-const T0 = 0.3,
-  COL = 1.2; // first panel, then one every 1.2 s
+const T0 = 0.45,
+  COL = 1.8; // first panel, then one every 1.8 s
 
 const VISIBILITY = [
   { id: 'members', icon: 'lock', title: 'Only members' },
@@ -53,9 +53,9 @@ export default function Together() {
   const panel = (i: number) => ({
     initial: animate ? { opacity: 0, y: 24 } : false,
     animate: { opacity: 1, y: 0 },
-    transition: { delay: at(T0 + i * COL), duration: 0.6, ease: EASE },
+    transition: { delay: at(T0 + i * COL), duration: 0.9, ease: EASE },
   });
-  const after = (i: number, d: number) => T0 + i * COL + d; // a beat inside panel i
+  const after = (i: number, d: number) => T0 + i * COL + d * 1.5; // a beat inside panel i
 
   return (
     <div className="tg">
@@ -73,7 +73,7 @@ export default function Together() {
                 alt="A friend"
                 initial={animate ? { opacity: 0, x: -24 } : false}
                 animate={{ opacity: 1, x: 0 }}
-                transition={{ delay: at(after(0, 0.6)), duration: 0.5, ease: EASE }}
+                transition={{ delay: at(after(0, 0.6)), duration: 0.75, ease: EASE }}
               />
             </div>
             <div className="tg-who">
@@ -84,12 +84,12 @@ export default function Together() {
               <motion.i
                 initial={animate ? { flexGrow: 1 } : false}
                 animate={{ flexGrow: 0.5 }}
-                transition={{ delay: at(after(0, 0.8)), duration: 0.7, ease: EASE }}
+                transition={{ delay: at(after(0, 0.8)), duration: 1.05, ease: EASE }}
               />
               <motion.i
                 initial={animate ? { flexGrow: 0 } : false}
                 animate={{ flexGrow: 0.5 }}
-                transition={{ delay: at(after(0, 0.8)), duration: 0.7, ease: EASE }}
+                transition={{ delay: at(after(0, 0.8)), duration: 1.05, ease: EASE }}
               />
             </div>
           </div>
@@ -116,7 +116,7 @@ export default function Together() {
                       aria-hidden
                       initial={animate ? { opacity: 0 } : false}
                       animate={{ opacity: 1 }}
-                      transition={{ delay: at(after(1, 0.7)), duration: 0.35 }}
+                      transition={{ delay: at(after(1, 0.7)), duration: 0.52 }}
                     />
                   )}
                   <span className="tg-badge">
@@ -128,7 +128,7 @@ export default function Together() {
                       <motion.i
                         initial={animate ? { scale: 0 } : false}
                         animate={{ scale: 1 }}
-                        transition={{ delay: at(after(1, 0.8)), duration: 0.3, ease: EASE }}
+                        transition={{ delay: at(after(1, 0.8)), duration: 0.45, ease: EASE }}
                       />
                     )}
                   </span>
@@ -157,7 +157,7 @@ export default function Together() {
                       aria-hidden
                       initial={animate ? { x: '-200%', opacity: 0 } : false}
                       animate={{ x: '0%', opacity: 1 }}
-                      transition={{ delay: at(after(2, 0.6)), duration: 0.7, ease: EASE }}
+                      transition={{ delay: at(after(2, 0.6)), duration: 1.05, ease: EASE }}
                     />
                   )}
                   <b>{f}%</b>

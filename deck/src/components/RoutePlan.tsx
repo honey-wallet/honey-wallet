@@ -14,20 +14,34 @@ const CHAIN: Record<string, string> = {
   Base: '#0000FF',
   Solana: '#9945FF',
   NEAR: '#00C08B',
+  Arbitrum: '#12AAFF',
+  Optimism: '#FF0420',
+  Polygon: '#7B3FE4',
+  BNB: '#F0B90B',
+  Avalanche: '#E84142',
+  Gnosis: '#3E6957',
+  Linea: '#61DFFF',
+  Scroll: '#EB7106',
+  Injective: '#4D3DFF',
 };
 const usd = (n: number) => `$${n.toLocaleString('en-US')}`;
 
 /* The chains a plan touches, as real marks ringed in the colour their bars use (the bars' legend). */
-export function ChainMarks({ chains }: { chains: string[] }) {
+export function ChainMarks({ chains, dense }: { chains: string[]; dense?: boolean }) {
   return (
-    <span className="rp-chains">
+    <span className={`rp-chains${dense ? ' dense' : ''}`}>
       {chains.map((c) => (
         <span key={c} className="rp-chain" title={c}>
           <span
             className="rp-ring"
             style={{ boxShadow: `0 0 0 2px #131313, 0 0 0 4px ${CHAIN[c] ?? 'var(--fg)'}` }}
           >
-            {logoFor(c) && <Logo id={logoFor(c)!} size="clamp(26px, 2.4vw, 36px)" />}
+            {logoFor(c) && (
+              <Logo
+                id={logoFor(c)!}
+                size={dense ? 'clamp(20px, 1.7vw, 28px)' : 'clamp(26px, 2.4vw, 36px)'}
+              />
+            )}
           </span>
           <small>{c}</small>
         </span>
@@ -64,8 +78,8 @@ export default function RoutePlan({ routes, from }: { routes: Route[]; from: Rea
                 initial={animate ? { scaleX: 0 } : false}
                 animate={{ scaleX: 1 }}
                 transition={{
-                  delay: animate ? 0.35 + i * 0.12 : 0,
-                  duration: 0.8,
+                  delay: animate ? 0.52 + i * 0.18 : 0,
+                  duration: 1.2,
                   ease: [0.16, 1, 0.3, 1],
                 }}
               >

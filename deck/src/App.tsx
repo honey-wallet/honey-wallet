@@ -2,8 +2,9 @@ import AgentRun from './components/AgentRun';
 import ChartSlide, { AsideStat, BigStats } from './components/ChartSlide';
 import { cite } from './components/Cite';
 import Clip from './components/Clip';
+import Contacts from './components/Contacts';
 import Friends from './components/Friends';
-import Logo, { Brand, LogoStack } from './components/Logo';
+import { Brand, LogoStack } from './components/Logo';
 import RoutePlan, { ChainMarks } from './components/RoutePlan';
 import Together from './components/Together';
 import { agentStages, samplePicks, sampleRoutes, sources } from './data/sources';
@@ -17,6 +18,22 @@ import { asset } from './asset';
    product facts come from the honey-wallet repository and its test mode. */
 
 const REPO = 'https://github.com/honey-wallet/honey-wallet';
+/* Every chain Honey holds and buys on: the EVM networks (one address on all of them), Solana and NEAR. */
+const CHAINS = [
+  'Ethereum',
+  'Base',
+  'Arbitrum',
+  'Optimism',
+  'Polygon',
+  'BNB',
+  'Avalanche',
+  'Gnosis',
+  'Linea',
+  'Scroll',
+  'Injective',
+  'Solana',
+  'NEAR',
+];
 
 const Lockup = ({ big }: { big?: boolean }) => (
   <div className={`hl${big ? ' big' : ''}`}>
@@ -71,7 +88,7 @@ export default function App() {
       <ChartSlide
         nav="The market"
         notes="Crypto.com estimates 741 million owners at the end of 2025, up from 659 million. Reown and Nansen surveyed 1,038 active users in the US and UK: 62% use two or more wallets, and the top reason, at 48%, is reaching different chains. NEAR Intents is the rail that already moves this money across chains."
-        title="2. 741M own crypto, across chains."
+        title="2. 741M own crypto on many chains. They need one easy app."
         source={
           <>
             <b>Figure 2.</b> End of 2025 {cite(1)} · 1,038 active users {cite(2)} · 9 Nov 2026{' '}
@@ -136,7 +153,7 @@ export default function App() {
       <ChartSlide
         nav="The agent"
         notes="These are the six steps the app shows while the agent works on NEAR AI Cloud. The proposal names each pick, its chain, its weight and why. A critic agent writes the strongest objection, so the user sees the case against before buying."
-        title="4. The agent shows its work."
+        title="4. The agent picks tokens from your thesis."
         source={
           <>
             <b>Figure 4.</b> Honey app, test mode, $500.
@@ -155,7 +172,7 @@ export default function App() {
       <ChartSlide
         nav="Routes"
         notes="The route planner spreads each buy across the venues and chains where it trades, cheapest first, within the user's max slippage. Here a $5,000 jar starting as USDC on Base fills on four chains: TAO splits across Uniswap on Ethereum and Aerodrome on Base. These are the planner's real outputs on test-mode prices and pool depths."
-        title="5. One approval, every chain."
+        title="5. One approval, every chain. Easy to use."
         source={
           <>
             <b>Figure 5.</b> Route planner, $5,000 jar, test-mode prices.
@@ -164,8 +181,8 @@ export default function App() {
         aside={
           <>
             <AsideStat
-              value="4 chains"
-              label={<ChainMarks chains={['Ethereum', 'Base', 'Solana', 'NEAR']} />}
+              value={`${CHAINS.length} chains`}
+              label={<ChainMarks dense chains={CHAINS} />}
             />
             <AsideStat value="1%" label="max slippage" />
           </>
@@ -185,7 +202,7 @@ export default function App() {
       <ChartSlide
         nav="NEAR"
         notes="NEAR AI Cloud runs the agent (apps/server/src/thesis/near_ai.rs). NEAR Intents 1Click quotes and settles every buy and bridge (providers/near_intents.rs, api-client/src/near-intents.ts); its token list is the only place a token address can come from (thesis/registry.rs). Native NEAR accounts live in packages/keyring. Quotes use dry runs until the user confirms."
-        title="6. What NEAR does."
+        title="6. How it works."
         source={
           <>
             <b>Figure 6.</b> Route planner amounts, test-mode prices {cite(4)}.
@@ -201,7 +218,7 @@ export default function App() {
       <ChartSlide
         nav="Safety"
         notes="Giving an agent money is the risk. Honey's agent never gets it. Links are wrapped as quoted material the model is told not to obey. Every answer is checked against a strict schema and retried once if wrong. Tokens come only from the NEAR Intents list. The user approves once, with a max slippage, and Intents fills within it."
-        title="7. The agent suggests. You sign."
+        title="7. One click. Secure investing with agents."
         source={
           <>
             <b>Figure 7.</b> Safeguards in the server code {cite(4)}.
@@ -237,12 +254,7 @@ export default function App() {
           </h2>
         </Reveal>
         <Reveal delay={0.16}>
-          <p className="byline">
-            <a href={REPO} target="_blank" rel="noopener" className="cl-repo">
-              <Logo id="github" size="1.4em" />
-              github.com/honey-wallet/honey-wallet
-            </a>
-          </p>
+          <Contacts />
         </Reveal>
       </Slide>
 
@@ -263,6 +275,20 @@ export default function App() {
               </li>
             ))}
           </ol>
+        </Reveal>
+      </Slide>
+
+      <Slide center nav="Thank you" notes="Thank the judges; leave the contacts up for questions.">
+        <Reveal>
+          <Lockup big />
+        </Reveal>
+        <Reveal delay={0.08}>
+          <h2 className="display" style={{ marginTop: 28 }}>
+            Thank you.
+          </h2>
+        </Reveal>
+        <Reveal delay={0.16}>
+          <Contacts compact />
         </Reveal>
       </Slide>
     </Deck>

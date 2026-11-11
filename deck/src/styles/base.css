@@ -55,7 +55,7 @@ body {
 .slide-stage {
   position: absolute;
   inset: 0;
-  animation: slideIn 0.5s var(--ease) both;
+  animation: slideIn 0.75s var(--ease) both;
 }
 @keyframes slideIn {
   from {
@@ -1697,7 +1697,7 @@ strong {
   height: 100%;
   cursor: grab;
   opacity: 0;
-  transition: opacity 1.2s var(--ease);
+  transition: opacity 1.8s var(--ease);
   contain: layout paint size;
 }
 /* thumbnails get a cheap static disc instead of a WebGL context */
@@ -2671,7 +2671,7 @@ strong {
   stroke-dashoffset: 1;
 }
 .vframe.shown .dspark path {
-  animation: dash 1.2s var(--ease) 0.45s forwards;
+  animation: dash 1.8s var(--ease) 0.7s forwards;
 }
 .dgrid {
   stroke: var(--hair-2);
@@ -2716,16 +2716,16 @@ strong {
 }
 .dfill-area {
   opacity: 0;
-  transition: opacity 0.8s var(--ease) 0.5s;
+  transition: opacity 1.2s var(--ease) 0.75s;
 }
 .vframe.shown .dline {
-  animation: dash 1.5s var(--ease) 0.15s forwards;
+  animation: dash 2.2s var(--ease) 0.22s forwards;
 }
 .vframe.shown .dfill-area {
   opacity: 1;
 }
 .vframe.shown .dbar-track span {
-  animation: bargrow 0.8s var(--ease-spring) both;
+  animation: bargrow 1.2s var(--ease-spring) both;
 }
 @keyframes dash {
   to {

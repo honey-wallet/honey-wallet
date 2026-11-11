@@ -30,7 +30,7 @@ export default function Reveal({
       style={style}
       initial={{ opacity: 0, y }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1], delay }}
+      transition={{ duration: 0.9, ease: [0.16, 1, 0.3, 1], delay: delay * 1.5 }}
     >
       {children}
     </motion.div>

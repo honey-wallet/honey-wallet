@@ -8,7 +8,7 @@ import { useDeck } from '../deck/DeckContext';
 export default function CountUp({
   to,
   from = 0,
-  duration = 1500,
+  duration = 2250,
   decimals = 0,
   prefix = '',
   suffix = '',
