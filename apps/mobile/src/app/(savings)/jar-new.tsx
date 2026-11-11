@@ -1,4 +1,4 @@
-import { Redirect, router } from 'expo-router';
+import { router } from 'expo-router';
 import { useState } from 'react';
 import { Keyboard, Text, TextInput, View } from 'react-native';
 import { PressableScale } from '@/components/motion/PressableScale';
@@ -11,7 +11,6 @@ import { TokenIcon } from '@/components/wallet/parts';
 import { tap } from '@/lib/haptics';
 import { addJar, JAR_TOKENS, usdValue } from '@/lib/jars';
 import { formatUsd } from '@/lib/mock-wallet';
-import { isWeb } from '@/lib/platform';
 import { useSectionPrefs } from '@/lib/section-prefs';
 import { stealthJarsEnabled } from '@/lib/stealth-jar';
 import { showToast } from '@/lib/toast';
@@ -21,8 +20,6 @@ const STABLE = new Set(['USDC', 'USDT']);
 
 /** New Honey Jar: a name, a token and a goal. */
 export default function NewJarSheet() {
-  // Savings is phone-only for launch: a deep link lands back where it can go.
-  if (isWeb) return <Redirect href="/home" />;
   return <NewJarSheetContent />;
 }
 

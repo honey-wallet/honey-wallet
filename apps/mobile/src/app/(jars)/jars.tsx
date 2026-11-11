@@ -2,7 +2,14 @@ import { router } from 'expo-router';
 import { useState } from 'react';
 import { ScrollView, Text, View } from 'react-native';
 import { Icon } from '@/components/Icon';
-import { JarCarousel, JarList } from '@/components/jars/JarParts';
+import {
+  Exposure,
+  IdeaGrid,
+  JarCard,
+  JarCarousel,
+  JarList,
+  NewJarCard,
+} from '@/components/jars/JarParts';
 import { NumberPopIn } from '@/components/motion/NumberPopIn';
 import { PressableScale } from '@/components/motion/PressableScale';
 import { UnderlineTabs } from '@/components/motion/UnderlineTabs';
@@ -132,15 +139,31 @@ export default function JarsScreen() {
         {view === 'Yours' ? (
           <>
             {mine.length ? (
-              <JarList jars={mine} gutter={SCREEN.gutter} />
+              <View style={styles.shelf}>
+                {mine.map((jar) => (
+                  <JarCard key={jar.id} jar={jar} />
+                ))}
+                <NewJarCard />
+              </View>
             ) : (
-              <EmptyState
-                compact
-                icon="pie"
-                title="No jars yet"
-                hint="Ask Honey below to start one from an idea, or copy a jar from Explore."
-              />
+              <View style={styles.empty}>
+                <View style={styles.emptyIcon}>
+                  <Icon name="sparkles" size={26} color={c.accentText} />
+                </View>
+                <Text style={styles.emptyTitle}>Your shelf is empty</Text>
+                <Text style={styles.emptyHint}>
+                  A jar is a few tokens bought around one idea. Pick an idea below, or copy a jar
+                  someone shares.
+                </Text>
+              </View>
             )}
+            {/* With one jar its card already shows the mix. */}
+            {mine.length > 1 ? (
+              <>
+                <Text style={[styles.heading, styles.section]}>What you own across jars</Text>
+                <Exposure jars={mine} />
+              </>
+            ) : null}
             <View style={[styles.header, styles.section]}>
               <Text style={styles.heading}>Popular to copy</Text>
               <PressableScale
@@ -155,6 +178,10 @@ export default function JarsScreen() {
               </PressableScale>
             </View>
             <JarCarousel jars={popular} gutter={SCREEN.gutter} />
+            <Text style={[styles.heading, styles.section, styles.headingGap]}>
+              Start from an idea
+            </Text>
+            <IdeaGrid />
           </>
         ) : (
           <>
@@ -234,6 +261,19 @@ const useStyles = makeStyles((c) => ({
   section: { marginTop: 24 },
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   heading: { color: c.textSecondary, fontSize: 15 },
+  headingGap: { marginBottom: 10 },
+  shelf: { marginTop: 8, gap: 10 },
+  empty: { alignItems: 'center', gap: 8, paddingTop: 16, paddingHorizontal: 12 },
+  emptyIcon: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: c.accentSurface,
+  },
+  emptyTitle: { marginTop: 4, color: c.text, fontSize: 18, fontWeight: '600' },
+  emptyHint: { color: c.textSecondary, fontSize: 15, lineHeight: 21, textAlign: 'center' },
   seeAll: { color: c.accentText, fontSize: 15, fontWeight: '600' },
   bleed: { marginHorizontal: -SCREEN.gutter, marginTop: 10, marginBottom: 4 },
   chips: { gap: 8, paddingHorizontal: SCREEN.gutter, paddingBottom: 6 },

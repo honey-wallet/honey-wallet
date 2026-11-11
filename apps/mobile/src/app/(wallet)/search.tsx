@@ -259,8 +259,7 @@ export default function SearchScreen() {
               </>
             )}
 
-            {/* review: no Savings in the extension. {prefs.searchShowEarn && ( */}
-            {prefs.searchShowEarn && !isWeb && (
+            {prefs.searchShowEarn && (
               <>
                 <Text style={[styles.heading, styles.section]}>
                   {POSITIONS.length && !empty ? 'Earn more' : 'Start earning'}

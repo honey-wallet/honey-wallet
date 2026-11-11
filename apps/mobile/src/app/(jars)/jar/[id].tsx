@@ -4,12 +4,12 @@ import { Text, View } from 'react-native';
 import { PriceChart } from '@/components/charts/PriceChart';
 import { Icon, type IconName } from '@/components/Icon';
 import {
+  JarIcon,
   layersOf,
   Owners,
   PickIcon,
   signedPct,
   Tiles,
-  TokenStack,
   visibilityLabel,
 } from '@/components/jars/JarParts';
 import { NumberPopIn } from '@/components/motion/NumberPopIn';
@@ -124,7 +124,7 @@ export default function JarScreen() {
       fallback="/jars"
       title={
         <>
-          {layers ? <TokenStack picks={jar.picks} size={20} ring={c.canvas} /> : null}
+          {layers ? <JarIcon jar={jar} size={20} ring={c.canvas} /> : null}
           <Text style={styles.headerTitle} numberOfLines={1}>
             {jar.name}
           </Text>

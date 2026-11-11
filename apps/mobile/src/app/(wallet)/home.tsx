@@ -24,7 +24,7 @@ import {
 import { NftGallery } from '@/components/home/NftGallery';
 import { TradesList, useHasTrades } from '@/components/home/PositionsList';
 import { Icon, type IconName } from '@/components/Icon';
-import { JarList } from '@/components/jars/JarParts';
+import { JarList, NewJarCard } from '@/components/jars/JarParts';
 import { HoneyJar } from '@/components/logo/HoneyJar';
 import { Accordion, AccordionChevron } from '@/components/motion/Accordion';
 import { ContentSwap } from '@/components/motion/ContentSwap';
@@ -852,6 +852,7 @@ const useStyles = makeStyles((c) => ({
 
 /** Home's Jars: the jars you own or share, or a way to start one. */
 function HomeJars() {
+  const c = useTheme();
   const mine = useThesisJars().filter((j) => j.mine);
   if (!mine.length)
     return (
@@ -862,5 +863,36 @@ function HomeJars() {
         action={{ label: 'Start a jar', onPress: () => router.push('/thesis-new') }}
       />
     );
-  return <JarList jars={mine} />;
+  return (
+    <View>
+      <JarList jars={mine} />
+      <View style={homeJars.links}>
+        <NewJarCard />
+        <PressableRow
+          accessibilityRole="button"
+          onPress={() => {
+            tap();
+            router.push('/jars');
+          }}
+          style={homeJars.all}
+        >
+          <Text style={[homeJars.allText, { color: c.accentText }]}>See all jars and explore</Text>
+          <Icon name="chevronRight" size={14} color={c.accentText} />
+        </PressableRow>
+      </View>
+    </View>
+  );
 }
+
+const homeJars = StyleSheet.create({
+  links: { marginTop: 8, gap: 4 },
+  all: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    paddingVertical: 12,
+    borderRadius: 12,
+  },
+  allText: { fontSize: 15, fontWeight: '600' },
+});

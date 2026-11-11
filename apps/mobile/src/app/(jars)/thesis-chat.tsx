@@ -6,6 +6,7 @@ import {
   KeyboardAvoidingView,
   Linking,
   Platform,
+  ScrollView,
   Share,
   Text,
   TextInput,
@@ -16,7 +17,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Line, Path, Text as SvgText } from 'react-native-svg';
 import { DonutChart } from '@/components/charts/DonutChart';
 import { Icon } from '@/components/Icon';
-import { Facts, HoldingRow, TokenStack } from '@/components/jars/JarParts';
+import { Facts, HoldingRow, IDEAS, TokenStack } from '@/components/jars/JarParts';
 import { PressableScale } from '@/components/motion/PressableScale';
 import { PillButton } from '@/components/onboarding/PillButton';
 import { HeaderShortcut } from '@/components/wallet/HeaderShortcut';
@@ -42,14 +43,6 @@ import { DURATION } from '@/theme/motion';
 
 /** One line of the message box, and the size of its round buttons. */
 const ROW = 36;
-
-/** What a first-time visitor can tap to see how it works. */
-const STARTERS = [
-  { title: 'AI keeps eating the world', hint: '$500 across AI infra tokens' },
-  { title: 'Privacy coins come back', hint: 'Bet on private money' },
-  { title: 'NS is entering Kazakhstan', hint: 'What can I actually buy?' },
-  { title: 'Gold over dollars', hint: 'Hedge a weaker dollar, low risk' },
-];
 
 /**
  * The idea chat: say what you believe (words or links), the agent researches it and
@@ -119,7 +112,12 @@ export default function ThesisChatScreen() {
       </View>
 
       {empty ? (
-        <View style={styles.welcome}>
+        <ScrollView
+          style={styles.flexFill}
+          contentContainerStyle={styles.welcome}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="interactive"
+        >
           <View style={styles.welcomeIcon}>
             <Icon name="jar" size={28} color={c.onPrimary} />
           </View>
@@ -128,7 +126,7 @@ export default function ThesisChatScreen() {
             Say it any way, or paste a post. Honey finds what you can buy.
           </Text>
           <View style={styles.starters}>
-            {STARTERS.map((st) => (
+            {IDEAS.map((st) => (
               <PressableScale
                 key={st.title}
                 accessibilityRole="button"
@@ -145,7 +143,7 @@ export default function ThesisChatScreen() {
               </PressableScale>
             ))}
           </View>
-        </View>
+        </ScrollView>
       ) : (
         <FlatList
           ref={list}
@@ -642,8 +640,11 @@ const useStyles = makeStyles((c) => ({
   },
   modelText: { color: c.textSecondary, fontSize: 12, fontWeight: '600' },
   topSpacer: { width: 24 },
+  // Scrolls, so the keyboard pushes the ideas under the header instead of over it.
+  flexFill: { flex: 1 },
   welcome: {
-    flex: 1,
+    flexGrow: 1,
+    paddingVertical: 16,
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: 20,

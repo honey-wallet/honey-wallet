@@ -1,4 +1,4 @@
-import { Redirect, useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
 import { Text, View } from 'react-native';
 import { Icon } from '@/components/Icon';
@@ -19,7 +19,6 @@ import { success, tap } from '@/lib/haptics';
 import { LOADS } from '@/lib/loads';
 import { formatUsd, VAULTS } from '@/lib/mock-wallet';
 import { followFix, useFailure } from '@/lib/outcomes';
-import { isWeb } from '@/lib/platform';
 import { useWalletView } from '@/lib/wallet-view';
 import { makeStyles, radius, useTheme } from '@/theme';
 
@@ -42,8 +41,6 @@ type Page = (typeof PAGES)[number];
  * to pay, then the success burst.
  */
 export default function SavingsAddSheet() {
-  // Savings is phone-only for launch: a deep link lands back where it can go.
-  if (isWeb) return <Redirect href="/home" />;
   return <SavingsAddSheetContent />;
 }
 

@@ -11,7 +11,6 @@ import {
 } from '@/components/sheets/Sheet';
 import { OptionChips } from '@/components/trade/TradeForm';
 import { copyText } from '@/lib/copy';
-import { isWeb } from '@/lib/platform';
 import {
   flowDeps,
   listStealthJars,
@@ -33,7 +32,7 @@ const short = (id: string) => `${id.slice(0, 6)}…${id.slice(-4)}`;
  * link to its members. Behind EXPO_PUBLIC_STEALTH_JARS; reached from New Honey Jar.
  */
 export default function StealthJarScreen() {
-  if (isWeb || !stealthJarsEnabled) return <Redirect href="/home" />;
+  if (!stealthJarsEnabled) return <Redirect href="/home" />;
   return <StealthJarContent />;
 }
 

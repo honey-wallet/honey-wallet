@@ -43,7 +43,6 @@ import {
   TOKEN_INFO,
   VAULTS,
 } from '@/lib/mock-wallet';
-import { isWeb } from '@/lib/platform';
 import { TEST_MODE } from '@/lib/test-mode';
 import { showToast } from '@/lib/toast';
 import { useWalletView } from '@/lib/wallet-view';
@@ -286,8 +285,7 @@ export default function TokenScreen() {
 
       {/* Earn banner */}
       {/* Glides with the Breakdown above as it opens and closes. */}
-      {/* review: no Savings in the extension. {vault && ( */}
-      {vault && !isWeb && (
+      {vault && (
         <Animated.View layout={RESIZE}>
           <PressableScale
             scaleTo={0.98}

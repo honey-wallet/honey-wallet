@@ -1,4 +1,4 @@
-import { Redirect, router, useLocalSearchParams } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { type ReactNode, useState } from 'react';
 import { Linking, Pressable, Text, View } from 'react-native';
 import { Icon } from '@/components/Icon';
@@ -28,14 +28,11 @@ import {
 } from '@/lib/mock-wallet';
 import { useSigner } from '@/lib/multisig';
 import { followFix, useFailure } from '@/lib/outcomes';
-import { isWeb } from '@/lib/platform';
 import { useWalletView } from '@/lib/wallet-view';
 import { makeStyles, radius, useTheme } from '@/theme';
 
 /** Earn sheet after Uniswap's: headline rate, vault facts, details on demand, Deposit. */
 export default function EarnSheet() {
-  // Savings is phone-only for launch: a deep link lands back where it can go.
-  if (isWeb) return <Redirect href="/home" />;
   return <EarnSheetContent />;
 }
 

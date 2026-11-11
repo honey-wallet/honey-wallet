@@ -4,7 +4,6 @@ import { Redirect, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { PillButton } from '@/components/onboarding/PillButton';
 import { SheetRow, SheetScreen, SheetSection, SheetText } from '@/components/sheets/Sheet';
-import { isWeb } from '@/lib/platform';
 import {
   flowDeps,
   listStealthJars,
@@ -25,7 +24,7 @@ const POLL_MS = 3000;
 
 /** Approve-signing prompt for one private jar, plus its private balance. */
 export default function StealthJarApproveScreen() {
-  if (isWeb || !stealthJarsEnabled) return <Redirect href="/home" />;
+  if (!stealthJarsEnabled) return <Redirect href="/home" />;
   return <ApproveContent />;
 }
 
