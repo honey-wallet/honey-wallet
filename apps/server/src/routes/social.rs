@@ -223,6 +223,8 @@ fn build(
         .route("/social/handles/{handle}", get(handle_status))
         .route("/social/me", get(me).put(upsert_me))
         .route("/social/me/privacy", get(my_privacy).put(update_privacy))
+        .route("/social/me/copy-fee-account", get(my_copy_fee_account))
+        .route("/social/me/copy-earnings", get(my_copy_earnings))
         .route("/social/people", get(search_people))
         .route("/social/profiles/{handle}", get(profile))
         .route(
@@ -1430,6 +1432,68 @@ fn privacy((public_profile, show_holdings, show_returns, allow_copy): PrivacyRow
     }
 }
 
+/// Where your copy fees are paid (`copy_fees`): the NEAR Intents account of the first
+/// wallet you signed in with, or null when there's none and no fee is collected.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CopyFeeAccount {
+    pub near_account: Option<String>,
+}
+
+async fn my_copy_fee_account(
+    State(state): State<SocialState>,
+    headers: HeaderMap,
+) -> Result<Json<CopyFeeAccount>, AppError> {
+    let user = viewer(&state, &headers)
+        .await?
+        .ok_or(AppError::Unauthorized)?;
+    let near_account = crate::copy_fees::payout_account(pool(&state)?, user).await?;
+    Ok(Json(CopyFeeAccount { near_account }))
+}
+
+/// What your published jars earned from copies (`copy_fees`), from sells 1Click settled:
+/// your share as 1Click paid it, in dollars at its price then, and each jar's copies.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CopyEarnings {
+    pub near_account: Option<String>,
+    pub earned_usd: f64,
+    pub jars: Vec<JarEarnings>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JarEarnings {
+    pub id: Uuid,
+    pub earned_usd: f64,
+    pub copies: i64,
+}
+
+async fn my_copy_earnings(
+    State(state): State<SocialState>,
+    headers: HeaderMap,
+) -> Result<Json<CopyEarnings>, AppError> {
+    let user = viewer(&state, &headers)
+        .await?
+        .ok_or(AppError::Unauthorized)?;
+    let pool = pool(&state)?;
+    let near_account = crate::copy_fees::payout_account(pool, user).await?;
+    let jars: Vec<JarEarnings> = crate::copy_fees::earnings(pool, user)
+        .await?
+        .into_iter()
+        .map(|(id, micro, copies)| JarEarnings {
+            id,
+            earned_usd: micro as f64 / 1e6,
+            copies,
+        })
+        .collect();
+    Ok(Json(CopyEarnings {
+        near_account,
+        earned_usd: jars.iter().map(|j| j.earned_usd).sum(),
+        jars,
+    }))
+}
+
 /// Your privacy settings (also on `GET /social/me`). 404 before you claim a handle.
 async fn my_privacy(
     State(state): State<SocialState>,
@@ -2117,6 +2181,10 @@ async fn unpublish_jar(
 /// Counts a copy once per person and jar. The count is of rows, so a copier deleting
 /// their account takes their copy with them. Copies are not tied to a verified buy
 /// (the jar buy flow has no server-side record to check yet).
+///
+/// Since 2026-11-14 a copy counts only once its copy buy has settled (1Click delivered
+/// it: `copy_fees::settle_lot` adds it and its feed event). This checks the jar can be
+/// copied and answers with the verified count; it adds nothing.
 async fn record_copy(
     State(state): State<SocialState>,
     Path(id): Path<Uuid>,
@@ -2147,25 +2215,26 @@ async fn record_copy(
     if !copyable {
         return Err(AppError::Forbidden);
     }
-    let inserted = sqlx::query(
-        "INSERT INTO social_jar_copies (jar_id, copier) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-    )
-    .bind(id)
-    .bind(me)
-    .execute(&mut *tx)
-    .await
-    .map_err(unavailable)?
-    .rows_affected();
-    if inserted == 1 {
-        sqlx::query(
-            "INSERT INTO social_events (actor, kind, jar_id) VALUES ($1, 'jar_copied', $2)",
-        )
-        .bind(me)
-        .bind(id)
-        .execute(&mut *tx)
-        .await
-        .map_err(unavailable)?;
-    }
+    //     let inserted = sqlx::query(
+    //         "INSERT INTO social_jar_copies (jar_id, copier) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+    //     )
+    //     .bind(id)
+    //     .bind(me)
+    //     .execute(&mut *tx)
+    //     .await
+    //     .map_err(unavailable)?
+    //     .rows_affected();
+    //     if inserted == 1 {
+    //         sqlx::query(
+    //             "INSERT INTO social_events (actor, kind, jar_id) VALUES ($1, 'jar_copied', $2)",
+    //         )
+    //         .bind(me)
+    //         .bind(id)
+    //         .execute(&mut *tx)
+    //         .await
+    //         .map_err(unavailable)?;
+    //     }
+    let inserted = 0;
     let copies: i64 =
         sqlx::query_scalar("SELECT count(*) FROM social_jar_copies WHERE jar_id = $1")
             .bind(id)
@@ -2173,9 +2242,10 @@ async fn record_copy(
             .await
             .map_err(unavailable)?;
     tx.commit().await.map_err(unavailable)?;
-    if inserted == 1 {
-        state.forget_lists().await;
-    }
+    // if inserted == 1 {
+    //     state.forget_lists().await;
+    // }
+    let _ = inserted;
     Ok(Json(CopyResult { copies }))
 }
 
@@ -2511,6 +2581,8 @@ async fn load_feed_page(
          LEFT JOIN social_profiles jo ON jo.user_id = j.owner
          WHERE ($1::bigint IS NULL OR e.id < $1)
            AND (e.kind <> 'trade' OR p.share_trades)
+           -- A copy says what its copier holds: only when they share trades and holdings.
+           AND (e.kind <> 'jar_copied' OR (p.share_trades AND p.show_holdings) OR e.actor = $6)
            AND (e.jar_id IS NULL OR j.unpublished_at IS NULL)
            -- Privacy, except for your own: private accounts' events and events about
            -- their jars are theirs; a milestone is a return, so it needs returns shown.

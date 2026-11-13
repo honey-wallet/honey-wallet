@@ -47,6 +47,9 @@ import {
   useBlendedSince,
 } from '@/components/social/parts';
 import { Change, HEADER_BUTTON, PushedScreen, SCREEN } from '@/components/wallet/parts';
+import { useCopyEarnings } from '@/lib/copy-fee-account';
+import { jarEarnings, withdrawLine } from '@/lib/copy-fees';
+import { useMoney } from '@/lib/fx';
 import { membersIn } from '@/lib/group-jar-core';
 import { tap } from '@/lib/haptics';
 import { refreshJarBuy } from '@/lib/jar-buy';
@@ -519,6 +522,13 @@ function JarBody({
 }) {
   const styles = useStyles();
   const c = useTheme();
+  // Your published jar's copies and earnings, from the server (lib/copy-fee-account).
+  const own = jar.mine && !!serverId && !TEST_MODE;
+  const earnings = useCopyEarnings(own);
+  const earned = jarEarnings(own ? earnings : undefined, serverId);
+  const copiedBy = earned.known ? earned.copies : jar.copiers;
+  const withdraw = withdrawLine(earnings?.nearAccount);
+  const money = useMoney();
   const [range, setRange] = useState<JarRange>('All');
   const [scrub, setScrub] = useState<number | null>(null);
   // The chart fits the page it's on (the extension popup is narrower than the window).
@@ -841,11 +851,22 @@ function JarBody({
               />
             )}
             {/* Nobody yet is nothing to show. */}
-            {jar.copiers > 0 ? (
+            {/* {jar.copiers > 0 ? ( ... value={jar.copiers.toLocaleString()} ... ) : null} */}
+            {/* Copies are the server's count (a copy counts once its buy settled): your
+                published jar's from your earnings, anyone else's from the jar itself. */}
+            {copiedBy > 0 ? (
               <StatRow
                 icon={<Icon name="personOutline" size={15} color={c.textSecondary} />}
                 label="Copied by"
-                value={jar.copiers.toLocaleString()}
+                value={copiedBy.toLocaleString()}
+              />
+            ) : null}
+            {/* Your published jar: what its copies earned you, from sells that settled. */}
+            {earned.known && !TEST_MODE ? (
+              <StatRow
+                icon={<Icon name="pieOutline" size={15} color={c.textSecondary} />}
+                label="Earned from copies"
+                value={money.format(earned.earnedUsd)}
               />
             ) : null}
             {/* Copy fees aren't charged yet: outside test mode, no fee is shown (lib/surface). */}
@@ -855,6 +876,9 @@ function JarBody({
                 label={jar.copiedFrom ? 'Their cut' : 'Copy fee'}
                 value={`${jar.copiedFrom?.fee ?? jar.copyFee}%`}
               />
+            ) : null}
+            {earned.known && !TEST_MODE && withdraw ? (
+              <Text style={styles.earnedNote}>{withdraw}</Text>
             ) : null}
           </>
         )}
@@ -1022,6 +1046,7 @@ function Message({ text, action, onPress }: { text: string; action: string; onPr
 
 const useStyles = makeStyles((c) => ({
   soon: { opacity: SOON_OPACITY },
+  earnedNote: { color: c.textSecondary, fontSize: 13, lineHeight: 18, paddingTop: 4 },
   // As a post's Save and Share (social/parts PostActions).
   headerActions: { flexDirection: 'row', alignItems: 'center', gap: 4, marginRight: -8 },
   headerAction: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },

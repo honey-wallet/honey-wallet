@@ -56,10 +56,11 @@ import {
   atomic,
   quoteChanged as changed,
   checkDeadline,
-  checkOneClickFees,
+  checkOneClickCopyFees,
   checkOneClickRecord,
   checkOneClickTerms,
   DEADLINE_MARGIN_MS,
+  declaredCopyFees,
   MAX_SLIPPAGE_BPS,
   MIN_VALUE_KEPT,
   minWithinSlippage,
@@ -351,6 +352,11 @@ export type JarBuyDeps = {
   dexPrices: () => Promise<Record<string, number>>;
   /** The route planner (lib/best-route): NEAR Intents unless it can't do the leg. */
   route: (ask: RouteAsk) => Promise<PlannedRoute>;
+  /**
+   * Copying this published jar (its server id): the server records what the buy cost, the
+   * basis for the creator's fee when the copy is sold (lib/copy-fees).
+   */
+  copyOf?: string;
   /** The server's clock (lib/server-clock), for deadlines. */
   now: () => number;
   /** A sent deposit's state on its own chain (lib/deposit-tx). */
@@ -600,6 +606,7 @@ export async function quoteJarBuy(
             amount: l.micro.toString(),
             recipient: l.recipient,
           })),
+          ...(d.copyOf ? { copyOf: d.copyOf } : {}),
         }),
         STEP_MS,
         'NEAR Intents took too long to quote.',
@@ -850,6 +857,7 @@ async function quoteWithToken(
       amount: l.amountIn.toString(),
       recipient: l.recipient,
     })),
+    ...(d.copyOf ? { copyOf: d.copyOf } : {}),
   });
   checkQuote(quote, asked, { refundTo, slippageBps, origin: chain, originAsset: asset.assetId });
   // The cap holds for what's paid, at 1Click's price, as the server counts it.
@@ -991,8 +999,9 @@ export async function verifyWithOneClick(
     amountIn: leg.amountIn,
   });
   checkOneClickTerms(record, leg);
-  // No fee is declared on a jar buy: only 1Click's own small entry may be there (money audit 2).
-  checkOneClickFees(record, null);
+  // Paying with tokens copied from someone's jar pays their creators' fees: exactly the
+  // ones the server declared, or nothing is paid.
+  checkOneClickCopyFees(record, declaredCopyFees(leg.copyFees));
 }
 
 /**

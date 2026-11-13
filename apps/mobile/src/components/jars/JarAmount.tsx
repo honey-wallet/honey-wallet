@@ -13,14 +13,29 @@ import { applyKey, Keypad, TypedAmount, trimNumber } from '@/components/wallet/K
 import { TokenIcon } from '@/components/wallet/parts';
 import { useMoney } from '@/lib/fx';
 import { tap } from '@/lib/haptics';
+import { canSellRef, loadSwapTokens, swapTokenList } from '@/lib/intents-swap';
 import { PAY_CHAINS } from '@/lib/jar-buy';
 import { quickAmount } from '@/lib/money';
-import { holdingOf, isUsdc, jarPayWith, PAY_BUFFER_BPS, spendable } from '@/lib/pay-with';
+// import { holdingOf, isUsdc, jarPayWith, PAY_BUFFER_BPS, spendable } from '@/lib/pay-with';
+import {
+  autoPayWith,
+  holdingOf,
+  isUsdc,
+  jarPayWith,
+  jarPayWithChosen,
+  NOTHING_TO_PAY,
+  PAY_BUFFER_BPS,
+  samePay,
+  spendable,
+} from '@/lib/pay-with';
+import { addMoneyHref } from '@/lib/surface';
 import { TEST_MODE } from '@/lib/test-mode';
 import { useWalletView } from '@/lib/wallet-view';
 import { makeStyles, useTheme } from '@/theme';
 
-const PRESETS = [50, 100, 250];
+// const PRESETS = [50, 100, 250];
+// Dollar amounts a copy or a first jar starts with (2026-11-14), like Copy's own steps.
+const PRESETS = [5, 10, 25];
 
 /**
  * What the wallet in use can spend on a jar. USDC by default: on every network that pays
@@ -28,7 +43,13 @@ const PRESETS = [50, 100, 250];
  * and another token picked (lib/pay-with `jarPayWith`), that one holding, less the gas
  * kept back on Ethereum and the small buffer each leg pays over its dollars.
  */
-function useJarFunds(payWith: boolean) {
+// function useJarFunds(payWith: boolean) {
+// function useJarFunds(payWith: boolean, amountUsd = 0) {
+function useJarFunds(
+  payWith: boolean,
+  amountUsd = 0,
+  except: readonly { symbol: string; chain: string }[] = [],
+) {
   const view = useWalletView();
   const picked = jarPayWith.useValue();
   // Sample wallets aren't held to it: they end on the demo's success instead.
@@ -38,11 +59,42 @@ function useJarFunds(payWith: boolean) {
   const loading = real && 'live' in view && !!view.loading;
   const failed = real && 'live' in view && !!view.error;
   const holdings = real ? (view.holdings ?? []) : [];
+  // Until "Pay with" is picked by hand, it follows what the wallet holds (lib/pay-with
+  // `autoPayWith`): USDC when it covers the amount, else the largest holding that pays.
+  const chosen = jarPayWithChosen.useValue();
+  const { tokens } = swapTokenList.useValue();
+  useEffect(() => {
+    if (payWith && real) loadSwapTokens();
+  }, [payWith, real]);
+  const auto =
+    payWith && real && !loading && !failed && !watchOnly
+      ? // autoPayWith(holdings, amountUsd, PAY_CHAINS, (ref) => canSellRef(ref, tokens))
+        autoPayWith(holdings, amountUsd, PAY_CHAINS, (ref) => canSellRef(ref, tokens), except)
+      : null;
+  const autoKey = auto === NOTHING_TO_PAY ? auto : auto ? `${auto.chain}:${auto.symbol}` : 'usdc';
+  // biome-ignore lint/correctness/useExhaustiveDependencies: follows the pick it names.
+  useEffect(() => {
+    if (!payWith || !real || chosen || loading || failed) return;
+    const next = auto === NOTHING_TO_PAY ? null : auto;
+    if (!samePay(jarPayWith.get(), next)) jarPayWith.set(next);
+  }, [autoKey, chosen, payWith, real, loading, failed]);
+  const nothing = !chosen && auto === NOTHING_TO_PAY;
   const token = payWith && real && picked && !isUsdc(picked) ? picked : null;
   if (token) {
     const held = spendable(holdingOf(holdings, token), token).usd;
     const available = held / (1 + PAY_BUFFER_BPS / 10_000);
-    return { real, held, available, token, symbol: token.symbol, watchOnly, loading, failed };
+    // return { real, held, available, token, symbol: token.symbol, watchOnly, loading, failed };
+    return {
+      real,
+      held,
+      available,
+      token,
+      symbol: token.symbol,
+      watchOnly,
+      loading,
+      failed,
+      nothing,
+    };
   }
   const available = real
     ? holdings
@@ -58,6 +110,7 @@ function useJarFunds(payWith: boolean) {
     watchOnly,
     loading,
     failed,
+    nothing,
   };
 }
 
@@ -76,7 +129,10 @@ export function JarAmount({
   hold,
   sell,
   payWith,
+  picks,
 }: {
+  /** What the jar buys: never picked to pay for it (lib/pay-with `autoPayWith`). */
+  picks?: readonly { symbol: string; chain: string }[];
   /**
    * A "Pay with" row: USDC by default, or any token the wallet holds and can sell
    * (lib/pay-with `jarPayWith`, picked in the token picker). Jar buys only.
@@ -108,7 +164,13 @@ export function JarAmount({
   const c = useTheme();
   // Typed and shown in Settings' Local currency (lib/fx); everything handed back is dollars.
   const money = useMoney();
-  const funds = useJarFunds(!!payWith && !sell);
+  // const funds = useJarFunds(!!payWith && !sell);
+  // The dollars typed so far pick what pays (USDC while it covers them): see below.
+  const [typedUsdForPay, setTypedUsdForPay] = useState(initial ?? 0);
+  // const funds = useJarFunds(!!payWith && !sell, typedUsdForPay);
+  const funds = useJarFunds(!!payWith && !sell, typedUsdForPay, picks);
+  // Nothing in this wallet can pay for a jar: say so, with Deposit as the way on.
+  const nothing = !sell && !!payWith && funds.nothing;
   const { real, symbol } = funds;
   const showPayWith = !!payWith && !sell && real && !funds.watchOnly;
   const available = sell ? sell.available : funds.available;
@@ -138,6 +200,9 @@ export function JarAmount({
   useEffect(() => {
     onChange?.(amount);
   }, [amount, onChange]);
+  useEffect(() => {
+    setTypedUsdForPay(typedUsd);
+  }, [typedUsd]);
   // Until the balance is read, "not enough" would be a guess: wait instead.
   const tooMuch = (sell ? true : real) && !loading && !failed && amount > available;
   const max = trimNumber(
@@ -157,19 +222,21 @@ export function JarAmount({
           text={
             watchOnly
               ? 'This wallet is watch-only: its keys aren’t on this phone'
-              : loading
-                ? `Checking your ${symbol}…`
-                : failed
-                  ? 'Couldn’t check your balance. Pull to refresh your Wallet, then try again'
-                  : tooMuch
-                    ? sell
-                      ? `The jar holds ${money.format(available)}`
-                      : `You have ${money.format(funds.held)} in ${symbol}`
-                    : amount && note
-                      ? note
-                      : sell
-                        ? `${money.format(available)} in this jar`
+              : nothing
+                ? 'Nothing in this wallet can pay for a jar yet'
+                : loading
+                  ? `Checking your ${symbol}…`
+                  : failed
+                    ? 'Couldn’t check your balance. Pull to refresh your Wallet, then try again'
+                    : tooMuch
+                      ? sell
+                        ? `The jar holds ${money.format(available)}`
                         : `You have ${money.format(funds.held)} in ${symbol}`
+                      : amount && note
+                        ? note
+                        : sell
+                          ? `${money.format(available)} in this jar`
+                          : `You have ${money.format(funds.held)} in ${symbol}`
           }
           style={[styles.hint, tooMuch && styles.error]}
         />
@@ -242,20 +309,24 @@ export function JarAmount({
         label={
           watchOnly
             ? 'Watch-only wallet can’t buy'
-            : loading
-              ? 'Checking balance…'
-              : failed
-                ? 'Balance unavailable'
-                : !amount
-                  ? 'Enter an amount'
-                  : tooMuch
-                    ? sell
-                      ? 'More than the jar holds'
-                      : `Not enough ${symbol}`
-                    : (hold ?? (typeof cta === 'function' ? cta(amount) : cta))
+            : nothing
+              ? 'Deposit'
+              : loading
+                ? 'Checking balance…'
+                : failed
+                  ? 'Balance unavailable'
+                  : !amount
+                    ? 'Enter an amount'
+                    : tooMuch
+                      ? sell
+                        ? 'More than the jar holds'
+                        : `Not enough ${symbol}`
+                      : (hold ?? (typeof cta === 'function' ? cta(amount) : cta))
         }
-        disabled={!amount || tooMuch || watchOnly || loading || failed || !!hold}
-        onPress={() => onDone(amount)}
+        // disabled={!amount || tooMuch || watchOnly || loading || failed || !!hold}
+        // onPress={() => onDone(amount)}
+        disabled={!nothing && (!amount || tooMuch || watchOnly || loading || failed || !!hold)}
+        onPress={() => (nothing ? router.push(addMoneyHref()) : onDone(amount))}
         style={styles.cta}
       />
     </View>

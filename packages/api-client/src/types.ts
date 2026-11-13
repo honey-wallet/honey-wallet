@@ -1041,6 +1041,25 @@ export interface JarBuyRequest {
   legs: { destinationAsset: string; amount: string; recipient: string }[];
   /** Shared jars: INTENTS in and out (server sets this for `/jar-dao/buy-quote`). */
   intents?: boolean;
+  /** A copy of this published jar (`SocialJar.id`): the server records its cost for copy fees. */
+  copyOf?: string;
+  /**
+   * The phone's hint that this sells a copied jar's holdings. The server never reads it:
+   * every sell of copied units pays the creators' fees (`copyFees`), named or not.
+   */
+  copySaleOf?: string;
+}
+
+/** A creator's cut of a copier's sell, as the server asked 1Click for it (`copy_fees::CopyFee`). */
+export interface CopyFeeQuote {
+  /** The creator's NEAR Intents account. */
+  recipient: string;
+  /** Basis points of the sale (1Click `appFees`). */
+  bps: number;
+  /** The jar's fee, percent of profit. */
+  pct: number;
+  /** `bps` of the sale, in dollars. */
+  usd: number;
 }
 
 /**
@@ -1351,6 +1370,13 @@ export interface JarBuyLeg {
   slippageBps: number;
   /** 1Click's signature over the quote, passed through. */
   signature: string | null;
+  // /** The creator's cut taken from this swap (a copy sale only); absent from older servers. */
+  // copyFee?: CopyFeeQuote | null;
+  /**
+   * Creators' cuts taken from this swap: it sells units copied from their jars (oldest
+   * copy first). Empty, or absent from older servers, for every other swap.
+   */
+  copyFees?: CopyFeeQuote[];
 }
 
 export interface JarBuyQuote {
@@ -1761,6 +1787,22 @@ export interface SocialProfileRequest {
   avatarSeed?: string;
   /** Omitted keeps the current setting (off for a new profile). */
   shareTrades?: boolean;
+}
+
+/** `GET /api/v1/social/me/copy-fee-account`: where your copy fees are paid, or null (none are). */
+export interface SocialCopyFeeAccount {
+  nearAccount: string | null;
+}
+
+/**
+ * `GET /api/v1/social/me/copy-earnings`: what your published jars earned from copies,
+ * from sells NEAR Intents settled (your share as 1Click paid it), and each jar's copies
+ * (counted once a copy's buy settled).
+ */
+export interface SocialCopyEarnings {
+  nearAccount: string | null;
+  earnedUsd: number;
+  jars: { id: string; earnedUsd: number; copies: number }[];
 }
 
 export interface SocialHandleStatus {

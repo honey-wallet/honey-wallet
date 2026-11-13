@@ -105,19 +105,24 @@ export const COPY_STEPS = [1, 2, 5, 10, 25, 50, 100, 250, 500, 1000] as const;
 
 /** Who can see a jar: Launch your jar's choices, and the default picked in Settings. */
 export const JAR_VISIBILITY: { id: Visibility; icon: IconName; title: string; hint: string }[] = [
-  { id: 'members', icon: 'lock', title: 'Only members', hint: 'Private to you and your friends' },
+  // { id: 'members', icon: 'lock', title: 'Only members', hint: 'Private to you and your friends' },
+  // { id: 'private', icon: 'eyeSlash', title: 'Returns only', hint: 'Others see how it does, not what it holds' },
+  // { id: 'public', icon: 'globe', title: 'Everyone', hint: 'The idea and holdings are public; anyone can copy' },
+  // Everyone first (2026-11-14): the one people can copy, and earn you a cut. The default
+  // in Settings is unchanged.
+  {
+    id: 'public',
+    icon: 'globe',
+    title: 'Everyone',
+    hint: 'The idea and holdings are public; anyone can copy, and you earn your cut',
+  },
   {
     id: 'private',
     icon: 'eyeSlash',
     title: 'Returns only',
     hint: 'Others see how it does, not what it holds',
   },
-  {
-    id: 'public',
-    icon: 'globe',
-    title: 'Everyone',
-    hint: 'The idea and holdings are public; anyone can copy',
-  },
+  { id: 'members', icon: 'lock', title: 'Only members', hint: 'Private to you and your friends' },
 ];
 
 /** Your cut of copiers' profit (%), and the max slippage on a jar's buys (%). */

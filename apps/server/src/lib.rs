@@ -17,6 +17,7 @@ pub mod arrivals;
 pub mod bounded_lru;
 pub mod bridge_monitor;
 pub mod config;
+pub mod copy_fees;
 pub mod database;
 pub mod dex;
 pub mod earn_catalog;
@@ -223,7 +224,12 @@ fn router(config: &Config, health: runtime::RuntimeHealth, services: RouterServi
         .ok()
         .flatten()
         .map(std::sync::Arc::new);
-    let buys = jar_buys(market.clone(), redis.clone());
+    // let buys = jar_buys(market.clone(), redis.clone());
+    let buys = jar_buys(
+        market.clone(),
+        redis.clone(),
+        identity.as_ref().map(|i| i.pool().clone()),
+    );
     // DEX routing (KyberSwap, Jupiter, GoPlus); builds offline, fetches lazily.
     let dex = dex_service(
         redis.clone(),
@@ -491,17 +497,57 @@ fn push_sender(identity: Option<&identity::Identity>) -> Option<std::sync::Arc<p
 
 /// Real jar buys (and swaps) through NEAR Intents; needs market data for prices and the
 /// cap. Shared with EVM gas sponsorship, which checks deposits against its quotes.
+/// Copy fees (`copy_fees`) need PostgreSQL; without it no copy fee is charged.
 fn jar_buys(
     market: Option<std::sync::Arc<market_data::MarketData>>,
     redis: Option<redis_store::RedisStore>,
+    pool: Option<sqlx::PgPool>,
 ) -> Option<std::sync::Arc<jar_buys::JarBuys>> {
-    market.and_then(|market| match jar_buys::JarBuys::from_env(market) {
-        Ok(buys) => Some(std::sync::Arc::new(buys.with_redis(redis))),
+    market.and_then(|market| match jar_buys::JarBuys::from_env(market.clone()) {
+        // Ok(buys) => Some(std::sync::Arc::new(buys.with_redis(redis))),
+        // Ok(buys) => Some(std::sync::Arc::new(buys.with_redis(redis).with_pool(pool))),
+        Ok(buys) => Some(std::sync::Arc::new(
+            buys.with_redis(redis)
+                .with_pool(pool)
+                .with_held(held_balances(market)),
+        )),
         Err(error) => {
             tracing::error!(%error, "jar buys disabled");
             None
         }
     })
+}
+
+/// What an address holds of a 1Click asset on chain now, read fresh through the public
+/// portfolio reads, for capping copied units at what's still there (`copy_fees`).
+fn held_balances(market: std::sync::Arc<market_data::MarketData>) -> Option<jar_buys::HeldFn> {
+    let service = portfolio::PortfolioService::new(Some(market.clone()))
+        .map_err(|error| tracing::error!(%error, "copy fee balance reads disabled"))
+        .ok()?;
+    Some(std::sync::Arc::new(
+        move |address: String, asset: String| {
+            let (service, market) = (service.clone(), market.clone());
+            Box::pin(async move {
+                let tokens = market.tokens().await.ok()?;
+                let token = tokens.iter().find(|t| t.asset_id == asset)?.clone();
+                let addresses = if address.starts_with("0x") {
+                    portfolio::Addresses::parse(Some(&address), None, None)
+                } else if bs58::decode(&address)
+                    .into_vec()
+                    .is_ok_and(|b| b.len() == 32)
+                {
+                    portfolio::Addresses::parse(None, Some(&address), None)
+                } else {
+                    portfolio::Addresses::parse(None, None, Some(&address))
+                }
+                .ok()?;
+                let read = service.balances(&addresses, true).await;
+                let held = copy_fees::held_units(&read.holdings, &token);
+                // A chain that didn't answer is unknown, not empty.
+                (held > 0 || read.unavailable.is_empty()).then_some(held)
+            })
+        },
+    ))
 }
 
 /// EIP-7702 gas sponsorship on Base, Arbitrum and Polygon; off unless

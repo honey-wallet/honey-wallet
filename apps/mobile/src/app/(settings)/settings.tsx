@@ -16,6 +16,7 @@ import { api } from '@/lib/api';
 import { lockNow } from '@/lib/app-lock';
 import { applyLatestUpdate, buildInfo } from '@/lib/build-info';
 import { expandView, inPopup } from '@/lib/dapp';
+import { useMoney } from '@/lib/fx';
 import { useGasAllowance } from '@/lib/gas';
 import { tap } from '@/lib/haptics';
 import { formatUsd, shortAddress } from '@/lib/mock-wallet';
@@ -39,6 +40,8 @@ export default function SettingsScreen() {
   const c = useTheme();
   const profile = useProfile();
   const settings = useSettings();
+  // The default copy amount, in dollars in the person's currency (lib/fx).
+  const money = useMoney();
   // Honey's free gas, shown only while it pays fees somewhere.
   const freeGas = useGasAllowance();
   // Out for now, with the other-wallets list below:
@@ -195,7 +198,8 @@ export default function SettingsScreen() {
             <SheetRow
               icon="copy"
               title="Default copy amount"
-              value={`${settings.copyAmount.toLocaleString()} USDC`}
+              // value={`${settings.copyAmount.toLocaleString()} USDC`}
+              value={money.format(settings.copyAmount).replace(/\.0+$/, '')}
               onPress={open('/settings-copy-amount')}
               accessory="chevron"
             />
@@ -507,7 +511,10 @@ function PrivacyRows({
       subtitle={
         row.key === 'publicProfile' && !privacy.publicProfile
           ? 'Only you see your jars and theses'
-          : undefined
+          : // A copy buys what a jar holds, so copying is off while your tokens are hidden.
+            row.key === 'allowCopy' && privacy.allowCopy && !privacy.showHoldings
+            ? 'Off while your tokens are hidden'
+            : undefined
       }
       accessory={
         <Toggle

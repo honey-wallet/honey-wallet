@@ -142,6 +142,77 @@ export const ONE_CLICK_FEE_RECIPIENT =
 /** A copy fee the server declared on a quote: who's paid, and how much of the sale. */
 export type DeclaredCopyFee = { recipient: string; bps: number; pct: number; usd: number };
 
+/** The server's copy fee on a leg, checked for shape; null when there's none. */
+export function declaredCopyFee(fee: unknown): DeclaredCopyFee | null {
+  if (fee === undefined || fee === null) return null;
+  const f = fee as Partial<DeclaredCopyFee>;
+  if (
+    typeof f.recipient !== 'string' ||
+    !f.recipient ||
+    !Number.isInteger(f.bps) ||
+    (f.bps as number) < 1 ||
+    (f.bps as number) > MAX_COPY_FEE_BPS ||
+    !Number.isInteger(f.pct) ||
+    (f.pct as number) < 1 ||
+    (f.pct as number) > 30 ||
+    typeof f.usd !== 'number' ||
+    !Number.isFinite(f.usd) ||
+    f.usd < 0
+  )
+    throw quoteChanged();
+  return f as DeclaredCopyFee;
+}
+
+/**
+ * The server's copy fees on a leg (one per creator, oldest copy first), checked for shape:
+ * each well formed, creators distinct, at most `MAX_COPY_FEE_BPS` together.
+ */
+export function declaredCopyFees(fees: unknown): DeclaredCopyFee[] {
+  if (fees === undefined || fees === null) return [];
+  if (!Array.isArray(fees)) throw quoteChanged();
+  const out = fees.map((f) => {
+    const fee = declaredCopyFee(f);
+    if (!fee) throw quoteChanged();
+    return fee;
+  });
+  const names = new Set(out.map((f) => f.recipient.toLowerCase()));
+  if (names.size !== out.length || out.reduce((s, f) => s + f.bps, 0) > MAX_COPY_FEE_BPS)
+    throw quoteChanged();
+  return out;
+}
+
+/**
+ * 1Click's own record must take exactly the copy fees shown, and nothing more: each
+ * creator named once and paid their fee (or the half 1Click's 50/50 split leaves them),
+ * and every fee on the swap together at most those plus 1Click's own share. Without
+ * declared fees, only 1Click's own small fee may be there (`checkOneClickFees`).
+ */
+export function checkOneClickCopyFees(record: OneClickStatus, fees: DeclaredCopyFee[]) {
+  // if (!fees.length) return;
+  // No fee declared: the money audit's rule (`checkOneClickFees` with none): at most
+  // 1Click's own entry, of `ONE_CLICK_EXTRA_BPS` or less.
+  if (!fees.length) return checkOneClickFees(record, null);
+  const list = record.quoteRequest.appFees;
+  if (!Array.isArray(list)) throw quoteChanged();
+  const entries = (list as { recipient?: unknown; fee?: unknown }[]).map((e) => {
+    if (typeof e?.recipient !== 'string' || !Number.isInteger(e.fee) || Number(e.fee) < 0)
+      throw quoteChanged();
+    return { to: e.recipient.toLowerCase(), bps: Number(e.fee) };
+  });
+  for (const fee of fees) {
+    const mine = entries.filter((e) => e.to === fee.recipient.toLowerCase());
+    const paid = mine[0]?.bps;
+    if (mine.length !== 1 || (paid !== fee.bps && paid !== Math.ceil(fee.bps / 2)))
+      throw quoteChanged();
+  }
+  const total = entries.reduce((s, e) => s + e.bps, 0);
+  if (total > fees.reduce((s, f) => s + f.bps, 0) + ONE_CLICK_EXTRA_BPS) throw quoteChanged();
+}
+
+/**
+ * Superseded 2026-11-14 (security review) for copy fees by `checkOneClickCopyFees`
+ * (several creators); still the rule for a swap with no fee declared.
+ */
 /**
  * 1Click's own record must take exactly the fees shown, and nothing more. With no fee
  * declared (every buy and swap today), `appFees` may hold at most 1Click's own entry of

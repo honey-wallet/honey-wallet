@@ -6,7 +6,8 @@ mod common;
 
 use common::TestDatabase;
 use honey_server::routes::account_identity::{
-    Deletion, EVIDENCE_TABLES, PERSONAL_TABLES, SPEND_TABLES, delete_linked_user,
+    Deletion, EVIDENCE_TABLES, KEPT_COLUMNS, PERSONAL_COLUMNS, PERSONAL_TABLES, SPEND_TABLES,
+    delete_linked_user,
 };
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -241,13 +242,20 @@ async fn account_deletion_covers_every_reference() {
     // keep its rows without the person; only operation evidence may hold a row back.
     let mut cascading = sorted(PERSONAL_TABLES);
     cascading.push("wallet_memberships".into());
+    // Copy fee records, keyed by copier or creator rather than user_id.
+    cascading.extend(PERSONAL_COLUMNS.iter().map(|(t, _)| t.to_string()));
     cascading.sort();
     assert_eq!(of("c"), cascading);
-    assert_eq!(of("n"), sorted(SPEND_TABLES));
+    // assert_eq!(of("n"), sorted(SPEND_TABLES));
+    let mut kept = sorted(SPEND_TABLES);
+    kept.extend(KEPT_COLUMNS.iter().map(|(t, _)| t.to_string()));
+    kept.sort();
+    assert_eq!(of("n"), kept);
     assert_eq!(of("a"), sorted(EVIDENCE_TABLES));
     assert_eq!(
         refs.len(),
-        cascading.len() + SPEND_TABLES.len() + EVIDENCE_TABLES.len()
+        // cascading.len() + SPEND_TABLES.len() + EVIDENCE_TABLES.len()
+        cascading.len() + kept.len() + EVIDENCE_TABLES.len()
     );
     db.close().await;
 }

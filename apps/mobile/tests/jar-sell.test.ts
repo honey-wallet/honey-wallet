@@ -20,8 +20,14 @@ const TOKENS = [
 ];
 
 const calls: string[] = [];
+/** Whether this wallet holds copied wNEAR (the server's records). */
+let copiedWnear = false;
 const quoteSwap = vi.fn(
-  async (input: { sell: { assetId?: string; symbol: string }; amount: string }) => ({
+  async (input: {
+    sell: { assetId?: string; symbol: string };
+    amount: string;
+    copySaleOf?: string;
+  }) => ({
     sell: { ...input.sell, chain: input.sell.symbol === 'SOL' ? 'Solana' : 'NEAR' },
     originAsset: input.sell.assetId,
     depositAddress: `dep-${input.sell.symbol}`,
@@ -30,6 +36,21 @@ const quoteSwap = vi.fn(
     minAmountOut: input.sell.symbol === 'SOL' ? '2475000' : '3950000',
     deadline: deadlineOf(input.sell.symbol),
     status: 'QUOTED',
+    // The server's creator fee on a copy sale (wNEAR made a profit; SOL didn't).
+    // ...(input.copySaleOf
+    //   ? {
+    //       copySaleOf: input.copySaleOf,
+    //       copyFee:
+    //         input.sell.symbol === 'SOL'
+    //           ? null
+    //           : { recipient: '0xcreator', bps: 300, pct: 10, usd: 0.12 },
+    //     }
+    //   : {}),
+    // The server charges copied wNEAR whatever the phone calls the sell (SOL: no profit).
+    ...(input.copySaleOf ? { copySaleOf: input.copySaleOf } : {}),
+    ...(input.sell.symbol === 'SOL' || !copiedWnear
+      ? {}
+      : { copyFees: [{ recipient: '0xcreator', bps: 300, pct: 10, usd: 0.12 }] }),
   }),
 );
 /** Each quote's deadline: 10 minutes off unless a test says otherwise. */
@@ -172,6 +193,27 @@ describe('quoteJarSell', () => {
     expect(quoteSwap.mock.calls[1]?.[0]).toMatchObject({ amount: '0.025' });
     expect(q.usdOut).toBeCloseTo(6.49);
     expect(q.frac).toBe(0.5);
+  });
+});
+
+describe('copied jars', () => {
+  it('names the copied jar on each swap and totals the creator’s fee', async () => {
+    copiedWnear = true;
+    const copied = jar({ copiedFrom: { creator: 'ana', fee: 10, jarId: 'social-jar-1' } });
+    const q = await quoteJarSell(copied, 6.5, 13);
+    expect(quoteSwap.mock.calls.map(([input]) => input.copySaleOf)).toEqual(['jar-1', 'jar-1']);
+    expect(q.copyFee).toEqual({ usd: 0.12, pct: 10 });
+    copiedWnear = false;
+  });
+
+  it('names nothing on your own jar, and shows a fee the server charges anyway', async () => {
+    const q = await quoteJarSell(jar(), 6.5, 13);
+    expect(quoteSwap.mock.calls.every(([input]) => input.copySaleOf === undefined)).toBe(true);
+    expect(q.copyFee).toBeNull();
+    // The same tokens copied from someone else's jar elsewhere: they pay, and it shows.
+    copiedWnear = true;
+    expect((await quoteJarSell(jar(), 6.5, 13)).copyFee).toEqual({ usd: 0.12, pct: 10 });
+    copiedWnear = false;
   });
 });
 

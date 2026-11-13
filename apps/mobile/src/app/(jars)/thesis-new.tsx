@@ -26,12 +26,20 @@ import { AddFace, FACE, FaceRow, FaceTile } from '@/components/social/FaceTile';
 import { SocialAvatar, Trend } from '@/components/social/parts';
 import { Chip } from '@/components/wallet/Chip';
 import { EmptyState } from '@/components/wallet/parts';
+import { useCopyFeeAccount } from '@/lib/copy-fee-account';
+import {
+  buyCopyFeeLine,
+  copiedJarId,
+  copyFeePayoutText,
+  copyFeeText,
+  sellCopyFee,
+} from '@/lib/copy-fees';
 import { routeLabel } from '@/lib/dex-tokens';
 import { useMoney } from '@/lib/fx';
 import { inviteLabel, MAX_FRIENDS, dollars as plainDollars } from '@/lib/group-jar-core';
 import { friendPicks, groupError, startGroup } from '@/lib/group-jars';
 import { tap } from '@/lib/haptics';
-import { REFRESH_FAILED } from '@/lib/intents-quote';
+import { declaredCopyFees, REFRESH_FAILED } from '@/lib/intents-quote';
 // import { type BuyLeg, JarBuyError, payJarBuy, QuoteRanOut, quoteJarBuy } from '@/lib/jar-buy';
 import {
   type BuyLeg,
@@ -48,7 +56,7 @@ import { useBasketChart, useTokenChart } from '@/lib/market';
 import { formatUsd } from '@/lib/mock-wallet';
 import { memberName, propose, useActiveMultisig } from '@/lib/multisig';
 import { SHEET_EXIT } from '@/lib/navigation';
-import { jarPayWith } from '@/lib/pay-with';
+import { jarPayWith, jarPayWithChosen } from '@/lib/pay-with';
 import { refreshAfterChange } from '@/lib/portfolio';
 import { useProfile } from '@/lib/profile';
 import { JAR_VISIBILITY, settings, useSettings } from '@/lib/settings';
@@ -154,7 +162,12 @@ export default function NewThesisSheet() {
   });
   const [step, setStep] = useState<Step>(fromChat && openAt ? openAt : 'idea');
   // Every new jar starts paying with USDC; "Pay with" on How much? changes it.
-  useEffect(() => jarPayWith.set(null), []);
+  // useEffect(() => jarPayWith.set(null), []);
+  // It then follows what the wallet holds until picked by hand (lib/pay-with).
+  useEffect(() => {
+    jarPayWith.set(null);
+    jarPayWithChosen.set(false);
+  }, []);
   const [text, setText] = useState(idea ?? fromChat?.thesis ?? '');
   // Ideas are written in the chat: opened bare (no strategy to review), go there instead;
   // your own jar without its picks (a reload lost them) goes back to picking.
@@ -173,7 +186,11 @@ export default function NewThesisSheet() {
   );
   // Every jar is named by you on Launch (2026-11-13): the field starts empty under its
   // "Name your jar" placeholder, and the card's title stays blank until you type one.
-  const [name, setName] = useState(named ?? '');
+  // const [name, setName] = useState(named ?? '');
+  // A copy starts with the copied jar's name (changeable), so Copy isn't held up on it.
+  const [name, setName] = useState(named ?? (copied && !copied.mine ? copied.name : ''));
+  // Amounts in the person's currency (lib/fx): a jar's money is dollars, not "USDC".
+  const usdText = useMoney();
   // A copy whose jar loaded after this opened (a cold start from a link): start on it now.
   useEffect(() => {
     if (!copied || proposal || !openAt) return;
@@ -191,7 +208,10 @@ export default function NewThesisSheet() {
     return () => friendPicks.set([]);
   }, []);
   // No copy fee is charged yet (lib/surface COPY_FEES), so outside test mode none is set.
+  // Copy fees are collected (2026-11-14, lib/copy-fees): COPY_FEES is on.
   const [copyFee, setCopyFee] = useState(() => (COPY_FEES ? settings.get().jarCopyFee : 0));
+  // Where a creator's fees are paid (their signed-in wallet's NEAR Intents account).
+  const payoutAccount = useCopyFeeAccount(COPY_FEES && !TEST_MODE);
   // Limit orders are off for now, so every buy is a market order.
   const [order] = useState<OrderKind>('market');
   // Slippage is automatic here: the max from Settings, changed there, not on Launch.
@@ -438,11 +458,17 @@ export default function NewThesisSheet() {
       setBuyStage('Getting quotes…');
       try {
         const quoteAndPay = async (again: boolean) => {
-          const quoted = await quoteJarBuy(routes, maxSlip / 100, {}, jarPayWith.get()).catch(
-            (e: unknown) => {
-              throw again ? new Error(REFRESH_FAILED) : e;
-            },
-          );
+          // const quoted = await quoteJarBuy(routes, maxSlip / 100, {}, jarPayWith.get()).catch(
+          // A copy of someone's published jar: the server records its cost for their fee.
+          const copyOf = copied && !copied.mine ? copiedJarId({ copiedFrom }) : undefined;
+          const quoted = await quoteJarBuy(
+            routes,
+            maxSlip / 100,
+            copyOf ? { copyOf } : {},
+            jarPayWith.get(),
+          ).catch((e: unknown) => {
+            throw again ? new Error(REFRESH_FAILED) : e;
+          });
           legCount = quoted.legs.length;
           // Legs bought through a DEX say so, and what you'll hold.
           routeLines = quoted.legs
@@ -451,14 +477,29 @@ export default function NewThesisSheet() {
               key: `route-${l.symbol}`,
               text: `${l.holdAs ?? l.symbol}: ${l.why}`,
             }));
+          // Paying with tokens copied from someone's jar pays their creator's fee: shown
+          // before Face ID, and named in its prompt (audit H3).
+          const copyFee = sellCopyFee(
+            quoted.quotes.flatMap((q) => q.legs.flatMap((l) => declaredCopyFees(l.copyFees))),
+          );
+          const feeLine = buyCopyFeeLine(copyFee);
+          if (feeLine) routeLines = [...routeLines, { key: 'copy-fee', text: feeLine }];
           setBuyLines(routeLines);
           setBuyStage('Confirm to pay…');
-          return payJarBuy(quoted.legs, (legs) => {
-            // sent = legs.filter((l) => l.txHash);
-            // Legs that may have gone out are kept too (money audit 1): never paid twice.
-            sent = legs.filter(wentOut);
-            setBuyStage(`Paying ${Math.min(sent.length + 1, legCount)} of ${legCount}…`);
-          });
+          // return payJarBuy(quoted.legs, (legs) => {
+          const reason = copyFee
+            ? `Buy ${usdText.format(proposal.amount)}, with a creator's fee of ${copyFeeText(copyFee)}`
+            : undefined;
+          return payJarBuy(
+            quoted.legs,
+            (legs) => {
+              // sent = legs.filter((l) => l.txHash);
+              // Legs that may have gone out are kept too (money audit 1): never paid twice.
+              sent = legs.filter(wentOut);
+              setBuyStage(`Paying ${Math.min(sent.length + 1, legCount)} of ${legCount}…`);
+            },
+            reason,
+          );
         };
         // A quote that ran out before anything was paid (the confirm prompt sat open):
         // quoted once more, and confirmed again.
@@ -672,6 +713,7 @@ export default function NewThesisSheet() {
           }
           cta="Continue"
           payWith
+          picks={kept}
           onDone={(amount) => {
             tap();
             // A token stepped down to 0% is left out of the jar.
@@ -689,9 +731,12 @@ export default function NewThesisSheet() {
     // A copy can't be resold for a cut of someone else's idea, and only Everyone's jars
     // show the picks a copy buys.
     const copyable = COPY_FEES && !copied && visibility === 'public';
+    const payoutText = TEST_MODE ? '' : copyFeePayoutText(payoutAccount);
     return (
       <SheetScreen
-        title="Launch your jar"
+        // title="Launch your jar"
+        // A copy reads as one: the jar is someone else's idea, at your amount.
+        title={copied && !copied.mine ? 'Copy jar' : 'Launch your jar'}
         size="fill"
         scroll
         pinFooter
@@ -719,7 +764,10 @@ export default function NewThesisSheet() {
                           ? 'Checking routes…'
                           : tooSmall
                             ? tooSmall.label
-                            : `Buy ${formatUsd(proposal.amount)} and launch`
+                            : // `Buy ${formatUsd(proposal.amount)} and launch`
+                              copied && !copied.mine
+                              ? `Copy for ${usdText.format(proposal.amount).replace(/\.00$/, '')}`
+                              : `Buy ${usdText.format(proposal.amount).replace(/\.00$/, '')} and launch`
               }
               // disabled={!name.trim() || buying || blocked.length > 0}
               disabled={
@@ -742,7 +790,9 @@ export default function NewThesisSheet() {
           <TextInput
             value={name}
             onChangeText={setName}
-            autoFocus
+            // autoFocus
+            // A copy arrives named: no keyboard over its Copy button.
+            autoFocus={!(copied && !copied.mine)}
             maxLength={32}
             placeholder="Name your jar"
             placeholderTextColor={c.placeholder}
@@ -847,6 +897,8 @@ export default function NewThesisSheet() {
 
           {/* Everyone's jars can be copied: the landing page's cut slider. */}
           {copyable ? <CopyCutSlider value={copyFee} onChange={setCopyFee} /> : null}
+          {/* Where that cut is paid, or that it can't be (lib/copy-fees). */}
+          {copyable && payoutText ? <Text style={styles.note}>{payoutText}</Text> : null}
 
           {/* Limit orders ("At a better price") are off for now (2026-11-13): every buy is
               at today's price within the max slippage from Settings.

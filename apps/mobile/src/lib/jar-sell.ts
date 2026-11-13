@@ -11,6 +11,7 @@
  * Intents swap of that USDC to it, paid once the DEX swap has landed. All under the same
  * one confirmation.
  */
+import { copiedJarId, type SellCopyFee, sellCopyFee } from '@/lib/copy-fees';
 import {
   type DexChain,
   type DexDeps,
@@ -115,6 +116,8 @@ export type JarSellQuote = {
   /** The same in dollars (1Click's price). */
   usdOut: number;
   usdOutMin: number;
+  /** A copied jar's creator fee on this sell (server-set, checked with 1Click); null when none. */
+  copyFee: SellCopyFee | null;
 };
 
 /** One verified NEAR Intents quote per token, to `into` (USDC on Base unless picked). */
@@ -138,6 +141,8 @@ export async function quoteJarSell(
   const dex = await Promise.all(
     parts.filter((p) => isDexLeg(p.leg)).map((p) => quoteDexSale(p.leg, p.units, buy, deps)),
   );
+  // A copied jar's sells name the jar copied: the server adds its creator's fee, if any.
+  const copySaleOf = copiedJarId(jar);
   const swaps = await Promise.all(
     parts
       .filter((p) => !isDexLeg(p.leg))
@@ -148,7 +153,8 @@ export async function quoteJarSell(
         if (sell.symbol === buy.symbol && sell.chain === buy.chain)
           throw new Error(`This jar already holds ${into}. Pick something else to get.`);
         const swap = await quoteSwap(
-          { sell, buy, amount: unitsText(units.toString(), decimals) },
+          // { sell, buy, amount: unitsText(units.toString(), decimals) },
+          { sell, buy, amount: unitsText(units.toString(), decimals), copySaleOf },
           deps,
         );
         return { swap, units };
@@ -197,6 +203,8 @@ export async function quoteJarSell(
       ? amountOutMin
       : swaps.reduce((s, x) => s + usdMin(x.swap), 0) +
         dex.reduce((s, x) => s + (x.payout ? usdMin(x.payout) : dexOut(x, true)), 0),
+    // copyFee: sellCopyFee(swaps.map((x) => x.swap.copyFee)),
+    copyFee: sellCopyFee(swaps.flatMap((x) => x.swap.copyFees ?? [])),
   };
 }
 
@@ -324,9 +332,12 @@ export async function executeJarSell(
     const done = await sellDex(jar, sale, { ...deps, confirm });
     if (done) sent.push(done);
   }
-  if (q.frac >= 1 && sent.length === q.swaps.length + q.dex.filter((x) => x.payout).length)
+  if (q.frac >= 1 && sent.length === q.swaps.length + q.dex.filter((x) => x.payout).length) {
     thesisJars.set((list) => list.filter((j) => j.id !== jar.id));
-  else void refreshJarValues();
+    // Sold in full: off the feed too (best effort; loaded lazily, it pulls in the API).
+    if (jar.mine && !jar.copiedFrom)
+      void import('@/lib/social').then((social) => social.unpublishJar(jar.id)).catch(() => {});
+  } else void refreshJarValues();
   return sent;
 }
 

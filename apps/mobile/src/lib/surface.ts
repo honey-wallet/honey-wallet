@@ -53,7 +53,13 @@ export const SOON = {
  * Creators' copy fees ("x% of your profit"): nothing charges one yet (no escrow, no payout
  * when a copy is sold), so outside test mode no screen offers, sets or promises a fee.
  */
-export const COPY_FEES = TEST_MODE;
+// export const COPY_FEES = TEST_MODE;
+/**
+ * Creators' copy fees ("x% of your profit") are collected (2026-11-14): the server adds the
+ * creator's cut to a copier's sell as NEAR Intents 1Click `appFees` (lib/copy-fees), so
+ * every build offers, sets and shows them.
+ */
+export const COPY_FEES = true;
 
 /**
  * Settings that change nothing yet, hidden outside test mode until they're wired:

@@ -223,6 +223,16 @@ export function usePortfolio(wallet: AddedWallet, withActivity = false) {
   };
 }
 
+/**
+ * What `wallet` holds right now (the last read), as send choices: for code outside a
+ * screen (a Copy of a post's token picks what to pay with from these).
+ */
+export function heldNow(wallet: AddedWallet): SendHolding[] {
+  const addresses = liveAddresses(wallet);
+  const entry = addresses ? portfolios.get()[addressKey(addresses)] : undefined;
+  return toHoldings(entry?.portfolio?.holdings ?? []);
+}
+
 /** Holdings as Home's token list: one row per symbol, summed over chains, largest first. */
 export function toTokens(holdings: PortfolioHolding[]): Token[] {
   const bySymbol = new Map<string, Token>();

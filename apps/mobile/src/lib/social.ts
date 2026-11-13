@@ -382,7 +382,9 @@ export function socialPicks(picks: Pick[]) {
  */
 export async function publishJar(jar: ThesisJar): Promise<SocialJar | null> {
   const token = backendSessionToken();
-  if (!token || !jar.mine || jar.visibility !== 'public') return null;
+  // if (!token || !jar.mine || jar.visibility !== 'public') return null;
+  // Everyone's and "Returns only" jars are published; "Only members" stays on the phone.
+  if (!token || !jar.mine || !publishedVisibility(jar.visibility)) return null;
   // The feed may never have been opened: find out whether there's a handle first.
   if (!social.get().meLoaded) await loadMe();
   if (!social.get().me) return null;
@@ -394,7 +396,9 @@ export async function publishJar(jar: ThesisJar): Promise<SocialJar | null> {
       picks: socialPicks(jar.picks),
       copyFee: Math.min(30, Math.max(0, Math.round(jar.copyFee))),
       // Only Everyone's jars are published now, and they show what they hold.
-      hidePicks: false,
+      // hidePicks: false,
+      // "Returns only": published with what it holds hidden from everyone else.
+      hidePicks: jar.visibility === 'private',
     });
     void loadFeed('everyone');
     return published;
@@ -409,33 +413,50 @@ export async function publishJar(jar: ThesisJar): Promise<SocialJar | null> {
   }
 }
 
-// Unused since 14 Nov (cleanup): nothing imports it.
-// /** Takes a jar off the feed (made private or deleted on the phone). */
-// export async function unpublishJar(clientId: string) {
-//   const token = backendSessionToken();
-//   const me = social.get().me;
-//   if (!token || !me) return;
-//   const jar = me.jars.find((j) => j.clientId === clientId);
-//   if (!jar) return;
-//   try {
-//     await api.socialUnpublishJar(token, jar.id);
-//     void loadMe();
-//   } catch {
-//     // Best effort; it stays listed until the next try.
-//   }
-// }
+// Unused since 14 Nov (cleanup): nothing imports it. Back in use (2026-11-14): a jar
+// sold in full or made "Only members" comes off the feed.
+/** Takes a jar off the feed (made private or deleted on the phone). */
+export async function unpublishJar(clientId: string) {
+  const token = backendSessionToken();
+  if (!token) return;
+  if (!social.get().meLoaded) await loadMe();
+  const me = social.get().me;
+  if (!me) return;
+  const jar = me.jars.find((j) => j.clientId === clientId);
+  if (!jar) return;
+  try {
+    await api.socialUnpublishJar(token, jar.id);
+    void loadMe();
+  } catch {
+    // Best effort; it stays listed until the next try.
+  }
+}
+
+/** Whether a jar with this visibility is on the feed: Everyone's and "Returns only". */
+export const publishedVisibility = (v: ThesisJar['visibility']) =>
+  v === 'public' || v === 'private';
 
 /** Tells the server you copied a public jar, so its owner's count (and the feed) move. */
+// The server counts a copy once its buy has settled (2026-11-14); this checks the jar
+// can be copied and takes the server's count, never a guess made here.
 export async function recordCopy(socialJarId: string) {
   const token = backendSessionToken();
   if (!token) return;
   if (!social.get().meLoaded) await loadMe();
   if (!social.get().me) return;
   try {
-    await api.socialRecordCopy(token, socialJarId);
+    // await api.socialRecordCopy(token, socialJarId);
+    const { copies } = await api.socialRecordCopy(token, socialJarId);
+    setCopies(socialJarId, copies);
   } catch {
     // The copy itself happened on chain; the counter is best effort.
   }
+}
+
+/** A public jar's copies on this phone, as the server counts them. */
+export function setCopies(socialJarId: string, copies: number) {
+  const id = `${SOCIAL_JAR_PREFIX}${socialJarId}`;
+  thesisJars.set((list) => list.map((j) => (j.id === id ? { ...j, copiers: copies } : j)));
 }
 
 /** Public jars from the server live in the phone's jar list under this id prefix. */

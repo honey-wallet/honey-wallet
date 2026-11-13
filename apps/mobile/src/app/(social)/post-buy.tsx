@@ -5,10 +5,13 @@ import { JarAmount } from '@/components/jars/JarAmount';
 import { SheetScreen } from '@/components/sheets/Sheet';
 import { tokensProposal } from '@/components/social/parts';
 import { TokenIcon } from '@/components/wallet/parts';
+import { swapForDollars } from '@/lib/buy';
 import { tap } from '@/lib/haptics';
 import type { Chain } from '@/lib/mock-wallet';
-import { updateSwap } from '@/lib/swap';
+import { jarPayWith, jarPayWithChosen } from '@/lib/pay-with';
 import { chatDraft } from '@/lib/thesis-chat';
+// import { updateSwap } from '@/lib/swap';
+import { useWalletView } from '@/lib/wallet-view';
 import { makeStyles } from '@/theme';
 
 /** Feed amounts are a tap, not a plan: smaller quick picks than a jar's. */
@@ -44,6 +47,13 @@ export default function PostBuySheet() {
     chatDraft.set(tokensProposal(list, params.title));
     return true;
   });
+  const view = useWalletView();
+  // "Pay with" starts from what the wallet holds (lib/pay-with), changeable.
+  useState(() => {
+    jarPayWith.set(null);
+    jarPayWithChosen.set(false);
+    return true;
+  });
 
   if (params.jar)
     return (
@@ -67,15 +77,24 @@ export default function PostBuySheet() {
           </View>
         }
         presets={PRESETS}
+        payWith
         cta="Review"
         onDone={(amount) => {
           tap();
           // Paid in USDC on Base, so the dollars typed are the amount sold.
-          updateSwap({
-            sell: { symbol: 'USDC', chain: 'Base' },
-            buy: { symbol, chain: (params.chain ?? 'Ethereum') as Chain },
-            presetAmount: String(amount),
-          });
+          // updateSwap({
+          //   sell: { symbol: 'USDC', chain: 'Base' },
+          //   buy: { symbol, chain: (params.chain ?? 'Ethereum') as Chain },
+          //   presetAmount: String(amount),
+          // });
+          // Dollars, paid with the best token this wallet holds (lib/buy).
+          swapForDollars(
+            { symbol, chain: (params.chain ?? 'Ethereum') as Chain },
+            amount,
+            'holdings' in view ? (view.holdings ?? []) : [],
+            undefined,
+            jarPayWith.get(),
+          );
           router.dismissAll();
           router.navigate('/trade');
         }}

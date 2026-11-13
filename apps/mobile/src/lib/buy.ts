@@ -77,3 +77,20 @@ export function openBuy(_holdings: readonly Holding[], symbol?: string) {
   // presetBuy(holdings, symbol);
   // router.navigate('/trade');
 }
+
+/**
+ * Swap set up to spend `usd` dollars on `buy`, paid with the best token the wallet in use
+ * holds (`bestPayWith`: its largest USDC, else its largest holding), not always USDC on
+ * Base (2026-11-14). The amount is dollars; Swap types it in that token's units.
+ */
+export function swapForDollars(
+  buy: TokenRef,
+  usd: number,
+  holdings: readonly Holding[],
+  tokens = swapTokenList.get().tokens,
+  /** What "Pay with" picked (lib/pay-with `jarPayWith`), when not USDC. */
+  picked: TokenRef | null = null,
+) {
+  const sell = picked ?? bestPayWith(holdings, tokens, buy) ?? swap.get().sell;
+  updateSwap({ sell, buy, buyChosen: true, presetUsd: usd, presetAmount: null });
+}
