@@ -73,7 +73,10 @@ export function TokenArc({
   width,
   onTotalPress,
   payToken,
+  bubbles: withBubbles = true,
 }: {
+  /** Token logos sit on the arc; off, the arc and its middle only (a legend goes below). */
+  bubbles?: boolean;
   slices: Slice[];
   total: string;
   label?: string;
@@ -158,7 +161,7 @@ export function TokenArc({
           ))}
         </Svg>
 
-        {bubbles.map((b, i) => {
+        {(withBubbles ? bubbles : []).map((b, i) => {
           const p = spots[i] ?? { x: 0, y: 0 };
           const entering = reduced
             ? undefined

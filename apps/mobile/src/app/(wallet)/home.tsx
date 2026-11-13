@@ -818,23 +818,43 @@ const RING_MAX = 240;
  * tab bar's jar button opens Create), so the ring sits here, over the list.
  */
 function JarsRing({ jars }: { jars: ThesisJar[] }) {
+  const ringStyles = useRingStyles();
   const [width, setWidth] = useState(0);
   const slices = exposureSlices(jars);
   // One token is a solid ring saying 100%: nothing to show.
   if (slices.length < 2) return null;
+  // The arc carries colour and the count; the names sit in one quiet row under it
+  // (logos on the arc crowded the count, review 2026-11-13).
+  const top = slices.slice(0, 3);
+  const more = slices.length - top.length;
   return (
-    <View
-      style={{ alignItems: 'center', paddingVertical: 12 }}
-      onLayout={(e) => setWidth(e.nativeEvent.layout.width)}
-    >
+    <View style={ringStyles.wrap} onLayout={(e) => setWidth(e.nativeEvent.layout.width)}>
       {width > 0 ? (
         <TokenArc
           slices={slices}
           total={String(slices.length)}
           label="tokens"
           width={Math.min(width, RING_MAX)}
+          bubbles={false}
         />
       ) : null}
+      <View style={ringStyles.legend}>
+        {top.map((s) => (
+          <View key={s.symbol} style={ringStyles.item}>
+            <TokenIcon symbol={s.symbol} size={16} />
+            <Text style={ringStyles.pct}>{s.weight}%</Text>
+          </View>
+        ))}
+        {more > 0 ? <Text style={ringStyles.more}>+{more} more</Text> : null}
+      </View>
     </View>
   );
 }
+
+const useRingStyles = makeStyles((c) => ({
+  wrap: { alignItems: 'center', paddingTop: 12, paddingBottom: 8, gap: 10 },
+  legend: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 16 },
+  item: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  pct: { color: c.textSecondary, fontSize: 13, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  more: { color: c.textSecondary, fontSize: 13 },
+}));
