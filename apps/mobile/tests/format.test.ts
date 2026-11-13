@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { chanceText, floorNumber, formatPrice, formatUsd, signedPct } from '@/lib/format';
+import {
+  chanceText,
+  floorNumber,
+  floorSignificant,
+  formatPrice,
+  formatUsd,
+  signedPct,
+} from '@/lib/format';
 
 // The helpers each screen used to keep its own copy of (14 Nov cleanup).
 const oldSigned = (f: number) => `${f >= 0 ? '+' : ''}${(f * 100).toFixed(1)}%`;
@@ -42,5 +49,18 @@ describe('floorNumber (money audit 8)', () => {
     expect(floorNumber(1e-9, 8)).toBe('0');
     expect(floorNumber(0, 8)).toBe('0');
     expect(floorNumber(Number.NaN, 8)).toBe('0');
+  });
+});
+
+describe('floorSignificant (money audit 10)', () => {
+  it('cuts a minimum to 6 significant digits, rounding down', () => {
+    // toPrecision(6) showed 0.0123457, more than the 0.01234569 guaranteed.
+    expect(Number((0.01234569).toPrecision(6))).toBe(0.0123457);
+    expect(floorSignificant('0.01234569')).toBe('0.0123456');
+    expect(floorSignificant('1.9999999')).toBe('1.99999');
+    expect(floorSignificant('49.104')).toBe('49.104');
+    expect(floorSignificant('1234567.89')).toBe('1234567');
+    expect(floorSignificant('0')).toBe('0');
+    expect(floorSignificant('12')).toBe('12');
   });
 });

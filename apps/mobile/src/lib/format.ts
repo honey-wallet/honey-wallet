@@ -68,3 +68,24 @@ export function floorNumber(n: number, decimals: number) {
   const kept = frac.slice(0, Math.max(0, decimals)).replace(/0+$/, '');
   return kept ? `${int}.${kept}` : int;
 }
+
+/**
+ * Exact decimal text ("0.0123456789") cut to `sig` significant digits, rounded down: a
+ * "≥" minimum must never show more than is guaranteed (money audit 10: `toPrecision`
+ * rounded 0.01234569 up). Whole-number digits are all kept.
+ */
+export function floorSignificant(text: string, sig = 6) {
+  const m = /^(\d+)(?:\.(\d*))?$/.exec(text.trim());
+  if (!m) return text;
+  const int = (m[1] ?? '0').replace(/^0+(?=\d)/, '');
+  const frac = m[2] ?? '';
+  const intDigits = int === '0' ? 0 : int.length;
+  let keep: number;
+  if (intDigits) keep = Math.max(0, sig - intDigits);
+  else {
+    const lead = /^0*/.exec(frac)?.[0].length ?? 0;
+    keep = lead + sig;
+  }
+  const kept = frac.slice(0, keep).replace(/0+$/, '');
+  return kept ? `${int}.${kept}` : int;
+}

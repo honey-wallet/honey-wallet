@@ -38,6 +38,7 @@ import {
   takerOn,
   usdcOn,
 } from '@/lib/dex';
+import { floorSignificant } from '@/lib/format';
 import { useMoney } from '@/lib/fx';
 import { success, tap } from '@/lib/haptics';
 import { REFRESH_FAILED } from '@/lib/intents-quote';
@@ -160,6 +161,13 @@ function useNow(ms: number | null) {
 /** "0.0123", short enough for a card. */
 const short = (units: string, decimals: number) =>
   Number(Number(unitsText(units, decimals)).toPrecision(6)).toString();
+
+/**
+ * A guaranteed minimum, as short: rounded down, never above what's guaranteed (money audit
+ * 10). Every "≥" and "You get at least" figure used `short` until 14 Nov.
+ */
+const atLeast = (units: string, decimals: number) =>
+  floorSignificant(unitsText(units, decimals), 6);
 
 function arrivesIn(seconds: number | null) {
   if (!seconds) return 'A few minutes';
@@ -626,9 +634,9 @@ function IntentsSwapForm() {
                 adjustsFontSizeToFit
               >
                 {current
-                  ? `≥ ${short(current.minAmountOut, current.buyDecimals)}`
+                  ? `≥ ${atLeast(current.minAmountOut, current.buyDecimals)}`
                   : dexCurrent
-                    ? `≥ ${short(dexCurrent.quote.minBuyAmount, buyDecimals)}`
+                    ? `≥ ${atLeast(dexCurrent.quote.minBuyAmount, buyDecimals)}`
                     : estimate
                       ? `≈ ${formatBalance(estimate)}`
                       : '0'}
@@ -703,7 +711,7 @@ function IntentsSwapForm() {
             />
             <DetailRow
               label="You get at least"
-              value={`${short(dexCurrent.quote.minBuyAmount, buyDecimals)} ${buy.symbol}`}
+              value={`${atLeast(dexCurrent.quote.minBuyAmount, buyDecimals)} ${buy.symbol}`}
             />
             {priceImpactText(dexCurrent.quote) ? (
               <DetailRow label="Price impact" value={priceImpactText(dexCurrent.quote) ?? ''} />
@@ -720,7 +728,7 @@ function IntentsSwapForm() {
             <DetailRow label="Route" value="NEAR Intents" />
             <DetailRow
               label="You get at least"
-              value={`${short(current.minAmountOut, current.buyDecimals)} ${buy.symbol}`}
+              value={`${atLeast(current.minAmountOut, current.buyDecimals)} ${buy.symbol}`}
             />
             <DetailRow label="Arrives" value={arrivesIn(current.timeEstimate)} />
             <DetailRow label="Max slippage" value={`${current.slippageBps / 100}%`} />
@@ -856,7 +864,7 @@ function IntentsSwapForm() {
                   detail={`It lands in a few seconds. Activity shows it.`}
                   amount={{
                     symbol: buy.symbol,
-                    text: `≥ ${short(tray.quoted.quote.minBuyAmount, buyDecimals)} ${buy.symbol}`,
+                    text: `≥ ${atLeast(tray.quoted.quote.minBuyAmount, buyDecimals)} ${buy.symbol}`,
                   }}
                   rows={[
                     {
@@ -1213,7 +1221,7 @@ function DexReviewStep({
   const c = useTheme();
   const q = quoted.quote;
   const pay = `${unitsText(q.sellAmount, sellDecimals)} ${sell.symbol}`;
-  const get = `${short(q.minBuyAmount, buyDecimals)} ${buy.symbol}`;
+  const get = `${atLeast(q.minBuyAmount, buyDecimals)} ${buy.symbol}`;
   const impact = priceImpactText(q);
   const gasNote = dexGasNote(q);
   // Dollar values read in Settings' Local currency (lib/fx).
@@ -1286,7 +1294,7 @@ function ProgressStep({ swap, error, onDone }: { swap: Swap; error?: string; onD
     wasDone.current = stage === 'done';
   }, [stage, swap.depositAddress, swap.externalRecipient]);
   const pay = `${short(swap.amountIn, swap.sellDecimals)} ${swap.sell.symbol}`;
-  const get = `${short(swap.minAmountOut, swap.buyDecimals)} ${swap.buy.symbol}`;
+  const get = `${atLeast(swap.minAmountOut, swap.buyDecimals)} ${swap.buy.symbol}`;
   const sentOk = !['quoted', 'sending'].includes(stage) && swap.status !== 'NOT_SENT';
   const steps: { label: string; state: StepState; link?: ReactNode }[] = [
     {
