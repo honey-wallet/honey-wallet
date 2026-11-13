@@ -122,6 +122,75 @@ export function sortTokens(tokens: readonly OneClickToken[]) {
   );
 }
 
+/** Each coin's own network, where it keeps its name ("Ethereum"). */
+const COIN_HOME: Record<string, string> = {
+  ETH: 'eth',
+  BTC: 'btc',
+  SOL: 'sol',
+  NEAR: 'near',
+  wNEAR: 'near',
+  BNB: 'bsc',
+  POL: 'pol',
+  AVAX: 'avax',
+};
+/** Uniswap's word for a network in a coin's name, where it isn't the network's name. */
+const NETWORK_WORD: Record<string, string> = { op: 'Optimistic' };
+
+/**
+ * A coin away from its own network named Uniswap's way: "Arbitrum ETH", "Base ETH",
+ * "Optimistic ETH"; on its own network (and for every other token) `name` as it is.
+ */
+export function coinName(
+  t: Pick<OneClickToken, 'symbol' | 'blockchain'>,
+  name: string,
+  networkOf: (blockchain: string) => string,
+) {
+  const home = COIN_HOME[t.symbol];
+  if (!home || t.blockchain === home) return name;
+  return `${NETWORK_WORD[t.blockchain] ?? networkOf(t.blockchain)} ${t.symbol}`;
+}
+
+/** Market data for ordering: a symbol's place by market cap, and the network it's on. */
+export type Popularity = {
+  /** 0 for the largest; undefined when the market list doesn't have it. */
+  rankOf: (symbol: string) => number | undefined;
+  /** The network the market list shows the token on ("Ethereum"), if any. */
+  mainNetworkOf: (symbol: string) => string | undefined;
+};
+
+/**
+ * A popular list, as Uniswap's: one row per token first (on its main network), largest
+ * first, then every other network's copy further down, in the same order.
+ */
+export function popularOrder(
+  tokens: readonly OneClickToken[],
+  { rankOf, mainNetworkOf }: Popularity,
+  networkOf: (blockchain: string) => string,
+) {
+  const groups = new Map<string, OneClickToken[]>();
+  for (const t of sortTokens(tokens)) groups.set(t.symbol, [...(groups.get(t.symbol) ?? []), t]);
+  const firsts: OneClickToken[] = [];
+  const copies: OneClickToken[] = [];
+  for (const [symbol, list] of groups) {
+    const main = mainNetworkOf(symbol);
+    // A coin on its own network first (BTC on Bitcoin), else where the market shows it.
+    const first =
+      list.find((t) => t.blockchain === COIN_HOME[symbol]) ??
+      list.find((t) => !!main && networkOf(t.blockchain) === main) ??
+      list.find((t) => !t.contractAddress) ??
+      (list[0] as OneClickToken);
+    firsts.push(first);
+    copies.push(...list.filter((t) => t !== first));
+  }
+  const place = (t: OneClickToken) => rankOf(t.symbol) ?? Number.MAX_SAFE_INTEGER;
+  const order = (a: OneClickToken, b: OneClickToken) =>
+    place(a) - place(b) ||
+    rank(a.symbol) - rank(b.symbol) ||
+    a.symbol.localeCompare(b.symbol) ||
+    chainOrder(a.blockchain) - chainOrder(b.blockchain);
+  return [...firsts.sort(order), ...copies.sort(order)];
+}
+
 export type PickerLists = {
   /** Networks in the list, for the network selector. */
   chains: string[];
@@ -141,6 +210,7 @@ export function pickerLists(
     nameOf,
     networkOf,
     recent = [],
+    popularity,
   }: {
     query: string;
     chain: string | null;
@@ -151,9 +221,11 @@ export function pickerLists(
     /** The network's name ("Ethereum"). */
     networkOf: (blockchain: string) => string;
     recent?: readonly TokenRef[];
+    /** Market data: one row per token first, by market cap (else majors, then A to Z). */
+    popularity?: Popularity;
   },
 ): PickerLists {
-  const sorted = sortTokens(tokens);
+  const sorted = popularity ? popularOrder(tokens, popularity, networkOf) : sortTokens(tokens);
   const chains = [...new Set(sorted.map((t) => t.blockchain))].sort(
     (a, b) => chainOrder(a) - chainOrder(b),
   );

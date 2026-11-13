@@ -11,11 +11,12 @@ import { Copyable, ExplorerLink } from '@/components/sheets/Details';
 import { SheetHeader, StatRow } from '@/components/sheets/Sheet';
 import { SuccessPage } from '@/components/sheets/SuccessPage';
 import { InlineTray } from '@/components/sheets/Tray';
-import { PopularPairs } from '@/components/trade/PopularPairs';
+// Popular swaps are commented out below (14 Nov), so their row isn't imported.
+// import { PopularPairs } from '@/components/trade/PopularPairs';
 import { Spinner } from '@/components/trade/SwapReview';
 import { InFlightBar } from '@/components/wallet/InFlightBar';
 import { applyKey, Keypad, PercentChips, TypedAmount } from '@/components/wallet/Keypad';
-import { SCREEN, TokenIcon } from '@/components/wallet/parts';
+import { /* SCREEN, */ TokenIcon } from '@/components/wallet/parts';
 import { confirmOwner } from '@/lib/auth';
 import { backendSession, backendSessionToken } from '@/lib/backend-session';
 import { planRoute } from '@/lib/best-route';
@@ -41,12 +42,13 @@ import { useMoney } from '@/lib/fx';
 import { success, tap } from '@/lib/haptics';
 import { REFRESH_FAILED } from '@/lib/intents-quote';
 import {
+  bestPayWith,
   canBuyRef,
   canSellRef,
   executeSwapPayment,
   FALLBACK_SWAP_TOKENS,
   intentsSwaps,
-  isFinal,
+  // isFinal (finished swaps left the top of Swap, 14 Nov),
   loadSwapTokens,
   MAX_INPUT_DECIMALS,
   nearExpiry,
@@ -67,6 +69,7 @@ import {
   swapAssetOf,
   swapStage,
   swapTokenList,
+  tokenRef,
   unitsText,
   unsupportedReason,
   useIntentsSwaps,
@@ -79,6 +82,7 @@ import { serverNow } from '@/lib/server-clock';
 import { shareTrade } from '@/lib/social';
 import { type TokenRef, updateSwap, useSwap } from '@/lib/swap';
 import { TEST_MODE } from '@/lib/test-mode';
+import { quickPicks } from '@/lib/token-picker';
 import { explorerTxOn } from '@/lib/tx-receipt';
 import { requireWallet, useHasWallet } from '@/lib/wallet-gate';
 import { useWalletView } from '@/lib/wallet-view';
@@ -196,8 +200,12 @@ function IntentsSwapForm() {
   const buyAsset = tokens ? swapAssetOf(tokens, buy) : null;
   // Keep the store on the shown pair, so the pickers tick what's on screen.
   useEffect(() => {
-    if (!sameToken(stored.sell, sell) || !sameToken(stored.buy, buy)) updateSwap({ sell, buy });
-  }, [stored.sell, stored.buy, sell, buy]);
+    if (!sameToken(stored.sell, sell) || !sameToken(stored.buy, buy))
+      updateSwap({ sell, buy, buyChosen: !!stored.buyChosen });
+  }, [stored.sell, stored.buy, stored.buyChosen, sell, buy]);
+  // Like Uniswap, Buy starts empty: "Select token" and a few suggestions until one is
+  // picked (lib/swap `buyChosen`); `buy` is only a placeholder until then.
+  const buyChosen = !!stored.buyChosen;
 
   // Signing in to Honey is needed to ask for quotes (they mint deposit addresses).
   backendSession.useValue();
@@ -206,6 +214,31 @@ function IntentsSwapForm() {
   const view = useWalletView();
   const holdings = 'holdings' in view ? (view.holdings ?? []) : [];
   const balance = holdings.find((h) => sameToken(h, sell))?.amount ?? 0;
+  // Start like Uniswap: sell what you hold the most of (lib/intents-swap `bestPayWith`)
+  // when the token left in the form isn't held. Once per visit, so a token picked to sell
+  // that isn't held stays picked.
+  const balancesIn = !!tokens && 'holdings' in view && !view.loading;
+  const seeded = useRef(false);
+  useEffect(() => {
+    if (seeded.current || !balancesIn) return;
+    seeded.current = true;
+    if (balance > 0) return;
+    const best = bestPayWith(holdings, tokens, buyChosen ? buy : null);
+    if (best && !sameToken(best, sell)) updateSwap({ sell: best, buyChosen });
+  }, [balancesIn, balance, holdings, tokens, buy, sell, buyChosen]);
+  // Buy's suggestions while it's empty, as Uniswap's four logos: common tokens on the
+  // network being sold from, then on their own networks.
+  const suggestions = (() => {
+    if (!tokens) return [];
+    const seen = new Set<string>();
+    return [...quickPicks(tokens, sellAsset?.blockchain ?? null), ...quickPicks(tokens, null)]
+      .filter((t) => {
+        if (seen.has(t.symbol) || sameToken(tokenRef(t), sell)) return false;
+        seen.add(t.symbol);
+        return true;
+      })
+      .slice(0, 4);
+  })();
   const sellDecimals = sellDex?.decimals ?? sellAsset?.decimals;
   const buyDecimals = buyDex?.decimals ?? buyAsset?.decimals ?? 6;
   const maxDecimals = sellDecimals
@@ -239,7 +272,7 @@ function IntentsSwapForm() {
   const estimate = typed && sellPrice && buyPrice ? (typed * sellPrice) / buyPrice : null;
 
   // Payouts on a network this wallet has no key for go to an address typed here.
-  const askAddress = !!buyAsset && needsRecipient(buyAsset.blockchain);
+  const askAddress = buyChosen && !!buyAsset && needsRecipient(buyAsset.blockchain);
   const [addresses, setAddresses] = useState<Record<string, string>>({});
   const recipient = askAddress ? (addresses[buy.chain] ?? '').trim() : '';
 
@@ -263,11 +296,13 @@ function IntentsSwapForm() {
   const now = useNow(asked || dexMode || dexQuote ? 1000 : null);
   const left = asked ? Date.parse(asked.deadline) - QUOTE_MARGIN_MS - now : 0;
   const current = asked && left > 0 ? asked : null;
-  const reason = dexMode
-    ? dexList && !dexToken
-      ? `${(isDexAsset(sell.assetId) ? sell : buy).symbol} can’t be swapped right now.`
-      : null
-    : unsupportedReason(sell, buy, tokens);
+  const reason = !buyChosen
+    ? null
+    : dexMode
+      ? dexList && !dexToken
+        ? `${(isDexAsset(sell.assetId) ? sell : buy).symbol} can’t be swapped right now.`
+        : null
+      : unsupportedReason(sell, buy, tokens);
   const dexAsked = dexQuote?.key === quoteKey ? dexQuote : null;
   const dexCurrent = dexAsked && now - dexAsked.at < DEX_QUOTE_MS ? dexAsked.quoted : null;
   const safety = safetyLine(buyDex);
@@ -371,6 +406,11 @@ function IntentsSwapForm() {
 
   const flip = () => {
     tap();
+    // Buy still empty: what was sold becomes the buy, and the sell your largest holding.
+    if (!buyChosen) {
+      updateSwap({ sell: bestPayWith(holdings, tokens, sell) ?? buy, buy: sell });
+      return;
+    }
     updateSwap({ sell: buy, buy: sell });
   };
 
@@ -378,10 +418,13 @@ function IntentsSwapForm() {
   // toasts when they settle); moving ones show in the bar above, finished ones from the
   // last hour as rows.
   const all = useIntentsSwaps();
+  /* Only swaps still moving show at the top now (14 Nov, the user's call): the bar above
+  has them; finished ones are in Activity and Notifications.
   const mine = Object.values(all)
     .filter((s) => s.walletId === wallet.id && isFinal(s) && now - (s.sentAt ?? 0) < 3600_000)
     .sort((a, b) => (b.sentAt ?? 0) - (a.sentAt ?? 0))
     .slice(0, 3);
+  */
 
   const [tray, setTray] = useState<TrayState | null>(null);
   // Opened from "1 swap in progress" elsewhere: straight to that swap's progress.
@@ -396,7 +439,9 @@ function IntentsSwapForm() {
   // so with it shown the room would just grow to fit it), and whether popular pairs
   // take some of it.
   const [room, setRoom] = useState<number | null>(null);
-  const pairs = !amount && !askAddress;
+  // The popular swaps row is commented out below (14 Nov), so it takes no room.
+  // const pairs = !amount && !askAddress;
+  const pairs = false;
   const preview = room !== null && room >= (pairs ? PAIRS_HEIGHT : 0) + PREVIEW_HEIGHT;
   // One payment at a time: a second tap must never start a second send.
   const paying = useRef(false);
@@ -421,45 +466,47 @@ function IntentsSwapForm() {
             onPress: () => router.push('/wallet-sign-in'),
             disabled: false,
           }
-        : reason
-          ? { label: 'Pick another pair', onPress: () => undefined, disabled: true }
-          : !typed
-            ? { label: 'Enter an amount', onPress: () => undefined, disabled: true }
-            : tooMuch
-              ? { label: `Not enough ${sell.symbol}`, onPress: () => undefined, disabled: true }
-              : tooSmall
-                ? { label: 'Enter a larger amount', onPress: () => undefined, disabled: true }
-                : askAddress && !recipient
-                  ? {
-                      label: `Enter a ${buy.chain} address`,
-                      onPress: () => undefined,
-                      disabled: true,
-                    }
-                  : quoting
-                    ? { label: 'Getting quote…', onPress: () => undefined, disabled: true }
-                    : dexCurrent
-                      ? {
-                          label: 'Review swap',
-                          onPress: () => {
-                            tap();
-                            setTray({
-                              kind: 'dexReview',
-                              quoted: dexCurrent,
-                              why: dexAsked?.why ?? null,
-                            });
-                          },
-                          disabled: false,
-                        }
-                      : current
+        : !buyChosen
+          ? { label: 'Select a token', onPress: () => undefined, disabled: true }
+          : reason
+            ? { label: 'Pick another pair', onPress: () => undefined, disabled: true }
+            : !typed
+              ? { label: 'Enter an amount', onPress: () => undefined, disabled: true }
+              : tooMuch
+                ? { label: `Not enough ${sell.symbol}`, onPress: () => undefined, disabled: true }
+                : tooSmall
+                  ? { label: 'Enter a larger amount', onPress: () => undefined, disabled: true }
+                  : askAddress && !recipient
+                    ? {
+                        label: `Enter a ${buy.chain} address`,
+                        onPress: () => undefined,
+                        disabled: true,
+                      }
+                    : quoting
+                      ? { label: 'Getting quote…', onPress: () => undefined, disabled: true }
+                      : dexCurrent
                         ? {
                             label: 'Review swap',
                             onPress: () => {
                               tap();
-                              setTray({ kind: 'review', swap: current });
+                              setTray({
+                                kind: 'dexReview',
+                                quoted: dexCurrent,
+                                why: dexAsked?.why ?? null,
+                              });
                             },
                             disabled: false,
                           }
-                        : { label: 'Get quote', onPress: () => void getQuote(), disabled: false };
+                        : current
+                          ? {
+                              label: 'Review swap',
+                              onPress: () => {
+                                tap();
+                                setTray({ kind: 'review', swap: current });
+                              },
+                              disabled: false,
+                            }
+                          : { label: 'Get quote', onPress: () => void getQuote(), disabled: false };
 
   return (
     <View style={styles.flex}>
@@ -470,6 +517,7 @@ function IntentsSwapForm() {
           if (s) setTray({ kind: 'progress', swap: s });
         }}
       />
+      {/* Finished swaps left the top of Swap (14 Nov): only the in-progress bar shows.
       {mine.map((s) => (
         <RecentSwap
           key={s.depositAddress}
@@ -480,6 +528,7 @@ function IntentsSwapForm() {
           }}
         />
       ))}
+      */}
       <View>
         <View style={styles.card}>
           <Text style={styles.cardLabel}>Sell</Text>
@@ -526,47 +575,89 @@ function IntentsSwapForm() {
           <Icon name="swapVertical" size={18} color={c.text} />
         </PressableScale>
 
-        <View style={[styles.card, styles.stacked]}>
-          <Text style={styles.cardLabel}>Buy</Text>
-          <View style={styles.cardRow}>
-            <Text
-              style={[styles.amountOut, !current && styles.placeholder]}
-              numberOfLines={1}
-              adjustsFontSizeToFit
-            >
-              {current
-                ? `≥ ${short(current.minAmountOut, current.buyDecimals)}`
-                : dexCurrent
-                  ? `≥ ${short(dexCurrent.quote.minBuyAmount, buyDecimals)}`
-                  : estimate
-                    ? `≈ ${formatBalance(estimate)}`
-                    : '0'}
-            </Text>
-            <TokenPill side="buy" token={buy} />
-          </View>
-          {quoting ? (
-            <View style={styles.metaLine}>
-              <SkeletonBar width={160} height={12} />
+        {!buyChosen ? (
+          // Uniswap's empty Buy: suggested tokens to tap, and "Select token" for the rest.
+          <View style={[styles.card, styles.stacked]}>
+            <Text style={styles.cardLabel}>Buy</Text>
+            <View style={[styles.cardRow, styles.emptyBuy]}>
+              <View style={styles.suggestions}>
+                {suggestions.map((t) => (
+                  <PressableScale
+                    key={t.assetId}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Buy ${t.symbol} on ${tokenRef(t).chain}`}
+                    hitSlop={4}
+                    scaleTo={0.92}
+                    onPress={() => {
+                      tap();
+                      updateSwap({ buy: tokenRef(t) });
+                    }}
+                  >
+                    <TokenIcon
+                      symbol={t.symbol}
+                      chain={tokenRef(t).chain}
+                      size={32}
+                      ring={c.card}
+                    />
+                  </PressableScale>
+                ))}
+              </View>
+              <PressableScale
+                accessibilityRole="button"
+                scaleTo={0.97}
+                onPress={() => {
+                  tap();
+                  router.push({ pathname: '/token-picker', params: { side: 'buy', live: '1' } });
+                }}
+                style={styles.selectToken}
+              >
+                <Text style={styles.selectTokenLabel}>Select token</Text>
+              </PressableScale>
             </View>
-          ) : current ? (
-            <Text style={styles.meta}>
-              {current.usdOutMin !== null ? `≈ ${money.format(current.usdOutMin)} · ` : ''}
-              {arrivesIn(current.timeEstimate)}
-            </Text>
-          ) : dexCurrent ? (
-            <Text style={styles.meta}>
-              {routeLabel(dexCurrent.quote.aggregator, buy.chain, false)}
-            </Text>
-          ) : estimate ? (
-            <Text style={styles.meta}>
-              {`Estimate · ${sell.chain === buy.chain ? buy.chain : `${sell.chain} → ${buy.chain}`}`}
-            </Text>
-          ) : (
-            <Text style={styles.meta}>
-              {sell.chain === buy.chain ? buy.chain : `${sell.chain} → ${buy.chain}`}
-            </Text>
-          )}
-        </View>
+          </View>
+        ) : (
+          <View style={[styles.card, styles.stacked]}>
+            <Text style={styles.cardLabel}>Buy</Text>
+            <View style={styles.cardRow}>
+              <Text
+                style={[styles.amountOut, !current && styles.placeholder]}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+              >
+                {current
+                  ? `≥ ${short(current.minAmountOut, current.buyDecimals)}`
+                  : dexCurrent
+                    ? `≥ ${short(dexCurrent.quote.minBuyAmount, buyDecimals)}`
+                    : estimate
+                      ? `≈ ${formatBalance(estimate)}`
+                      : '0'}
+              </Text>
+              <TokenPill side="buy" token={buy} />
+            </View>
+            {quoting ? (
+              <View style={styles.metaLine}>
+                <SkeletonBar width={160} height={12} />
+              </View>
+            ) : current ? (
+              <Text style={styles.meta}>
+                {current.usdOutMin !== null ? `≈ ${money.format(current.usdOutMin)} · ` : ''}
+                {arrivesIn(current.timeEstimate)}
+              </Text>
+            ) : dexCurrent ? (
+              <Text style={styles.meta}>
+                {routeLabel(dexCurrent.quote.aggregator, buy.chain, false)}
+              </Text>
+            ) : estimate ? (
+              <Text style={styles.meta}>
+                {`Estimate · ${sell.chain === buy.chain ? buy.chain : `${sell.chain} → ${buy.chain}`}`}
+              </Text>
+            ) : (
+              <Text style={styles.meta}>
+                {sell.chain === buy.chain ? buy.chain : `${sell.chain} → ${buy.chain}`}
+              </Text>
+            )}
+          </View>
+        )}
       </View>
       {askAddress ? (
         <TextInput
@@ -638,8 +729,10 @@ function IntentsSwapForm() {
           <>
             {/* Before an amount is typed, popular pairs and the pair's rate and route fill
               the room above the keypad (review). */}
+            {/* Popular swaps went (14 Nov, Uniswap's swap has none).
             {pairs ? <PopularPairs current={{ sell, buy }} gutter={SCREEN.gutter} /> : null}
-            {preview ? (
+            */}
+            {preview && buyChosen ? (
               <PairPreview
                 sell={sell}
                 buy={buy}
@@ -1331,7 +1424,8 @@ function ProgressStep({ swap, error, onDone }: { swap: Swap; error?: string; onD
   );
 }
 
-/** A swap from this wallet that's still moving (or just finished); tap to follow it. */
+/* Finished swaps no longer show at the top of Swap (14 Nov), so this row went with them.
+/** A swap from this wallet that's still moving (or just finished); tap to follow it. * /
 function RecentSwap({ swap, onPress }: { swap: Swap; onPress: () => void }) {
   const styles = useStyles();
   const c = useTheme();
@@ -1362,6 +1456,7 @@ function RecentSwap({ swap, onPress }: { swap: Swap; onPress: () => void }) {
     </PressableScale>
   );
 }
+*/
 
 /** "1 ETH ≈ 41.2 SOL", from NEAR Intents' prices; null when either isn't priced. */
 function rateText(
@@ -1594,6 +1689,27 @@ const useStyles = makeStyles((c) => ({
     height: 38,
     borderRadius: 19,
     backgroundColor: c.raised,
+  },
+  // Empty Buy: the suggestions' row as tall as an amount, so the card keeps its height.
+  emptyBuy: {
+    minHeight: 48 + 10 + 18,
+    alignItems: 'flex-end',
+  },
+  suggestions: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  selectToken: {
+    height: 40,
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+    borderRadius: 20,
+    backgroundColor: c.primary,
+  },
+  selectTokenLabel: {
+    color: c.onPrimary,
+    fontSize: 17,
+    fontWeight: '600',
   },
   tokenPillLabel: {
     color: c.text,

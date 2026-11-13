@@ -14,7 +14,6 @@ import {
   SheetRowSkeletons,
   SheetScreen,
 } from '@/components/sheets/Sheet';
-import { Chip } from '@/components/wallet/Chip';
 import { EmptyState, NetworkGrid, TokenIcon } from '@/components/wallet/parts';
 import { SearchField } from '@/components/wallet/SearchField';
 import { dexTokenList, loadDexTokens } from '@/lib/dex';
@@ -32,12 +31,14 @@ import {
   tokenRef,
 } from '@/lib/intents-swap';
 import { PAY_CHAINS } from '@/lib/jar-buy';
+import { useMarketList } from '@/lib/market';
 import { CHAINS, chainSymbol, formatBalance, HOLDINGS, tokenName } from '@/lib/mock-wallet';
 import { isUsdc, jarPayWith } from '@/lib/pay-with';
 import { pickToken, type TokenRef, useSwap } from '@/lib/swap';
 import { TEST_MODE } from '@/lib/test-mode';
 import {
   clearRecentPicks,
+  coinName,
   pickerLists,
   quickPicks,
   recentPicks,
@@ -116,7 +117,7 @@ const PER_CHAIN = 6;
 /** Rows per page of the token list and of search results. */
 const PAGE = 40;
 /** Logo size in the rows, as Uniswap's. */
-const ICON = 36;
+const ICON = 40;
 
 /**
  * Every token NEAR Intents trades (plus Honey's DEX tokens), laid out like Uniswap's iOS
@@ -146,7 +147,9 @@ function LiveTokens({
     usd: number;
     assetId?: string;
   }[] = 'holdings' in view ? (view.holdings ?? []) : TEST_MODE && view.wallet.demo ? HOLDINGS : [];
-  const swapPick = useSwap()[side];
+  const swapState = useSwap();
+  // An empty Buy (lib/swap `buyChosen`) has nothing picked to tick.
+  const swapPick = side === 'buy' && !swapState.buyChosen ? null : swapState[side];
   const jarPick = jarPayWith.useValue();
   const picked: TokenRef | null = jar ? jarPick : swapPick;
   const recent = recentPicks.useValue();
@@ -173,7 +176,27 @@ function LiveTokens({
         ? h.assetId === t.assetId
         : h.symbol === t.symbol && h.chain === chainName(t.blockchain),
     );
-  const nameOf = (t: OneClickToken) => t.name ?? tokenName(t.symbol);
+  // Market cap order and names from the market list (lib/market), as Search uses.
+  const market = useMarketList();
+  const marketRank = new Map<string, number>();
+  const marketChain = new Map<string, string>();
+  const marketName = new Map<string, string>();
+  market.forEach((m, i) => {
+    const key = m.symbol.toUpperCase();
+    marketRank.set(key, i);
+    marketChain.set(key, m.chain);
+    marketName.set(key, m.name);
+    // Wrapped copies folded into a coin's row (WETH under ETH) rank just after it.
+    for (const alias of m.aliases ?? [])
+      if (!marketRank.has(alias.toUpperCase())) marketRank.set(alias.toUpperCase(), i + 0.5);
+  });
+  // "Arbitrum ETH", "Base ETH": a coin away from its own network, named as Uniswap does.
+  const nameOf = (t: OneClickToken) => {
+    const known = tokenName(t.symbol);
+    const name =
+      t.name ?? (known !== t.symbol ? known : (marketName.get(t.symbol.toUpperCase()) ?? known));
+    return coinName(t, name, chainName);
+  };
   const listed = (tokens ?? [])
     .filter((t) => side === 'buy' || canSell(t))
     .filter((t) => !jar || (t.symbol !== 'USDC' && (heldOf(t)?.amount ?? 0) > 0));
@@ -195,6 +218,10 @@ function LiveTokens({
     networkOf: chainName,
     // A jar pays with what it holds; recent swap picks don't belong there.
     recent: jar ? [] : recent,
+    popularity: {
+      rankOf: (symbol) => marketRank.get(symbol.toUpperCase()),
+      mainNetworkOf: (symbol) => marketChain.get(symbol.toUpperCase()),
+    },
   });
   const picks = jar || q ? [] : quickPicks(listed, chain);
   // Long lists show in pages, with "Show more" at the end.
@@ -421,20 +448,27 @@ function LiveTokens({
           style={styles.chipScroll}
           contentContainerStyle={styles.chips}
         >
+          {/* Uniswap's quick picks: a tighter pill with a bold symbol than Honey's Chip. */}
           {picks.map((t) => (
-            <Chip
+            <PressableScale
               key={t.assetId}
-              label={t.symbol}
-              leading={
-                <TokenIcon
-                  symbol={t.symbol}
-                  chain={chainName(t.blockchain)}
-                  size={24}
-                  ring={c.sheet}
-                />
-              }
-              onPress={() => pick(tokenRef(t))}
-            />
+              accessibilityRole="button"
+              accessibilityLabel={`${nameOf(t)}, ${t.symbol}`}
+              scaleTo={0.97}
+              onPress={() => {
+                tap();
+                pick(tokenRef(t));
+              }}
+              style={styles.quick}
+            >
+              <TokenIcon
+                symbol={t.symbol}
+                chain={chainName(t.blockchain)}
+                size={24}
+                ring={c.sheet}
+              />
+              <Text style={styles.quickLabel}>{t.symbol}</Text>
+            </PressableScale>
           ))}
         </ScrollView>
       )}
@@ -607,9 +641,8 @@ const useStyles = makeStyles((c) => ({
   search: {
     marginBottom: 12,
   },
-  // Uniswap's field: a little shorter than Honey's pill, with softer corners.
+  // Uniswap's field: Honey's height, with softer corners.
   searchField: {
-    height: 44,
     borderRadius: 16,
     marginBottom: 8,
   },
@@ -642,8 +675,25 @@ const useStyles = makeStyles((c) => ({
     marginBottom: 4,
   },
   chips: {
-    gap: 8,
+    gap: 9,
     paddingHorizontal: SHEET.gutter,
+  },
+  // Uniswap's quick pick: logo and bold symbol in a tight outlined pill.
+  quick: {
+    height: 34,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingLeft: 4,
+    paddingRight: 12,
+    borderRadius: 17,
+    borderWidth: 1,
+    borderColor: c.divider,
+  },
+  quickLabel: {
+    color: c.text,
+    fontSize: 17,
+    fontWeight: '700',
   },
   note: {
     marginBottom: 8,
@@ -666,19 +716,19 @@ const useStyles = makeStyles((c) => ({
   sectionLabel: {
     flex: 1,
     color: c.textSecondary,
-    fontSize: 15,
+    fontSize: 16,
   },
   sectionAction: {
     color: c.textSecondary,
-    fontSize: 15,
+    fontSize: 16,
     fontWeight: '500',
   },
   row: {
-    minHeight: 53,
+    minHeight: 58,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    paddingVertical: 7,
+    gap: 13,
+    paddingVertical: 9,
     // Bleed past the gutter so the press highlight runs edge to edge.
     marginHorizontal: -SHEET.gutter,
     paddingHorizontal: SHEET.gutter,
@@ -688,13 +738,13 @@ const useStyles = makeStyles((c) => ({
   },
   rowTitle: {
     color: c.text,
-    fontSize: 17,
+    fontSize: 18,
     fontWeight: '500',
   },
   rowSubtitle: {
-    marginTop: 2,
+    marginTop: 1,
     color: c.textSecondary,
-    fontSize: 14,
+    fontSize: 15,
   },
   rowAddress: {
     color: c.placeholder,
@@ -705,19 +755,19 @@ const useStyles = makeStyles((c) => ({
   },
   rowValue: {
     color: c.text,
-    fontSize: 17,
+    fontSize: 18,
     fontWeight: '600',
   },
   rowAmount: {
     color: c.textSecondary,
-    fontSize: 14,
+    fontSize: 15,
   },
-  // Uniswap's category tag: an outlined pill, as Honey's unselected chips.
+  // Uniswap's category tag: a compact outlined pill.
   tag: {
-    height: 24,
+    height: 22,
     justifyContent: 'center',
-    paddingHorizontal: 9,
-    borderRadius: 12,
+    paddingHorizontal: 7,
+    borderRadius: 11,
     borderWidth: 1,
     borderColor: c.divider,
   },
