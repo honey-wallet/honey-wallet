@@ -1,5 +1,6 @@
 import type { ChainActivityItem } from '@honey-wallet/api-client';
 import { useInboxUnread } from '@/lib/inbox';
+import { type IntentsSwap, intentsSwaps } from '@/lib/intents-swap';
 import { useNeedsMyApproval } from '@/lib/multisig';
 import { useSeenAt, useTestUnread } from '@/lib/notifications';
 import { formatAmount, isLikelySpam, toActivity, usePortfolio } from '@/lib/portfolio';
@@ -11,7 +12,7 @@ export type WalletNotification = {
   id: string;
   /** Milliseconds. */
   at: number;
-  kind: 'received' | 'sent' | 'failed';
+  kind: 'received' | 'sent' | 'failed' | 'swapped';
   title: string;
   detail: string;
   symbol: string;
@@ -28,12 +29,50 @@ const LIMIT = 50;
  * On-chain items worth a notification: money in or out, and anything that failed.
  * Contract calls that moved nothing Honey reads stay in Activity only.
  */
-export function toNotifications(items: ChainActivityItem[]): WalletNotification[] {
+export function toNotifications(
+  items: ChainActivityItem[],
+  swaps: readonly IntentsSwap[] = [],
+): WalletNotification[] {
   const rows = toActivity(items);
+  // A swap made here is one notification (2026-11-14): its payment to 1Click's one-time
+  // address becomes "Swapped", and the payout that follows isn't told again.
+  const low = (v?: string | null) => (v ?? '').toLowerCase();
+  const paidBy = new Map<string, IntentsSwap>();
+  const payouts = new Set<string>();
+  for (const s of swaps) {
+    if (s.txHash) paidBy.set(low(s.txHash), s);
+    paidBy.set(low(s.depositAddress), s);
+    for (const h of s.destinationTxHashes ?? []) payouts.add(low(h));
+  }
+  const swapOf = (item: ChainActivityItem) =>
+    item.direction === 'sent'
+      ? (paidBy.get(low(item.hash)) ?? paidBy.get(low(item.counterparty)))
+      : undefined;
   return items
     .map((item, i) => ({ item, row: rows[i] }))
     .filter(({ item }) => (item.failed || item.direction !== 'other') && !isLikelySpam(item))
+    .filter(({ item }) => !(item.direction === 'received' && payouts.has(low(item.hash))))
     .map(({ item, row }) => {
+      const swap = !item.failed ? swapOf(item) : undefined;
+      if (swap) {
+        const units = (atomic: string, decimals: number) => Number(atomic) / 10 ** decimals;
+        const got =
+          swap.status === 'SUCCESS'
+            ? `${formatAmount(units(swap.amountOut, swap.buyDecimals))} ${swap.buy.symbol}`
+            : swap.buy.symbol;
+        return {
+          id: row.id,
+          at: item.timestamp * 1000,
+          kind: 'swapped' as const,
+          title: `Swapped ${formatAmount(units(swap.amountIn, swap.sellDecimals))} ${swap.sell.symbol} → ${got}`,
+          detail:
+            swap.sell.chain === swap.buy.chain
+              ? swap.sell.chain
+              : `${swap.sell.chain} → ${swap.buy.chain}`,
+          symbol: swap.buy.symbol,
+          url: item.explorerUrl,
+        } satisfies WalletNotification;
+      }
       const kind = item.failed ? 'failed' : item.direction === 'received' ? 'received' : 'sent';
       const what =
         item.amount != null && item.symbol ? ` ${formatAmount(item.amount)} ${item.symbol}` : '';
@@ -69,8 +108,9 @@ export function useWalletNotifications() {
   const wallet = useActiveWallet();
   const real = !TEST_MODE && !wallet.demo && wallet.kind === 'wallet' && !wallet.watchOnly;
   const live = usePortfolio(wallet, real);
+  const swaps = Object.values(intentsSwaps.useValue()).filter((s) => s.walletId === wallet.id);
   return {
-    items: real ? toNotifications(live.activity ?? []) : [],
+    items: real ? toNotifications(live.activity ?? [], swaps) : [],
     loading: real && live.loadingActivity,
   };
 }

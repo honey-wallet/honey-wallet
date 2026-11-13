@@ -263,6 +263,7 @@ const WALLET_BADGE: Record<WalletNotification['kind'], IconName> = {
   received: 'arrowDown',
   sent: 'arrowUp',
   failed: 'close',
+  swapped: 'trade',
 };
 
 /** A payment in or out of this wallet (or one that failed); opens it on the explorer. */

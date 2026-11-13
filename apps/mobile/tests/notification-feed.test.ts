@@ -6,6 +6,7 @@ vi.mock('@/lib/inbox', () => ({ useInboxUnread: () => 0 }));
 vi.mock('@/lib/notifications', () => ({ useSeenAt: () => 0, useTestUnread: () => false }));
 vi.mock('@/lib/wallets', () => ({ useActiveWallet: () => ({ id: 'w' }) }));
 vi.mock('@/lib/test-mode', () => ({ TEST_MODE: false }));
+vi.mock('@/lib/intents-swap', () => ({ intentsSwaps: { useValue: () => ({}) } }));
 
 const { toNotifications } = await import('@/lib/notification-feed');
 
@@ -36,4 +37,33 @@ it('turns the wallet’s on-chain history into notifications, newest first', () 
   ]);
   expect(out[2].detail).toBe('From 0x41CD…Cee3 · Base');
   expect(out[0].url).toBe('https://basescan.org/tx/0xabc');
+});
+
+it('tells a swap made here once: "Swapped", not a send and a receive', () => {
+  const swap = {
+    walletId: 'w',
+    sell: { symbol: 'USDC', chain: 'Arbitrum' },
+    buy: { symbol: 'USDT0', chain: 'Arbitrum' },
+    sellDecimals: 6,
+    buyDecimals: 6,
+    amountIn: '1000000',
+    amountOut: '995000',
+    depositAddress: '0xDBDE000000000000000000000000000000009824',
+    txHash: '0xpay',
+    destinationTxHashes: ['0xpayout'],
+    status: 'SUCCESS',
+  } as unknown as Parameters<typeof toNotifications>[1][number];
+  const out = toNotifications(
+    [
+      item({ hash: '0xpay', direction: 'sent', amount: 1, counterparty: swap.depositAddress }),
+      item({ hash: '0xpayout', direction: 'received', symbol: 'USDT0', amount: 0.995 }),
+      item({ hash: '0xother', direction: 'received', amount: 3 }),
+    ],
+    [swap],
+  );
+  expect(out.map((n) => [n.kind, n.title])).toEqual([
+    ['swapped', 'Swapped 1 USDC → 0.995 USDT0'],
+    ['received', 'Received 3 USDC'],
+  ]);
+  expect(out[0].detail).toBe('Arbitrum');
 });
