@@ -1,10 +1,19 @@
 // Motion: a crossfade with a small directional hint. The old text leaves up 4px
 // (150ms), then the new one enters from 4px below (200ms, ease-out), so the label
 // reads as changing rather than blinking. Under Reduce Motion it only fades.
+//
+// `soft` (was TextSoftSwap): a pure crossfade for values that change in place (a chart's
+// period, a filter): old and new fade together in the same spot (200ms, ease) with no
+// movement, while the value's width eases to the new text (250ms, snappy ease-out). The
+// fade has no movement, so it stays under Reduce Motion; only the resize is dropped.
 import { useLayoutEffect, useState } from 'react';
 import { type StyleProp, type TextStyle, View, type ViewStyle } from 'react-native';
 import Animated, {
+  FadeIn,
+  FadeOut,
   Keyframe,
+  LinearTransition,
+  ReduceMotion,
   useAnimatedStyle,
   useReducedMotion,
   useSharedValue,
@@ -92,24 +101,66 @@ function TextRoll({
   );
 }
 
+const softEnter = lazy(() =>
+  FadeIn.duration(DURATION.fast).easing(EASE.ease).reduceMotion(ReduceMotion.Never),
+);
+const softExit = lazy(() =>
+  FadeOut.duration(DURATION.fast).easing(EASE.ease).reduceMotion(ReduceMotion.Never),
+);
+const softResize = lazy(() => LinearTransition.duration(DURATION.medium).easing(EASE.height));
+
+function TextSoft({
+  text,
+  style,
+  align,
+}: {
+  text: string;
+  style?: StyleProp<TextStyle>;
+  align: 'start' | 'end';
+}) {
+  const mounted = useHasMounted();
+  return (
+    <Animated.View
+      layout={softResize()}
+      style={{ flexDirection: 'row', justifyContent: align === 'end' ? 'flex-end' : 'flex-start' }}
+    >
+      <Animated.Text
+        key={text}
+        entering={mounted ? softEnter() : undefined}
+        exiting={softExit()}
+        style={style}
+      >
+        {text}
+      </Animated.Text>
+    </Animated.View>
+  );
+}
+
 const ROLL_BOX: ViewStyle = { alignItems: 'center', justifyContent: 'center' };
 const ROLL_GHOST: TextStyle = { position: 'absolute' };
 
 /**
  * Text that swaps in place whenever it changes, e.g. "Enter an amount" → "Review". Pass
- * `direction` for a value that steps up or down (a stepper's amount) to roll it instead.
+ * `direction` for a value that steps up or down (a stepper's amount) to roll it instead,
+ * or `soft` for amounts that cross-fade in place when a chart's period or a filter
+ * changes (`align="end"` keeps right-aligned values on their edge).
  */
 export function TextSwap({
   text,
   style,
   direction,
+  soft,
+  align = 'start',
 }: {
   text: string;
   style?: StyleProp<TextStyle>;
   direction?: 'up' | 'down';
+  soft?: boolean;
+  align?: 'start' | 'end';
 }) {
   const mounted = useHasMounted();
   const reduceMotion = useReducedMotion();
+  if (soft) return <TextSoft text={text} style={style} align={align} />;
   if (direction) return <TextRoll text={text} style={style} direction={direction} />;
   return (
     <Animated.Text

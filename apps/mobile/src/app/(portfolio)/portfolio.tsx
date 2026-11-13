@@ -18,7 +18,6 @@ import {
   SkeletonReveal,
   useFirstLoad,
 } from '@/components/motion/Skeleton';
-import { TextSoftSwap } from '@/components/motion/TextSoftSwap';
 import { TextSwap } from '@/components/motion/TextSwap';
 import { PillButton } from '@/components/onboarding/PillButton';
 import { ActionFooter } from '@/components/sheets/ActionFooter';
@@ -218,7 +217,8 @@ export default function PortfolioScreen() {
             <Icon name={delta < 0 ? 'down' : 'up'} size={9} color={color} />
             {/* Soft cross-fade when the range changes; plain while scrubbing. */}
             {scrub === null ? (
-              <TextSoftSwap
+              <TextSwap
+                soft
                 text={`${formatUsd(Math.abs(delta))} (${Math.abs(pct).toFixed(2)}%)`}
                 style={styles.changeAmount}
               />
@@ -290,7 +290,7 @@ export default function PortfolioScreen() {
         <View style={[styles.section, styles.gutter]}>
           <View style={styles.sectionHeader}>
             <Text style={styles.heading}>Performance</Text>
-            <TextSoftSwap text={sentenceCase(RANGE_LABEL[range])} style={styles.heading} />
+            <TextSwap soft text={sentenceCase(RANGE_LABEL[range])} style={styles.heading} />
           </View>
           <Animated.View layout={RESIZE} style={[styles.perfCard, styles.perfList]}>
             {(chartLoading
@@ -391,9 +391,10 @@ export default function PortfolioScreen() {
                     {/* The key is the token's logo (a network's is its native token's). */}
                     <TokenIcon symbol={x.id} size={16} />
                     <View style={styles.flex}>
-                      <TextSoftSwap text={x.label} style={styles.legendLabel} />
+                      <TextSwap soft text={x.label} style={styles.legendLabel} />
                     </View>
-                    <TextSoftSwap
+                    <TextSwap
+                      soft
                       text={`${((x.value / sharesTotal) * 100).toFixed(0)}%`}
                       style={styles.legendValue}
                       align="end"
@@ -435,7 +436,8 @@ function Signed({
       {Math.abs(value) >= 0.005 && (
         <Icon name={value < 0 ? 'down' : 'up'} size={9} color={value < 0 ? c.error : c.success} />
       )}
-      <TextSoftSwap
+      <TextSwap
+        soft
         text={formatUsd(Math.abs(value))}
         style={[styles.value, strong && styles.valueStrong]}
       />
