@@ -38,7 +38,15 @@ import {
   shareAmountIn,
   toMicroUsd,
 } from '@/lib/group-jar-core';
-import { type BuyLeg, MAX_BUY_USD, payerEvm, payJarBuy, USDC_BASE_ASSET } from '@/lib/jar-buy';
+import {
+  type BuyLeg,
+  JarBuyError,
+  MAX_BUY_USD,
+  payerEvm,
+  payJarBuy,
+  USDC_BASE_ASSET,
+  wentOut,
+} from '@/lib/jar-buy';
 import {
   approveGroupProposal,
   checkGroupPin,
@@ -431,7 +439,19 @@ export async function payShare(g: SocialGroup, nearUsdc: number | null) {
     }
   }
   const leg = await quoteShare(dao, g.shareUsd);
-  const [sent] = await payJarBuy([leg], undefined, `Add your $${g.shareUsd.toFixed(2)}`);
+  // const [sent] = await payJarBuy([leg], undefined, `Add your $${g.shareUsd.toFixed(2)}`);
+  // A share whose payment may have gone out is tracked like a sent one, so it's never
+  // paid twice (money audit 1).
+  const [sent] = await payJarBuy([leg], undefined, `Add your $${g.shareUsd.toFixed(2)}`).catch(
+    (error: unknown) => {
+      if (error instanceof JarBuyError && error.sent?.some(wentOut))
+        pendingShares.set((all) => ({
+          ...all,
+          [g.id]: { depositAddress: leg.depositAddress, at: Date.now() },
+        }));
+      throw error;
+    },
+  );
   if (!sent?.txHash) throw new Error('Payment not sent');
   pendingShares.set((all) => ({
     ...all,

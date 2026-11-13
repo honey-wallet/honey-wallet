@@ -174,13 +174,18 @@ export async function advanceDexLegs(legs: BuyLeg[], deps: DexLegDeps): Promise<
 async function advance(leg: BuyLeg & { dex: DexLeg }, d: DexLegDeps): Promise<BuyLeg> {
   const { dex } = leg;
   if (dex.stage === 'bridging') {
-    if (!leg.txHash || FINAL.has(leg.status)) return leg;
+    // if (!leg.txHash || FINAL.has(leg.status)) return leg;
+    // A bridge `SENDING` (its outcome unknown) is asked about too (money audit 1).
+    if ((!leg.txHash && leg.status !== 'SENDING') || FINAL.has(leg.status)) return leg;
     const seen = await d.bridge({
       ...leg,
       route: undefined,
       status: dex.bridgeStatus ?? leg.status,
     });
     const status = seen.status === 'HOLDING_USDC' ? 'PROCESSING' : seen.status;
+    // Still unknown, or settled as never sent (money audit 1).
+    if (status === 'SENDING') return leg;
+    if (status === 'NOT_SENT') return { ...leg, status, dex: { ...dex, bridgeStatus: 'NOT_SENT' } };
     if (status === 'REFUNDED' || status === 'FAILED' || status === 'INCOMPLETE_DEPOSIT')
       // 1Click sent the USDC back to where it was paid from: nothing is held here.
       return { ...leg, status, dex: { ...dex, bridgeStatus: status } };

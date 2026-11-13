@@ -40,6 +40,7 @@ import {
   QuoteRanOut,
   quoteJarBuy,
   usdcByChain,
+  wentOut,
 } from '@/lib/jar-buy';
 import { belowMinimum, useJarMinimum } from '@/lib/jar-minimum';
 import { blockedRoutes, describeRoute, useRoutes } from '@/lib/jar-routes';
@@ -453,7 +454,9 @@ export default function NewThesisSheet() {
           setBuyLines(routeLines);
           setBuyStage('Confirm to pay…');
           return payJarBuy(quoted.legs, (legs) => {
-            sent = legs.filter((l) => l.txHash);
+            // sent = legs.filter((l) => l.txHash);
+            // Legs that may have gone out are kept too (money audit 1): never paid twice.
+            sent = legs.filter(wentOut);
             setBuyStage(`Paying ${Math.min(sent.length + 1, legCount)} of ${legCount}…`);
           });
         };
