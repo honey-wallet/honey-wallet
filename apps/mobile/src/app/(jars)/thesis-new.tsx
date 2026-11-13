@@ -390,7 +390,7 @@ export default function NewThesisSheet() {
     openJar(id);
     // A jar others can see is a post: once it's bought, ask for the words it leads with
     // (on top of the new jar, after the sheets have closed).
-    if (!copied && visibility !== 'members')
+    if (!copied && visibility === 'public')
       setTimeout(() => router.push({ pathname: '/jar-post', params: { id } }), SHEET_EXIT + 250);
   };
 

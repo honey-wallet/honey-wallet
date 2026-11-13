@@ -372,7 +372,7 @@ export function socialPicks(picks: Pick[]) {
  */
 export async function publishJar(jar: ThesisJar): Promise<SocialJar | null> {
   const token = backendSessionToken();
-  if (!token || !jar.mine || jar.visibility === 'members') return null;
+  if (!token || !jar.mine || jar.visibility !== 'public') return null;
   // The feed may never have been opened: find out whether there's a handle first.
   if (!social.get().meLoaded) await loadMe();
   if (!social.get().me) return null;
@@ -383,7 +383,8 @@ export async function publishJar(jar: ThesisJar): Promise<SocialJar | null> {
       thesis: jar.thesis.slice(0, 280),
       picks: socialPicks(jar.picks),
       copyFee: Math.min(30, Math.max(0, Math.round(jar.copyFee))),
-      hidePicks: jar.visibility === 'private',
+      // Only Everyone's jars are published now, and they show what they hold.
+      hidePicks: false,
     });
     void loadFeed('everyone');
     return published;

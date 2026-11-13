@@ -598,7 +598,8 @@ export function createThesisJar(
     // or a handle. (Imported lazily: lib/social imports this module.)
     const created = thesisJars.get().find((j) => j.id === id);
     void import('@/lib/social').then((social) => {
-      if (created && created.visibility !== 'members') void social.publishJar(created);
+      // Only Everyone's jars go to the Feed (2026-11-13); Returns only stays on the phone.
+      if (created && created.visibility === 'public') void social.publishJar(created);
       const copied = options.copiedFrom?.jarId;
       if (copied?.startsWith(social.SOCIAL_PREFIX))
         void social.recordCopy(copied.slice(social.SOCIAL_PREFIX.length));

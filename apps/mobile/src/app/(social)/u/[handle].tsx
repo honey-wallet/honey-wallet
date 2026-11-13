@@ -1,3 +1,4 @@
+import type { SocialFeedItem } from '@honey-wallet/api-client';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
 import { Linking, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
@@ -20,10 +21,8 @@ import { SkeletonBar, SkeletonReveal } from '@/components/motion/Skeleton';
 import { PILL_HEIGHT, PillButton } from '@/components/onboarding/PillButton';
 import { EdgeTabs, openCompose } from '@/components/social/FeedSections';
 import {
-  cardEntering,
   FeedCard,
   FollowButton,
-  JarAttachment,
   MascotEmpty,
   openProfile,
   SocialAvatar,
@@ -56,7 +55,8 @@ import { makeStyles, useTheme } from '@/theme';
  * their theses, public jars and, if shared, their trades. Flat on the page: the banner
  * is the only shaped surface.
  */
-const PROFILE_TABS = ['Theses', 'Jars', 'Trades'] as const;
+/** Everything they posted (jars with their words, and theses) in one place, then trades. */
+const PROFILE_TABS = ['Posts', 'Trades'] as const;
 
 /** The banner under the status bar (the safe-area top is added to it). */
 const BANNER_HEIGHT = 150;
@@ -186,9 +186,37 @@ function ProfileBody({
 }) {
   const styles = useStyles();
   const c = useTheme();
-  const reduced = useReducedMotion();
+  const _reduced = useReducedMotion();
   const { pendingFollow } = useSocial();
-  const [tab, setTab] = useState<(typeof PROFILE_TABS)[number]>('Theses');
+  const [tab, setTab] = useState<(typeof PROFILE_TABS)[number]>('Posts');
+  // Posts: each public jar as its launch post (its words over the card) and each thesis,
+  // newest first, as the Feed shows them.
+  const posts: SocialFeedItem[] = [
+    ...profile.jars.map(
+      (jar): SocialFeedItem => ({
+        id: `jar-${jar.id}`,
+        kind: 'jar_published',
+        at: jar.publishedAt,
+        actor: jar.owner,
+        jar,
+        trade: null,
+        post: null,
+        milestone: null,
+      }),
+    ),
+    ...profile.posts.map(
+      (post): SocialFeedItem => ({
+        id: post.id,
+        kind: 'thesis',
+        at: post.at,
+        actor: post.author,
+        jar: null,
+        trade: null,
+        post,
+        milestone: null,
+      }),
+    ),
+  ].sort((a, b) => b.at - a.at);
   // Their P&L over 30 days as a dense line: their jars' tokens' prices, ending on the P&L.
   const { pnl, line: pnlLine } = usePnlLine(profile.jars, '1M');
   const tokens = useMemo(() => holdingsOf(profile).map((t) => t.symbol), [profile]);
@@ -301,8 +329,8 @@ function ProfileBody({
         <View style={styles.stats}>
           {profile.isPrivate === true ? null : (
             <InlineStat
-              value={String(profile.posts.length)}
-              label={profile.posts.length === 1 ? 'Thesis' : 'Theses'}
+              value={String(posts.length)}
+              label={posts.length === 1 ? 'Post' : 'Posts'}
             />
           )}
           <InlineStat
@@ -341,60 +369,23 @@ function ProfileBody({
             />
           </View>
           <View style={styles.gutter}>
-            {tab === 'Theses' ? (
-              profile.posts.length ? (
-                profile.posts.map((post, i) => (
-                  <FeedCard
-                    key={post.id}
-                    item={{
-                      id: post.id,
-                      kind: 'thesis',
-                      at: post.at,
-                      actor: post.author,
-                      jar: null,
-                      trade: null,
-                      post,
-                      milestone: null,
-                    }}
-                    index={i}
-                    last={i === profile.posts.length - 1}
-                  />
+            {tab === 'Posts' ? (
+              posts.length ? (
+                posts.map((item, i) => (
+                  <FeedCard key={item.id} item={item} index={i} last={i === posts.length - 1} />
                 ))
               ) : profile.isMe ? (
                 <MascotEmpty
-                  title="No theses yet"
-                  hint="Say what you believe about a token and track the call."
+                  title="Nothing posted yet"
+                  hint="Launch a jar for Everyone, or share a thesis."
                   action={{ label: 'Share a thesis', onPress: () => openCompose() }}
                 />
               ) : (
                 <EmptyState
                   compact
                   icon="chat"
-                  title="No theses yet"
-                  hint={`@${handle}’s theses show up here.`}
-                />
-              )
-            ) : tab === 'Jars' ? (
-              profile.jars.length ? (
-                <View style={styles.section}>
-                  {profile.jars.map((jar, i) => (
-                    <Animated.View key={jar.id} entering={cardEntering(i + 1, reduced)}>
-                      <JarAttachment jar={jar} />
-                    </Animated.View>
-                  ))}
-                </View>
-              ) : profile.isMe ? (
-                <MascotEmpty
-                  title="No public jars yet"
-                  hint="Make a jar public to show it here."
-                  action={{ label: 'Open Jars', onPress: () => router.navigate('/jars') }}
-                />
-              ) : (
-                <EmptyState
-                  compact
-                  icon="jar"
-                  title="No public jars"
-                  hint={`@${handle}’s public jars show up here.`}
+                  title="No posts yet"
+                  hint={`@${handle}’s jars and theses show up here.`}
                 />
               )
             ) : profile.trades.length ? (
