@@ -240,13 +240,22 @@ function serially<T>(task: () => Promise<T>): Promise<T> {
 
 async function readFamilies(): Promise<Record<string, StoredRefresh>> {
   const families: Record<string, StoredRefresh> = {};
+  // A keychain read that fails must reach the caller, so it skips its write: treated as an
+  // empty map, the next save rewrote it with one entry and signed the other wallets out.
+  // Only a corrupt (unparseable) map counts as empty.
+  // try {
+  //   const raw = JSON.parse((await SecureStore.getItemAsync(REFRESH_FAMILIES_KEY)) ?? '{}');
+  //   …
+  // } catch {}
+  const stored = await SecureStore.getItemAsync(REFRESH_FAMILIES_KEY);
+  let raw: unknown = {};
   try {
-    const raw = JSON.parse((await SecureStore.getItemAsync(REFRESH_FAMILIES_KEY)) ?? '{}');
-    for (const [accountId, value] of Object.entries(raw && typeof raw === 'object' ? raw : {})) {
-      const record = parseStoredRefresh(JSON.stringify(value));
-      if (record && record.accountId === accountId) families[accountId] = record;
-    }
+    raw = JSON.parse(stored ?? '{}');
   } catch {}
+  for (const [accountId, value] of Object.entries(raw && typeof raw === 'object' ? raw : {})) {
+    const record = parseStoredRefresh(JSON.stringify(value));
+    if (record && record.accountId === accountId) families[accountId] = record;
+  }
   const legacy = parseStoredRefresh(await SecureStore.getItemAsync(REFRESH_KEY));
   if (legacy && !families[legacy.accountId]) families[legacy.accountId] = legacy;
   return families;
