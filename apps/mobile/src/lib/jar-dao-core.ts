@@ -308,20 +308,21 @@ export function withdrawProposalTx(input: {
   return { receiverId: input.dao, actions: [addProposalCall(description, kind)], kind };
 }
 
-/** ft_withdraw needs the receiver registered on USDC (0.00125 NEAR, once). */
-export const registerForUsdcTx = (member: string) => ({
-  receiverId: USDC_NEAR,
-  actions: [
-    {
-      methodName: 'storage_deposit',
-      args: new TextEncoder().encode(
-        JSON.stringify({ account_id: member, registration_only: true }),
-      ),
-      gas: 30n * TGAS,
-      deposit: 1_250_000_000_000_000_000_000n,
-    },
-  ],
-});
+// Unused since 14 Nov (cleanup): nothing imports it.
+// /** ft_withdraw needs the receiver registered on USDC (0.00125 NEAR, once). */
+// export const registerForUsdcTx = (member: string) => ({
+//   receiverId: USDC_NEAR,
+//   actions: [
+//     {
+//       methodName: 'storage_deposit',
+//       args: new TextEncoder().encode(
+//         JSON.stringify({ account_id: member, registration_only: true }),
+//       ),
+//       gas: 30n * TGAS,
+//       deposit: 1_250_000_000_000_000_000_000n,
+//     },
+//   ],
+// });
 
 export function configProposalTx(dao: string, action: ProposalAction, members?: number) {
   let kind: ProposalKind;
@@ -566,16 +567,17 @@ export async function viewStorageRegistered(rpc: Rpc, token: string, account: st
 /** NEP-141 transfers need exactly one yoctoNEAR attached. */
 const ONE_YOCTO = 1n;
 
-/**
- * Sends USDC on NEAR: `ft_transfer` to `to`, preceded by a `storage_deposit` that
- * registers them (0.00125 NEAR, paid by the sender) when they aren't registered yet.
- */
-export function usdcTransferTx(to: string, amount: bigint, registerReceiver: boolean) {
-  return ftTransferTx(USDC_NEAR, to, amount, registerReceiver ? USDC_STORAGE_DEPOSIT : null);
-}
-
-/** What USDC on NEAR takes to register an account. */
-const USDC_STORAGE_DEPOSIT = 1_250_000_000_000_000_000_000n; // 0.00125 NEAR
+// Unused since 14 Nov (cleanup): nothing imports it.
+// /**
+//  * Sends USDC on NEAR: `ft_transfer` to `to`, preceded by a `storage_deposit` that
+//  * registers them (0.00125 NEAR, paid by the sender) when they aren't registered yet.
+//  */
+// export function usdcTransferTx(to: string, amount: bigint, registerReceiver: boolean) {
+//   return ftTransferTx(USDC_NEAR, to, amount, registerReceiver ? USDC_STORAGE_DEPOSIT : null);
+// }
+//
+// /** What USDC on NEAR takes to register an account. */
+// const USDC_STORAGE_DEPOSIT = 1_250_000_000_000_000_000_000n; // 0.00125 NEAR
 
 /** The least storage deposit `token` takes to register an account (NEP-145), in yoctoNEAR. */
 export async function viewStorageMin(rpc: Rpc, token: string) {

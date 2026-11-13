@@ -23,6 +23,15 @@ overrides:
   # abitype (via WalletConnect/ox) validates untrusted typed data with zod; <4.6.6 can
   # exhaust memory on crafted input.
   zod@<4.6.6: ^4.6.6
+  # One WalletConnect stack in the app bundle: WalletKit 1.6.0 pins 2.25.0 while the app
+  # (and its native compat module) is on 2.26.0, which bundled both. JS only.
+  '@walletconnect/core': 2.26.0
+  '@walletconnect/sign-client': 2.26.0
+  '@walletconnect/types': 2.26.0
+  '@walletconnect/utils': 2.26.0
+  # Same-major copies of the noble crypto libs collapse to one (semver-compatible).
+  '@noble/curves@1': 1.9.7
+  '@noble/hashes@1': 1.8.0
 
 patchedDependencies:
   # braces has no fixed release; decode-uri-component 0.5.1 is ESM-only and breaks

@@ -19,6 +19,7 @@ import Animated, {
 import Svg, { Circle, G, Line, Path } from 'react-native-svg';
 import { scheduleOnRN } from 'react-native-worklets';
 import { ChartEmpty } from '@/components/charts/PriceChart';
+import { chanceText } from '@/lib/format';
 import { tap } from '@/lib/haptics';
 import { chartTime, type PredictRange } from '@/lib/predict';
 import { makeStyles, type Palette, useTheme } from '@/theme';
@@ -42,8 +43,9 @@ export function outcomeColor(c: Palette, tone: number) {
   return tones[tone % tones.length];
 }
 
-/** "<1%" under one percent, as Polymarket writes it; otherwise a whole percentage. */
-const pct = (v: number) => (v < 0.01 ? '<1%' : `${Math.round(v * 100)}%`);
+// Replaced on 14 Nov (cleanup) by chanceText in lib/format.ts.
+// /** "<1%" under one percent, as Polymarket writes it; otherwise a whole percentage. */
+// const pct = (v: number) => (v < 0.01 ? '<1%' : `${Math.round(v * 100)}%`);
 
 export type ChanceLine = { id: string; label: string; tone: number; data: number[] };
 
@@ -272,7 +274,7 @@ function Probabilities({
             {line.label}
           </Text>
           <Text style={[styles.labelValue, { color: outcomeColor(c, line.tone) }]}>
-            {pct(value)}
+            {chanceText(value)}
           </Text>
         </View>
       ))}

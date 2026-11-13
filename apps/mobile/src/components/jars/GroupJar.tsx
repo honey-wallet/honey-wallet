@@ -1,11 +1,11 @@
 import type { SocialGroup } from '@honey-wallet/api-client';
-import { useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { Text, View } from 'react-native';
 import { Icon } from '@/components/Icon';
 import { PressableRow } from '@/components/motion/PressableRow';
 import { PillButton } from '@/components/onboarding/PillButton';
 import { SheetRow, StatRow } from '@/components/sheets/Sheet';
+import { useFocusPolling } from '@/lib/focus-polling';
 import { dollars, membersIn } from '@/lib/group-jar-core';
 import {
   approveVote,
@@ -42,15 +42,10 @@ export function useGroupJar(groupId: string | undefined) {
   const [walletId, setWalletId] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
-  useFocusEffect(
-    useCallback(() => {
-      if (!groupId) return;
-      const tick = () => void syncGroup(groupId).catch(() => {});
-      tick();
-      const timer = setInterval(tick, POLL_MS);
-      return () => clearInterval(timer);
-    }, [groupId]),
-  );
+  const sync = useCallback(() => {
+    if (groupId) void syncGroup(groupId).catch(() => {});
+  }, [groupId]);
+  useFocusPolling(sync, POLL_MS, !!groupId);
   useEffect(() => {
     if (g?.dao && g.myState === 'accepted') setWalletId(groupWallet(g));
   }, [g]);

@@ -4,6 +4,7 @@ import { Redirect, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { PillButton } from '@/components/onboarding/PillButton';
 import { SheetRow, SheetScreen, SheetSection, SheetText } from '@/components/sheets/Sheet';
+import { usePolling } from '@/lib/polling';
 import {
   flowDeps,
   listStealthJars,
@@ -56,11 +57,7 @@ function ApproveContent() {
     }
   }, [jar]);
 
-  useEffect(() => {
-    refresh();
-    const timer = setInterval(refresh, POLL_MS);
-    return () => clearInterval(timer);
-  }, [refresh]);
+  usePolling(refresh, POLL_MS);
 
   if (!jar || !walletId) return <SheetScreen title="Private jar">{null}</SheetScreen>;
 

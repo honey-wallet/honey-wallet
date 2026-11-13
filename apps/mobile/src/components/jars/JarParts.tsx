@@ -4,11 +4,13 @@
 import { router } from 'expo-router';
 import { type ReactNode, useId, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
-import Animated, { FadeInDown, useReducedMotion } from 'react-native-reanimated';
+// Unused since 14 Nov (cleanup): only the commented-out code below used it.
+// import Animated, { FadeInDown, useReducedMotion } from 'react-native-reanimated';
 import Svg, { Circle, Defs, LinearGradient, Path, Rect, Stop } from 'react-native-svg';
 import { Avatar } from '@/components/Avatar';
 import { DonutChart } from '@/components/charts/DonutChart';
-import { SplitBarArt, SplitRingArcs, useSweepOnce } from '@/components/charts/SplitArt';
+// useSweepOnce: unused since 14 Nov (cleanup), only the commented-out RingLegend used it.
+import { SplitBarArt, SplitRingArcs } from '@/components/charts/SplitArt';
 import { Icon } from '@/components/Icon';
 import { PressableRow } from '@/components/motion/PressableRow';
 import { PressableScale } from '@/components/motion/PressableScale';
@@ -22,6 +24,7 @@ import {
 } from '@/components/wallet/parts';
 import { TOKEN_IMAGES } from '@/components/wallet/token-images';
 import { TOKEN_LOGOS } from '@/components/wallet/token-logos';
+import { signedPct } from '@/lib/format';
 import { tap } from '@/lib/haptics';
 import { useTokenInfo } from '@/lib/market';
 import { formatBalance, formatUsd, tokenName } from '@/lib/mock-wallet';
@@ -32,7 +35,8 @@ import { jarReturn, jarValue, type Pick, type ThesisJar } from '@/lib/thesis';
 import { tokenColor } from '@/lib/token-colors';
 import { useTokenLogo } from '@/lib/token-logos';
 import { makeStyles, radius, useTheme } from '@/theme';
-import { DURATION, EASE } from '@/theme/motion';
+// Unused since 14 Nov (cleanup): only the commented-out code below used it.
+// import { DURATION, EASE } from '@/theme/motion';
 
 /** A jar's holdings as layers of its jar (bottom first), or none when they're hidden. */
 export const layersOf = (jar: ThesisJar) =>
@@ -276,13 +280,14 @@ const styles_ideaCoins = StyleSheet.create({
   },
 });
 
-/** Who can see a jar, in the words the launch step uses. */
-export const visibilityLabel = (jar: ThesisJar) =>
-  jar.visibility === 'public'
-    ? 'Public'
-    : jar.visibility === 'private'
-      ? 'Returns only'
-      : 'Members only';
+// Unused since 14 Nov (cleanup): nothing imports it.
+// /** Who can see a jar, in the words the launch step uses. */
+// export const visibilityLabel = (jar: ThesisJar) =>
+//   jar.visibility === 'public'
+//     ? 'Public'
+//     : jar.visibility === 'private'
+//       ? 'Returns only'
+//       : 'Members only';
 
 /**
  * Overlapping token logos, as Earn shows a vault's exposure; a lock well when hidden.
@@ -617,9 +622,10 @@ export function JarHoldingRow({
   );
 }
 
-/** A signed percentage, "+12.4%". */
-export const signedPct = (fraction: number) =>
-  `${fraction >= 0 ? '+' : ''}${(fraction * 100).toFixed(1)}%`;
+// Replaced on 14 Nov (cleanup) by signedPct in lib/format.ts.
+// /** A signed percentage, "+12.4%". */
+// export const signedPct = (fraction: number) =>
+//   `${fraction >= 0 ? '+' : ''}${(fraction * 100).toFixed(1)}%`;
 
 /**
  * The Perps page's market tiles: one grey card split into tiles by the page's colour,
@@ -663,20 +669,21 @@ export function Tiles({
   );
 }
 
-/** A few facts in one plain row, split by hairlines (inside a card, e.g. the chat's). */
-export function Facts({ facts }: { facts: { label: string; value: string }[] }) {
-  const styles = useStyles();
-  return (
-    <View style={styles.facts}>
-      {facts.map((f, i) => (
-        <View key={f.label} style={[styles.fact, i > 0 && styles.factBorder]}>
-          <Text style={styles.factValue}>{f.value}</Text>
-          <Text style={styles.factLabel}>{f.label}</Text>
-        </View>
-      ))}
-    </View>
-  );
-}
+// Unused since 14 Nov (cleanup): nothing imports it.
+// /** A few facts in one plain row, split by hairlines (inside a card, e.g. the chat's). */
+// export function Facts({ facts }: { facts: { label: string; value: string }[] }) {
+//   const styles = useStyles();
+//   return (
+//     <View style={styles.facts}>
+//       {facts.map((f, i) => (
+//         <View key={f.label} style={[styles.fact, i > 0 && styles.factBorder]}>
+//           <Text style={styles.factValue}>{f.value}</Text>
+//           <Text style={styles.factLabel}>{f.label}</Text>
+//         </View>
+//       ))}
+//     </View>
+//   );
+// }
 
 /**
  * A jar in a list, laid out like Explore's top-token rows (and Home's token rows): an
@@ -1111,35 +1118,36 @@ export function stepSplit(weights: number[], index: number, delta: number): numb
   return next;
 }
 
-/**
- * What you own across all your jars, token by token: each jar's value split by its
- * mix and added up, largest first. Hidden jars are yours, so they count too.
- */
-export function Exposure({ jars }: { jars: ThesisJar[] }) {
-  const total = jars.reduce((s, j) => s + jarValue(j), 0);
-  const by = new Map<string, { pick: Pick; value: number }>();
-  for (const jar of jars) {
-    const v = jarValue(jar);
-    for (const p of jar.picks) {
-      const row = by.get(p.symbol) ?? { pick: p, value: 0 };
-      row.value += (v * p.weight) / 100;
-      by.set(p.symbol, row);
-    }
-  }
-  const rows = [...by.values()].sort((a, b) => b.value - a.value);
-  if (!total || !rows.length) return null;
-  return (
-    <View>
-      {rows.map(({ pick, value }) => (
-        <HoldingRow
-          key={pick.symbol}
-          pick={{ ...pick, weight: Math.round((value / total) * 100) }}
-          value={value}
-        />
-      ))}
-    </View>
-  );
-}
+// Unused since 14 Nov (cleanup): nothing imports it.
+// /**
+//  * What you own across all your jars, token by token: each jar's value split by its
+//  * mix and added up, largest first. Hidden jars are yours, so they count too.
+//  */
+// export function Exposure({ jars }: { jars: ThesisJar[] }) {
+//   const total = jars.reduce((s, j) => s + jarValue(j), 0);
+//   const by = new Map<string, { pick: Pick; value: number }>();
+//   for (const jar of jars) {
+//     const v = jarValue(jar);
+//     for (const p of jar.picks) {
+//       const row = by.get(p.symbol) ?? { pick: p, value: 0 };
+//       row.value += (v * p.weight) / 100;
+//       by.set(p.symbol, row);
+//     }
+//   }
+//   const rows = [...by.values()].sort((a, b) => b.value - a.value);
+//   if (!total || !rows.length) return null;
+//   return (
+//     <View>
+//       {rows.map(({ pick, value }) => (
+//         <HoldingRow
+//           key={pick.symbol}
+//           pick={{ ...pick, weight: Math.round((value / total) * 100) }}
+//           value={value}
+//         />
+//       ))}
+//     </View>
+//   );
+// }
 
 /** What you own across jars as slices for a ring: each token's share of the total value. */
 export function exposureSlices(jars: ThesisJar[]): Slice[] {
@@ -1159,41 +1167,42 @@ export function exposureSlices(jars: ThesisJar[]): Slice[] {
     }));
 }
 
-/** A ring's key in a card: each slice's dot and symbol over its share, side by side. */
-export function RingLegend({ slices, sweep }: { slices: Slice[]; sweep?: string }) {
-  const styles = useStyles();
-  // With its ring's sweep (the same id): each key rises 4pt in as the ring lands, the
-  // first four 40ms apart. Otherwise, and under Reduce Motion, it's simply there.
-  const sweeping = useSweepOnce(sweep);
-  const reduced = useReducedMotion();
-  const follow = sweeping && !reduced;
-  return (
-    <View style={styles.ringKey}>
-      {slices.slice(0, 8).map((s, i) => (
-        <Animated.View
-          key={s.symbol}
-          entering={
-            follow
-              ? FadeInDown.duration(DURATION.medium)
-                  .delay(250 + Math.min(i, 3) * DURATION.stagger)
-                  .easing(EASE.smoothOut)
-                  .withInitialValues({ transform: [{ translateY: 4 }] })
-              : undefined
-          }
-          style={styles.ringKeyItem}
-        >
-          <View style={styles.ringKeyName}>
-            <TokenIcon symbol={s.symbol} size={18} />
-            <Text style={styles.ringKeySymbol} numberOfLines={1}>
-              {s.symbol}
-            </Text>
-          </View>
-          <Text style={styles.ringKeyPct}>{s.weight}%</Text>
-        </Animated.View>
-      ))}
-    </View>
-  );
-}
+// Unused since 14 Nov (cleanup): nothing imports it.
+// /** A ring's key in a card: each slice's dot and symbol over its share, side by side. */
+// export function RingLegend({ slices, sweep }: { slices: Slice[]; sweep?: string }) {
+//   const styles = useStyles();
+//   // With its ring's sweep (the same id): each key rises 4pt in as the ring lands, the
+//   // first four 40ms apart. Otherwise, and under Reduce Motion, it's simply there.
+//   const sweeping = useSweepOnce(sweep);
+//   const reduced = useReducedMotion();
+//   const follow = sweeping && !reduced;
+//   return (
+//     <View style={styles.ringKey}>
+//       {slices.slice(0, 8).map((s, i) => (
+//         <Animated.View
+//           key={s.symbol}
+//           entering={
+//             follow
+//               ? FadeInDown.duration(DURATION.medium)
+//                   .delay(250 + Math.min(i, 3) * DURATION.stagger)
+//                   .easing(EASE.smoothOut)
+//                   .withInitialValues({ transform: [{ translateY: 4 }] })
+//               : undefined
+//           }
+//           style={styles.ringKeyItem}
+//         >
+//           <View style={styles.ringKeyName}>
+//             <TokenIcon symbol={s.symbol} size={18} />
+//             <Text style={styles.ringKeySymbol} numberOfLines={1}>
+//               {s.symbol}
+//             </Text>
+//           </View>
+//           <Text style={styles.ringKeyPct}>{s.weight}%</Text>
+//         </Animated.View>
+//       ))}
+//     </View>
+//   );
+// }
 
 /**
  * Ideas to start a jar from, one card each with its picture; each opens the chat with it

@@ -5,6 +5,7 @@ import { Icon } from '@/components/Icon';
 import { HoneyLogo } from '@/components/logo/HoneyLogo';
 import { TokenIcon } from '@/components/wallet/parts';
 import { formatPrice } from '@/lib/mock-wallet';
+import { smoothPath } from '@/lib/svg-path';
 import { makeStyles, radius, useTheme } from '@/theme';
 
 // The card follows the theme: a light card with a hairline edge in light mode, a raised
@@ -25,38 +26,57 @@ function calm(data: number[]) {
   return out;
 }
 
+// Replaced on 14 Nov (cleanup) by chartPath below, which draws with lib/svg-path's smoothPath.
+// /**
+//  * A smooth path through the points (Catmull-Rom as cubic Béziers). `calmed` evens out
+//  * tick noise first; pass false for a few points, which averaging would flatten.
+//  */
+// export function smoothPath(
+//   raw: number[],
+//   width: number,
+//   height: number,
+//   inset: number,
+//   calmed = true,
+// ) {
+//   const data = calmed ? calm(raw) : raw;
+//   const min = Math.min(...data);
+//   const max = Math.max(...data);
+//   const span = max - min || 1;
+//   const pts = data.map((v, i) => [
+//     (i / (data.length - 1)) * width,
+//     inset + (1 - (v - min) / span) * (height - inset * 2),
+//   ]);
+//   let d = `M${pts[0][0].toFixed(1)} ${pts[0][1].toFixed(1)}`;
+//   for (let i = 0; i < pts.length - 1; i++) {
+//     const [x0, y0] = pts[i - 1] ?? pts[i];
+//     const [x1, y1] = pts[i];
+//     const [x2, y2] = pts[i + 1];
+//     const [x3, y3] = pts[i + 2] ?? pts[i + 1];
+//     const c1x = x1 + (x2 - x0) / 6;
+//     const c1y = y1 + (y2 - y0) / 6;
+//     const c2x = x2 - (x3 - x1) / 6;
+//     const c2y = y2 - (y3 - y1) / 6;
+//     d += ` C${c1x.toFixed(1)} ${c1y.toFixed(1)} ${c2x.toFixed(1)} ${c2y.toFixed(1)} ${x2.toFixed(1)} ${y2.toFixed(1)}`;
+//   }
+//   return d;
+// }
+
 /**
- * A smooth path through the points (Catmull-Rom as cubic Béziers). `calmed` evens out
- * tick noise first; pass false for a few points, which averaging would flatten.
+ * The card's line: `raw` scaled into the chart (`inset` from top and bottom), drawn
+ * smooth. `calmed` evens out tick noise first; pass false for a few points, which
+ * averaging would flatten.
  */
-export function smoothPath(
-  raw: number[],
-  width: number,
-  height: number,
-  inset: number,
-  calmed = true,
-) {
+function chartPath(raw: number[], width: number, height: number, inset: number, calmed = true) {
   const data = calmed ? calm(raw) : raw;
   const min = Math.min(...data);
   const max = Math.max(...data);
   const span = max - min || 1;
-  const pts = data.map((v, i) => [
-    (i / (data.length - 1)) * width,
-    inset + (1 - (v - min) / span) * (height - inset * 2),
-  ]);
-  let d = `M${pts[0][0].toFixed(1)} ${pts[0][1].toFixed(1)}`;
-  for (let i = 0; i < pts.length - 1; i++) {
-    const [x0, y0] = pts[i - 1] ?? pts[i];
-    const [x1, y1] = pts[i];
-    const [x2, y2] = pts[i + 1];
-    const [x3, y3] = pts[i + 2] ?? pts[i + 1];
-    const c1x = x1 + (x2 - x0) / 6;
-    const c1y = y1 + (y2 - y0) / 6;
-    const c2x = x2 - (x3 - x1) / 6;
-    const c2y = y2 - (y3 - y1) / 6;
-    d += ` C${c1x.toFixed(1)} ${c1y.toFixed(1)} ${c2x.toFixed(1)} ${c2y.toFixed(1)} ${x2.toFixed(1)} ${y2.toFixed(1)}`;
-  }
-  return d;
+  return smoothPath(
+    data.map((v, i) => [
+      (i / (data.length - 1)) * width,
+      inset + (1 - (v - min) / span) * (height - inset * 2),
+    ]),
+  );
 }
 
 type Props = {
@@ -90,7 +110,7 @@ export const TokenShareCard = forwardRef<View, Props>(function TokenShareCard(
   const tone = down ? c.error : c.success;
   // A line needs two real points; with fewer the card keeps the chart's room, empty.
   const line = useMemo(
-    () => (data.length >= 2 ? smoothPath(data, SHARE_CARD_WIDTH, CHART_HEIGHT, 6) : ''),
+    () => (data.length >= 2 ? chartPath(data, SHARE_CARD_WIDTH, CHART_HEIGHT, 6) : ''),
     [data],
   );
   // The same line closed along the bottom edge, for a soft wash of the move's colour.

@@ -312,44 +312,53 @@ export function shortAddress(address: string, head = 6, tail = 4) {
   return `${address.slice(0, head)}…${address.slice(-tail)}`;
 }
 
-export function formatUsd(value: number) {
-  // Anything that rounds to zero is "$0.00": an empty wallet's sum came out as -0 and
-  // showed "$-0.00". Negatives read "-$1.00", not "$-1.00".
-  const v = Math.abs(value) < 0.005 ? 0 : value;
-  const digits = Math.abs(v).toLocaleString('en-US', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
-  return `${v < 0 ? '-' : ''}$${digits}`;
-}
+export {
+  formatAmount,
+  formatBalance,
+  formatCompactUsd,
+  formatPrice,
+  formatUsd,
+} from '@/lib/format';
 
-/** Compact dollar amounts for volumes, e.g. $1.85B or $645.68M. */
-export function formatCompactUsd(value: number) {
-  const units: [number, string][] = [
-    [1e12, 'T'],
-    [1e9, 'B'],
-    [1e6, 'M'],
-    [1e3, 'K'],
-  ];
-  const [size, unit] = units.find(([n]) => value >= n) ?? [1, ''];
-  return `$${(value / size).toFixed(2)}${unit}`;
-}
-
-/** Token amounts, e.g. 0.0042 or 12,000. */
-export function formatAmount(value: number, maxDecimals = 6) {
-  return value.toLocaleString('en-US', { maximumFractionDigits: maxDecimals });
-}
-
-/** Balances on send/buy screens: 6 decimals under 1, else 4 (0.000123, 7.08). */
-export function formatBalance(value: number) {
-  return formatAmount(value, value < 1 ? 6 : 4);
-}
-
-/** Prices keep sub-dollar precision, e.g. $0.999 or $80,649.68. */
-export function formatPrice(value: number) {
-  // Just under a dollar reads as one, in cents ($1.00, not "$1" next to "$0.999").
-  return value < 0.995 ? `$${Number(value.toPrecision(3))}` : formatUsd(value);
-}
+// Moved to lib/format.ts on 14 Nov (cleanup); re-exported above so importers keep working.
+// export function formatUsd(value: number) {
+//   // Anything that rounds to zero is "$0.00": an empty wallet's sum came out as -0 and
+//   // showed "$-0.00". Negatives read "-$1.00", not "$-1.00".
+//   const v = Math.abs(value) < 0.005 ? 0 : value;
+//   const digits = Math.abs(v).toLocaleString('en-US', {
+//     minimumFractionDigits: 2,
+//     maximumFractionDigits: 2,
+//   });
+//   return `${v < 0 ? '-' : ''}$${digits}`;
+// }
+//
+// /** Compact dollar amounts for volumes, e.g. $1.85B or $645.68M. */
+// export function formatCompactUsd(value: number) {
+//   const units: [number, string][] = [
+//     [1e12, 'T'],
+//     [1e9, 'B'],
+//     [1e6, 'M'],
+//     [1e3, 'K'],
+//   ];
+//   const [size, unit] = units.find(([n]) => value >= n) ?? [1, ''];
+//   return `$${(value / size).toFixed(2)}${unit}`;
+// }
+//
+// /** Token amounts, e.g. 0.0042 or 12,000. */
+// export function formatAmount(value: number, maxDecimals = 6) {
+//   return value.toLocaleString('en-US', { maximumFractionDigits: maxDecimals });
+// }
+//
+// /** Balances on send/buy screens: 6 decimals under 1, else 4 (0.000123, 7.08). */
+// export function formatBalance(value: number) {
+//   return formatAmount(value, value < 1 ? 6 : 4);
+// }
+//
+// /** Prices keep sub-dollar precision, e.g. $0.999 or $80,649.68. */
+// export function formatPrice(value: number) {
+//   // Just under a dollar reads as one, in cents ($1.00, not "$1" next to "$0.999").
+//   return value < 0.995 ? `$${Number(value.toPrecision(3))}` : formatUsd(value);
+// }
 
 // ---------------------------------------------------------------------------
 // Charts

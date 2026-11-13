@@ -1,5 +1,5 @@
 import type { SocialGroup, SocialGroupMember } from '@honey-wallet/api-client';
-import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { createElement, type ReactNode, useCallback, useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { People, StrategyCard } from '@/components/jars/JarParts';
@@ -9,6 +9,7 @@ import { SheetRow, StatRow } from '@/components/sheets/Sheet';
 import { SocialAvatar } from '@/components/social/parts';
 import { PushedScreen, SCREEN } from '@/components/wallet/parts';
 import { backendSession } from '@/lib/backend-session';
+import { useFocusPolling } from '@/lib/focus-polling';
 import { isDemoGroup } from '@/lib/group-demo';
 import {
   dollars,
@@ -77,13 +78,7 @@ export default function GroupScreen() {
   }, [signedInAs, id]);
 
   // On every visit, and every 15s while others still have something to do.
-  useFocusEffect(
-    useCallback(() => {
-      refresh();
-      const timer = setInterval(refresh, POLL_MS);
-      return () => clearInterval(timer);
-    }, [refresh]),
-  );
+  useFocusPolling(refresh, POLL_MS);
 
   if (!group && failed)
     return (

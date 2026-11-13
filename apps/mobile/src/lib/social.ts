@@ -16,6 +16,7 @@ import { useEffect, useState } from 'react';
 import { Share } from 'react-native';
 import { api } from '@/lib/api';
 import { backendSession, backendSessionToken } from '@/lib/backend-session';
+import { signedPct } from '@/lib/format';
 import { DEMO_FRIENDS, demoCollabPost, setDemoHandle } from '@/lib/group-demo';
 import { getProfile } from '@/lib/profile';
 import {
@@ -408,20 +409,21 @@ export async function publishJar(jar: ThesisJar): Promise<SocialJar | null> {
   }
 }
 
-/** Takes a jar off the feed (made private or deleted on the phone). */
-export async function unpublishJar(clientId: string) {
-  const token = backendSessionToken();
-  const me = social.get().me;
-  if (!token || !me) return;
-  const jar = me.jars.find((j) => j.clientId === clientId);
-  if (!jar) return;
-  try {
-    await api.socialUnpublishJar(token, jar.id);
-    void loadMe();
-  } catch {
-    // Best effort; it stays listed until the next try.
-  }
-}
+// Unused since 14 Nov (cleanup): nothing imports it.
+// /** Takes a jar off the feed (made private or deleted on the phone). */
+// export async function unpublishJar(clientId: string) {
+//   const token = backendSessionToken();
+//   const me = social.get().me;
+//   if (!token || !me) return;
+//   const jar = me.jars.find((j) => j.clientId === clientId);
+//   if (!jar) return;
+//   try {
+//     await api.socialUnpublishJar(token, jar.id);
+//     void loadMe();
+//   } catch {
+//     // Best effort; it stays listed until the next try.
+//   }
+// }
 
 /** Tells the server you copied a public jar, so its owner's count (and the feed) move. */
 export async function recordCopy(socialJarId: string) {
@@ -734,9 +736,11 @@ export function timeAgo(at: number, now = Date.now()) {
   return new Date(at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
 }
 
-/** "+12.4%" from a fraction. */
-export const pct = (fraction: number) =>
-  `${fraction >= 0 ? '+' : '−'}${Math.abs(fraction * 100).toFixed(1)}%`;
+/** "+12.4%" from a fraction, with a typographic minus ("−3.0%"). */
+export const pct = (fraction: number) => signedPct(fraction, '−');
+// Replaced on 14 Nov (cleanup) by signedPct in lib/format.ts:
+// export const pct = (fraction: number) =>
+//   `${fraction >= 0 ? '+' : '−'}${Math.abs(fraction * 100).toFixed(1)}%`;
 
 /** Trims a token amount for a sentence: 0.2, 1,250, 0.00042. */
 export function amountText(amount: number) {
@@ -928,24 +932,25 @@ export async function createPost(input: {
   return post;
 }
 
-const withoutPost = (items: SocialFeedItem[], id: string) => items.filter((i) => i.post?.id !== id);
-
-export async function deletePost(id: string) {
-  const token = backendSessionToken();
-  if (!token) throw new ApiError(401, 'unauthorized', 'Sign in to continue');
-  await api.socialDeletePost(token, id);
-  social.set((s) => ({
-    ...s,
-    feeds: {
-      everyone: { ...s.feeds.everyone, items: withoutPost(s.feeds.everyone.items, id) },
-      following: { ...s.feeds.following, items: withoutPost(s.feeds.following.items, id) },
-    },
-    postsAbout: Object.fromEntries(
-      Object.entries(s.postsAbout).map(([k, v]) => [k, v.filter((p) => p.id !== id)]),
-    ),
-  }));
-  void loadMe();
-}
+// Unused since 14 Nov (cleanup): nothing imports it.
+// const withoutPost = (items: SocialFeedItem[], id: string) => items.filter((i) => i.post?.id !== id);
+//
+// export async function deletePost(id: string) {
+//   const token = backendSessionToken();
+//   if (!token) throw new ApiError(401, 'unauthorized', 'Sign in to continue');
+//   await api.socialDeletePost(token, id);
+//   social.set((s) => ({
+//     ...s,
+//     feeds: {
+//       everyone: { ...s.feeds.everyone, items: withoutPost(s.feeds.everyone.items, id) },
+//       following: { ...s.feeds.following, items: withoutPost(s.feeds.following.items, id) },
+//     },
+//     postsAbout: Object.fromEntries(
+//       Object.entries(s.postsAbout).map(([k, v]) => [k, v.filter((p) => p.id !== id)]),
+//     ),
+//   }));
+//   void loadMe();
+// }
 
 export async function loadPostsAbout(symbol: string) {
   const key = symbol.toUpperCase();
@@ -1002,7 +1007,8 @@ async function share(message: string, url: string) {
   }
 }
 
-const signed = (fraction: number) => `${fraction >= 0 ? '+' : ''}${(fraction * 100).toFixed(1)}%`;
+// Replaced on 14 Nov (cleanup) by signedPct in lib/format.ts.
+// const signed = (fraction: number) => `${fraction >= 0 ? '+' : ''}${(fraction * 100).toFixed(1)}%`;
 
 export function sharePost(post: SocialPost) {
   const tokens = post.tokens.map((t) => `$${t.symbol}`).join(' ');
@@ -1012,7 +1018,7 @@ export function sharePost(post: SocialPost) {
 
 export function shareJar(jar: SocialJar) {
   const r = jar.returnSincePublish;
-  const ret = r == null ? '' : ` (${signed(r)} since launch)`;
+  const ret = r == null ? '' : ` (${signedPct(r)} since launch)`;
   return share(`${jar.name} by @${jar.owner.handle} on Honey${ret}`, jarLink(jar.id));
 }
 
@@ -1037,26 +1043,28 @@ export function shareRank(rank: number, jar: SocialJar, window: SocialLeaderboar
         : window === '7d'
           ? 'this week'
           : 'this month';
-  const ret = r == null ? '' : ` at ${signed(r)}`;
+  const ret = r == null ? '' : ` at ${signedPct(r)}`;
   return share(`#${rank} on the Honey leaderboard ${when}${ret} with ${jar.name}`, jarLink(jar.id));
 }
 
-/** Live USD prices by uppercase symbol from a market list. */
-export function priceMap(list: { symbol: string; price: number }[]): Record<string, number> {
-  const out: Record<string, number> = {};
-  for (const t of list) if (t.price > 0) out[t.symbol.toUpperCase()] = t.price;
-  return out;
-}
+// Unused since 14 Nov (cleanup): nothing imports it.
+// /** Live USD prices by uppercase symbol from a market list. */
+// export function priceMap(list: { symbol: string; price: number }[]): Record<string, number> {
+//   const out: Record<string, number> = {};
+//   for (const t of list) if (t.price > 0) out[t.symbol.toUpperCase()] = t.price;
+//   return out;
+// }
 
-/** True after `ms`; for loading states that give up. */
-export function useAfter(ms: number) {
-  const [done, setDone] = useState(false);
-  useEffect(() => {
-    const t = setTimeout(() => setDone(true), ms);
-    return () => clearTimeout(t);
-  }, [ms]);
-  return done;
-}
+// Unused since 14 Nov (cleanup): nothing imports it.
+// /** True after `ms`; for loading states that give up. */
+// export function useAfter(ms: number) {
+//   const [done, setDone] = useState(false);
+//   useEffect(() => {
+//     const t = setTimeout(() => setDone(true), ms);
+//     return () => clearTimeout(t);
+//   }, [ms]);
+//   return done;
+// }
 
 /**
  * What someone holds most across their public jars and theses, heaviest first, with

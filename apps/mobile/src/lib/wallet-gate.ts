@@ -1,5 +1,5 @@
 import { router, usePathname } from 'expo-router';
-import { useCallback, useEffect } from 'react';
+import { useEffect } from 'react'; // useCallback: unused since 14 Nov (cleanup), see useRequireWallet.
 import { backendSessionToken } from '@/lib/backend-session';
 import { hasWalletState, rememberIntent } from '@/lib/intent';
 import { getOnboarding, useOnboarding } from '@/lib/onboarding';
@@ -49,14 +49,15 @@ export function requireSignIn(action: string, resume?: string) {
   return false;
 }
 
-/** The same, with "come back to this screen" filled in from the current route. */
-export function useRequireWallet() {
-  const pathname = usePathname();
-  return useCallback(
-    (action: string, resume?: string) => requireWallet(action, resume, pathname),
-    [pathname],
-  );
-}
+// Unused since 14 Nov (cleanup): nothing imports it.
+// /** The same, with "come back to this screen" filled in from the current route. */
+// export function useRequireWallet() {
+//   const pathname = usePathname();
+//   return useCallback(
+//     (action: string, resume?: string) => requireWallet(action, resume, pathname),
+//     [pathname],
+//   );
+// }
 
 /**
  * For screens that only make sense with a wallet (Receive, Send, Add money, sign-in):

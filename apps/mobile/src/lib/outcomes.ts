@@ -1,7 +1,7 @@
 import { type Href, router } from 'expo-router';
 import { useState } from 'react';
 import { SHEET_EXIT } from '@/lib/navigation';
-import { settings, useSettings } from '@/lib/settings';
+import { settings } from '@/lib/settings'; // useSettings: unused since 14 Nov (cleanup), see useSimulateFailures.
 import { addMoneyHref } from '@/lib/surface';
 
 /**
@@ -171,7 +171,8 @@ export function demoOutcome(flow: Flow): Failure | null {
   return describeFailure(list[n % list.length], flow);
 }
 
-export const useSimulateFailures = () => useSettings().simulateFailures;
+// Unused since 14 Nov (cleanup): nothing imports it.
+// export const useSimulateFailures = () => useSettings().simulateFailures;
 
 /**
  * Follows a failure's fix, if it has one: closes the current surface (by default the

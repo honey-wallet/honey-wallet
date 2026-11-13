@@ -8,13 +8,14 @@ import type { SocialJar } from '@honey-wallet/api-client';
  */
 
 export const DAY_MS = 86_400_000;
-/** A day as a list shows it: "Today", "Yesterday", or "12 Nov". */
-export function dayLabel(ms: number, now = Date.now()) {
-  const ago = Math.round((midnight(now) - midnight(ms)) / DAY_MS);
-  if (ago === 0) return 'Today';
-  if (ago === 1) return 'Yesterday';
-  return new Date(ms).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
-}
+// Unused since 14 Nov (cleanup): nothing imports it.
+// /** A day as a list shows it: "Today", "Yesterday", or "12 Nov". */
+// export function dayLabel(ms: number, now = Date.now()) {
+//   const ago = Math.round((midnight(now) - midnight(ms)) / DAY_MS);
+//   if (ago === 0) return 'Today';
+//   if (ago === 1) return 'Yesterday';
+//   return new Date(ms).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+// }
 
 /** The server sends marks from the last 30 days, at most ~30 per jar, ending now. */
 const WINDOW_DAYS = 30;

@@ -16,6 +16,7 @@ import { MarketIcon } from '@/components/trade/PredictFeed';
 import type { Side } from '@/components/trade/TradeForm';
 import { HeaderShortcut } from '@/components/wallet/HeaderShortcut';
 import { EmptyState, PushedScreen } from '@/components/wallet/parts';
+import { chanceText } from '@/lib/format';
 import { tap } from '@/lib/haptics';
 import { LOADS } from '@/lib/loads';
 import { formatCompactUsd } from '@/lib/mock-wallet';
@@ -39,8 +40,9 @@ import { makeStyles, radius, useTheme } from '@/theme';
 const CHART_HEIGHT = 236;
 const GUTTER = 20;
 
-/** "<1%" under one percent, as Polymarket writes it; otherwise a whole percentage. */
-const pct = (v: number) => (v < 0.01 ? '<1%' : `${Math.round(v * 100)}%`);
+// Replaced on 14 Nov (cleanup) by chanceText in lib/format.ts.
+// /** "<1%" under one percent, as Polymarket writes it; otherwise a whole percentage. */
+// const pct = (v: number) => (v < 0.01 ? '<1%' : `${Math.round(v * 100)}%`);
 
 function openOrder(market: PredictMarket, side: Side, outcome?: string) {
   tap();
@@ -109,7 +111,7 @@ function PredictMarketScreen() {
             icon="share"
             label="Share market"
             onPress={() =>
-              Share.share({ message: `${title} ${pct(leadChance(market))} on Honey` }).catch(
+              Share.share({ message: `${title} ${chanceText(leadChance(market))} on Honey` }).catch(
                 () => {},
               )
             }
@@ -144,9 +146,9 @@ function PredictMarketScreen() {
         {market.kind === 'multi' ? null : (
           <View style={styles.chanceRow}>
             {scrub === null ? (
-              <NumberPopIn value={pct(at(main))} style={styles.chance} />
+              <NumberPopIn value={chanceText(at(main))} style={styles.chance} />
             ) : (
-              <Text style={styles.chance}>{pct(at(main))}</Text>
+              <Text style={styles.chance}>{chanceText(at(main))}</Text>
             )}
             <Text style={styles.chanceLabel}>chance</Text>
             {Math.abs(moved) >= 0.005 ? (
@@ -221,7 +223,9 @@ function PredictMarketScreen() {
                     {formatCompactUsd(market.volume * (o.yes * 0.8 + 0.08))} Vol.
                   </Text>
                 </View>
-                <Text style={[styles.outcomePct, o.yes < 0.01 && styles.muted]}>{pct(o.yes)}</Text>
+                <Text style={[styles.outcomePct, o.yes < 0.01 && styles.muted]}>
+                  {chanceText(o.yes)}
+                </Text>
                 <BuyButton
                   side="Yes"
                   detail={price(o.yes)}
@@ -260,7 +264,7 @@ function PredictMarketScreen() {
               <Text style={[styles.flex, styles.relatedText]} numberOfLines={2}>
                 {m.question}
               </Text>
-              <Text style={styles.relatedPct}>{pct(leadChance(m))}</Text>
+              <Text style={styles.relatedPct}>{chanceText(leadChance(m))}</Text>
             </PressableRow>
           ))}
         </View>
