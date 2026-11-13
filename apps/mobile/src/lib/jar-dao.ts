@@ -18,7 +18,7 @@ import {
   USDC_NEAR,
   valueOfUnits,
 } from '@honey-wallet/keyring';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import { confirmOwner } from '@/lib/auth';
 import { backendSessionToken } from '@/lib/backend-session';
@@ -61,6 +61,7 @@ import {
 } from '@/lib/multisig';
 import { signAndSendNearCall, signNearDelegate } from '@/lib/near-call';
 import { persistence } from '@/lib/persistence';
+import { usePolling } from '@/lib/polling';
 import { createStore } from '@/lib/store';
 import { TEST_MODE } from '@/lib/test-mode';
 import { addWallet, wallets } from '@/lib/wallets';
@@ -313,20 +314,13 @@ export function useDaoJar(walletId: string | undefined) {
   const multisig = useMultisig(walletId);
   const dao = TEST_MODE ? undefined : multisig?.dao;
   const ledger = daoLedgers.useValue()[walletId ?? ''];
-  useEffect(() => {
+  const tick = useCallback(() => {
     if (!walletId || !dao) return;
-    let live = true;
-    const tick = () =>
-      refreshJar(walletId, dao, walletName(walletId)).catch(() => {
-        // Keep the last chain view; the next poll retries.
-      });
-    void tick();
-    const timer = setInterval(() => live && void tick(), POLL_MS);
-    return () => {
-      live = false;
-      clearInterval(timer);
-    };
+    void refreshJar(walletId, dao, walletName(walletId)).catch(() => {
+      // Keep the last chain view; the next poll retries.
+    });
   }, [walletId, dao]);
+  usePolling(tick, POLL_MS, !!walletId && !!dao);
   return dao ? (ledger ?? null) : null;
 }
 

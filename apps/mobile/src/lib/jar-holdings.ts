@@ -10,7 +10,8 @@
  * came back (a refunded leg, a sale) leaves the cost basis, and the marks are scaled
  * with it, so selling half a jar doesn't read as a 50% loss.
  */
-import { useEffect } from 'react';
+// Unused since 14 Nov (cleanup): useJarValues polls through usePolling now.
+// import { useEffect } from 'react';
 import { dexAssetId, fetchAllDexTokens } from '@/lib/dex-tokens';
 import {
   fetchSwapTokens,
@@ -21,6 +22,7 @@ import {
 import { type BuyLeg, refreshJarBuy } from '@/lib/jar-buy';
 import { heldUsdc, isDexLeg } from '@/lib/jar-dex';
 import { livePrices } from '@/lib/market';
+import { usePolling } from '@/lib/polling';
 import { TEST_MODE } from '@/lib/test-mode';
 import { type JarSell, type ThesisJar, thesisJars } from '@/lib/thesis';
 
@@ -234,12 +236,9 @@ const dexPriceMap = async () =>
     (await fetchAllDexTokens()).map((t) => [dexAssetId(t.chain, t.address), t.priceUsd]),
   );
 
+const refreshValues = () => void refreshJarValues();
+
 /** While mounted: real jars' values now, then every `everyMs`. */
 export function useJarValues(everyMs = 60_000, enabled = true) {
-  useEffect(() => {
-    if (!enabled || TEST_MODE) return;
-    void refreshJarValues();
-    const timer = setInterval(() => void refreshJarValues(), everyMs);
-    return () => clearInterval(timer);
-  }, [everyMs, enabled]);
+  usePolling(refreshValues, everyMs, enabled && !TEST_MODE);
 }
