@@ -605,6 +605,23 @@ pub async fn refund_allowed(pool: &PgPool, user: Uuid, refund_to: &str) -> Resul
     .map_err(unavailable)
 }
 
+/// Whether this person may hold copied units of `asset` anywhere (any copy buy not voided,
+/// not all sold: a paid buy settles lazily, on the next quote).
+/// The refund-address rule only applies to them: a swap by someone with no copies of the
+/// asset can't dodge a fee, so it isn't refused over an unlinked wallet (14 Nov).
+pub async fn holds_copied(pool: &PgPool, user: Uuid, asset: &str) -> Result<bool, AppError> {
+    sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM copy_buy_lots
+         WHERE copier = $1 AND asset = $2 AND state <> 'void'
+           AND (units IS NULL OR sold < units))",
+    )
+    .bind(user)
+    .bind(asset)
+    .fetch_one(pool)
+    .await
+    .map_err(unavailable)
+}
+
 /// Marks a deposit the app says it paid: a copy buy's (it now counts towards the
 /// outstanding cap) or a sell's (its units are now spoken for), under the copier's lock.
 pub async fn mark_deposited(pool: &PgPool, deposit_address: &str) -> Result<(), AppError> {

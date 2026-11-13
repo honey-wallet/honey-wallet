@@ -936,6 +936,20 @@ async fn refunds_go_only_to_a_wallet_the_seller_signed_in_with() {
 
 #[tokio::test]
 #[ignore = "requires TEST_DATABASE_URL"]
+async fn a_swap_with_no_copied_units_may_refund_to_an_unlinked_wallet() {
+    let db = TestDatabase::new().await;
+    let (buys, double, _, copier, _, _) = setup(&db, true).await;
+    let me = copier.to_string();
+    holds(&double, WALLET_A, 50_000_000_000_000_000);
+    // No copies of this asset: no fee to dodge, so a wallet not linked to this sign-in
+    // still swaps.
+    let elsewhere = "0x00000000000000000000000000000000000000d0";
+    assert!(buys.quote(&me, sell_from(elsewhere, BOUGHT)).await.is_ok());
+    db.close().await;
+}
+
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL"]
 async fn a_bare_deposit_report_shields_nothing() {
     let db = TestDatabase::new().await;
     let pool = db.pool.clone();

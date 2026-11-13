@@ -427,8 +427,11 @@ impl JarBuys {
         // Copied units are keyed on the refund address: it must be a wallet this person
         // signed in with, or a modified app could sell from a wallet with no copies on
         // record. EVM only: the server has no proof of anyone's Solana or NEAR address.
+        // Only for someone holding copied units of the asset sold (14 Nov): others have no
+        // fee to dodge, and their swaps from a wallet not linked to this sign-in still work.
         if !input.intents
             && let (Some(pool), Some(copier)) = (&self.pool, copier)
+            && copy_fees::holds_copied(pool, copier, &input.origin_asset).await?
             && !copy_fees::refund_allowed(pool, copier, &input.refund_to).await?
         {
             return Err(AppError::BadRequest(
