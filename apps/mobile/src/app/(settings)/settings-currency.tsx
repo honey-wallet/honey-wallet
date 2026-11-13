@@ -1,9 +1,7 @@
 import { Text } from 'react-native';
-import { ComingSoonSheet } from '@/components/sheets/ComingSoon';
 import { closeSheet, SheetRow, SheetScreen } from '@/components/sheets/Sheet';
 import { tap } from '@/lib/haptics';
 import { CURRENCIES, updateSettings, useSettings } from '@/lib/settings';
-import { UNWIRED_SETTINGS } from '@/lib/surface';
 import { makeStyles } from '@/theme';
 
 /**
@@ -31,12 +29,13 @@ const FLAGS: Record<string, string> = {
   CHF: '🇨🇭',
 };
 
-/** Amounts always print in USD (lib/surface UNWIRED_SETTINGS): a link straight here says so. */
+/** Dollar values read in the chosen currency (lib/fx). */
 export default function CurrencyRoute() {
-  if (!UNWIRED_SETTINGS)
-    return (
-      <ComingSoonSheet icon="currency" hint="Showing amounts in other currencies is coming soon." />
-    );
+  // Was gated on lib/surface UNWIRED_SETTINGS until lib/fx converted amounts (14 Nov):
+  // if (!UNWIRED_SETTINGS)
+  //   return (
+  //     <ComingSoonSheet icon="currency" hint="Showing amounts in other currencies is coming soon." />
+  //   );
   return <CurrencySheet />;
 }
 

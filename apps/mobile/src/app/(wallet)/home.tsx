@@ -58,9 +58,10 @@ import { TabScreen } from '@/components/wallet/TabScreen';
 import { WalletHeader } from '@/components/wallet/WalletHeader';
 import { openBuy } from '@/lib/buy';
 import { SHOW_DEMO_LABELS } from '@/lib/demo-money-copy';
+import { useMoney } from '@/lib/fx';
 import { tap } from '@/lib/haptics';
 import { LOADS } from '@/lib/loads';
-import { BALANCE_HISTORY, EARN, formatUsd } from '@/lib/mock-wallet';
+import { BALANCE_HISTORY, EARN } from '@/lib/mock-wallet';
 import { useMultisig } from '@/lib/multisig';
 import { setupComplete, useOnboarding } from '@/lib/onboarding';
 import { isWeb } from '@/lib/platform';
@@ -195,6 +196,8 @@ function HomeScreen() {
   const ratesLoading = useFirstLoad(LOADS.earnRates);
   const onboarding = useOnboarding();
   const nudgeShown = useApprovalsNudgeShown();
+  // Dollar values in Settings' Local currency (lib/fx).
+  const money = useMoney();
   const changePct = view.usd ? (view.change / (view.usd - view.change)) * 100 : 0;
   const { hideBalance, earnPromo } = useSettings();
   // Between the actions and the tabs, Home shows at most two cards (one in the
@@ -324,7 +327,7 @@ function HomeScreen() {
                     <Icon name={view.change < 0 ? 'down' : 'up'} size={9} color={changeColor} />
                     <Text style={styles.changeText}>
                       <Text style={styles.changeAmount}>
-                        {hideBalance ? HIDDEN_AMOUNT : formatUsd(Math.abs(view.change))} (
+                        {hideBalance ? HIDDEN_AMOUNT : money.format(Math.abs(view.change))} (
                         {Math.abs(changePct).toFixed(2)}%)
                       </Text>{' '}
                       today
@@ -584,7 +587,7 @@ function HomeScreen() {
               style={styles.gutter}
               crossfade={{
                 scrollY,
-                balance: loading ? '' : hideBalance ? HIDDEN_AMOUNT : formatUsd(view.usd),
+                balance: loading ? '' : hideBalance ? HIDDEN_AMOUNT : money.format(view.usd),
               }}
             />
           </Rise>

@@ -298,25 +298,23 @@ export default function SettingsScreen() {
             accessory="chevron"
           />
         )}
-        {/* Amounts always print in USD and there are no translations yet: hidden until
-            they're wired (lib/surface UNWIRED_SETTINGS). */}
+        {/* Dollar values read in this currency (lib/fx). */}
+        <SheetRow
+          icon="currency"
+          title="Local currency"
+          value={settings.currency}
+          onPress={open('/settings-currency')}
+          accessory="chevron"
+        />
+        {/* No translations yet: hidden until wired (lib/surface UNWIRED_SETTINGS). */}
         {UNWIRED_SETTINGS ? (
-          <>
-            <SheetRow
-              icon="currency"
-              title="Local currency"
-              value={settings.currency}
-              onPress={open('/settings-currency')}
-              accessory="chevron"
-            />
-            <SheetRow
-              icon="language"
-              title="Language"
-              value={settings.language}
-              onPress={open('/settings-language')}
-              accessory="chevron"
-            />
-          </>
+          <SheetRow
+            icon="language"
+            title="Language"
+            value={settings.language}
+            onPress={open('/settings-language')}
+            accessory="chevron"
+          />
         ) : null}
         <SheetRow
           icon="chart"

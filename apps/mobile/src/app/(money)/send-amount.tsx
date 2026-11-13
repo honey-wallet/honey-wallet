@@ -143,10 +143,10 @@ export default function SendAmountSheet() {
   const label = !value ? 'Enter an amount' : insufficient ? 'Insufficient balance' : 'Continue';
 
   const recipient = describeRecipient(to);
-  // Sent to a name rather than a pasted address: the review also shows where it goes.
-  const named =
-    !!recipient.subtitle ||
-    (!!plan?.to && plan.to.toLowerCase() !== recipient.address.toLowerCase());
+  // The review now always shows the whole address (address-poisoning check), 14 Nov:
+  // const named =
+  //   !!recipient.subtitle ||
+  //   (!!plan?.to && plan.to.toLowerCase() !== recipient.address.toLowerCase());
   // The sent transaction's id and explorer link, for the receipt: the real one for a real
   // send, a placeholder in the sample flow.
   const tx = sent
@@ -521,18 +521,16 @@ export default function SendAmountSheet() {
                       </View>
                     }
                   />
-                  {/* To a name (a saved label, a .near or .eth name): the address it goes to,
-                      so it can be checked. A bare address is already the To row. */}
-                  {named ? (
-                    <StatRow
-                      label="Address"
-                      value={
-                        <Text style={styles.rowValue}>
-                          {shortAddress(plan?.to ?? recipient.address, 8, 6)}
-                        </Text>
-                      }
-                    />
-                  ) : null}
+                  {/* Always the whole address it goes to, so it can be checked character
+                      by character (look-alike addresses only differ in the middle). */}
+                  <StatRow
+                    label="Address"
+                    value={
+                      <Text style={[styles.rowValue, styles.rowAddress]} selectable>
+                        {plan?.to ?? recipient.address}
+                      </Text>
+                    }
+                  />
                   {plan ? (
                     <>
                       <StatRow label="Network cost" value={plan.fee} />
@@ -827,6 +825,13 @@ const useStyles = makeStyles((c) => ({
   rowValue: {
     color: c.text,
     fontSize: 16,
+  },
+  rowAddress: {
+    flexShrink: 1,
+    maxWidth: 220,
+    textAlign: 'right',
+    fontSize: 14,
+    fontVariant: ['tabular-nums'],
   },
   total: {
     color: c.text,

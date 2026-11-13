@@ -39,8 +39,9 @@ import { TextsReveal } from '@/components/motion/TextsReveal';
 import { NETWORK_LOGOS } from '@/components/wallet/network-logos';
 import { TOKEN_IMAGES } from '@/components/wallet/token-images';
 import { TOKEN_LOGOS } from '@/components/wallet/token-logos';
+import { useMoney } from '@/lib/fx';
 import { tap } from '@/lib/haptics';
-import { CHAINS, chainSymbol, formatUsd, type Token } from '@/lib/mock-wallet';
+import { CHAINS, chainSymbol, type Token } from '@/lib/mock-wallet';
 import { goBackOr } from '@/lib/navigation';
 import { HIDDEN_AMOUNT, toggleHideBalance, useSettings } from '@/lib/settings';
 import { LANDING } from '@/lib/surface';
@@ -270,12 +271,13 @@ export function AssetRow({
 }
 
 export function TokenRow({ token, onPress }: { token: Token; onPress?: () => void }) {
+  const money = useMoney();
   return (
     <AssetRow
       icon={<TokenIcon symbol={token.symbol} />}
       title={token.name}
       subtitle={`${token.amount.toLocaleString('en-US', { maximumFractionDigits: 6 })} ${token.symbol}`}
-      value={formatUsd(token.usd)}
+      value={money.format(token.usd)}
       detail={<Change value={token.change} />}
       onPress={onPress}
     />
@@ -639,10 +641,12 @@ export function BalanceAmount({
 }) {
   const { hideBalance } = useSettings();
   const { usd } = useWalletView();
+  // In Settings' Local currency (lib/fx).
+  const money = useMoney();
   return (
     <PressableScale
       accessibilityRole="button"
-      accessibilityLabel={hideBalance ? 'Balance hidden' : `Balance ${formatUsd(usd)}`}
+      accessibilityLabel={hideBalance ? 'Balance hidden' : `Balance ${money.format(usd)}`}
       accessibilityHint={hideBalance ? 'Shows your balance' : 'Hides your balance'}
       scaleTo={0.97}
       onPress={() => {
@@ -652,7 +656,7 @@ export function BalanceAmount({
       style={BALANCE_AMOUNT}
     >
       <NumberPopIn
-        value={hideBalance ? HIDDEN_AMOUNT : formatUsd(usd)}
+        value={hideBalance ? HIDDEN_AMOUNT : money.format(usd)}
         style={style}
         fractionStyle={fractionStyle}
       />
