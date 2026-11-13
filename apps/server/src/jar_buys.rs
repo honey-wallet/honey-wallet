@@ -720,11 +720,17 @@ mod tests {
         // 1Click (since 2026-11-13) answers a 15-minute ask with one days out.
         let mut later = reply(&p, "1336500000000000000000000");
         later["quote"]["deadline"] = json!("2026-11-11T12:15:00.000Z");
-        assert_eq!(check_quote(&later, &p).unwrap().deadline, "2026-11-08T12:15:00Z");
+        assert_eq!(
+            check_quote(&later, &p).unwrap().deadline,
+            "2026-11-08T12:15:00Z"
+        );
         // A sooner one is kept: the deposit address closes then.
         let mut sooner = reply(&p, "1336500000000000000000000");
         sooner["quote"]["deadline"] = json!("2026-11-08T12:10:00Z");
-        assert_eq!(check_quote(&sooner, &p).unwrap().deadline, "2026-11-08T12:10:00Z");
+        assert_eq!(
+            check_quote(&sooner, &p).unwrap().deadline,
+            "2026-11-08T12:10:00Z"
+        );
     }
 
     #[test]
