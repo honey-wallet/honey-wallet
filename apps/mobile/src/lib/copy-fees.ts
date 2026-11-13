@@ -31,7 +31,20 @@ export function sellCopyFee(fees: (DeclaredCopyFee | null | undefined)[]): SellC
 
 /** The sell review's row: "$0.12 (10% of profit)", or "None" when there's no profit to share. */
 export function copyFeeText(fee: SellCopyFee | null) {
-  return fee ? `${formatUsd(fee.usd)} (${fee.pct}% of profit)` : 'None';
+  // return fee ? `${formatUsd(fee.usd)} (${fee.pct}% of profit)` : 'None';
+  if (!fee) return 'None';
+  // A fee under a cent is still a fee: never "$0.00" (audit L6).
+  const usd = fee.usd > 0 && fee.usd < 0.01 ? '<$0.01' : formatUsd(fee.usd);
+  return `${usd} (${fee.pct}% of profit)`;
+}
+
+/**
+ * A jar buy paid with tokens copied from someone's jar pays their creators' fees (the
+ * server puts them on the quote, 1Click's record must match): the line it shows before
+ * Face ID, or '' when there's none (audit H3).
+ */
+export function buyCopyFeeLine(fee: SellCopyFee | null) {
+  return fee ? `Creator's fee: ${copyFeeText(fee)}, on the copied tokens paying for this` : '';
 }
 
 const short = (account: string) =>
@@ -45,7 +58,9 @@ export function copyFeePayoutText(account: string | null | undefined) {
   if (account === undefined) return '';
   if (account === null)
     return 'You have no NEAR account Honey can pay, so no fee is collected on copies.';
-  return `Paid to your NEAR Intents account ${short(account)} when a copier sells at a profit. NEAR Intents keeps half of each fee.`;
+  // return `Paid to your NEAR Intents account ${short(account)} when a copier sells at a profit. NEAR Intents keeps half of each fee.`;
+  // Copiers see that wallet on their sell (it's who 1Click pays): say so (audit M3).
+  return `Paid to your NEAR Intents account ${short(account)} when a copier sells at a profit. NEAR Intents keeps half of each fee. Copiers can see the wallet your fees are paid to.`;
 }
 
 /** Where copy fees land and how to get them out, in one plain line. */

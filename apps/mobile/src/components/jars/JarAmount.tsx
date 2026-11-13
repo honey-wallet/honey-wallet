@@ -44,7 +44,12 @@ const PRESETS = [5, 10, 25];
  * kept back on Ethereum and the small buffer each leg pays over its dollars.
  */
 // function useJarFunds(payWith: boolean) {
-function useJarFunds(payWith: boolean, amountUsd = 0) {
+// function useJarFunds(payWith: boolean, amountUsd = 0) {
+function useJarFunds(
+  payWith: boolean,
+  amountUsd = 0,
+  except: readonly { symbol: string; chain: string }[] = [],
+) {
   const view = useWalletView();
   const picked = jarPayWith.useValue();
   // Sample wallets aren't held to it: they end on the demo's success instead.
@@ -63,7 +68,8 @@ function useJarFunds(payWith: boolean, amountUsd = 0) {
   }, [payWith, real]);
   const auto =
     payWith && real && !loading && !failed && !watchOnly
-      ? autoPayWith(holdings, amountUsd, PAY_CHAINS, (ref) => canSellRef(ref, tokens))
+      ? // autoPayWith(holdings, amountUsd, PAY_CHAINS, (ref) => canSellRef(ref, tokens))
+        autoPayWith(holdings, amountUsd, PAY_CHAINS, (ref) => canSellRef(ref, tokens), except)
       : null;
   const autoKey = auto === NOTHING_TO_PAY ? auto : auto ? `${auto.chain}:${auto.symbol}` : 'usdc';
   // biome-ignore lint/correctness/useExhaustiveDependencies: follows the pick it names.
@@ -123,7 +129,10 @@ export function JarAmount({
   hold,
   sell,
   payWith,
+  picks,
 }: {
+  /** What the jar buys: never picked to pay for it (lib/pay-with `autoPayWith`). */
+  picks?: readonly { symbol: string; chain: string }[];
   /**
    * A "Pay with" row: USDC by default, or any token the wallet holds and can sell
    * (lib/pay-with `jarPayWith`, picked in the token picker). Jar buys only.
@@ -158,7 +167,8 @@ export function JarAmount({
   // const funds = useJarFunds(!!payWith && !sell);
   // The dollars typed so far pick what pays (USDC while it covers them): see below.
   const [typedUsdForPay, setTypedUsdForPay] = useState(initial ?? 0);
-  const funds = useJarFunds(!!payWith && !sell, typedUsdForPay);
+  // const funds = useJarFunds(!!payWith && !sell, typedUsdForPay);
+  const funds = useJarFunds(!!payWith && !sell, typedUsdForPay, picks);
   // Nothing in this wallet can pay for a jar: say so, with Deposit as the way on.
   const nothing = !sell && !!payWith && funds.nothing;
   const { real, symbol } = funds;

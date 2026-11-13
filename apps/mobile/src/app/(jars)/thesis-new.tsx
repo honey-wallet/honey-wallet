@@ -27,13 +27,19 @@ import { SocialAvatar, Trend } from '@/components/social/parts';
 import { Chip } from '@/components/wallet/Chip';
 import { EmptyState } from '@/components/wallet/parts';
 import { useCopyFeeAccount } from '@/lib/copy-fee-account';
-import { copiedJarId, copyFeePayoutText } from '@/lib/copy-fees';
+import {
+  buyCopyFeeLine,
+  copiedJarId,
+  copyFeePayoutText,
+  copyFeeText,
+  sellCopyFee,
+} from '@/lib/copy-fees';
 import { routeLabel } from '@/lib/dex-tokens';
 import { useMoney } from '@/lib/fx';
 import { inviteLabel, MAX_FRIENDS, dollars as plainDollars } from '@/lib/group-jar-core';
 import { friendPicks, groupError, startGroup } from '@/lib/group-jars';
 import { tap } from '@/lib/haptics';
-import { REFRESH_FAILED } from '@/lib/intents-quote';
+import { declaredCopyFees, REFRESH_FAILED } from '@/lib/intents-quote';
 // import { type BuyLeg, JarBuyError, payJarBuy, QuoteRanOut, quoteJarBuy } from '@/lib/jar-buy';
 import {
   type BuyLeg,
@@ -471,14 +477,29 @@ export default function NewThesisSheet() {
               key: `route-${l.symbol}`,
               text: `${l.holdAs ?? l.symbol}: ${l.why}`,
             }));
+          // Paying with tokens copied from someone's jar pays their creator's fee: shown
+          // before Face ID, and named in its prompt (audit H3).
+          const copyFee = sellCopyFee(
+            quoted.quotes.flatMap((q) => q.legs.flatMap((l) => declaredCopyFees(l.copyFees))),
+          );
+          const feeLine = buyCopyFeeLine(copyFee);
+          if (feeLine) routeLines = [...routeLines, { key: 'copy-fee', text: feeLine }];
           setBuyLines(routeLines);
           setBuyStage('Confirm to pay…');
-          return payJarBuy(quoted.legs, (legs) => {
-            // sent = legs.filter((l) => l.txHash);
-            // Legs that may have gone out are kept too (money audit 1): never paid twice.
-            sent = legs.filter(wentOut);
-            setBuyStage(`Paying ${Math.min(sent.length + 1, legCount)} of ${legCount}…`);
-          });
+          // return payJarBuy(quoted.legs, (legs) => {
+          const reason = copyFee
+            ? `Buy ${usdText.format(proposal.amount)}, with a creator's fee of ${copyFeeText(copyFee)}`
+            : undefined;
+          return payJarBuy(
+            quoted.legs,
+            (legs) => {
+              // sent = legs.filter((l) => l.txHash);
+              // Legs that may have gone out are kept too (money audit 1): never paid twice.
+              sent = legs.filter(wentOut);
+              setBuyStage(`Paying ${Math.min(sent.length + 1, legCount)} of ${legCount}…`);
+            },
+            reason,
+          );
         };
         // A quote that ran out before anything was paid (the confirm prompt sat open):
         // quoted once more, and confirmed again.
@@ -692,6 +713,7 @@ export default function NewThesisSheet() {
           }
           cta="Continue"
           payWith
+          picks={kept}
           onDone={(amount) => {
             tap();
             // A token stepped down to 0% is left out of the jar.

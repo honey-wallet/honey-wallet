@@ -98,3 +98,43 @@ describe('a profile’s P&L', () => {
     expect(noPnlText([jar('ana', true)])).toBe('P&L is private');
   });
 });
+
+describe('audit fixes in the app', () => {
+  it('never pays for a jar with what the jar buys', async () => {
+    const { autoPayWith: auto } = await import('@/lib/pay-with');
+    const held = [h('ETH', 'Base', 40, 0.01), h('SOL', 'Solana', 20, 0.1)];
+    // Buying ETH on Base: SOL pays, not the ETH being bought.
+    expect(auto(held, 30, PAY_CHAINS, anything, [{ symbol: 'ETH', chain: 'Base' }])).toEqual({
+      symbol: 'SOL',
+      chain: 'Solana',
+    });
+  });
+
+  it('shows a fee under a cent as <$0.01, never $0.00', async () => {
+    const { copyFeeText } = await import('@/lib/copy-fees');
+    expect(copyFeeText({ usd: 0.004, pct: 10 })).toBe('<$0.01 (10% of profit)');
+    expect(copyFeeText({ usd: 0.12, pct: 10 })).toBe('$0.12 (10% of profit)');
+  });
+
+  it('shows the creator’s fee on a jar buy paid with copied tokens before Face ID', async () => {
+    const { buyCopyFeeLine, sellCopyFee } = await import('@/lib/copy-fees');
+    const { declaredCopyFees } = await import('@/lib/intents-quote');
+    const legs = [
+      { copyFees: [{ recipient: '0xana', bps: 120, pct: 10, usd: 0.05 }] },
+      { copyFees: [{ recipient: '0xana', bps: 120, pct: 10, usd: 0.07 }] },
+      { copyFees: [] },
+    ];
+    const fee = sellCopyFee(legs.flatMap((l) => declaredCopyFees(l.copyFees)));
+    expect(buyCopyFeeLine(fee)).toBe(
+      "Creator's fee: $0.12 (10% of profit), on the copied tokens paying for this",
+    );
+    expect(buyCopyFeeLine(null)).toBe('');
+  });
+
+  it('tells creators copiers can see the wallet fees go to', async () => {
+    const { copyFeePayoutText } = await import('@/lib/copy-fees');
+    expect(copyFeePayoutText('0x97a5c31bfbfa1809cf20454f2aaefa05932ab18e')).toContain(
+      'Copiers can see the wallet your fees are paid to.',
+    );
+  });
+});

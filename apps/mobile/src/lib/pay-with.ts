@@ -73,13 +73,17 @@ export function autoPayWith(
   amountUsd: number,
   payChains: readonly string[],
   canPay: (ref: TokenRef) => boolean,
+  /** The jar's own picks: never paid with what it buys (like `bestPayWith`'s except). */
+  except: readonly Pick<TokenRef, 'symbol' | 'chain'>[] = [],
 ): TokenRef | null | typeof NOTHING_TO_PAY {
   const usdc = holdings
     .filter((h) => h.symbol === 'USDC' && payChains.includes(h.chain) && h.amount > 0)
     .reduce((s, h) => s + h.usd, 0);
   if (usdc > 0 && usdc >= amountUsd) return null;
   const best = holdings
+    // .filter((h) => h.amount > 0 && h.usd > 0 && h.symbol !== 'USDC')
     .filter((h) => h.amount > 0 && h.usd > 0 && h.symbol !== 'USDC')
+    .filter((h) => !except.some((e) => e.symbol === h.symbol && e.chain === h.chain))
     .map((h) => {
       const ref: TokenRef = {
         symbol: h.symbol,
