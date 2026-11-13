@@ -1502,6 +1502,8 @@ impl DexService {
                         recipient: recipient.into(),
                     }],
                     intents: false,
+                    copy_of: None,
+                    copy_sale_of: None,
                 },
             )
             .await?;

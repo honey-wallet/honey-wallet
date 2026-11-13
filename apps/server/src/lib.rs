@@ -16,6 +16,7 @@ pub mod aave_service;
 pub mod arrivals;
 pub mod bridge_monitor;
 pub mod config;
+pub mod copy_fees;
 pub mod database;
 pub mod dex;
 pub mod earn_catalog;
@@ -220,7 +221,12 @@ fn router(config: &Config, health: runtime::RuntimeHealth, services: RouterServi
         .ok()
         .flatten()
         .map(std::sync::Arc::new);
-    let buys = jar_buys(market.clone(), redis.clone());
+    // let buys = jar_buys(market.clone(), redis.clone());
+    let buys = jar_buys(
+        market.clone(),
+        redis.clone(),
+        identity.as_ref().map(|i| i.pool().clone()),
+    );
     // DEX routing (KyberSwap, Jupiter, GoPlus); builds offline, fetches lazily.
     let dex = dex_service(
         redis.clone(),
@@ -486,12 +492,15 @@ fn push_sender(identity: Option<&identity::Identity>) -> Option<std::sync::Arc<p
 
 /// Real jar buys (and swaps) through NEAR Intents; needs market data for prices and the
 /// cap. Shared with EVM gas sponsorship, which checks deposits against its quotes.
+/// Copy fees (`copy_fees`) need PostgreSQL; without it no copy fee is charged.
 fn jar_buys(
     market: Option<std::sync::Arc<market_data::MarketData>>,
     redis: Option<redis_store::RedisStore>,
+    pool: Option<sqlx::PgPool>,
 ) -> Option<std::sync::Arc<jar_buys::JarBuys>> {
     market.and_then(|market| match jar_buys::JarBuys::from_env(market) {
-        Ok(buys) => Some(std::sync::Arc::new(buys.with_redis(redis))),
+        // Ok(buys) => Some(std::sync::Arc::new(buys.with_redis(redis))),
+        Ok(buys) => Some(std::sync::Arc::new(buys.with_redis(redis).with_pool(pool))),
         Err(error) => {
             tracing::error!(%error, "jar buys disabled");
             None

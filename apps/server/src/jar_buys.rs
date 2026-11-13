@@ -4,6 +4,7 @@
 //! user's own address automatically.
 
 use crate::{
+    copy_fees::{self, CopyFee},
     error::AppError,
     market_data::{MarketData, OneClickToken},
 };
@@ -43,6 +44,14 @@ pub struct BuyRequest {
     /// deadline long enough for members to vote. Refunds return to the DAO's Intents balance.
     #[serde(default)]
     pub intents: bool,
+    /// A copy of this published jar (`social_jars.id`): each leg is recorded as the
+    /// copier's cost basis for the creator's copy fee.
+    #[serde(default)]
+    pub copy_of: Option<uuid::Uuid>,
+    /// Selling holdings bought by copying this published jar: the server works out the
+    /// creator's fee (never the phone) and adds it to the quote as 1Click `appFees`.
+    #[serde(default)]
+    pub copy_sale_of: Option<uuid::Uuid>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -73,6 +82,9 @@ pub struct LegQuote {
     pub slippage_bps: u16,
     /// 1Click's signature over the quote, passed through untouched.
     pub signature: Option<String>,
+    /// The creator's cut taken from this swap (a copy sale), as asked of and echoed by
+    /// 1Click; None for every other swap.
+    pub copy_fee: Option<CopyFee>,
 }
 
 #[derive(Debug, Serialize)]
@@ -174,6 +186,8 @@ pub struct JarBuys {
     api_key: Option<Zeroizing<String>>,
     market: Arc<MarketData>,
     cap_usd: f64,
+    /// Copy fees' records (`copy_fees`); without a database no copy fee is charged.
+    pool: Option<sqlx::PgPool>,
 }
 
 /// The per-quote USD cap (`JAR_BUY_CAP_USD`, default $250), shared by jar buys and the
@@ -265,7 +279,14 @@ impl JarBuys {
             api_key,
             market,
             cap_usd,
+            pool: None,
         })
+    }
+
+    /// Records copy buys and charges copy fees (`copy_fees`) in PostgreSQL.
+    pub fn with_pool(mut self, pool: Option<sqlx::PgPool>) -> Self {
+        self.pool = pool;
+        self
     }
 
     /// Keep deposit-address ownership in Redis so every replica agrees.
@@ -335,6 +356,22 @@ impl JarBuys {
                 self.cap_usd
             )));
         }
+        // Copy fees: a copy buy records its cost; a copy sale gets the creator's fee.
+        if (input.copy_of.is_some() || input.copy_sale_of.is_some())
+            && (input.intents || (input.copy_of.is_some() && input.copy_sale_of.is_some()))
+        {
+            return Err(AppError::BadRequest("invalid copy".into()));
+        }
+        let copy_fee = match input.copy_sale_of {
+            Some(jar) => {
+                let [leg] = input.legs.as_slice() else {
+                    return Err(AppError::BadRequest("a copy sale is one swap".into()));
+                };
+                self.copy_sale_fee(owner, jar, &input.origin_asset, &leg.amount, &tokens)
+                    .await?
+            }
+            None => None,
+        };
         let now = OffsetDateTime::now_utc();
         let minutes = if input.intents {
             INTENTS_DEADLINE_MINUTES
@@ -347,7 +384,9 @@ impl JarBuys {
             .format(&Rfc3339)
             .map_err(|_| AppError::Busy)?;
         let quotes = input.legs.iter().map(|leg| {
-            let payload = payload(&input, leg, &deadline);
+            // let payload = payload(&input, leg, &deadline);
+            let payload = payload(&input, leg, &deadline, copy_fee.as_ref());
+            let copy_fee = copy_fee.clone();
             async move {
                 let body = self
                     .call(
@@ -356,12 +395,17 @@ impl JarBuys {
                             .json(&payload),
                     )
                     .await?;
-                check_quote(&body, &payload)
+                // check_quote(&body, &payload)
+                check_quote(&body, &payload).map(|leg| LegQuote { copy_fee, ..leg })
             }
         });
         let legs = futures_util::future::try_join_all(quotes).await?;
         for leg in &legs {
             self.owners.record(&leg.deposit_address, owner).await?;
+        }
+        if let Some(jar) = input.copy_of {
+            self.record_copy_buy(owner, jar, &input, &legs, &tokens)
+                .await;
         }
         Ok(BuyQuote {
             origin_asset: input.origin_asset,
@@ -408,7 +452,138 @@ impl JarBuys {
         url.query_pairs_mut()
             .append_pair("depositAddress", deposit_address);
         let body = self.call(self.client.get(url)).await?;
-        parse_status(deposit_address, &body)
+        // parse_status(deposit_address, &body)
+        let status = parse_status(deposit_address, &body)?;
+        // A copy buy that has landed (or won't) settles its cost basis; best effort, the
+        // sale looks it up again if this didn't stick.
+        if let Some(pool) = &self.pool
+            && let Some(units) = settled_units(&status)
+            && let Err(error) = copy_fees::settle(pool, deposit_address, units).await
+        {
+            tracing::warn!(%error, "copy buy not settled");
+        }
+        Ok(status)
+    }
+
+    /// Records a copy buy's legs as the copier's cost basis (each leg's price in dollars at
+    /// 1Click's price for what paid). Never stops the buy: without a record the copier is
+    /// simply charged no fee later.
+    async fn record_copy_buy(
+        &self,
+        owner: &str,
+        jar: uuid::Uuid,
+        input: &BuyRequest,
+        legs: &[LegQuote],
+        tokens: &[OneClickToken],
+    ) {
+        let (Some(pool), Ok(copier)) = (&self.pool, owner.parse::<uuid::Uuid>()) else {
+            return;
+        };
+        let terms = match copy_fees::jar_terms(pool, jar).await {
+            Ok(Some((creator, pct))) if creator != copier => pct,
+            Ok(_) => return,
+            Err(error) => {
+                tracing::warn!(%error, "copy buy not recorded");
+                return;
+            }
+        };
+        let lots: Vec<_> = legs
+            .iter()
+            .filter_map(|leg| {
+                let cost = usd_value(tokens, &input.origin_asset, &leg.amount_in)?;
+                Some(copy_fees::NewLot {
+                    deposit_address: leg.deposit_address.clone(),
+                    asset: leg.destination_asset.clone(),
+                    cost_micro_usd: (cost * 1e6).floor() as i64,
+                })
+            })
+            .filter(|lot| lot.cost_micro_usd > 0)
+            .collect();
+        if let Err(error) = copy_fees::record_lots(pool, copier, jar, terms, &lots).await {
+            tracing::warn!(%error, "copy buy not recorded");
+        }
+    }
+
+    /// The creator's fee on selling `amount` of `asset` copied from `jar`, worked out here
+    /// from the server's own records: the jar's fee, the copier's settled copy buys of that
+    /// asset, 1Click's price, and the creator's signed-in wallet. None when nothing is owed.
+    async fn copy_sale_fee(
+        &self,
+        owner: &str,
+        jar: uuid::Uuid,
+        asset: &str,
+        amount: &str,
+        tokens: &[OneClickToken],
+    ) -> Result<Option<CopyFee>, AppError> {
+        let Some(pool) = &self.pool else {
+            return Ok(None);
+        };
+        let copier: uuid::Uuid = owner
+            .parse()
+            .map_err(|_| AppError::BadRequest("invalid copy".into()))?;
+        let Some((creator, jar_pct)) = copy_fees::jar_terms(pool, jar).await? else {
+            return Ok(None);
+        };
+        if creator == copier {
+            return Ok(None);
+        }
+        let units = atomic(amount).ok_or_else(|| AppError::BadRequest("invalid amount".into()))?;
+        // Busy, not "no fee", when the sale can't be priced: never a free pass by outage.
+        let sale_usd = usd_value(tokens, asset, amount).ok_or(AppError::Busy)?;
+        let sale_micro = (sale_usd * 1e6).floor() as u128;
+        let mut lots = Vec::new();
+        let mut lookups = 0;
+        for (deposit_address, settled, cost, pct) in
+            copy_fees::lots(pool, copier, jar, asset).await?
+        {
+            let units = match settled {
+                Some(units) => atomic(&units),
+                None if lookups < copy_fees::MAX_LOOKUPS => {
+                    lookups += 1;
+                    self.settle_from_1click(pool, &deposit_address).await
+                }
+                None => None,
+            };
+            if let (Some(units), Ok(cost), Ok(fee_pct)) =
+                (units, u128::try_from(cost), u8::try_from(pct))
+            {
+                lots.push(copy_fees::Lot {
+                    units,
+                    cost_micro_usd: cost,
+                    fee_pct,
+                });
+            }
+        }
+        if lots.is_empty() {
+            return Ok(None);
+        }
+        let recipient = copy_fees::payout_account(pool, creator).await?;
+        Ok(copy_fees::plan(
+            jar_pct, &lots, units, sale_micro, recipient,
+        ))
+    }
+
+    /// Asks 1Click how an unsettled copy buy ended and records it; the units it delivered,
+    /// or None while it hasn't (or when it can't be read right now).
+    async fn settle_from_1click(&self, pool: &sqlx::PgPool, deposit_address: &str) -> Option<u128> {
+        let mut url = reqwest::Url::parse(&format!("{}/status", self.origin)).ok()?;
+        url.query_pairs_mut()
+            .append_pair("depositAddress", deposit_address);
+        let body = self.call(self.client.get(url)).await.ok()?;
+        let status = parse_status(deposit_address, &body).ok()?;
+        let units = settled_units(&status)?;
+        copy_fees::settle(pool, deposit_address, units).await.ok()?;
+        units.and_then(atomic)
+    }
+}
+
+/// How a copy buy ended, from its status: Some(Some(units)) delivered, Some(None) voided
+/// (refunded or failed), None not yet.
+fn settled_units(status: &LegStatus) -> Option<Option<&str>> {
+    match status.status.as_str() {
+        "SUCCESS" => status.amount_out.as_deref().map(Some),
+        "REFUNDED" | "FAILED" => Some(None),
+        _ => None,
     }
 }
 
@@ -513,19 +688,27 @@ fn safe_message(m: &str) -> bool {
     m.len() <= 200 && m.chars().all(|c| !c.is_control())
 }
 
-fn payload(input: &BuyRequest, leg: &BuyLeg, deadline: &str) -> Value {
+// fn payload(input: &BuyRequest, leg: &BuyLeg, deadline: &str) -> Value {
+/// The 1Click quote request for one leg. The only `appFees` it ever carries is a copy fee
+/// the server worked out (`copy_fees`); nothing in the request can add or change one.
+fn payload(input: &BuyRequest, leg: &BuyLeg, deadline: &str, copy_fee: Option<&CopyFee>) -> Value {
     let (deposit, recipient, refund) = if input.intents {
         ("INTENTS", "INTENTS", "INTENTS")
     } else {
         ("ORIGIN_CHAIN", "DESTINATION_CHAIN", "ORIGIN_CHAIN")
     };
-    json!({
+    // json!({
+    let mut payload = json!({
         "dry": false, "swapType": "EXACT_INPUT", "depositType": deposit,
         "recipientType": recipient, "refundType": refund,
         "originAsset": input.origin_asset, "destinationAsset": leg.destination_asset,
         "amount": leg.amount, "recipient": leg.recipient, "refundTo": input.refund_to,
         "slippageTolerance": input.slippage_bps, "deadline": deadline,
-    })
+    });
+    if let Some(fee) = copy_fee {
+        payload["appFees"] = copy_fees::app_fees(fee);
+    }
+    payload
 }
 
 /// The quote must echo exactly what was asked, pay out at least the slippage floor,
@@ -549,6 +732,8 @@ fn check_quote(body: &Value, payload: &Value) -> Result<LegQuote, AppError> {
             return Err(AppError::Busy);
         }
     }
+    // A copy fee must reach the creator as asked, and nothing more may ride on it.
+    copy_fees::check_echo(request.get("appFees"), copy_fees::asked(payload)?.as_ref())?;
     // 1Click may re-format the timestamp (e.g. add milliseconds), so compare instants.
     let instant = |v: Option<&Value>| {
         v.and_then(Value::as_str)
@@ -612,6 +797,7 @@ fn check_quote(body: &Value, payload: &Value) -> Result<LegQuote, AppError> {
             .as_str()
             .filter(|s| safe(s, 512))
             .map(String::from),
+        copy_fee: None,
     })
 }
 
@@ -673,6 +859,8 @@ mod tests {
                 recipient: "alice.near".into(),
             }],
             intents: false,
+            copy_of: None,
+            copy_sale_of: None,
         }
     }
 
@@ -680,7 +868,7 @@ mod tests {
     fn intents_mode_pays_and_refunds_on_intents() {
         let mut r = request();
         r.intents = true;
-        let p = payload(&r, &r.legs[0], "2026-11-09T12:00:00Z");
+        let p = payload(&r, &r.legs[0], "2026-11-09T12:00:00Z", None);
         assert_eq!(p["depositType"], "INTENTS");
         assert_eq!(p["recipientType"], "INTENTS");
         assert_eq!(p["refundType"], "INTENTS");
@@ -700,10 +888,115 @@ mod tests {
         })
     }
 
+    fn copy_fee(bps: u16) -> CopyFee {
+        CopyFee {
+            recipient: "0x97a5c31bfbfa1809cf20454f2aaefa05932ab18e".into(),
+            bps,
+            pct: 10,
+            usd: 0.5,
+        }
+    }
+
+    #[test]
+    fn a_client_can_never_set_a_fee_or_its_recipient() {
+        let base = json!({
+            "originAsset": "nep141:wrap.near", "refundTo": "0xabc", "slippageBps": 100,
+            "legs": [{ "destinationAsset": "nep141:usdc", "amount": "5", "recipient": "0xabc" }],
+            "copySaleOf": "6f2a8a52-25a8-4a8e-9f0c-2c8d3f1b7e11",
+        });
+        assert!(serde_json::from_value::<BuyRequest>(base.clone()).is_ok());
+        for (key, value) in [
+            (
+                "appFees",
+                json!([{ "recipient": "mallory.near", "fee": 0 }]),
+            ),
+            ("copyFee", json!({ "recipient": "mallory.near", "bps": 0 })),
+            ("feeBps", json!(0)),
+            ("recipientOfFee", json!("mallory.near")),
+        ] {
+            let mut body = base.clone();
+            body[key] = value;
+            assert!(
+                serde_json::from_value::<BuyRequest>(body).is_err(),
+                "{key} accepted"
+            );
+        }
+        let mut leg = base.clone();
+        leg["legs"][0]["appFees"] = json!([{ "recipient": "mallory.near", "fee": 400 }]);
+        assert!(serde_json::from_value::<BuyRequest>(leg).is_err());
+        // Only an id: no fee, percentage or account can come with it.
+        let mut not_an_id = base;
+        not_an_id["copySaleOf"] = json!({ "jar": "x", "fee": 0 });
+        assert!(serde_json::from_value::<BuyRequest>(not_an_id).is_err());
+    }
+
+    #[test]
+    fn appfees_are_only_ever_the_servers_copy_fee() {
+        let r = request();
+        let plain = payload(&r, &r.legs[0], "2026-11-08T12:15:00Z", None);
+        assert!(plain.get("appFees").is_none());
+        let fee = copy_fee(120);
+        let p = payload(&r, &r.legs[0], "2026-11-08T12:15:00Z", Some(&fee));
+        assert_eq!(
+            p["appFees"],
+            json!([{ "recipient": "0x97a5c31bfbfa1809cf20454f2aaefa05932ab18e", "fee": 120 }])
+        );
+    }
+
+    #[test]
+    fn a_copy_sale_quote_must_echo_its_fee() {
+        let r = request();
+        let p = payload(&r, &r.legs[0], "2026-11-08T12:15:00Z", Some(&copy_fee(120)));
+        let ok = "1336500000000000000000000";
+        let creator = "0x97a5c31bfbfa1809cf20454f2aaefa05932ab18e";
+        let onec = "5880ad2b362620fadf759cbceb1cd5737ce8c6ed7fb8e9942881e6731f9247dd";
+        // 1Click echoes the fee split 50/50 with itself, as its live quotes do.
+        let mut split = reply(&p, ok);
+        split["quoteRequest"]["appFees"] =
+            json!([{ "recipient": creator, "fee": 60 }, { "recipient": onec, "fee": 60 }]);
+        assert!(check_quote(&split, &p).is_ok());
+        // An echo that lost the fee, moved it, or added to it is refused.
+        for echoed in [
+            Value::Null,
+            json!([{ "recipient": onec, "fee": 20 }]),
+            json!([{ "recipient": "mallory.near", "fee": 60 }, { "recipient": onec, "fee": 60 }]),
+            json!([{ "recipient": creator, "fee": 240 }]),
+        ] {
+            let mut changed = reply(&p, ok);
+            changed["quoteRequest"]["appFees"] = echoed.clone();
+            assert!(check_quote(&changed, &p).is_err(), "accepted {echoed}");
+        }
+        // A plain swap's echo (1Click's own fee only) is checked as before.
+        let plain = payload(&r, &r.legs[0], "2026-11-08T12:15:00Z", None);
+        let mut own = reply(&plain, ok);
+        own["quoteRequest"]["appFees"] = json!([{ "recipient": onec, "fee": 20 }]);
+        assert!(check_quote(&own, &plain).is_ok());
+    }
+
+    #[test]
+    fn copy_buys_settle_only_on_a_final_status() {
+        let status = |s: &str, out: Option<&str>| LegStatus {
+            deposit_address: "0xdeposit".into(),
+            status: s.into(),
+            destination_tx_hashes: vec![],
+            refunded_amount: None,
+            amount_out: out.map(String::from),
+        };
+        assert_eq!(
+            settled_units(&status("SUCCESS", Some("42"))),
+            Some(Some("42"))
+        );
+        assert_eq!(settled_units(&status("SUCCESS", None)), None);
+        assert_eq!(settled_units(&status("REFUNDED", None)), Some(None));
+        assert_eq!(settled_units(&status("FAILED", None)), Some(None));
+        assert_eq!(settled_units(&status("PROCESSING", Some("42"))), None);
+        assert_eq!(settled_units(&status("INCOMPLETE_DEPOSIT", None)), None);
+    }
+
     #[test]
     fn accepts_a_quote_that_echoes_the_request() {
         let r = request();
-        let p = payload(&r, &r.legs[0], "2026-11-08T12:15:00Z");
+        let p = payload(&r, &r.legs[0], "2026-11-08T12:15:00Z", None);
         let q = check_quote(&reply(&p, "1336500000000000000000000"), &p).unwrap();
         assert_eq!(q.deposit_address, "0xdeposit");
         assert_eq!(q.min_amount_out, "1336500000000000000000000");
@@ -716,7 +1009,7 @@ mod tests {
     #[test]
     fn keeps_our_deadline_when_1click_returns_a_later_one() {
         let r = request();
-        let p = payload(&r, &r.legs[0], "2026-11-08T12:15:00Z");
+        let p = payload(&r, &r.legs[0], "2026-11-08T12:15:00Z", None);
         // 1Click (since 2026-11-13) answers a 15-minute ask with one days out.
         let mut later = reply(&p, "1336500000000000000000000");
         later["quote"]["deadline"] = json!("2026-11-11T12:15:00.000Z");
@@ -736,7 +1029,7 @@ mod tests {
     #[test]
     fn rejects_changed_terms_or_a_minimum_below_slippage() {
         let r = request();
-        let p = payload(&r, &r.legs[0], "2026-11-08T12:15:00Z");
+        let p = payload(&r, &r.legs[0], "2026-11-08T12:15:00Z", None);
         // 1% slippage floor is 1336500...; anything lower is refused.
         assert!(check_quote(&reply(&p, "1336499999999999999999999"), &p).is_err());
         let mut other = reply(&p, "1336500000000000000000000");
@@ -750,7 +1043,7 @@ mod tests {
     #[test]
     fn rejects_changed_refund_swap_type_or_deadline() {
         let r = request();
-        let p = payload(&r, &r.legs[0], "2026-11-08T12:15:00Z");
+        let p = payload(&r, &r.legs[0], "2026-11-08T12:15:00Z", None);
         let ok = "1336500000000000000000000";
         for (field, value) in [
             ("refundType", json!("INTENTS")),
