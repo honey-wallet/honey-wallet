@@ -27,7 +27,6 @@ import {
   groupPicks,
   groupWallet,
   joinGroup,
-  payShare,
   proposeBuy,
   settleShare,
   soloProposal,
@@ -37,7 +36,7 @@ import {
   usePendingShare,
 } from '@/lib/group-jars';
 import { tap } from '@/lib/haptics';
-import { useDaoJar, useMyNearUsdc } from '@/lib/jar-dao';
+import { useDaoJar } from '@/lib/jar-dao';
 import { proposalId } from '@/lib/jar-dao-core';
 import { blockedRoutes, useRoutes } from '@/lib/jar-routes';
 import { hasVoted, useProposal, YOU } from '@/lib/multisig';
@@ -162,7 +161,6 @@ function GroupPage({ group: g, ring }: { group: SocialGroup; ring: string }) {
     };
   }, [pending, g.id]);
 
-  const nearUsdc = useMyNearUsdc(step === 'pay');
   const people = membersIn(g);
   const total = g.shareUsd * Math.max(people.length, 1);
   // The buy's live routes, only while it's time to buy.
@@ -204,7 +202,11 @@ function GroupPage({ group: g, ring }: { group: SocialGroup; ring: string }) {
     onGoAhead: act('Go ahead', () => goAhead(g.id, false)),
     onAlone: investAlone,
     onCreate: act('Create group', () => createGroupOnChain(g), 'Group created'),
-    onPay: act(`Add your ${dollars(g.shareUsd)}`, () => payShare(g, nearUsdc)),
+    // A review page first, as every payment gets: what leaves, where it lands, then pay.
+    onPay: () => {
+      tap();
+      router.push({ pathname: '/group-pay', params: { id: g.id } });
+    },
     onBuy: act(
       'Buy',
       () => proposeBuy(g, routes, ledger?.usdcAtomic ?? 0n),

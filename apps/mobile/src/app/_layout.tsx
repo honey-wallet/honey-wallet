@@ -234,6 +234,7 @@ export default function RootLayout() {
               {/* Group jars: the group's page, its invite and Launch's friend picker */}
               <Stack.Screen name="(jars)/group/[id]" />
               <Stack.Screen name="(jars)/group-invite" options={tray()} />
+              <Stack.Screen name="(jars)/group-pay" options={sheet([1])} />
               <Stack.Screen name="(jars)/group-friends" options={tray()} />
               {/* Social: public profiles, claiming a handle, followers */}
               <Stack.Screen name="(social)/u/[handle]" />

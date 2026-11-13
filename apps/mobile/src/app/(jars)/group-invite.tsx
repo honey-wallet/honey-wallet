@@ -5,6 +5,7 @@ import { StrategyCard } from '@/components/jars/JarParts';
 import { SkeletonBar } from '@/components/motion/Skeleton';
 import { PillButton } from '@/components/onboarding/PillButton';
 import { SheetScreen, SheetText, StatRow } from '@/components/sheets/Sheet';
+import { SocialAvatar } from '@/components/social/parts';
 import { dollars } from '@/lib/group-jar-core';
 import {
   declineGroup,
@@ -94,7 +95,13 @@ export default function GroupInviteSheet() {
         </View>
       }
     >
-      <SheetText lead>Everyone puts in the same and owns an equal part.</SheetText>
+      {/* Who's asking, by face, as a DM request shows it. */}
+      <View style={styles.from}>
+        <SocialAvatar who={g.creator} size={40} />
+        <View style={styles.flex}>
+          <SheetText lead>Everyone puts in the same and owns an equal part.</SheetText>
+        </View>
+      </View>
       <StrategyCard split picks={groupPicks(g)} name={g.name} meta={`by @${g.creator.handle}`} />
       <View style={styles.rows}>
         <StatRow label="Your share" value={dollars(g.shareUsd)} />
@@ -106,6 +113,8 @@ export default function GroupInviteSheet() {
 }
 
 const useStyles = makeStyles(() => ({
+  from: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 12 },
+  flex: { flex: 1 },
   rows: { marginTop: 16, gap: 2 },
   footer: { gap: 10 },
 }));

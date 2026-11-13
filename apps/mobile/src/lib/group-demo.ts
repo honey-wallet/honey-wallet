@@ -44,7 +44,8 @@ export function setDemoHandle(read: () => string | null | undefined) {
   myHandle = read;
 }
 
-function me(): SocialProfileCard {
+/** You in the sample groups: your handle once signed in, else one from your name. */
+export function demoMe(): SocialProfileCard {
   const p = getProfile();
   const handle = myHandle() || p.name.toLowerCase().replace(/[^a-z0-9_]/g, '') || 'you';
   return { handle, displayName: p.name || 'You', avatarSeed: p.avatarSeed };
@@ -69,7 +70,7 @@ function group(o: {
   }[];
   ago: number;
 }): SocialGroup {
-  const you = me();
+  const you = demoMe();
   const members: SocialGroupMember[] = o.people.map((p) => ({
     ...p.card,
     state: p.state,
@@ -124,7 +125,7 @@ const pick = (symbol: string, chain: string, weight: number): SocialPick => ({
 
 /** Every sample group, by id; you are the profile on this phone. */
 export function demoGroups(): Record<string, SocialGroup> {
-  const you = me();
+  const you = demoMe();
   const list = [
     // You started it: Ana joined, Dev passed, Sara hasn't answered.
     group({
@@ -313,7 +314,7 @@ export function demoCollabPost(): SocialFeedItem {
 
 /** You as you are now (your handle may arrive after the samples were made). */
 export function withMe(g: SocialGroup): SocialGroup {
-  const you = me();
+  const you = demoMe();
   const card = <T extends SocialProfileCard>(p: T): T => ({
     ...p,
     handle: you.handle,
@@ -355,7 +356,7 @@ export type DemoAction =
 
 /** What an action does to a sample group: the next state, as the server would answer. */
 export function advanceDemo(g: SocialGroup, action: DemoAction): SocialGroup {
-  const you = g.members.find((m) => m.isMe) ?? me();
+  const you = g.members.find((m) => m.isMe) ?? demoMe();
   const vote = (kind: SocialGroupProposalKind) => ({
     ...g,
     proposals: [
@@ -409,7 +410,7 @@ export function demoStartGroup(o: {
   shareUsd: number;
   friends: SocialProfileCard[];
 }): SocialGroup {
-  const you = me();
+  const you = demoMe();
   return group({
     id: `demo-${Date.now().toString(36)}`,
     name: o.name,

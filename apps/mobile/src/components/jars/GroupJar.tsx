@@ -20,6 +20,7 @@ import { tap } from '@/lib/haptics';
 import { useDaoJar } from '@/lib/jar-dao';
 import { proposalId } from '@/lib/jar-dao-core';
 import { hasVoted, useMultisigState, YOU } from '@/lib/multisig';
+import { useThesisJars } from '@/lib/thesis';
 import { showErrorToast, showToast } from '@/lib/toast';
 import { makeStyles, useTheme } from '@/theme';
 
@@ -60,10 +61,14 @@ export function useGroupJar(groupId: string | undefined) {
   }, [g, nav]);
 
   const { proposals } = useMultisigState();
+  // Until the DAO's worth arrives, the jar's last value on this phone.
+  const lastValue = useThesisJars()
+    .find((j) => j.groupId === groupId)
+    ?.history.at(-1);
   if (!g) return null;
   const people = membersIn(g);
   const n = Math.max(people.length, 1);
-  const total = nav ?? g.shareUsd * n;
+  const total = nav ?? lastValue ?? g.shareUsd * n;
   const votes = g.proposals
     .filter((p) => p.status === 'open')
     .map((p) => {
