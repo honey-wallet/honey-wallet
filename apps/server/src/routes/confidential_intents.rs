@@ -358,9 +358,9 @@ mod tests {
     fn quotes_are_capped_in_usd_like_jar_buys() {
         let cap = crate::jar_buys::DEFAULT_CAP_USD;
         let mut body = quote();
-        body["amount"] = serde_json::json!("25000000");
+        body["amount"] = serde_json::json!("250000000");
         assert!(within_cap(&body, &usdc(), cap).is_ok());
-        body["amount"] = serde_json::json!("25000001");
+        body["amount"] = serde_json::json!("250000001");
         assert!(within_cap(&body, &usdc(), cap).is_err());
         body["originAsset"] = serde_json::json!("nep141:unpriced");
         body["amount"] = serde_json::json!("1");

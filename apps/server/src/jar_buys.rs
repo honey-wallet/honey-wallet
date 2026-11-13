@@ -19,7 +19,7 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use zeroize::Zeroizing;
 
 use crate::json_rpc::ONE_CLICK_ORIGIN as ORIGIN;
-pub const DEFAULT_CAP_USD: f64 = 25.0;
+pub const DEFAULT_CAP_USD: f64 = 250.0;
 /// The header 1Click documents for the partner JWT, used by every partner-key call.
 pub const PARTNER_KEY_HEADER: &str = "X-API-Key";
 const MAX_LEGS: usize = 8;
@@ -176,7 +176,7 @@ pub struct JarBuys {
     cap_usd: f64,
 }
 
-/// The per-quote USD cap (`JAR_BUY_CAP_USD`, default $25), shared by jar buys and the
+/// The per-quote USD cap (`JAR_BUY_CAP_USD`, default $250), shared by jar buys and the
 /// Confidential Intents quote proxy.
 pub fn cap_usd_from_env() -> anyhow::Result<f64> {
     match std::env::var("JAR_BUY_CAP_USD")
