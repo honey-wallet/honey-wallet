@@ -1,0 +1,530 @@
+// Replaced 14 Nov: the user asked for the earlier Build your own page back (categories version kept here, unused).
+// import { router } from 'expo-router';
+// import { useEffect, useMemo, useRef, useState } from 'react';
+// import { Text, View } from 'react-native';
+// import { useSafeAreaInsets } from 'react-native-safe-area-context';
+// import { ConvergeChart, useConverge } from '@/components/charts/ConvergeChart';
+// import { ChartEmpty } from '@/components/charts/PriceChart';
+// import { Icon } from '@/components/Icon';
+// import { Tiles } from '@/components/jars/JarParts';
+// import { PressableRow } from '@/components/motion/PressableRow';
+// import { PressableScale } from '@/components/motion/PressableScale';
+// import { SegmentedTabs } from '@/components/motion/SegmentedTabs';
+// import { SkeletonBar } from '@/components/motion/Skeleton';
+// import { Sticky } from '@/components/motion/Sticky';
+// import { PillButton } from '@/components/onboarding/PillButton';
+// import { KeyboardFooter } from '@/components/sheets/KeyboardFooter';
+// import { StatRow } from '@/components/sheets/Sheet';
+// import { Chip } from '@/components/wallet/Chip';
+// import {
+//   Change,
+//   HeaderIconButton,
+//   PushedScreen,
+//   SCREEN,
+//   TokenIcon,
+// } from '@/components/wallet/parts';
+// import { SearchField } from '@/components/wallet/SearchField';
+// import { alignSeries, backtestStats } from '@/lib/converge';
+// import { signedPct } from '@/lib/format';
+// import { tap } from '@/lib/haptics';
+// import { categoriesFor } from '@/lib/jar-categories';
+// import {
+//   canStep,
+//   minimumBuy,
+//   PICKS_MAX,
+//   PICKS_MIN,
+//   splitEvenly,
+//   stepWeight,
+//   WEIGHT_MAX,
+//   WEIGHT_MIN,
+//   WEIGHT_STEP,
+//   weightErrors,
+// } from '@/lib/jar-weights';
+// import {
+//   matchesQuery,
+//   uniqueBySymbol,
+//   useChartSeries,
+//   useMarketList,
+//   useMarketSettled,
+// } from '@/lib/market';
+// import { formatCompactUsd, formatPrice, formatUsd, type MarketToken } from '@/lib/mock-wallet';
+// import { manualProposal } from '@/lib/thesis';
+// import { chatDraft } from '@/lib/thesis-chat';
+// import { tokenColor } from '@/lib/token-colors';
+// import { makeStyles, useTheme } from '@/theme';
+// 
+// /** Rows drawn per page as you scroll; the list is every token 1Click delivers. */
+// const SHOWN = 40;
+// /** The preview's ranges: a month, a year, and as far back as every token goes. */
+// const RANGES = ['1M', '1Y', 'All'] as const;
+// type PreviewRange = (typeof RANGES)[number];
+// /** What the preview's headline starts from. */
+// const PREVIEW_AMOUNT = 100;
+// 
+// /** A token is just its symbol here; NEAR Intents picks the chain when it buys. */
+// const keyOf = (t: { symbol: string }) => t.symbol.toUpperCase();
+// // Replaced on 14 Nov (cleanup) by signedPct in lib/format.ts.
+// // const pctText = (fraction: number) => `${fraction >= 0 ? '+' : ''}${(fraction * 100).toFixed(1)}%`;
+// 
+// /**
+//  * A jar built by hand, without the agent (after nearbags.com/create): tokens grouped
+//  * as chips (Search for the rest), each picked one's weight on a − / + stepper within
+//  * the rules (2–10 tokens, 5–50% each, 100% in all), and once the split adds up, a live
+//  * preview of how it did: the converge chart, against BTC, with its return, worst drop
+//  * and volatility. Continue goes on to "How much?" and the launch, as for any jar.
+//  */
+// export default function BuildJarScreen() {
+//   const styles = useStyles();
+//   const c = useTheme();
+//   const market = useMarketList();
+//   // One row per symbol (USDC on three chains is one USDC), the most liquid listing first.
+//   const list = useMemo(() => uniqueBySymbol(market), [market]);
+//   // Rows wait behind a skeleton until the list and its top tokens' numbers are in, then
+//   // keep the order they first settled in: late prices fill in rows, never reshuffle them.
+//   const settled = useMarketSettled(list);
+//   const order = useRef<Map<string, number> | null>(null);
+//   if (settled && !order.current && list.length)
+//     order.current = new Map(
+//       [...list].sort((a, b) => b.volume - a.volume).map((t, i) => [keyOf(t), i]),
+//     );
+//   const groups = useMemo(() => categoriesFor(list), [list]);
+//   const [query, setQuery] = useState('');
+//   const [picked, setPicked] = useState<MarketToken[]>([]);
+//   const [weights, setWeights] = useState<number[]>([]);
+//   const [range, setRange] = useState<PreviewRange>('1Y');
+//   const insets = useSafeAreaInsets();
+//   const [limit, setLimit] = useState(SHOWN);
+// 
+//   const q = query.trim().toLowerCase();
+//   // A new search starts from the first page.
+//   // biome-ignore lint/correctness/useExhaustiveDependencies: reset whenever the search changes.
+//   useEffect(() => setLimit(SHOWN), [q]);
+//   // Search's Top tokens, in its order (most traded first), drawn a page at a time.
+//   const matches = q
+//     ? list
+//         .filter((t) => matchesQuery(t, q))
+//         .sort((a, b) => {
+//           const rank = order.current;
+//           const ra = rank?.get(keyOf(a)) ?? Number.MAX_SAFE_INTEGER;
+//           const rb = rank?.get(keyOf(b)) ?? Number.MAX_SAFE_INTEGER;
+//           return ra - rb || b.volume - a.volume;
+//         })
+//     : [];
+//   const tokens = matches.slice(0, limit);
+//   const more = matches.length > tokens.length;
+//   const isPicked = (t: { symbol: string }) => picked.some((p) => keyOf(p) === keyOf(t));
+//   const full = picked.length >= PICKS_MAX;
+//   // Adding or removing a token splits the jar evenly again; − and + fine-tune it.
+//   const toggle = (t: MarketToken) => {
+//     tap();
+//     const next = isPicked(t)
+//       ? picked.filter((p) => keyOf(p) !== keyOf(t))
+//       : full
+//         ? picked
+//         : [...picked, t];
+//     setPicked(next);
+//     setWeights(splitEvenly(next.length));
+//   };
+// 
+//   const rows = picked.map((t, i) => ({ symbol: t.symbol, weight: weights[i] ?? 0 }));
+//   const errors = picked.length ? weightErrors(rows) : [];
+//   const valid = picked.length > 0 && errors.length === 0;
+//   const total = rows.reduce((s, r) => s + r.weight, 0);
+// 
+//   return (
+//     <PushedScreen
+//       title="Build your own"
+//       fallback="/jars"
+//       onEndReached={more ? () => setLimit((n) => n + SHOWN) : undefined}
+//       footer={
+//         // Rides above the keyboard while searching, so Continue is never covered.
+//         <KeyboardFooter under={insets.bottom + SCREEN.footerBottom} style={styles.flex}>
+//           <PillButton
+//             label={
+//               valid ? `Continue with ${picked.length} tokens` : `Pick at least ${PICKS_MIN} tokens`
+//             }
+//             disabled={!valid}
+//             onPress={() => {
+//               tap();
+//               // "How much?" (thesis-new) reads the picks and this split from the draft.
+//               chatDraft.set(manualProposal(picked, 0, weights));
+//               router.push({ pathname: '/thesis-new', params: { step: 'proposal', manual: '1' } });
+//             }}
+//           />
+//         </KeyboardFooter>
+//       }
+//     >
+//       <Sticky id="jar-build-search">
+//         <View style={styles.top}>
+//           <SearchField value={query} onChangeText={setQuery} placeholder="Search tokens" />
+//         </View>
+//       </Sticky>
+//       <View style={styles.gutter}>
+//         {!settled ? (
+//           // The Top tokens skeleton: logo, two lines, price and change.
+//           Array.from({ length: 9 }, (_, i) => (
+//             // biome-ignore lint/suspicious/noArrayIndexKey: placeholders have no identity
+//             <View key={i} style={styles.row}>
+//               <SkeletonBar width={40} height={40} radius={20} />
+//               <View style={[styles.flex, styles.skeletonLines]}>
+//                 <SkeletonBar width="50%" height={14} />
+//                 <SkeletonBar width="32%" height={12} />
+//               </View>
+//               <View style={styles.end}>
+//                 <SkeletonBar width={68} height={14} />
+//                 <SkeletonBar width={44} height={12} />
+//               </View>
+//             </View>
+//           ))
+//         ) : q ? (
+//           tokens.length ? null : (
+//             <Text style={styles.hint}>No tokens match</Text>
+//           )
+//         ) : (
+//           // The groups: a chip per token; picked ones turn honey.
+//           groups.map((g) => (
+//             <View key={g.title} style={styles.group}>
+//               <Text style={styles.heading}>{g.title}</Text>
+//               {g.note ? <Text style={styles.note}>{g.note}</Text> : null}
+//               <View style={styles.chips}>
+//                 {g.tokens.map((t) => {
+//                   const on = isPicked(t);
+//                   return (
+//                     <View key={keyOf(t)} style={!on && full ? styles.off : null}>
+//                       <Chip
+//                         label={t.symbol}
+//                         selected={on}
+//                         leading={<TokenIcon symbol={t.symbol} size={20} uri={t.logo} />}
+//                         accessibilityLabel={on ? `Remove ${t.symbol}` : `Add ${t.symbol}`}
+//                         onPress={() => toggle(t)}
+//                       />
+//                     </View>
+//                   );
+//                 })}
+//               </View>
+//             </View>
+//           ))
+//         )}
+//         {(settled ? tokens : []).map((item) => {
+//           const on = isPicked(item);
+//           const off = !on && full;
+//           return (
+//             <PressableRow
+//               key={keyOf(item)}
+//               accessibilityRole="checkbox"
+//               accessibilityState={{ checked: on, disabled: off }}
+//               disabled={off}
+//               onPress={() => toggle(item)}
+//               style={[styles.row, off && styles.off]}
+//             >
+//               {/* Search's Top tokens row: logo, name and volume, price and the day's move. */}
+//               <TokenIcon symbol={item.symbol} size={40} uri={item.logo} />
+//               <View style={styles.flex}>
+//                 <Text style={styles.name} numberOfLines={1}>
+//                   {item.name}
+//                 </Text>
+//                 <Text style={styles.meta} numberOfLines={1}>
+//                   {item.volume ? `${formatCompactUsd(item.volume)} Vol` : item.symbol}
+//                 </Text>
+//               </View>
+//               {item.price ? (
+//                 <View style={styles.end}>
+//                   <Text style={styles.name}>{formatPrice(item.price)}</Text>
+//                   <Change value={item.change} />
+//                 </View>
+//               ) : null}
+//               <View style={[styles.check, on && styles.checkOn]}>
+//                 {on ? <Icon name="check" size={13} color={c.onPrimary} /> : null}
+//               </View>
+//             </PressableRow>
+//           );
+//         })}
+// 
+//         {settled ? (
+//           <Weights
+//             picked={picked}
+//             weights={weights}
+//             total={total}
+//             errors={errors}
+//             onStep={(i, d) => setWeights((w) => stepWeight(w, i, d))}
+//             onEven={() => {
+//               tap();
+//               setWeights(splitEvenly(picked.length));
+//             }}
+//             onRemove={toggle}
+//           />
+//         ) : null}
+// 
+//         {valid ? <Preview rows={rows} range={range} onRange={setRange} /> : null}
+//       </View>
+//     </PushedScreen>
+//   );
+// }
+// 
+// /** Each picked token's share: − / + within 5–50%, × to drop it, and the rules' state. */
+// function Weights({
+//   picked,
+//   weights,
+//   total,
+//   errors,
+//   onStep,
+//   onEven,
+//   onRemove,
+// }: {
+//   picked: MarketToken[];
+//   weights: number[];
+//   total: number;
+//   errors: string[];
+//   onStep: (index: number, delta: number) => void;
+//   onEven: () => void;
+//   onRemove: (t: MarketToken) => void;
+// }) {
+//   const styles = useStyles();
+//   return (
+//     <View style={styles.section}>
+//       <View style={styles.headRow}>
+//         <Text style={[styles.heading, styles.flex]}>
+//           Weights · whole %, {WEIGHT_MIN}–{WEIGHT_MAX} each
+//         </Text>
+//         {picked.length > 1 ? (
+//           <PressableScale accessibilityRole="button" hitSlop={10} scaleTo={0.95} onPress={onEven}>
+//             <Text style={styles.link}>Split evenly</Text>
+//           </PressableScale>
+//         ) : null}
+//       </View>
+//       {picked.length ? null : (
+//         <Text style={styles.meta}>
+//           Pick {PICKS_MIN}–{PICKS_MAX} tokens above.
+//         </Text>
+//       )}
+//       {picked.map((t, i) => {
+//         const w = weights[i] ?? 0;
+//         const less = canStep(weights, i, -WEIGHT_STEP);
+//         const more = canStep(weights, i, WEIGHT_STEP);
+//         return (
+//           <View key={keyOf(t)} style={styles.weightRow}>
+//             <TokenIcon symbol={t.symbol} size={32} uri={t.logo} />
+//             <View style={styles.flex}>
+//               <Text style={styles.name} numberOfLines={1}>
+//                 {t.symbol}
+//               </Text>
+//               <Text style={styles.meta} numberOfLines={1}>
+//                 {t.name}
+//               </Text>
+//             </View>
+//             <View style={less ? null : styles.off}>
+//               <HeaderIconButton
+//                 icon="minus"
+//                 label={`Less ${t.symbol}`}
+//                 size={30}
+//                 accessibilityState={{ disabled: !less }}
+//                 onPress={() => less && onStep(i, -WEIGHT_STEP)}
+//               />
+//             </View>
+//             <Text style={styles.pct}>{w}%</Text>
+//             <View style={more ? null : styles.off}>
+//               <HeaderIconButton
+//                 icon="plus"
+//                 label={`More ${t.symbol}`}
+//                 size={30}
+//                 accessibilityState={{ disabled: !more }}
+//                 onPress={() => more && onStep(i, WEIGHT_STEP)}
+//               />
+//             </View>
+//             <HeaderIconButton
+//               icon="close"
+//               bare
+//               label={`Remove ${t.symbol}`}
+//               onPress={() => onRemove(t)}
+//             />
+//           </View>
+//         );
+//       })}
+//       {picked.length ? (
+//         <>
+//           <View style={styles.totals}>
+//             <Text style={styles.meta}>
+//               {picked.length} of {PICKS_MIN}–{PICKS_MAX} tokens
+//             </Text>
+//             <Text style={styles.meta}>Total {total}%</Text>
+//           </View>
+//           {errors.length ? (
+//             <View style={styles.errors}>
+//               {errors.map((e) => (
+//                 <Text key={e} style={styles.errorText}>
+//                   {e}
+//                 </Text>
+//               ))}
+//             </View>
+//           ) : (
+//             <StatRow label="Minimum buy, estimated" value={formatUsd(minimumBuy(weights))} />
+//           )}
+//         </>
+//       ) : null}
+//     </View>
+//   );
+// }
+// 
+// /**
+//  * How this split did: $100 along real past prices (the converge chart, BTC faint behind
+//  * it) over 1M, 1Y or as far back as all its tokens go, then its numbers.
+//  */
+// function Preview({
+//   rows,
+//   range,
+//   onRange,
+// }: {
+//   rows: { symbol: string; weight: number }[];
+//   range: PreviewRange;
+//   onRange: (r: PreviewRange) => void;
+// }) {
+//   const styles = useStyles();
+//   const picks = useMemo(
+//     () => rows.map((r, i) => ({ ...r, color: tokenColor(r.symbol, i) })),
+//     [rows],
+//   );
+//   // All starts where every token has prices, so no line is made up before it listed.
+//   const { model, loading } = useConverge(picks, range, { common: range === 'All' });
+//   const btc = useChartSeries(['BTC'], range);
+//   const compare = useMemo(() => {
+//     const series = btc.series.BTC;
+//     if (!model || !series) return null;
+//     return { label: 'BTC', values: alignSeries(series, model.times) };
+//   }, [model, btc.series]);
+//   const stats = model ? backtestStats(model.basket, model.times) : null;
+//   const btcChange = compare ? (compare.values.at(-1) ?? 1) - 1 : null;
+//   // The converge plays the first time the preview shows; after that the line morphs.
+//   const played = useRef(false);
+//   const since = model?.times[0];
+//   const period =
+//     range === 'All' && since
+//       ? `since ${new Date(since).toLocaleDateString(undefined, { month: 'short', year: 'numeric' })}`
+//       : `over ${range}`;
+//   return (
+//     <View style={styles.section}>
+//       <Text style={styles.heading}>How it did</Text>
+//       <ConvergeChart
+//         picks={picks}
+//         model={model}
+//         loading={loading}
+//         amount={PREVIEW_AMOUNT}
+//         range={range}
+//         period={period}
+//         play={!played.current}
+//         onDone={() => {
+//           played.current = true;
+//         }}
+//         compare={compare}
+//         height={200}
+//         fallback={<ChartEmpty height={200} text="No price history for these tokens yet" />}
+//         footer={
+//           <View style={styles.ranges}>
+//             <SegmentedTabs<PreviewRange> bare options={RANGES} value={range} onChange={onRange} />
+//           </View>
+//         }
+//       />
+//       {stats ? (
+//         <View style={styles.stats}>
+//           <Tiles
+//             tiles={[
+//               { label: 'Return', value: signedPct(stats.ret), tone: stats.ret < 0 ? 'down' : 'up' },
+//               { label: 'Worst drop', value: signedPct(stats.worstDrop) },
+//               { label: 'Volatility', value: `${(stats.volatility * 100).toFixed(0)}% a year` },
+//               {
+//                 label: 'BTC',
+//                 value: btcChange === null ? '—' : signedPct(btcChange),
+//                 tone: btcChange === null ? undefined : btcChange < 0 ? 'down' : 'up',
+//               },
+//             ]}
+//           />
+//         </View>
+//       ) : null}
+//     </View>
+//   );
+// }
+// 
+// const useStyles = makeStyles((c) => ({
+//   flex: {
+//     flex: 1,
+//   },
+//   group: { marginTop: 20 },
+//   section: { marginTop: 28 },
+//   heading: { marginBottom: 10, color: c.textSecondary, fontSize: 15 },
+//   note: { marginTop: -4, marginBottom: 10, color: c.textSecondary, fontSize: 13 },
+//   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+//   headRow: { flexDirection: 'row', alignItems: 'baseline', gap: 12 },
+//   link: { color: c.accentText, fontSize: 15, fontWeight: '600' },
+//   weightRow: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 52 },
+//   pct: {
+//     width: 44,
+//     textAlign: 'center',
+//     color: c.text,
+//     fontSize: 16,
+//     fontWeight: '600',
+//     fontVariant: ['tabular-nums'],
+//   },
+//   totals: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 8 },
+//   // A soft red box: the error colour at a tenth.
+//   errors: { marginTop: 12, gap: 4, padding: 12, borderRadius: 14, backgroundColor: `${c.error}1A` },
+//   errorText: { color: c.error, fontSize: 14 },
+//   ranges: { marginTop: 8 },
+//   stats: { marginTop: 16 },
+//   top: {
+//     paddingHorizontal: SCREEN.gutter,
+//     paddingBottom: 8,
+//     backgroundColor: c.canvas,
+//   },
+//   gutter: {
+//     paddingHorizontal: SCREEN.gutter,
+//   },
+//   pickedRow: {
+//     marginTop: 12,
+//     flexDirection: 'row',
+//     flexWrap: 'wrap',
+//     gap: 8,
+//   },
+//   hint: {
+//     marginTop: 12,
+//     color: c.textSecondary,
+//     fontSize: 15,
+//   },
+//   row: {
+//     flexDirection: 'row',
+//     alignItems: 'center',
+//     gap: 12,
+//     paddingVertical: 10,
+//   },
+//   off: {
+//     opacity: 0.4,
+//   },
+//   end: {
+//     alignItems: 'flex-end',
+//     gap: 2,
+//   },
+//   skeletonLines: {
+//     gap: 6,
+//   },
+//   name: {
+//     color: c.text,
+//     fontSize: 16,
+//     fontWeight: '500',
+//   },
+//   meta: {
+//     marginTop: 2,
+//     color: c.textSecondary,
+//     fontSize: 14,
+//   },
+//   check: {
+//     width: 24,
+//     height: 24,
+//     borderRadius: 12,
+//     borderWidth: 1.5,
+//     borderColor: c.divider,
+//     alignItems: 'center',
+//     justifyContent: 'center',
+//   },
+//   checkOn: {
+//     borderColor: c.primary,
+//     backgroundColor: c.primary,
+//   },
+// }));
