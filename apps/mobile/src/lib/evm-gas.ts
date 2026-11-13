@@ -18,6 +18,7 @@ import {
 } from '@honey-wallet/keyring';
 import { type Address, encodeFunctionData, getAddress, type Hex, isAddress } from 'viem';
 import { batchKey, forgetBatch, liveBatch, outstandingBatches } from '@/lib/evm-in-flight';
+import { serverNow } from '@/lib/server-clock';
 
 /**
  * Honey pays gas on Base, Arbitrum and Polygon (EIP-7702, never Ethereum mainnet): the
@@ -79,7 +80,9 @@ const defaults: GasDeps = {
   },
   prepare: async (...args) => (await import('@/lib/api')).api.evmSponsorPrepare(...args),
   submit: async (...args) => (await import('@/lib/api')).api.evmSponsorSubmit(...args),
-  now: () => Date.now(),
+  // now: () => Date.now(),
+  // Replaced 14 Nov (money audit 6): expiries are set on the server's clock (lib/server-clock).
+  now: serverNow,
   rpc: evmRpc,
 };
 

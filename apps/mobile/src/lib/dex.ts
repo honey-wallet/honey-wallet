@@ -60,6 +60,7 @@ import {
 import { evmRpc, type GasDeps, SPONSORED_FEE, sendSponsored, sponsorEvm } from '@/lib/evm-gas';
 import { assertNoSponsoredInFlight, liveBatch } from '@/lib/evm-in-flight';
 import { atomic, MAX_SLIPPAGE_BPS, quoteChanged } from '@/lib/intents-quote';
+import { serverNow } from '@/lib/server-clock';
 import { createStore } from '@/lib/store';
 import { TEST_MODE } from '@/lib/test-mode';
 
@@ -320,7 +321,9 @@ const defaults: DexDeps = {
       return null;
     }
   },
-  now: () => Date.now(),
+  // now: () => Date.now(),
+  // Replaced 14 Nov (money audit 6): expiries are set on the server's clock (lib/server-clock).
+  now: serverNow,
   keyOf: async (walletId, chain) => (await import('@/lib/vault')).privateKeyOf(walletId, chain),
   sponsorEvm,
   sendSponsored,
@@ -432,7 +435,9 @@ export const KYBER_SWAP_ABI = [
  * payout floor within the slippage asked for, a live expiry, and a transaction whose
  * own bytes say the same (decoded here, not taken from the JSON).
  */
-export function checkDexQuote(q: DexQuote, ask: DexAsk, now = Date.now()): void {
+// export function checkDexQuote(q: DexQuote, ask: DexAsk, now = Date.now()): void {
+// Replaced 14 Nov (money audit 6): expiries are set on the server's clock (lib/server-clock).
+export function checkDexQuote(q: DexQuote, ask: DexAsk, now = serverNow()): void {
   if (
     q.chain !== ask.chain ||
     !sameToken(ask.chain, q.sellToken, ask.sellToken) ||
@@ -589,18 +594,76 @@ const MAX_PRIORITY_LAMPORTS = { sponsored: 100_000n, own: 1_000_000n };
  * discriminator (and the shared-accounts id); v1 end with (in, quotedOut, slippageBps,
  * platformFeeBps u8). Exact-out and token-ledger routes are refused.
  */
+// const JUPITER_ROUTES: Record<
+//   string,
+//   { v2: boolean; at: number; destinations: number[]; optional?: number }
+// > = {
+// Replaced 14 Nov (money audit 11): the source side is pinned too, not only the payout.
 const JUPITER_ROUTES: Record<
   string,
-  { v2: boolean; at: number; destinations: number[]; optional?: number }
+  {
+    v2: boolean;
+    at: number;
+    destinations: number[];
+    optional?: number;
+    /** The wallet signing as the route's user transfer authority. */
+    authority: number;
+    /** The wallet's own token account the route sells from. */
+    source: number;
+    /** Where the route names the mints it sells and buys, when it does. */
+    sourceMint?: number;
+    destinationMint?: number;
+  }
 > = {
-  // shared_accounts_route_v2: …, destination_token_account (5), … (live 2026-11-13).
-  d19853937cfed8e9: { v2: true, at: 9, destinations: [5] },
-  // route_v2: user_destination_token_account (2), optional destination_token_account (7).
-  bb64facc31c4af14: { v2: true, at: 8, destinations: [2], optional: 7 },
-  // route: user_destination_token_account (3), optional destination_token_account (4).
-  e517cb977ae3ad2a: { v2: false, at: 0, destinations: [3], optional: 4 },
-  // shared_accounts_route: destination_token_account (6).
-  c1209b3341d69c81: { v2: false, at: 0, destinations: [6] },
+  // Account orders from Jupiter v6's on-chain IDL (read 2026-11-14).
+  // shared_accounts_route_v2: [program_authority, user_transfer_authority, source_token_account,
+  // program_source, program_destination, destination_token_account (5), source_mint,
+  // destination_mint, …] (live 2026-11-13).
+  d19853937cfed8e9: {
+    v2: true,
+    at: 9,
+    destinations: [5],
+    authority: 1,
+    source: 2,
+    sourceMint: 6,
+    destinationMint: 7,
+  },
+  // route_v2: [user_transfer_authority, user_source_token_account,
+  // user_destination_token_account (2), source_mint, destination_mint, source_token_program,
+  // destination_token_program, optional destination_token_account (7), …].
+  bb64facc31c4af14: {
+    v2: true,
+    at: 8,
+    destinations: [2],
+    optional: 7,
+    authority: 0,
+    source: 1,
+    sourceMint: 3,
+    destinationMint: 4,
+  },
+  // route: [token_program, user_transfer_authority, user_source_token_account,
+  // user_destination_token_account (3), optional destination_token_account (4), destination_mint, …].
+  e517cb977ae3ad2a: {
+    v2: false,
+    at: 0,
+    destinations: [3],
+    optional: 4,
+    authority: 1,
+    source: 2,
+    destinationMint: 5,
+  },
+  // shared_accounts_route: [token_program, program_authority, user_transfer_authority,
+  // source_token_account, program_source, program_destination, destination_token_account (6),
+  // source_mint, destination_mint, …].
+  c1209b3341d69c81: {
+    v2: false,
+    at: 0,
+    destinations: [6],
+    authority: 2,
+    source: 3,
+    sourceMint: 7,
+    destinationMint: 8,
+  },
 };
 
 const hex = (b: Uint8Array) => Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
@@ -645,7 +708,8 @@ export function readJupiterRoute(data: Uint8Array) {
  */
 export function checkSolanaSwap(
   q: DexQuote,
-  ask: Pick<DexAsk, 'taker' | 'sellAmount' | 'buyToken'>,
+  // ask: Pick<DexAsk, 'taker' | 'sellAmount' | 'buyToken'>,
+  ask: Pick<DexAsk, 'taker' | 'sellAmount' | 'buyToken' | 'sellToken'>,
 ) {
   if (!q.solana || q.evm) throw quoteChanged();
   let read: ReturnType<typeof readSolanaTransaction>;
@@ -667,8 +731,11 @@ export function checkSolanaSwap(
   const me = sponsored ? 1 : 0;
   const min = atomic(q.minBuyAmount);
   let output: string;
+  // The wallet's own token account for what it sells: the route may take only from it.
+  let input: string;
   try {
     output = associatedTokenAddress(taker, ask.buyToken);
+    input = associatedTokenAddress(taker, ask.sellToken);
   } catch {
     throw quoteChanged();
   }
@@ -705,6 +772,23 @@ export function checkSolanaSwap(
       // The output lands in this wallet's own token account for what it buys.
       for (const at of route.destinations)
         if (keys[ix.accountIndexes[at] ?? -1] !== output) throw quoteChanged();
+      // It sells exactly the token asked, from this wallet's own account (whose address is
+      // derived from that mint), signed by it: the same amount of another token (a WBTC for
+      // a USDC) must never go. A mint named among the static keys must match too; one loaded
+      // from a lookup table (the live order's are) can't be read here, and the two accounts
+      // already fix both tokens.
+      const named = (at: number) => keys[ix.accountIndexes[at] ?? -1];
+      const mintOk = (at: number | undefined, mint: string) => {
+        const i = at === undefined ? undefined : ix.accountIndexes[at];
+        return i === undefined || i >= keys.length || keys[i] === mint;
+      };
+      if (
+        named(route.authority) !== taker ||
+        named(route.source) !== input ||
+        !mintOk(route.sourceMint, ask.sellToken) ||
+        !mintOk(route.destinationMint, ask.buyToken)
+      )
+        throw quoteChanged();
       if (route.optional !== undefined) {
         const extra = keys[ix.accountIndexes[route.optional] ?? -1];
         if (extra !== JUPITER_V6 && extra !== output) throw quoteChanged();

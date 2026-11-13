@@ -146,6 +146,26 @@ describe('quotes', () => {
     await expect(refused(() => ({ expiresAt: NOW - 1 }))).rejects.toThrow('expired');
   });
 
+  it('checks a quote’s expiry on the server’s clock, not the phone’s (money audit 6)', async () => {
+    const { observeServerDate, resetServerClock } = await import('@/lib/server-clock');
+    const ask = baseAsk();
+    const req = { ...ask, sellAmount: ask.sellAmount.toString() };
+    try {
+      // The phone runs 5 minutes fast: a quote with 2 minutes left on the server's clock
+      // looked expired to it.
+      const phone = Date.now();
+      observeServerDate(new Date(phone - 300_000).toUTCString(), phone, phone);
+      const live = quoteFor(req, { expiresAt: phone - 180_000 });
+      expect(() => dex.checkDexQuote(live, ask)).not.toThrow();
+      // The phone runs 5 minutes slow: a quote the server already let run out is refused.
+      observeServerDate(new Date(phone + 300_000).toUTCString(), phone, phone);
+      const stale = quoteFor(req, { expiresAt: phone + 120_000 });
+      expect(() => dex.checkDexQuote(stale, ask)).toThrow('expired');
+    } finally {
+      resetServerClock();
+    }
+  });
+
   it('takes the live KyberSwap build exactly as Kyber made it', () => {
     const ask = baseAsk({ taker: LIVE_TAKER });
     const q = quoteFor(
@@ -583,6 +603,31 @@ describe('the device checks the Solana swap it signs (audit findings 1, 6)', () 
 
   it('refuses a Jupiter route paying a token account that isn’t the wallet’s', () => {
     expect(check(tx({ jupiter: { destination: filler(66) } }))).toThrow(changed);
+  });
+
+  it('refuses a Jupiter route selling another token, or from an account that isn’t the wallet’s (money audit 11)', () => {
+    // The same amount of another token (its own account and mint): refused.
+    expect(check(tx({ jupiter: { sell: filler(70) } }))).toThrow(changed);
+    const honest = jupiterIx({
+      taker: MY_SOL,
+      sell: SOL_USDC,
+      buy: JTO,
+      inAmount: 10_000_000n,
+      quotedOut: 10_000_000_000n,
+      slippageBps: 100,
+    });
+    const withAccount = (at: number, key: string) => {
+      const accounts = [...honest.accounts];
+      accounts[at] = key;
+      const ixs = [{ ...honest, accounts }];
+      return quoteFor(req, { solana: { transaction: solanaTx([HONEY_PAYER, MY_SOL], ixs) } });
+    };
+    expect(check(withAccount(1, MY_SOL))).not.toThrow();
+    // Source account, source mint, destination mint or signer swapped: each refused.
+    expect(check(withAccount(2, filler(71)))).toThrow(changed);
+    expect(check(withAccount(6, filler(72)))).toThrow(changed);
+    expect(check(withAccount(7, filler(73)))).toThrow(changed);
+    expect(check(withAccount(1, filler(74)))).toThrow(changed);
   });
 
   it('refuses two routes, an exact-out route, or no route at all', () => {

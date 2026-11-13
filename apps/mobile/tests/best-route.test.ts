@@ -47,6 +47,7 @@ const jarLeg = {
   fromAddress: ME,
   slippageBps: 100,
   wrapped: true,
+  toSymbol: 'BTC',
   walletId: 'w1',
 };
 
@@ -124,6 +125,34 @@ describe('the route planner (privacy first)', () => {
     await expect(planRoute(jarLeg, d)).rejects.toThrow(/route changed/);
     expect(canonicalOf('Arbitrum', WBTC_ARB)).toEqual({ symbol: 'WBTC', family: 'BTC' });
     expect(canonicalOf('Arbitrum', ATTACKER)).toBeNull();
+  });
+
+  it('refuses a wrapped token of another family than the pick (money audit 12)', async () => {
+    const WETH_ARB = getAddress('0x82af49447d8a07e3bd95bd0d56f35241523fbab1');
+    const { d } = deps({
+      best: option({
+        kind: 'wrapped',
+        label: 'KyberSwap on Arbitrum',
+        dexQuote: quoteFor({
+          chain: 'Arbitrum',
+          sellToken: USDC_ARB,
+          buyToken: WETH_ARB,
+          sellAmount: '170000',
+          taker: ME,
+          slippageBps: 100,
+        }),
+      }),
+      fallback: 'amount',
+      alternatives: [],
+      dropped: [],
+    });
+    // Buying BTC: WETH is curated, but not BTC.
+    await expect(planRoute(jarLeg, d)).rejects.toThrow(/route changed/);
+    // No symbol to check it against: refused too.
+    await expect(planRoute({ ...jarLeg, toSymbol: undefined }, d)).rejects.toThrow(/route changed/);
+    // Buying ETH, the same quote is the pick's own family.
+    const r = await planRoute({ ...jarLeg, toToken: 'nep141:eth.omft.near', toSymbol: 'ETH' }, d);
+    expect(r.holdAs).toBe('ETH (as WETH on Arbitrum)');
   });
 
   it('refuses a DEX quote whose swap pays someone else', async () => {

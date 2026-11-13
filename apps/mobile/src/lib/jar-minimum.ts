@@ -222,6 +222,7 @@ export async function checkJarMinimum(
           fromAddress: from,
           slippageBps,
           wrapped: true,
+          toSymbol: l.symbol,
           walletId: wallet.id,
         }),
         CHECK_MS,

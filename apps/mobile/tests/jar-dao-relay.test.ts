@@ -107,6 +107,21 @@ describe('Honey pays a group member’s gas (NEP-366)', () => {
     expect(sign).not.toHaveBeenCalled();
   });
 
+  it('says nothing was sent when NEAR ran the delegate and it failed (money audit 9)', async () => {
+    const relay = async () => {
+      throw Object.assign(new Error("NEAR didn't run that. Try again in a moment."), {
+        status: 409,
+      });
+    };
+    await expect(
+      sendViaRelayer(
+        { rpc: chain({ amount: 0n }), signerId: ME, sign: async () => 'signed', relay },
+        DAO,
+        [...vote.actions],
+      ),
+    ).rejects.toThrow('nothing was sent');
+  });
+
   it('never falls back silently once a delegate has left the device', async () => {
     const sign = vi.fn(async () => 'signed');
     for (const relay of [

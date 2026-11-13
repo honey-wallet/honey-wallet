@@ -41,6 +41,7 @@ import { HeaderActions } from '@/components/wallet/HeaderActions';
 import { HeaderShortcut } from '@/components/wallet/HeaderShortcut';
 import {
   applyKey,
+  floorNumber,
   Keypad,
   PercentChips,
   TypedAmount,
@@ -429,8 +430,12 @@ function SwapForm() {
               hitSlop={10}
               onPress={() => {
                 tap();
+                // setSellAmount(
+                //   unit === 'usd' ? trimNumber(balance * price, 2) : trimNumber(balance, 8),
+                // );
+                // Replaced 14 Nov (money audit 8): rounded down, never past the balance.
                 setSellAmount(
-                  unit === 'usd' ? trimNumber(balance * price, 2) : trimNumber(balance, 8),
+                  unit === 'usd' ? floorNumber(balance * price, 2) : floorNumber(balance, 8),
                 );
               }}
             >
