@@ -3,6 +3,7 @@
 // is already on screen, so it accelerates and brakes). Each move starts from wherever
 // the pill is, so rapid taps never jump; it snaps into place on first paint and
 // under Reduce Motion.
+import { GlassView, isLiquidGlassAvailable } from 'expo-glass-effect';
 import { useEffect, useRef, useState } from 'react';
 import { type LayoutRectangle, Pressable, Text, View } from 'react-native';
 import Animated, {
@@ -12,10 +13,12 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 import { tap } from '@/lib/haptics';
-import { makeStyles, radius } from '@/theme';
+import { makeStyles, radius, useTheme } from '@/theme';
 import { DURATION, EASE } from '@/theme/motion';
 
 const SLIDE = { duration: DURATION.fast, easing: EASE.inOut };
+/** iOS 26's Liquid Glass, as on the landing page's tabs; elsewhere honey tabs stay solid. */
+const GLASS = isLiquidGlassAvailable();
 
 type Props<T extends string> = {
   options: readonly T[];
@@ -27,6 +30,11 @@ type Props<T extends string> = {
   fill?: boolean;
   /** Display text per option where it differs from the value, e.g. All → MAX. */
   labels?: Partial<Record<T, string>>;
+  /**
+   * The landing page's "Choose who sees it" tabs: a soft track with a honey pill and the
+   * app's ink on it, segments sharing the width.
+   */
+  honey?: boolean;
 };
 
 /** A segmented control for a few mutually exclusive views, e.g. Swap / Perps. */
@@ -37,9 +45,13 @@ export function SegmentedTabs<T extends string>({
   bare,
   fill,
   labels,
+  honey,
 }: Props<T>) {
   const styles = useStyles();
+  const c = useTheme();
   const reduceMotion = useReducedMotion();
+  const glass = honey && GLASS;
+  const Bar = glass ? GlassView : View;
   const [layouts, setLayouts] = useState<Partial<Record<T, LayoutRectangle>>>({});
   const x = useSharedValue(0);
   const width = useSharedValue(0);
@@ -60,11 +72,37 @@ export function SegmentedTabs<T extends string>({
   }));
 
   return (
-    <View
-      style={[styles.bar, bare && styles.bare, fill && styles.fill]}
+    <Bar
+      {...(glass ? { glassEffectStyle: 'regular' as const, colorScheme: c.scheme } : {})}
+      style={[
+        styles.bar,
+        bare && styles.bare,
+        (fill || honey) && styles.fill,
+        honey && styles.honeyBar,
+        glass && styles.glassBar,
+      ]}
       accessibilityRole="tablist"
     >
-      <Animated.View style={[styles.pill, bare && styles.barePill, pillStyle]} />
+      <Animated.View
+        style={[
+          styles.pill,
+          bare && styles.barePill,
+          honey && styles.honeyPill,
+          glass && styles.glassPill,
+          pillStyle,
+        ]}
+      >
+        {glass ? (
+          // Honey-tinted glass that answers the finger, like the web's tinted Liquid tabs.
+          <GlassView
+            glassEffectStyle="regular"
+            tintColor={c.primary}
+            isInteractive
+            colorScheme={c.scheme}
+            style={styles.glassFill}
+          />
+        ) : null}
+      </Animated.View>
       {options.map((option) => {
         const active = option === value;
         return (
@@ -81,19 +119,29 @@ export function SegmentedTabs<T extends string>({
               tap();
               onChange(option);
             }}
-            style={[styles.tab, (bare || fill) && styles.stretch, fill && styles.tight]}
+            style={[
+              styles.tab,
+              (bare || fill || honey) && styles.stretch,
+              fill && styles.tight,
+              honey && styles.honeyTab,
+            ]}
           >
             <Text
               numberOfLines={1}
               adjustsFontSizeToFit
-              style={[styles.label, active && styles.labelActive]}
+              style={[
+                styles.label,
+                active && styles.labelActive,
+                honey && styles.honeyLabel,
+                honey && active && styles.honeyLabelActive,
+              ]}
             >
               {labels?.[option] ?? option}
             </Text>
           </Pressable>
         );
       })}
-    </View>
+    </Bar>
   );
 }
 
@@ -146,5 +194,43 @@ const useStyles = makeStyles((c) => ({
   },
   labelActive: {
     color: c.text,
+  },
+  // Honey: as on the landing page's "Choose who sees it", a honey pill, 14pt semibold.
+  // It sits on a card, so the track is the raised grey (tab-bar grey would vanish there).
+  honeyBar: {
+    gap: 4,
+    padding: 4,
+    backgroundColor: c.raised,
+  },
+  honeyPill: {
+    top: 4,
+    bottom: 4,
+    backgroundColor: c.primary,
+  },
+  honeyTab: {
+    height: 38,
+  },
+  honeyLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  honeyLabelActive: {
+    color: c.onPrimary,
+  },
+  // Liquid Glass draws the track and the pill, so neither keeps its own fill.
+  glassBar: {
+    backgroundColor: 'transparent',
+    overflow: 'hidden',
+  },
+  glassPill: {
+    backgroundColor: 'transparent',
+  },
+  glassFill: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    ...radius(48),
   },
 }));

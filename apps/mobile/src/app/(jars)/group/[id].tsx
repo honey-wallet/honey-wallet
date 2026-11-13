@@ -398,7 +398,8 @@ function GroupSkeleton() {
 const useStyles = makeStyles((c) => ({
   gutter: { paddingHorizontal: SCREEN.gutter },
   section: { marginTop: 28 },
-  heading: { marginBottom: 4, color: c.textSecondary, fontSize: 15 },
+  // As the Add friends labels: semibold in the text colour, 16 above the people.
+  heading: { marginBottom: 16, color: c.text, fontSize: 15, fontWeight: '600' },
   headerName: { color: c.text, fontSize: 16, fontWeight: '500', flexShrink: 1 },
   message: { alignItems: 'center', gap: 16, paddingTop: 96, paddingHorizontal: SCREEN.gutter },
   messageText: { color: c.textSecondary, fontSize: 16, textAlign: 'center' },

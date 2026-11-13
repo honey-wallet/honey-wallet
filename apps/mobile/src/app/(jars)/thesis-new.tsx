@@ -11,7 +11,10 @@ import {
 } from 'react-native';
 import Animated, { FadeIn } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import Svg, { Defs, LinearGradient, Path, Stop } from 'react-native-svg';
+import { Avatar } from '@/components/Avatar';
 import { Icon, type IconName } from '@/components/Icon';
+import { CopyCutSlider } from '@/components/jars/CopyCutSlider';
 import { JarAmount } from '@/components/jars/JarAmount';
 import { People, PickIcon, StrategyCard, stepSplit } from '@/components/jars/JarParts';
 import { PressableScale } from '@/components/motion/PressableScale';
@@ -19,6 +22,7 @@ import { SegmentedTabs } from '@/components/motion/SegmentedTabs';
 import { PillButton } from '@/components/onboarding/PillButton';
 import { KeyboardFooter } from '@/components/sheets/KeyboardFooter';
 import { SHEET, SheetScreen, StatRow } from '@/components/sheets/Sheet';
+import { AddFace, FACE, FaceRow, FaceTile } from '@/components/social/FaceTile';
 import { SocialAvatar, Trend } from '@/components/social/parts';
 import { Chip } from '@/components/wallet/Chip';
 import { EmptyState } from '@/components/wallet/parts';
@@ -27,11 +31,12 @@ import { friendPicks, groupError, startGroup } from '@/lib/group-jars';
 import { tap } from '@/lib/haptics';
 import { type BuyLeg, payJarBuy, quoteJarBuy } from '@/lib/jar-buy';
 import { blockedRoutes, describeRoute, useRoutes } from '@/lib/jar-routes';
-import { useTokenChart } from '@/lib/market';
+import { useBasketChart, useTokenChart } from '@/lib/market';
 import { formatUsd } from '@/lib/mock-wallet';
 import { memberName, propose, useActiveMultisig } from '@/lib/multisig';
 import { SHEET_EXIT } from '@/lib/navigation';
-import { JAR_FEES, JAR_SLIPPAGES, JAR_VISIBILITY, settings } from '@/lib/settings';
+import { useProfile } from '@/lib/profile';
+import { JAR_VISIBILITY, settings, useSettings } from '@/lib/settings';
 import { TEST_MODE } from '@/lib/test-mode';
 import {
   copyProposal,
@@ -64,13 +69,12 @@ import { DURATION } from '@/theme/motion';
 
 type Step = 'idea' | 'working' | 'proposal' | 'jar';
 const AMOUNTS = [100, 500, 1000];
-
-/** A jar name from the idea: whole words, up to 32 characters. */
-function shortName(text: string) {
-  if (text.length <= 32) return text;
-  const cut = text.slice(0, 33).replace(/[\s,.;:]+\S*$/, '');
-  return cut || text.slice(0, 32);
-}
+/** "Who can see it" tabs, worded as on the landing page. */
+const SEE_TABS: Record<Visibility, string> = {
+  members: 'Members',
+  private: 'Returns',
+  public: 'Everyone',
+};
 
 /**
  * New jar from an idea: say it any way (words, links), pick an amount and a risk; the
@@ -79,6 +83,7 @@ function shortName(text: string) {
  */
 export default function NewThesisSheet() {
   const styles = useStyles();
+  const profile = useProfile();
   const insets = useSafeAreaInsets();
   const c = useTheme();
   const {
@@ -144,14 +149,9 @@ export default function NewThesisSheet() {
   const [spend, setSpend] = useState(() =>
     fromChat && fromChat.amount > 0 ? fromChat.amount : settings.get().copyAmount,
   );
-  // Every jar is named by you on Launch (2026-11-13): the field starts empty, with a
-  // suggestion as its placeholder (the idea's words, or the jar you copied).
+  // Every jar is named by you on Launch (2026-11-13): the field starts empty under its
+  // "Name your jar" placeholder, and the card's title stays blank until you type one.
   const [name, setName] = useState(named ?? '');
-  const suggestedName = copied
-    ? copied.name
-    : proposal && !manual
-      ? shortName(proposal.thesis)
-      : 'Bitcoin and friends';
   // A copy whose jar loaded after this opened (a cold start from a link): start on it now.
   useEffect(() => {
     if (!copied || proposal || !openAt) return;
@@ -171,7 +171,8 @@ export default function NewThesisSheet() {
   const [copyFee, setCopyFee] = useState(() => settings.get().jarCopyFee);
   // Limit orders are off for now, so every buy is a market order.
   const [order] = useState<OrderKind>('market');
-  const [maxSlip, setMaxSlip] = useState(() => settings.get().jarSlippage);
+  // Slippage is automatic here: the max from Settings, changed there, not on Launch.
+  const { jarSlippage: maxSlip } = useSettings();
   // Edit split can take a token to 0%: it stays listed (to step back up) but isn't bought,
   // and is left out of the jar on Continue.
   const kept = (proposal?.picks ?? []).filter((p) => p.weight > 0);
@@ -599,15 +600,15 @@ export default function NewThesisSheet() {
         }
       >
         <View style={styles.gap}>
-          {/* First thing on Launch: its name, in a field of its own (a name inside the
-              card read as a title, not a box to fill). */}
-          <Text style={[styles.section, styles.sectionFirst]}>Name your jar</Text>
+          {/* The split first, then its name in a field of its own: "Name your jar" is the
+              field's own placeholder, so it reads as a box to fill without a heading. */}
+          <StrategyCard split picks={proposal.picks} name={name.trim()} />
           <TextInput
             value={name}
             onChangeText={setName}
             autoFocus
             maxLength={32}
-            placeholder={suggestedName}
+            placeholder="Name your jar"
             placeholderTextColor={c.placeholder}
             selectionColor={c.accentText}
             cursorColor={c.accentText}
@@ -615,9 +616,8 @@ export default function NewThesisSheet() {
             style={styles.nameField}
             accessibilityLabel="Jar name"
           />
-          <StrategyCard split picks={proposal.picks} name={name.trim() || suggestedName} />
 
-          <Text style={styles.section}>Who's in</Text>
+          <Text style={styles.heading}>Who's in</Text>
           {multisig ? (
             <View style={styles.card}>
               <View style={styles.memberRow}>
@@ -638,98 +638,82 @@ export default function NewThesisSheet() {
               </Text>
             </View>
           ) : (
-            // You, then the friends you add by @handle (up to 4). Each puts in the same
-            // amount; nobody's in until they accept.
-            <View style={styles.card}>
-              <View style={styles.memberRow}>
-                <People
-                  names={[
-                    { id: 'me', name: 'You' },
-                    ...friends.map((f) => ({ id: f.avatarSeed || f.handle, name: f.displayName })),
-                  ]}
-                  size={28}
+            // You, then the friends you add by @handle (up to 4), as big faces in a row
+            // with a plus circle to add more. Each puts in the same amount; nobody's in
+            // until they accept.
+            <View>
+              <FaceRow>
+                <FaceTile
+                  face={
+                    <Avatar name="You" size={FACE} uri={profile.photo} seed={profile.avatarSeed} />
+                  }
+                  label="You"
                 />
-                <Text style={[styles.pickName, styles.flex]}>
-                  {friends.length
-                    ? `You and ${friends.length} ${friends.length === 1 ? 'friend' : 'friends'}`
-                    : 'Just you'}
-                </Text>
-                {friends.length ? (
-                  <Text style={styles.pickReason}>{plainDollars(share)} each</Text>
+                {friends.map((f) => (
+                  <FaceTile
+                    key={f.handle}
+                    face={<SocialAvatar who={f} size={FACE} />}
+                    label={f.displayName}
+                    sublabel={`@${f.handle}`}
+                    badge="remove"
+                    accessibilityLabel={`Remove @${f.handle}`}
+                    onPress={() => friendPicks.set(friends.filter((x) => x.handle !== f.handle))}
+                  />
+                ))}
+                {friends.length < MAX_FRIENDS ? (
+                  <FaceTile
+                    face={<AddFace />}
+                    label="Add"
+                    accessibilityLabel="Add friends"
+                    onPress={() => router.push('/group-friends')}
+                  />
                 ) : null}
-              </View>
+              </FaceRow>
               {friends.length ? (
-                <View style={styles.chips}>
-                  {friends.map((f) => (
-                    <Chip
-                      key={f.handle}
-                      variant="filled"
-                      leading={<SocialAvatar who={f} size={20} />}
-                      label={`@${f.handle}`}
-                      trailing={<Icon name="close" size={11} color={c.textSecondary} />}
-                      accessibilityLabel={`Remove @${f.handle}`}
-                      onPress={() => friendPicks.set(friends.filter((x) => x.handle !== f.handle))}
-                    />
-                  ))}
-                </View>
-              ) : null}
-              {friends.length < MAX_FRIENDS ? (
-                <PressableScale
-                  accessibilityRole="button"
-                  scaleTo={0.98}
-                  onPress={() => {
-                    tap();
-                    router.push('/group-friends');
-                  }}
-                  style={styles.memberRow}
-                >
-                  <View style={styles.addWell}>
-                    <Icon name="plus" size={14} color={c.accentText} />
-                  </View>
-                  <Text style={[styles.pickName, styles.flex]}>Add friends</Text>
-                  <Icon name="chevronRight" size={13} color={c.textSecondary} />
-                </PressableScale>
+                <Text style={styles.pickReason}>
+                  You and {friends.length} {friends.length === 1 ? 'friend' : 'friends'} ·{' '}
+                  {plainDollars(share)} each
+                </Text>
               ) : null}
             </View>
           )}
 
-          <Text style={styles.section}>Who can see it</Text>
-          <View style={styles.card}>
-            {JAR_VISIBILITY.map((v, i) => (
-              <Choice
+          <Text style={styles.heading}>Who can see it</Text>
+          {/* As on the landing page ("Choose who sees it"): honey tabs, and under them the
+              chosen option's badge, name and what it means. */}
+          <View style={styles.seePanel}>
+            <SegmentedTabs<Visibility>
+              honey
+              options={JAR_VISIBILITY.map((v) => v.id)}
+              labels={SEE_TABS}
+              value={visibility}
+              onChange={setVisibility}
+            />
+            {JAR_VISIBILITY.filter((v) => v.id === visibility).map((v) => (
+              <Animated.View
                 key={v.id}
-                first={i === 0}
-                icon={v.icon}
-                title={v.title}
-                hint={v.hint}
-                selected={visibility === v.id}
-                onPress={() => setVisibility(v.id)}
-              />
+                entering={FadeIn.duration(DURATION.fast)}
+                style={v.id === 'members' ? styles.seeRowOption : styles.seeOption}
+              >
+                {v.id === 'members' ? (
+                  <View style={styles.seeLock}>
+                    <Icon name="lock" size={18} color={c.accentText} />
+                  </View>
+                ) : (
+                  <SeePreview id={v.id} picks={proposal.picks} />
+                )}
+                {/* The tab (and the lock or the picture) already names it: just what it
+                    means, beside the lock for Members only. */}
+                <Text style={[styles.seeHint, v.id === 'members' && styles.flex]}>{v.hint}</Text>
+              </Animated.View>
             ))}
           </View>
 
-          {copyable ? (
-            <>
-              <Text style={styles.section}>Your cut when people copy</Text>
-              <View style={styles.feeRow}>
-                {JAR_FEES.map((f) => (
-                  <Chip
-                    key={f}
-                    accessibilityRole="radio"
-                    label={`${f}%`}
-                    selected={copyFee === f}
-                    onPress={() => setCopyFee(f)}
-                  />
-                ))}
-              </View>
-              <Text style={styles.pickReason}>
-                Of copiers' profit only, never of a loss. Honey keeps 1.5%.
-              </Text>
-            </>
-          ) : null}
+          {/* Everyone's jars can be copied: the landing page's cut slider. */}
+          {copyable ? <CopyCutSlider value={copyFee} onChange={setCopyFee} /> : null}
 
           {/* Limit orders ("At a better price") are off for now (2026-11-13): every buy is
-              at today's price within the max slippage below.
+              at today's price within the max slippage from Settings.
           <Text style={styles.section}>How to buy</Text>
           <View style={styles.card}>
             <Choice
@@ -748,25 +732,8 @@ export default function NewThesisSheet() {
               onPress={() => setOrder('limit')}
             />
           </View> */}
-          <Text style={styles.section}>Max slippage</Text>
-          <View style={styles.feeRow}>
-            {JAR_SLIPPAGES.map((sl) => (
-              <Chip
-                key={sl}
-                accessibilityRole="radio"
-                label={`${sl}%`}
-                selected={maxSlip === sl}
-                onPress={() => setMaxSlip(sl)}
-              />
-            ))}
-          </View>
-
           {/* What it costs on top of the tokens, as review rows. */}
           <View style={styles.rows}>
-            <StatRow
-              label="Slippage"
-              value={`${((impactUsd / Math.max(proposal.amount, 1)) * 100).toFixed(2)}%`}
-            />
             {bridgeUsd > 0 ? <StatRow label="Network" value={`≈ ${formatUsd(bridgeUsd)}`} /> : null}
             {/* Real jars learn their fees from each swap's quote, after this step: say so
                 instead of a $0.00 that reads as "free". */}
@@ -894,13 +861,14 @@ const useStyles = makeStyles((c) => ({
     fontSize: 17,
     fontWeight: '600',
   },
-  sectionFirst: { marginTop: 0 },
   flex: { flex: 1 },
   gap: { gap: 12, paddingBottom: 16 },
   fill: { flex: 1 },
   fixRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 6 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   section: { marginTop: 8, color: c.textSecondary, fontSize: 15 },
+  // Launch's own sections: the grey section label, a step larger than the usual 15pt, bold.
+  heading: { marginTop: 12, color: c.textSecondary, fontSize: 17, fontWeight: '700' },
   field: {
     minHeight: 52,
     justifyContent: 'center',
@@ -931,15 +899,6 @@ const useStyles = makeStyles((c) => ({
   footer: { gap: 8 },
   footnote: { color: c.textSecondary, fontSize: 13, textAlign: 'center' },
   memberRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  // "Add friends": a round well as the faces are wide, honey-tinted like every icon well.
-  addWell: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: c.accentSurface,
-  },
   feeRow: { flexDirection: 'row', gap: 8 },
   choiceRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12 },
   choiceBorder: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: c.divider },
@@ -962,6 +921,32 @@ const useStyles = makeStyles((c) => ({
     justifyContent: 'center',
   },
   radioOn: { borderColor: c.primary, backgroundColor: c.primary },
+  // "Who can see it", as on the landing page: one card holding the honey tabs and, under
+  // them, the chosen option (badge, name, one line) on the card itself.
+  seePanel: { gap: 16, padding: 16, ...radius(20), backgroundColor: c.card },
+  // The chosen option. Members only: the lock with its words beside it. Returns only and
+  // Everyone: what other people see (the jar's week as a number and a chart, and for
+  // Everyone its coins), then the words.
+  seeRowOption: { flexDirection: 'row', alignItems: 'center', gap: 14 },
+  seeOption: { gap: 14 },
+  seeLock: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: c.accentSurface,
+  },
+  seePreview: { height: 56, flexDirection: 'row', alignItems: 'center', gap: 14 },
+  seeCoins: { flexDirection: 'row' },
+  seeCoin: { borderRadius: 17, borderWidth: 2, borderColor: c.card },
+  seeChart: { flex: 1, height: 48 },
+  seeMove: { minWidth: 64 },
+  seeMoveEnd: { alignItems: 'flex-end' },
+  seePct: { fontSize: 20, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  seePeriod: { marginTop: 1, color: c.textSecondary, fontSize: 12 },
+  seePctLoading: { width: 56, height: 16, borderRadius: 8, backgroundColor: c.skeleton },
+  seeHint: { marginTop: 2, color: c.textSecondary, fontSize: 16, lineHeight: 22 },
   card: { padding: 16, gap: 14, ...radius(20), backgroundColor: c.card },
   pickName: { color: c.text, fontSize: 15, fontWeight: '600' },
   pickReason: { marginTop: 2, color: c.textSecondary, fontSize: 14, lineHeight: 19 },
@@ -1056,6 +1041,7 @@ function SplitRow({
 }
 
 /** One option in a list of choices: icon, title, one line, and a check when picked. */
+// biome-ignore lint/correctness/noUnusedVariables: "How to buy" uses it again once limit orders return
 function Choice({
   icon,
   title,
@@ -1094,5 +1080,95 @@ function Choice({
         {selected ? <Icon name="check" size={12} color={c.onPrimary} /> : null}
       </View>
     </PressableScale>
+  );
+}
+
+/**
+ * What other people see of the jar: its picks' past week as one number and one chart,
+ * weighted by the split, and for Everyone the coins themselves (Returns only keeps them
+ * hidden). Both follow the picks as they change.
+ */
+function SeePreview({ id, picks }: { id: Visibility; picks: Pick[] }) {
+  const styles = useStyles();
+  const c = useTheme();
+  const { series, change, loading } = useBasketChart(picks, '1W');
+  const color = change != null && change < 0 ? c.error : c.success;
+  const move = (
+    <View style={[styles.seeMove, styles.seeMoveEnd]}>
+      {change == null ? (
+        loading ? (
+          <View style={styles.seePctLoading} />
+        ) : (
+          <Text style={[styles.seePct, { color: c.textSecondary }]}>—</Text>
+        )
+      ) : (
+        <Text style={[styles.seePct, { color }]}>
+          {change >= 0 ? '+' : '−'}
+          {Math.abs(change * 100).toFixed(1)}%
+        </Text>
+      )}
+      <Text style={styles.seePeriod}>past 7 days</Text>
+    </View>
+  );
+  return (
+    <View style={styles.seePreview}>
+      {id === 'public' ? (
+        <View style={styles.seeCoins}>
+          {picks.slice(0, 3).map((p, i) => (
+            <View
+              key={p.symbol}
+              style={[styles.seeCoin, { marginLeft: i ? -10 : 0, zIndex: 3 - i }]}
+            >
+              <PickIcon pick={p} size={30} />
+            </View>
+          ))}
+        </View>
+      ) : null}
+      <View style={styles.seeChart}>
+        <SeeChart series={series} color={color} />
+      </View>
+      {/* The week's number on the right, for Returns only and Everyone alike. */}
+      {move}
+    </View>
+  );
+}
+
+/** A series as a line with a soft fill under it, filling its box; flat while loading. */
+function SeeChart({ series, color }: { series: number[]; color: string }) {
+  if (series.length < 2) {
+    return (
+      <Svg width="100%" height="100%" viewBox="0 0 100 40" preserveAspectRatio="none">
+        <Path d="M0 30 L100 30" stroke={color} strokeOpacity={0.25} strokeWidth={2} />
+      </Svg>
+    );
+  }
+  const lo = Math.min(...series);
+  const hi = Math.max(...series);
+  const span = hi - lo || 1;
+  const points = series.map((v, i) => {
+    const x = (i / (series.length - 1)) * 100;
+    const y = 36 - ((v - lo) / span) * 32;
+    return `${x.toFixed(2)} ${y.toFixed(2)}`;
+  });
+  const line = `M${points.join(' L')}`;
+  return (
+    <Svg width="100%" height="100%" viewBox="0 0 100 40" preserveAspectRatio="none">
+      <Defs>
+        <LinearGradient id="seeChartFill" x1="0" y1="0" x2="0" y2="1">
+          <Stop offset="0" stopColor={color} stopOpacity={0.22} />
+          <Stop offset="1" stopColor={color} stopOpacity={0} />
+        </LinearGradient>
+      </Defs>
+      <Path d={`${line} L100 40 L0 40 Z`} fill="url(#seeChartFill)" />
+      <Path
+        d={line}
+        fill="none"
+        stroke={color}
+        strokeWidth={2.5}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        vectorEffect="non-scaling-stroke"
+      />
+    </Svg>
   );
 }

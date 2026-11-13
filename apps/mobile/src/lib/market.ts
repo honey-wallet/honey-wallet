@@ -169,6 +169,48 @@ export function useTokenChart(symbol: string, range: ChartRangeId, enabled = tru
   };
 }
 
+/** Points in a basket's combined series. */
+const BASKET_POINTS = 32;
+
+/**
+ * A basket of tokens as one line: each token's prices over `range`, scaled to start at 1,
+ * resampled to the same points and averaged by weight. `change` is the basket's move over
+ * the range as a fraction (0.042 = +4.2%); null until a token's prices have loaded.
+ * Tokens without prices are left out of the average.
+ */
+export function useBasketChart(
+  picks: readonly { symbol: string; weight: number }[],
+  range: ChartRangeId,
+) {
+  const all = charts.useValue();
+  const key = picks.map((p) => p.symbol).join(',');
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `key` stands for the symbols.
+  useEffect(() => {
+    for (const p of picks) if (p.symbol) void loadChart(p.symbol, range);
+  }, [key, range]);
+  let total = 0;
+  const sum = new Array<number>(BASKET_POINTS).fill(0);
+  let loading = false;
+  for (const p of picks) {
+    const entry = all[`${p.symbol}:${range}`];
+    const prices = entry?.prices ?? [];
+    if (!entry || (entry.loading && !entry.prices)) loading = true;
+    if (prices.length < 2 || !(prices[0] > 0) || !(p.weight > 0)) continue;
+    total += p.weight;
+    for (let i = 0; i < BASKET_POINTS; i++) {
+      const at = Math.round((i * (prices.length - 1)) / (BASKET_POINTS - 1));
+      sum[i] += p.weight * (prices[at] / prices[0]);
+    }
+  }
+  const series = total > 0 ? sum.map((v) => v / total) : [];
+  const last = series[series.length - 1];
+  return {
+    series,
+    change: last != null ? last - 1 : null,
+    loading: loading && series.length === 0,
+  };
+}
+
 /**
  * The change shown beside a chart: across the drawn series, or (no series) the 24h
  * change for 1D; otherwise unknown.

@@ -7,6 +7,7 @@ import {
   type StyleProp,
   StyleSheet,
   Text,
+  type TextStyle,
   useWindowDimensions,
   View,
   type ViewStyle,
@@ -291,9 +292,9 @@ export function SheetHeader({
 }
 
 /** Grey heading above a group of rows, e.g. "Preferences". */
-export function SheetSection({ title }: { title: string }) {
+export function SheetSection({ title, style }: { title: string; style?: StyleProp<TextStyle> }) {
   const styles = useStyles();
-  return <Text style={styles.section}>{title}</Text>;
+  return <Text style={[styles.section, style]}>{title}</Text>;
 }
 
 /** A labelled group of options (e.g. OptionChips) with a one-line explanation. */
