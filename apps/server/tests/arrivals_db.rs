@@ -1,6 +1,7 @@
 //! Who the arrival watcher reads and names, against real PostgreSQL: sender handles come
-//! only from proven wallets, one person can't crowd others out of a cycle, and each
-//! watcher is marked owner or not for the per-person messages.
+//! only from proven wallets, one person (or a swarm of unverified ones) can't crowd
+//! others out of a cycle, and each watcher is marked owner or not for the per-person
+//! messages.
 //! Explicitly run with --ignored and TEST_DATABASE_URL.
 mod common;
 
@@ -208,5 +209,38 @@ async fn someone_watching_another_persons_wallet_is_not_its_owner() {
     assert_eq!(get(victim).tokens, vec!["ExponentPushToken[victim]"]);
     assert!(!get(mallory).owner);
     assert_eq!(get(mallory).tokens, vec!["ExponentPushToken[mallory]"]);
+    db.close().await;
+}
+
+#[tokio::test]
+#[ignore = "requires isolated TEST_DATABASE_URL"]
+async fn verified_people_are_read_before_a_swarm_of_free_wallets() {
+    let db = TestDatabase::new().await;
+    let pool = &db.pool;
+    // Twenty fresh wallet accounts, each proving its own address with a made-up token.
+    for n in 0..20u32 {
+        let sybil = person(pool, 100 + u128::from(n), None).await;
+        prove(pool, sybil, &evm(0x500 + n)).await;
+        let token = format!("ExponentPushToken[sybil-{n}]");
+        phone(pool, sybil, &token, true).await;
+        declare(pool, &token, Some(&evm(0x500 + n)), None).await;
+    }
+    // One person with a linked Google sign-in watching a wallet they never proved.
+    let dana = person(pool, 1, None).await;
+    sqlx::query(
+        "INSERT INTO user_verified_identities (user_id, firebase_uid, provider)
+         VALUES ($1, 'dana-uid', 'google.com')",
+    )
+    .bind(dana)
+    .execute(pool)
+    .await
+    .unwrap();
+    phone(pool, dana, "ExponentPushToken[dana]", true).await;
+    declare(pool, "ExponentPushToken[dana]", Some(&evm(0xd)), None).await;
+
+    let one = watched_wallets(pool, 1).await.unwrap();
+    assert_eq!(one.len(), 1);
+    assert_eq!(one[0].addresses.evm.as_deref(), Some(evm(0xd).as_str()));
+    assert_eq!(one[0].watchers[0].user, dana);
     db.close().await;
 }

@@ -264,6 +264,15 @@ pub trait Sources: Send + Sync {
     async fn gas(&self, user: Uuid, chain: DexChain, work: Work) -> GasCost;
     /// Warm a DEX token's caches in the background (dropped candidates are cold).
     fn warm(&self, _chain: DexChain, _token: &str) {}
+    /// Charges Honey's 1Click budget for one dry quote (live: the jar-buy quote ceiling).
+    async fn admit_intents(&self, _user: Uuid) -> Result<(), AppError> {
+        Ok(())
+    }
+    /// Charges the `dex_quote*` ceilings for one DEX quote on `chain` (live: the same
+    /// counters `POST /dex/quote` spends, so the KyberSwap and Jupiter pacers hold).
+    async fn admit_dex(&self, _user: Uuid, _chain: DexChain) -> Result<(), AppError> {
+        Ok(())
+    }
 }
 
 // Planning
@@ -593,8 +602,12 @@ impl<S: Sources> Planner<S> {
             .unwrap_or(Err(AppError::Timeout))
     }
 
-    /// 1Click's dry quote, asked once more when it fails without saying why (d).
-    async fn intents_quote(&self, ask: IntentsAsk) -> Result<DryQuote, AppError> {
+    /// 1Click's dry quote, asked once more when it fails without saying why (d). The
+    /// budget is charged once for both tries.
+    // Replaced (audit #4): the quote now charges the 1Click budget first.
+    // async fn intents_quote(&self, ask: IntentsAsk) -> Result<DryQuote, AppError> {
+    async fn intents_quote(&self, user: Uuid, ask: IntentsAsk) -> Result<DryQuote, AppError> {
+        self.sources.admit_intents(user).await?;
         match self.timed(self.sources.intents(ask.clone())).await {
             Err(AppError::Busy | AppError::Timeout) => self.timed(self.sources.intents(ask)).await,
             other => other,
@@ -612,6 +625,8 @@ impl<S: Sources> Planner<S> {
         taker: &str,
         slippage: u16,
     ) -> Result<QuoteResponse, AppError> {
+        // Audit #4: the DEX ceilings are charged before the provider is asked.
+        self.sources.admit_dex(user, chain).await?;
         for token in [sell, buy] {
             self.sources.warm(chain, token);
         }
@@ -751,7 +766,7 @@ impl<S: Sources> Planner<S> {
             candidates.push(
                 async move {
                     let r = async {
-                        let q = self.intents_quote(ask.clone()).await?;
+                        let q = self.intents_quote(user, ask.clone()).await?;
                         let (price, decimals) =
                             out_price.ok_or_else(|| bad("no price for the token bought"))?;
                         let gas = self
@@ -885,7 +900,7 @@ impl<S: Sources> Planner<S> {
             candidates.push(
                 async move {
                     let r = async {
-                        let bridge = self.intents_quote(ask.clone()).await?;
+                        let bridge = self.intents_quote(user, ask.clone()).await?;
                         let q = self
                             .dex_quote(
                                 user,
@@ -975,7 +990,7 @@ impl<S: Sources> Planner<S> {
                             refund_to: from_address.clone(),
                             slippage_bps: slippage,
                         };
-                        let bridge = self.intents_quote(ask.clone()).await?;
+                        let bridge = self.intents_quote(user, ask.clone()).await?;
                         let (price, decimals) =
                             out_price.ok_or_else(|| bad("no price for the token bought"))?;
                         let swap = self.swap_gas(user, from_chain, &q).await;
@@ -1023,6 +1038,14 @@ impl<S: Sources> Planner<S> {
         }
 
         let results = join_all(candidates).await;
+        // Every candidate refused by a budget: say so (429), not "no route".
+        let all_limited = !results.is_empty()
+            && results
+                .iter()
+                .all(|(_, r)| matches!(r, Err(AppError::TooManyRequests)));
+        if all_limited {
+            return Err(AppError::TooManyRequests);
+        }
         let mut intents = None;
         let mut fallbacks = Vec::new();
         let mut dropped = Vec::new();
@@ -1134,6 +1157,8 @@ impl<S: Sources> Planner<S> {
 /// Production [`Sources`]: 1Click dry quotes (`JarBuys`), its token list
 /// (`MarketData`), DEX quotes (`DexService`), and gas from the ledger and the chain.
 pub struct LiveSources {
+    /// Charges the 1Click and DEX quote budgets (none: unlimited, as in tests).
+    pub identity: Option<crate::identity::Identity>,
     pub buys: Option<Arc<JarBuys>>,
     pub market: Option<Arc<MarketData>>,
     pub dex: Option<Arc<DexService>>,
@@ -1168,6 +1193,7 @@ impl LiveSources {
         pool: Option<sqlx::PgPool>,
     ) -> Self {
         Self {
+            identity: None,
             buys,
             market,
             dex,
@@ -1184,6 +1210,11 @@ impl LiveSources {
                 .unwrap_or_default(),
             gas_prices: Mutex::default(),
         }
+    }
+
+    pub fn with_identity(mut self, identity: Option<crate::identity::Identity>) -> Self {
+        self.identity = identity;
+        self
     }
 
     pub fn with_sponsors(mut self, evm_chains: Vec<&'static str>, solana: bool) -> Self {
@@ -1337,6 +1368,20 @@ impl Sources for LiveSources {
     fn warm(&self, chain: DexChain, token: &str) {
         if let Some(dex) = &self.dex {
             dex.warm(chain, token.to_string());
+        }
+    }
+
+    async fn admit_intents(&self, user: Uuid) -> Result<(), AppError> {
+        match &self.identity {
+            Some(identity) => crate::routes::jar_buys::charge_route_quote(identity, user).await,
+            None => Ok(()),
+        }
+    }
+
+    async fn admit_dex(&self, user: Uuid, chain: DexChain) -> Result<(), AppError> {
+        match &self.identity {
+            Some(identity) => crate::routes::dex::charge_route_quote(identity, user, chain).await,
+            None => Ok(()),
         }
     }
 }

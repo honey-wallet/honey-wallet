@@ -19,7 +19,16 @@ use axum::{
 };
 use futures_util::stream::{self, Stream, StreamExt};
 use serde::Serialize;
-use std::{convert::Infallible, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    convert::Infallible,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
+use tokio::{
+    sync::{OwnedSemaphorePermit, Semaphore},
+    time::Instant,
+};
 use uuid::Uuid;
 
 /// Thesis runs per minute: a few per user, and a global ceiling sized for the
@@ -38,10 +47,26 @@ const ASKS: Quota = Quota {
     per_user: 10,
 };
 
+/// The slice of `RUNS` wallets with no linked Apple or Google sign-in share: they are
+/// free to make, so four of them could otherwise take the whole global budget.
+const UNVERIFIED_RUNS: Quota = Quota {
+    domain: "thesis_run_unverified",
+    global: 6,
+    per_user: 5,
+};
+
+/// The same slice for follow-up questions (audit #5 applied to `/theses/ask`).
+const UNVERIFIED_ASKS: Quota = Quota {
+    domain: "thesis_ask_unverified",
+    global: 18,
+    per_user: 10,
+};
+
 #[derive(Clone)]
 struct StateData {
     identity: Option<Identity>,
     service: Arc<ThesisService>,
+    streams: StreamSlots,
 }
 
 pub fn router(identity: Option<Identity>, service: Arc<ThesisService>) -> Router {
@@ -52,7 +77,90 @@ pub fn router(identity: Option<Identity>, service: Arc<ThesisService>) -> Router
         .route("/theses/{id}/artifacts", get(artifacts))
         .route("/theses/{id}/events", get(events))
         .route("/theses/{id}/stream", get(stream_run))
-        .with_state(StateData { identity, service })
+        // Replaced (audit #1): the state now carries the open-stream caps.
+        // .with_state(StateData { identity, service })
+        .with_state(StateData {
+            identity,
+            service,
+            streams: StreamSlots::new(STREAMS_GLOBAL, STREAMS_PER_USER),
+        })
+}
+
+/// Open SSE streams (`/events` and `/stream`) per instance, and per signed-in user.
+/// The HTTP envelope's admission permit and timeout end once headers are sent, so a
+/// stream body would otherwise poll the run store for minutes holding nothing.
+const STREAMS_GLOBAL: usize = 256;
+const STREAMS_PER_USER: usize = 3;
+
+/// Caps on open streams. A [`StreamSlot`] lives inside the stream and frees its place
+/// when the stream is dropped (finished, timed out or the client went away).
+#[derive(Clone)]
+struct StreamSlots {
+    global: Arc<Semaphore>,
+    per_user: Arc<Mutex<HashMap<Uuid, usize>>>,
+    per_user_cap: usize,
+}
+
+struct StreamSlot {
+    _global: OwnedSemaphorePermit,
+    per_user: Arc<Mutex<HashMap<Uuid, usize>>>,
+    user: Uuid,
+}
+
+impl StreamSlots {
+    fn new(global: usize, per_user_cap: usize) -> Self {
+        Self {
+            global: Arc::new(Semaphore::new(global)),
+            per_user: Arc::new(Mutex::new(HashMap::new())),
+            per_user_cap,
+        }
+    }
+
+    /// A place for one more stream, or `TooManyRequests` when the user already has
+    /// `per_user_cap` open, `Busy` when the instance is full.
+    fn acquire(&self, user: Uuid) -> Result<StreamSlot, AppError> {
+        let mut open = self.per_user.lock().unwrap_or_else(|e| e.into_inner());
+        let count = open.entry(user).or_insert(0);
+        if *count >= self.per_user_cap {
+            if *count == 0 {
+                open.remove(&user);
+            }
+            return Err(AppError::TooManyRequests);
+        }
+        let global = match self.global.clone().try_acquire_owned() {
+            Ok(permit) => permit,
+            Err(_) => {
+                if *count == 0 {
+                    open.remove(&user);
+                }
+                return Err(AppError::Busy);
+            }
+        };
+        *count += 1;
+        Ok(StreamSlot {
+            _global: global,
+            per_user: self.per_user.clone(),
+            user,
+        })
+    }
+}
+
+impl Drop for StreamSlot {
+    fn drop(&mut self) {
+        let mut open = self.per_user.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(count) = open.get_mut(&self.user) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                open.remove(&self.user);
+            }
+        }
+    }
+}
+
+/// The wait before the next store read: back to `min` after a change, doubling up to
+/// `max` while nothing changes.
+fn next_poll(current: Duration, changed: bool, min: Duration, max: Duration) -> Duration {
+    if changed { min } else { (current * 2).min(max) }
 }
 
 #[derive(Serialize)]
@@ -83,7 +191,9 @@ async fn start(
     let identity = state.identity.as_ref().ok_or(AppError::Unauthorized)?;
     // Each run spends model calls, news searches and link fetches on Honey's keys
     // (R-PF-4, R-IN-10): a per-user budget under a global ceiling.
-    RUNS.charge(identity, &owner.to_string()).await?;
+    // Replaced (audit #5): keyed per verified person, unverified wallets in a smaller slice.
+    // RUNS.charge(identity, &owner.to_string()).await?;
+    super::jar_buys::charge_per_person(identity, owner, RUNS, UNVERIFIED_RUNS).await?;
     let Json(input) = body.map_err(|_| AppError::BadRequest("invalid thesis request".into()))?;
     let run_id = state
         .service
@@ -108,7 +218,9 @@ async fn ask(
 ) -> Result<Json<AskAnswer>, AppError> {
     let owner = user(&state, &headers).await?;
     let identity = state.identity.as_ref().ok_or(AppError::Unauthorized)?;
-    ASKS.charge(identity, &owner.to_string()).await?;
+    // Keyed per verified person like runs; unverified wallets share a smaller slice.
+    // ASKS.charge(identity, &owner.to_string()).await?;
+    super::jar_buys::charge_per_person(identity, owner, ASKS, UNVERIFIED_ASKS).await?;
     let Json(input) = body.map_err(|_| AppError::BadRequest("invalid question".into()))?;
     state
         .service
@@ -206,16 +318,41 @@ async fn events(
         .await
         .map_err(|_| AppError::Busy)?
         .ok_or(AppError::NotFound)?;
+    // Replaced (audit #1): a fixed 1 s poll for 200 s, holding no concurrency slot.
+    // let service = state.service.clone();
+    // let polls = (EVENTS_MAX.as_secs() / EVENTS_POLL.as_secs().max(1)) as usize;
+    // let live = stream::unfold(
+    //     (service, 0usize, false, 0usize),
+    //     move |(service, sent, done, tick)| async move {
+    //         if done || tick > polls {
+    //             return None;
+    //         }
+    //         if tick > 0 {
+    //             tokio::time::sleep(EVENTS_POLL).await;
+    //         }
+    //         let (progress, finished) = match service.progress_of(owner, id).await {
+    //             Ok(Some(p)) => p,
+    //             Ok(None) => return None,
+    //             // Store briefly unavailable: try again on the next tick.
+    //             Err(_) => (Vec::new(), false),
+    //         };
+    //         let fresh: Vec<_> = progress.iter().skip(sent).map(to_event).collect();
+    //         let sent = sent.max(progress.len());
+    //         Some((stream::iter(fresh), (service, sent, finished, tick + 1)))
+    //     },
+    // )
+    // .flatten();
+    let slot = state.streams.acquire(owner)?;
     let service = state.service.clone();
-    let polls = (EVENTS_MAX.as_secs() / EVENTS_POLL.as_secs().max(1)) as usize;
+    let deadline = Instant::now() + EVENTS_MAX;
     let live = stream::unfold(
-        (service, 0usize, false, 0usize),
-        move |(service, sent, done, tick)| async move {
-            if done || tick > polls {
+        (service, slot, 0usize, false, None::<Duration>),
+        move |(service, slot, sent, done, wait)| async move {
+            if done || Instant::now() >= deadline {
                 return None;
             }
-            if tick > 0 {
-                tokio::time::sleep(EVENTS_POLL).await;
+            if let Some(wait) = wait {
+                tokio::time::sleep(wait).await;
             }
             let (progress, finished) = match service.progress_of(owner, id).await {
                 Ok(Some(p)) => p,
@@ -224,8 +361,17 @@ async fn events(
                 Err(_) => (Vec::new(), false),
             };
             let fresh: Vec<_> = progress.iter().skip(sent).map(to_event).collect();
+            let wait = next_poll(
+                wait.unwrap_or(EVENTS_POLL),
+                !fresh.is_empty(),
+                EVENTS_POLL,
+                EVENTS_POLL_MAX,
+            );
             let sent = sent.max(progress.len());
-            Some((stream::iter(fresh), (service, sent, finished, tick + 1)))
+            Some((
+                stream::iter(fresh),
+                (service, slot, sent, finished, Some(wait)),
+            ))
         },
     )
     .flatten();
@@ -250,16 +396,47 @@ async fn stream_run(
         .await
         .map_err(|_| AppError::Busy)?
         .ok_or(AppError::NotFound)?;
+    // Replaced (audit #1): a fixed 500 ms poll for 240 s, holding no concurrency slot.
+    // let service = state.service.clone();
+    // let polls = (STREAM_MAX.as_millis() / STREAM_POLL.as_millis()) as usize;
+    // let updates = stream::unfold(
+    //     (service, String::new(), false, 0usize),
+    //     move |(service, last, done, tick)| async move {
+    //         if done || tick > polls {
+    //             return None;
+    //         }
+    //         if tick > 0 {
+    //             tokio::time::sleep(STREAM_POLL).await;
+    //         }
+    //         let (body, finished) = match service.view(owner, id).await {
+    //             Ok(Some(view)) => {
+    //                 let finished = matches!(
+    //                     view.stage,
+    //                     crate::thesis::Stage::Done | crate::thesis::Stage::Failed
+    //                 );
+    //                 (serde_json::to_string(&view).unwrap_or_default(), finished)
+    //             }
+    //             Ok(None) => return None,
+    //             // Store briefly unavailable: try again on the next tick.
+    //             Err(_) => (last.clone(), false),
+    //         };
+    //         let event = (body != last)
+    //             .then(|| Ok::<_, Infallible>(Event::default().event("update").data(body.clone())));
+    //         Some((stream::iter(event), (service, body, finished, tick + 1)))
+    //     },
+    // )
+    // .flatten();
+    let slot = state.streams.acquire(owner)?;
     let service = state.service.clone();
-    let polls = (STREAM_MAX.as_millis() / STREAM_POLL.as_millis()) as usize;
+    let deadline = Instant::now() + STREAM_MAX;
     let updates = stream::unfold(
-        (service, String::new(), false, 0usize),
-        move |(service, last, done, tick)| async move {
-            if done || tick > polls {
+        (service, slot, String::new(), false, None::<Duration>),
+        move |(service, slot, last, done, wait)| async move {
+            if done || Instant::now() >= deadline {
                 return None;
             }
-            if tick > 0 {
-                tokio::time::sleep(STREAM_POLL).await;
+            if let Some(wait) = wait {
+                tokio::time::sleep(wait).await;
             }
             let (body, finished) = match service.view(owner, id).await {
                 Ok(Some(view)) => {
@@ -273,9 +450,19 @@ async fn stream_run(
                 // Store briefly unavailable: try again on the next tick.
                 Err(_) => (last.clone(), false),
             };
-            let event = (body != last)
+            let changed = body != last;
+            let wait = next_poll(
+                wait.unwrap_or(STREAM_POLL),
+                changed,
+                STREAM_POLL,
+                STREAM_POLL_MAX,
+            );
+            let event = changed
                 .then(|| Ok::<_, Infallible>(Event::default().event("update").data(body.clone())));
-            Some((stream::iter(event), (service, body, finished, tick + 1)))
+            Some((
+                stream::iter(event),
+                (service, slot, body, finished, Some(wait)),
+            ))
         },
     )
     .flatten();
@@ -292,10 +479,13 @@ async fn stream_run(
 }
 
 const STREAM_POLL: Duration = Duration::from_millis(500);
+/// Polls back off to this while the run is quiet (a model call can take many seconds).
+const STREAM_POLL_MAX: Duration = Duration::from_secs(4);
 /// Runs end within 180 s; Cloud Run's request timeout must be at least this (300 s).
 const STREAM_MAX: Duration = Duration::from_secs(240);
 
 const EVENTS_POLL: Duration = Duration::from_secs(1);
+const EVENTS_POLL_MAX: Duration = Duration::from_secs(5);
 /// A run ends within its 180 s deadline; the stream gives up a little after that.
 const EVENTS_MAX: Duration = Duration::from_secs(200);
 
@@ -315,5 +505,45 @@ mod tests {
         super::super::jar_buys::tests::assert_valid(RUNS);
         assert_eq!(RUNS.global, 20);
         super::super::jar_buys::tests::assert_valid(ASKS);
+    }
+
+    #[test]
+    fn unverified_wallets_share_under_a_third_of_the_run_budget() {
+        super::super::jar_buys::tests::assert_valid(UNVERIFIED_RUNS);
+        const { assert!(UNVERIFIED_RUNS.global * 3 <= RUNS.global) };
+        const { assert!(UNVERIFIED_RUNS.per_user <= RUNS.per_user) };
+        super::super::jar_buys::tests::assert_valid(UNVERIFIED_ASKS);
+        const { assert!(UNVERIFIED_ASKS.global * 3 <= ASKS.global) };
+        const { assert!(UNVERIFIED_ASKS.per_user <= ASKS.per_user) };
+    }
+
+    #[test]
+    fn open_streams_are_capped_per_user_and_globally_and_freed_on_drop() {
+        let slots = StreamSlots::new(4, 3);
+        let (alice, bob) = (Uuid::new_v4(), Uuid::new_v4());
+        let a: Vec<_> = (0..3).map(|_| slots.acquire(alice).unwrap()).collect();
+        assert!(matches!(
+            slots.acquire(alice),
+            Err(AppError::TooManyRequests)
+        ));
+        let b = slots.acquire(bob).unwrap();
+        // Instance full: Bob is refused although he has room of his own.
+        assert!(matches!(slots.acquire(bob), Err(AppError::Busy)));
+        drop(b);
+        drop(a);
+        assert!(slots.per_user.lock().unwrap().is_empty());
+        assert_eq!(slots.global.available_permits(), 4);
+        let _again: Vec<_> = (0..3).map(|_| slots.acquire(alice).unwrap()).collect();
+    }
+
+    #[test]
+    fn quiet_runs_are_polled_less_often() {
+        let (min, max) = (STREAM_POLL, STREAM_POLL_MAX);
+        let mut wait = min;
+        for _ in 0..10 {
+            wait = next_poll(wait, false, min, max);
+        }
+        assert_eq!(wait, max);
+        assert_eq!(next_poll(wait, true, min, max), min);
     }
 }

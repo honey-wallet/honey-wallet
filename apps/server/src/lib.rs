@@ -14,6 +14,7 @@
 
 pub mod aave_service;
 pub mod arrivals;
+pub mod bounded_lru;
 pub mod bridge_monitor;
 pub mod config;
 pub mod copy_fees;
@@ -330,6 +331,7 @@ fn router(config: &Config, health: runtime::RuntimeHealth, services: RouterServi
                 dex.clone(),
                 identity.as_ref().map(|i| i.pool().clone()),
             )
+            .with_identity(identity.clone())
             .with_sponsors(
                 evm.as_ref().map(|e| e.chain_names()).unwrap_or_default(),
                 solana_relayer.is_some(),
@@ -443,7 +445,8 @@ fn market_data() -> Option<std::sync::Arc<market_data::MarketData>> {
 
 /// Public balances and activity for the user's addresses (keyless public nodes).
 /// `fresh=1` reads skip its cache, a few a minute per client when Redis can count them
-/// (production always has Redis; a loopback dev server leaves them unlimited).
+/// (production always has Redis; a loopback dev server leaves them unlimited). Any read
+/// that misses the cache also spends the client's uncached-read quota.
 fn portfolio_router(
     market: Option<std::sync::Arc<market_data::MarketData>>,
     fresh_admission: Option<routes::identity::AuthenticatedApiAdmission>,

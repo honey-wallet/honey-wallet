@@ -150,6 +150,33 @@ async fn admit(
     Ok(())
 }
 
+/// DEX quotes one person's `POST /routes/best` calls may spend a minute.
+pub(crate) const ROUTE_QUOTES_PER_PERSON: i32 = super::best_route::PER_PERSON;
+
+/// Charges one route-planner DEX quote on `chain` against the same shared ceilings as
+/// `POST /dex/quote` ([`quotas`]: the overall one, the unverified slice and the
+/// provider's), with the planner's own per-person count (`route:` subjects).
+pub(crate) async fn charge_route_quote(
+    identity: &Identity,
+    user: Uuid,
+    chain: DexChain,
+) -> Result<(), AppError> {
+    let verified: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM user_verified_identities WHERE user_id = $1)",
+    )
+    .bind(user)
+    .fetch_one(identity.pool())
+    .await
+    .map_err(unavailable)?;
+    let subject = format!("route:{user}");
+    for (domain, global, _) in quotas(false, &[chain], verified) {
+        identity
+            .rate_limit_pair(domain, &subject, global, ROUTE_QUOTES_PER_PERSON)
+            .await?;
+    }
+    Ok(())
+}
+
 async fn quote(
     State(s): State<StateData>,
     headers: HeaderMap,
