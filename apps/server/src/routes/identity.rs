@@ -179,12 +179,44 @@ pub(crate) async fn limit_market_data_reads_by_ip(
 const PORTFOLIO_FRESH_GLOBAL_LIMIT: i32 = 6_000;
 const PORTFOLIO_FRESH_PEER_LIMIT: i32 = 30;
 
+/// Any portfolio read that misses the server's cache (an address nobody read in the last
+/// 20-60 s, or a `fresh` one) fans out to about nine node and explorer calls, so those
+/// get their own budget per client, far below the 6,000 a minute public reads allow.
+/// Over it, the read is answered from older cached data, or refused when there is none.
+/// Balances stay readable signed out.
+const PORTFOLIO_UNCACHED_GLOBAL_LIMIT: i32 = 12_000;
+const PORTFOLIO_UNCACHED_PEER_LIMIT: i32 = 120;
+
 pub(crate) async fn limit_fresh_portfolio_reads_by_ip(
     State(state): State<AuthenticatedApiAdmission>,
-    request: Request<axum::body::Body>,
+    mut request: Request<axum::body::Body>,
     next: Next,
 ) -> Response {
     let client = client_ip_from_request(state.trust_proxy, &state.trusted_proxy_cidrs, &request);
+    let gate = {
+        let redis = state.redis.clone();
+        let bucket = client
+            .as_ref()
+            .ok()
+            .map(|ip| client_bucket(*ip).to_string());
+        let (global, peer) = (
+            state.global_limit.min(PORTFOLIO_UNCACHED_GLOBAL_LIMIT),
+            state.peer_limit.min(PORTFOLIO_UNCACHED_PEER_LIMIT),
+        );
+        crate::portfolio::MissGate::new(move || {
+            let (redis, bucket) = (redis.clone(), bucket.clone());
+            async move {
+                let Some(bucket) = bucket else {
+                    return false;
+                };
+                redis
+                    .rate_limit_pair("portfolio_uncached", &bucket, global, peer)
+                    .await
+                    .is_ok()
+            }
+        })
+    };
+    request.extensions_mut().insert(gate);
     let request = crate::routes::portfolio::admit_fresh(request, client, |ip| async move {
         state
             .redis

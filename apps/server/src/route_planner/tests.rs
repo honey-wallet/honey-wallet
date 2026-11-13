@@ -94,6 +94,9 @@ struct Fake {
     dex: Vec<(&'static str, Answer)>,
     sponsored: bool,
     dex_calls: AtomicU32,
+    /// Budget charges, and whether the budgets are spent.
+    admits: Mutex<Vec<&'static str>>,
+    out_of_budget: bool,
 }
 
 impl Fake {
@@ -105,6 +108,8 @@ impl Fake {
             dex,
             sponsored: true,
             dex_calls: AtomicU32::new(0),
+            admits: Mutex::new(Vec::new()),
+            out_of_budget: false,
         }
     }
 }
@@ -185,6 +190,20 @@ impl Sources for Fake {
             return Some((1.0, 6));
         }
         (token == AERO).then_some((0.5, 18))
+    }
+    async fn admit_intents(&self, _: Uuid) -> Result<(), AppError> {
+        self.admits.lock().unwrap().push("intents");
+        if self.out_of_budget {
+            return Err(AppError::TooManyRequests);
+        }
+        Ok(())
+    }
+    async fn admit_dex(&self, _: Uuid, chain: DexChain) -> Result<(), AppError> {
+        self.admits.lock().unwrap().push(chain.name());
+        if self.out_of_budget {
+            return Err(AppError::TooManyRequests);
+        }
+        Ok(())
     }
     async fn gas(&self, _: Uuid, _: DexChain, work: Work) -> GasCost {
         GasCost {
@@ -890,4 +909,33 @@ async fn live_best_routes() {
         }
         tokio::time::sleep(Duration::from_secs(3)).await;
     }
+}
+
+#[tokio::test]
+async fn every_quote_is_charged_before_its_provider_is_asked() {
+    let p = planner(Fake::new(
+        vec![Answer::Out("9990000", "9950000")],
+        vec![(USDT_ARB, Answer::Out("10000000", "9990000"))],
+    ));
+    p.best(Uuid::new_v4(), stable_swap("10000000"))
+        .await
+        .unwrap();
+    let mut admits = p.sources().admits.lock().unwrap().clone();
+    admits.sort();
+    assert_eq!(admits, vec!["arbitrum", "intents"]);
+
+    // Budgets spent: no provider is asked, and the answer is 429, not "no route".
+    let mut fake = Fake::new(
+        vec![Answer::Out("9990000", "9950000")],
+        vec![(USDT_ARB, Answer::Out("10000000", "9990000"))],
+    );
+    fake.out_of_budget = true;
+    let p = planner(fake);
+    let err = p
+        .best(Uuid::new_v4(), stable_swap("10000000"))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, AppError::TooManyRequests), "{err:?}");
+    assert_eq!(p.sources().intents_calls.load(AtomicOrdering::SeqCst), 0);
+    assert_eq!(p.sources().dex_calls.load(AtomicOrdering::SeqCst), 0);
 }

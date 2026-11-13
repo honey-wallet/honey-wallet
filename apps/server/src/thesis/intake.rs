@@ -176,10 +176,12 @@ impl Intake {
                 return None;
             }
             let final_url = response.url().to_string();
-            let bytes = response.bytes().await.ok()?;
-            if bytes.len() > MAX_BODY {
-                return None;
-            }
+            // Replaced (audit #2): `bytes()` buffered a chunked body of any size before this check.
+            // let bytes = response.bytes().await.ok()?;
+            // if bytes.len() > MAX_BODY {
+            //     return None;
+            // }
+            let bytes = read_capped(response.bytes_stream(), MAX_BODY).await?;
             return Some((String::from_utf8_lossy(&bytes).into_owned(), final_url));
         }
         None
@@ -209,6 +211,27 @@ impl Intake {
 
 const MAX_REDIRECTS: usize = 3;
 
+/// The body, read chunk by chunk and given up as soon as it passes `max` bytes, so a
+/// chunked response without a Content-Length can't make the server buffer it whole.
+async fn read_capped<S, B, E>(body: S, max: usize) -> Option<Vec<u8>>
+where
+    S: futures_util::Stream<Item = Result<B, E>>,
+    B: AsRef<[u8]>,
+{
+    use futures_util::StreamExt;
+    let mut body = std::pin::pin!(body);
+    let mut out = Vec::new();
+    while let Some(chunk) = body.next().await {
+        let chunk = chunk.ok()?;
+        let chunk = chunk.as_ref();
+        if out.len().saturating_add(chunk.len()) > max {
+            return None;
+        }
+        out.extend_from_slice(chunk);
+    }
+    Some(out)
+}
+
 /// Whether an address is publicly routable. Refuses loopback, unspecified, private
 /// (RFC 1918, fc00::/7), link-local (169.254/16 incl. cloud metadata, fe80::/10), CGNAT
 /// (100.64/10), multicast, broadcast, documentation and IPv4-mapped forms of those.
@@ -229,8 +252,20 @@ pub fn is_public_ip(ip: std::net::IpAddr) -> bool {
                 || a >= 240)
         }
         IpAddr::V6(v6) => {
-            if let Some(v4) = v6.to_ipv4_mapped() {
+            // Replaced (audit #8): only IPv4-mapped addresses were decoded.
+            // if let Some(v4) = v6.to_ipv4_mapped() {
+            //     return is_public_ip(IpAddr::V4(v4));
+            // }
+            if v6.is_loopback() || v6.is_unspecified() {
+                return false;
+            }
+            if let Some(v4) = embedded_ipv4(v6) {
                 return is_public_ip(IpAddr::V4(v4));
+            }
+            let seg = v6.segments();
+            // Local-use NAT64 (64:ff9b:1::/48, RFC 8215) maps to whatever the network chooses.
+            if seg[0] == 0x64 && seg[1] == 0xff9b && seg[2] == 1 {
+                return false;
             }
             let first = v6.segments()[0];
             !(v6.is_loopback()
@@ -240,6 +275,26 @@ pub fn is_public_ip(ip: std::net::IpAddr) -> bool {
                 || (first & 0xffc0) == 0xfe80)
         }
     }
+}
+
+/// The IPv4 address an IPv6 address carries and would reach: IPv4-mapped
+/// (::ffff:0:0/96), IPv4-compatible (::/96), NAT64 (64:ff9b::/96) and 6to4 (2002::/16).
+fn embedded_ipv4(v6: std::net::Ipv6Addr) -> Option<std::net::Ipv4Addr> {
+    let seg = v6.segments();
+    let low = |hi: u16, lo: u16| {
+        std::net::Ipv4Addr::new((hi >> 8) as u8, hi as u8, (lo >> 8) as u8, lo as u8)
+    };
+    // Both IPv4-compatible and IPv4-mapped.
+    if let Some(v4) = v6.to_ipv4() {
+        return Some(v4);
+    }
+    if seg[..6] == [0x64, 0xff9b, 0, 0, 0, 0] {
+        return Some(low(seg[6], seg[7]));
+    }
+    if seg[0] == 0x2002 {
+        return Some(low(seg[1], seg[2]));
+    }
+    None
 }
 
 /// A URL the fetcher may request: http(s), ports 80/443 only, no credentials, and an
@@ -590,6 +645,15 @@ mod tests {
             "http://[fe80::1]/",
             "http://[fd00::1]/",
             "http://[::ffff:127.0.0.1]/",
+            "http://[::127.0.0.1]/",
+            "http://[::a9fe:a9fe]/",
+            "http://[64:ff9b::7f00:1]/",
+            "http://[64:ff9b::a9fe:a9fe]/",
+            "http://[64:ff9b::10.0.0.5]/",
+            "http://[64:ff9b:1::808:808]/",
+            "http://[2002:7f00:1::]/",
+            "http://[2002:a9fe:a9fe::1]/",
+            "http://[2002:c0a8:101::]/",
             "http://2130706433/",
             "http://0x7f000001/",
             "http://0.0.0.0/",
@@ -603,6 +667,24 @@ mod tests {
         assert!(safe_url("http://93.184.216.34/").is_some());
         assert!(is_public_ip("8.8.8.8".parse().unwrap()));
         assert!(!is_public_ip("224.0.0.1".parse().unwrap()));
+        // Embedded public IPv4 stays reachable; ordinary global IPv6 too.
+        for ip in ["64:ff9b::808:808", "2002:808:808::1", "2606:4700::1111"] {
+            assert!(is_public_ip(ip.parse().unwrap()), "{ip} should be allowed");
+        }
+    }
+
+    #[tokio::test]
+    async fn body_reads_stop_at_the_cap_without_a_length() {
+        use futures_util::stream;
+        let chunks =
+            |n: usize| stream::iter((0..n).map(|_| Ok::<_, std::io::Error>(vec![0u8; 1024])));
+        assert_eq!(read_capped(chunks(4), 4096).await.unwrap().len(), 4096);
+        assert!(read_capped(chunks(5), 4096).await.is_none());
+        // An endless chunked body ends at the cap rather than filling memory.
+        let endless = stream::repeat_with(|| Ok::<_, std::io::Error>(vec![0u8; 1024]));
+        assert!(read_capped(endless, MAX_BODY).await.is_none());
+        let failed = stream::iter([Err::<Vec<u8>, _>(std::io::Error::other("reset"))]);
+        assert!(read_capped(failed, 4096).await.is_none());
     }
 
     #[test]
