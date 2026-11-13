@@ -1424,6 +1424,149 @@ fn view_bytes(value: &Value) -> Value {
     json!({ "result": value.to_string().into_bytes(), "logs": [], "block_height": 1 })
 }
 
+/// A share link's read: as a signed-out viewer sees it, whoever asks (it is cached and
+/// shared), with only what a card draws, and nothing from a private account.
+#[tokio::test]
+#[ignore = "requires isolated TEST_DATABASE_URL"]
+async fn public_share_reads_serve_only_what_the_feed_shows() {
+    let db = TestDatabase::new().await;
+    let identity = identity(&db);
+    let alice = bearer(&identity, 31).await;
+    let (market, base) = one_click(
+        &[("ETH", 2000.0), ("SOL", 100.0), ("USDC", 1.0)],
+        Arc::default(),
+    )
+    .await;
+    let app = routes::social::router_with_one_click(Some(identity.clone()), Some(market), base);
+    let (status, _) = call(
+        &app,
+        "PUT",
+        "/social/me",
+        Some(&alice),
+        Some(json!({ "handle": "alice", "displayName": "Alice", "avatarSeed": "a" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, published) = call(
+        &app,
+        "POST",
+        "/social/jars",
+        Some(&alice),
+        Some(json!({
+            "clientId": "phone-jar-1",
+            "name": "Base bets",
+            "thesis": "Base keeps growing.",
+            "picks": [
+                { "symbol": "ETH", "chain": "Base", "weight": 60 },
+                { "symbol": "SOL", "chain": "Solana", "weight": 40 }
+            ],
+            "copyFee": 10
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{published}");
+    let id = published["id"].as_str().unwrap().to_string();
+    let path = format!("/public/jars/{id}");
+
+    // Signed out, and the owner's own session changes nothing.
+    for token in [None, Some(alice.as_str())] {
+        let response = app
+            .clone()
+            .oneshot({
+                let mut r = Request::builder().uri(&path);
+                if let Some(t) = token {
+                    r = r.header("authorization", format!("Bearer {t}"));
+                }
+                r.body(Body::empty()).unwrap()
+            })
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(
+            response.headers()["cache-control"]
+                .to_str()
+                .unwrap()
+                .starts_with("public,")
+        );
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let jar: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(jar["name"], "Base bets");
+        assert_eq!(jar["thesis"], "Base keeps growing.");
+        assert_eq!(jar["owner"]["handle"], "alice");
+        assert_eq!(jar["picks"][0]["symbol"], "ETH");
+        assert_eq!(jar["picks"][0]["weight"], 60.0);
+        let text = jar.to_string();
+        for private in ["phone-jar-1", "clientId", "copyFee", "mine", "groupId"] {
+            assert!(!text.contains(private), "{private} leaked: {text}");
+        }
+    }
+
+    // A thesis too.
+    let (status, post) = call(
+        &app,
+        "POST",
+        "/social/posts",
+        Some(&alice),
+        Some(
+            json!({ "body": "ETH keeps going.", "tokens": [{ "symbol": "ETH", "chain": "Base" }] }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{post}");
+    let post_path = format!("/public/posts/{}", post["id"].as_str().unwrap());
+    let (status, thesis) = call(&app, "GET", &post_path, Some(&alice), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(thesis["body"], "ETH keeps going.");
+    assert_eq!(thesis["tokens"][0]["symbol"], "ETH");
+    assert!(thesis.get("mine").is_none());
+
+    // Hidden holdings and returns stay hidden.
+    let (status, _) = call(
+        &app,
+        "PUT",
+        "/social/me/privacy",
+        Some(&alice),
+        Some(json!({ "showHoldings": false, "showReturns": false })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, jar) = call(&app, "GET", &path, None, None).await;
+    assert_eq!(jar["picks"], json!([]));
+    assert_eq!(jar["holdingsHidden"], true);
+    assert_eq!(jar["returnsHidden"], true);
+    assert_eq!(jar["returnSincePublish"], Value::Null);
+    assert_eq!(jar["copyable"], false);
+
+    // A private account: nothing, even for its owner.
+    let (status, _) = call(
+        &app,
+        "PUT",
+        "/social/me/privacy",
+        Some(&alice),
+        Some(json!({ "publicProfile": false })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    for p in [&path, &post_path] {
+        let (status, _) = call(&app, "GET", p, Some(&alice), None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{p}");
+    }
+
+    // Unknown and unpublished jars aren't found; ids must be UUIDs.
+    let (status, _) = call(
+        &app,
+        "GET",
+        &format!("/public/jars/{}", Uuid::new_v4()),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = call(&app, "GET", "/public/jars/not-a-uuid", None, None).await;
+    assert!(status.is_client_error());
+    db.close().await;
+}
+
 async fn near_rpc(chain: SharedChain) -> String {
     use base64::Engine;
     let app = Router::new().route(

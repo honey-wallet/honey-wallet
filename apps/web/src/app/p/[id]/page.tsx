@@ -1,52 +1,52 @@
 import type { Metadata } from 'next';
+import { PostHead, StrategyWell } from '@/components/site/share-card';
+import { Missing, price, SharePage } from '@/components/site/share-page';
 import {
-  Change,
-  Initial,
-  Missing,
-  type Post,
-  price,
-  read,
-  SharePage,
-} from '@/components/site/share-page';
+  equalWeights,
+  loadLogos,
+  loadThesis,
+  REVALIDATE,
+  thesisMetadata,
+  thesisMove,
+} from '@/lib/share';
 
 type Props = { params: Promise<{ id: string }> };
 
-const load = async (id: string) =>
-  /^[0-9a-f-]{36}$/i.test(id) ? read<Post>(`/social/posts/${id}`) : null;
+export const revalidate = REVALIDATE;
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
-  const post = await load((await params).id);
-  if (!post) return { title: 'Thesis · Honey' };
-  const tokens = post.tokens.map((t) => `$${t.symbol}`).join(' ');
-  return {
-    title: `@${post.author.handle}'s thesis on ${tokens} · Honey`,
-    description: post.body.slice(0, 200),
-  };
+  const { id } = await params;
+  return thesisMetadata(await loadThesis(id), id);
 }
 
-/** A shared thesis: who, which tokens at what price then and how they've done since. */
+/**
+ * A shared thesis (honeywallet.org/p/<id>): the words and its tokens in equal parts, as
+ * the Feed shows it, with each token's price when it was posted. "Buy these tokens"
+ * opens it in Honey (its jar, if it's about one).
+ */
 export default async function PostPage({ params }: Props) {
-  const post = await load((await params).id);
+  const { id } = await params;
+  const [post, logos] = await Promise.all([loadThesis(id), loadLogos()]);
   if (!post) return <Missing what="thesis" />;
+  const weights = equalWeights(post.tokens.length);
+  const only = post.tokens.length === 1 ? post.tokens[0] : undefined;
   return (
-    <SharePage openIn={`u/${post.author.handle}`}>
-      <div className="flex items-center gap-3">
-        <Initial name={post.author.displayName} />
-        <div className="flex flex-col">
-          <span className="font-semibold">@{post.author.handle}</span>
-          <span className="text-muted-foreground text-sm">Thesis</span>
-        </div>
-      </div>
-      <div className="flex flex-wrap gap-x-4 gap-y-1">
-        {post.tokens.map((t) => (
-          <span key={t.symbol} className="tabular-nums">
-            <strong>{t.symbol}</strong> {price(t.priceAtPost)} (<Change value={t.change} />)
-          </span>
-        ))}
-      </div>
-      <p className="whitespace-pre-wrap text-lg leading-relaxed">{post.body}</p>
-      <p className="text-muted-foreground text-sm">
-        Prices are when it was posted, then the move since.
+    <SharePage
+      bare
+      openIn={post.jarId ? `jar/social-${post.jarId}` : `jar/post-${post.id}`}
+      action={post.jarId ? 'Buy this jar' : only ? `Buy ${only.symbol}` : 'Buy these tokens'}
+    >
+      <PostHead who={post.author} words={post.body} />
+      <StrategyWell
+        name={only ? only.symbol : 'Equal parts'}
+        tokens={post.tokens.map((t, i) => ({ symbol: t.symbol, weight: weights[i] ?? 0 }))}
+        move={thesisMove(post)}
+        hidden={post.tokens.length === 0}
+        logos={logos}
+      />
+      <p className="text-muted-foreground text-sm tabular-nums">
+        {post.tokens.map((t) => `${t.symbol} ${price(t.priceAtPost)}`).join(' · ')} when posted,
+        then the move since.
       </p>
     </SharePage>
   );

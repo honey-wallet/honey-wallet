@@ -84,6 +84,8 @@ import type {
   PairMessage,
   PairSlot,
   PortfolioAddresses,
+  PublicJarSnapshot,
+  PublicThesisSnapshot,
   PushTokenRequest,
   PushTokenResult,
   SocialFeed,
@@ -938,6 +940,12 @@ export function createApiClient({ baseUrl, fetch: fetchImpl = fetch }: ApiClient
         `/api/v1/social/posts/${encodeURIComponent(id)}`,
         maybeAuthorized(accessToken),
       ),
+    /** A published jar for its share link: signed out, cacheable (`routes/social/public.rs`). */
+    publicJar: (id: string, init?: RequestInit) =>
+      request<PublicJarSnapshot>(`/api/v1/public/jars/${encodeURIComponent(id)}`, init),
+    /** A thesis for its share link: signed out, cacheable. */
+    publicThesis: (id: string, init?: RequestInit) =>
+      request<PublicThesisSnapshot>(`/api/v1/public/posts/${encodeURIComponent(id)}`, init),
     socialDeletePost: async (accessToken: string, id: string) => {
       await send(`/api/v1/social/posts/${encodeURIComponent(id)}`, {
         ...authorized(accessToken),

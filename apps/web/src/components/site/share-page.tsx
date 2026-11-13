@@ -1,10 +1,13 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
+import { LogoMark } from './logo';
+import { OpenInApp } from './open-in-app';
 
 /*
  * The pages behind Honey's share links (honeywallet.org/p/…, /u/…, /j/…): what was
- * shared, read-only, with "Open in Honey" (the app's deep link) and "Get Honey".
- * Server-rendered from the public social API, so links unfurl in chats.
+ * shared, read-only, with "Get Honey" and the main button ("Buy this jar", "Open in
+ * Honey") at the bottom. Server-rendered from the public API, so links unfurl in chats;
+ * jars and theses also have their own preview image (lib/og).
  */
 
 export const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? 'https://api.honeywallet.org').replace(
@@ -75,33 +78,42 @@ export function Initial({ name }: { name: string }) {
 
 export function SharePage({
   openIn,
+  action = 'Open in Honey',
+  bare = false,
   children,
 }: {
-  /** The app path to open, e.g. `u/priya`. */
+  /** The app path to open, e.g. `u/priya` or `jar/social-<id>`. */
   openIn: string;
+  /** The main button's words, e.g. "Buy this jar". */
+  action?: string;
+  /** The content draws its own card (a jar or thesis as the Feed shows it). */
+  bare?: boolean;
   children: ReactNode;
 }) {
   return (
-    <main className="mx-auto flex min-h-dvh max-w-md flex-col gap-6 px-4 py-10">
-      <Link href="/" className="font-semibold text-foreground">
-        Honey
+    <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col gap-6 px-4 py-8">
+      <Link href="/" className="flex items-center gap-2 font-semibold text-foreground">
+        <LogoMark className="h-[22px] w-[25px]" />
+        <span className="text-[1.0625rem] tracking-[-0.025em]">honey</span>
       </Link>
-      <section className="flex flex-col gap-4 rounded-3xl border border-border bg-card p-5">
+      <section
+        className={
+          bare
+            ? 'flex flex-col gap-4'
+            : 'flex flex-col gap-4 rounded-3xl border border-border bg-card p-5'
+        }
+      >
         {children}
       </section>
-      <div className="flex flex-col gap-3">
-        <a
-          href={`honeywallet://${openIn}`}
-          className="rounded-full bg-amber-400 px-5 py-3 text-center font-semibold text-neutral-900"
-        >
-          Open in Honey
-        </a>
+      {/* The main button is the bottom-most one. */}
+      <div className="mt-auto flex flex-col gap-3">
         <Link
           href="/get"
-          className="rounded-full border border-border px-5 py-3 text-center font-semibold"
+          className="rounded-full bg-[#F5F5F5] px-5 py-3.5 text-center font-semibold text-[#242329] dark:bg-neutral-800 dark:text-neutral-100"
         >
           Get Honey
         </Link>
+        <OpenInApp appPath={openIn} label={action} />
       </div>
     </main>
   );

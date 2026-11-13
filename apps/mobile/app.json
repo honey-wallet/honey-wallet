@@ -55,8 +55,38 @@
             },
             {
               "scheme": "https",
+              "host": "honeywallet.org",
+              "pathPrefix": "/j/"
+            },
+            {
+              "scheme": "https",
+              "host": "honeywallet.org",
+              "pathPrefix": "/p/"
+            },
+            {
+              "scheme": "https",
+              "host": "honeywallet.org",
+              "pathPrefix": "/u/"
+            },
+            {
+              "scheme": "https",
               "host": "www.honeywallet.org",
               "pathPrefix": "/app"
+            },
+            {
+              "scheme": "https",
+              "host": "www.honeywallet.org",
+              "pathPrefix": "/j/"
+            },
+            {
+              "scheme": "https",
+              "host": "www.honeywallet.org",
+              "pathPrefix": "/p/"
+            },
+            {
+              "scheme": "https",
+              "host": "www.honeywallet.org",
+              "pathPrefix": "/u/"
             }
           ],
           "category": ["BROWSABLE", "DEFAULT"]

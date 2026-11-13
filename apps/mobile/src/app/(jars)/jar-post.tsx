@@ -7,21 +7,24 @@ import { PillButton } from '@/components/onboarding/PillButton';
 import { SheetScreen } from '@/components/sheets/Sheet';
 import { SocialAvatar } from '@/components/social/parts';
 import { success, tap } from '@/lib/haptics';
-import { publishJar, socialError, useSocialMe } from '@/lib/social';
+import { publishJar, shareJar, socialError, useSocialMe } from '@/lib/social';
 import { TEST_MODE } from '@/lib/test-mode';
 import { thesisJars, useThesisJars } from '@/lib/thesis';
 import { showErrorToast, showToast } from '@/lib/toast';
+import { requireSignIn } from '@/lib/wallet-gate';
 import { makeStyles, useTheme } from '@/theme';
 
 /**
  * Right after a jar others can see is bought: the post it makes. Your face and handle,
  * the words it leads with, and the jar's card, as the Feed will show it. Post saves the
- * words on the jar and (re)publishes it; Not now leaves the jar's own summary.
+ * words on the jar and (re)publishes it, then opens the share sheet with its link
+ * (honeywallet.org/j/…, which chats show as the jar's card); Not now leaves the jar's own
+ * summary. Share on a jar only you see comes here first (`share=1`): a link needs it public.
  */
 export default function JarPostSheet() {
-  const { id = '' } = useLocalSearchParams<{ id?: string }>();
+  const { id = '', share } = useLocalSearchParams<{ id?: string; share?: string }>();
   const jar = useThesisJars().find((j) => j.id === id);
-  const { me } = useSocialMe();
+  const { me, loaded } = useSocialMe();
   const styles = useStyles();
   const c = useTheme();
   const [why, setWhy] = useState('');
@@ -31,16 +34,25 @@ export default function JarPostSheet() {
 
   const post = async () => {
     if (!text || posting) return;
+    // Posting needs a Honey sign-in and a handle; both come back here afterwards.
+    if (!TEST_MODE && !requireSignIn('post this jar', `/jar/${jar.id}`)) return;
+    if (!TEST_MODE && loaded && !me) {
+      router.push('/claim-handle');
+      return;
+    }
     tap();
     setPosting(true);
     // Posting puts it on the Feed, so it's Everyone's from now on.
     const next = { ...jar, thesis: text, visibility: 'public' as const };
     thesisJars.set((list) => list.map((j) => (j.id === jar.id ? next : j)));
     try {
-      if (!TEST_MODE && !(await publishJar(next))) throw new Error('Couldn’t post it. Try again.');
+      const published = TEST_MODE ? null : await publishJar(next);
+      if (!TEST_MODE && !published) throw new Error('Couldn’t post it. Try again.');
       success();
       showToast('Posted to the Feed');
       router.back();
+      // Its link, once the sheet is down: the native share sheet over the jar.
+      if (published) setTimeout(() => void shareJar(published), 350);
     } catch (error) {
       setPosting(false);
       showErrorToast(error instanceof Error ? error.message : socialError(error));
@@ -49,7 +61,7 @@ export default function JarPostSheet() {
 
   return (
     <SheetScreen
-      title="Post your jar"
+      title={share ? 'Post to share' : 'Post your jar'}
       // Skipping is a quiet word up top, so Post is the one button (X's composer).
       right={
         <PressableScale

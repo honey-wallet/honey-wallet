@@ -1,45 +1,40 @@
 import type { Metadata } from 'next';
-import { Change, Initial, type Jar, Missing, read, SharePage } from '@/components/site/share-page';
+import { PostHead, StrategyWell } from '@/components/site/share-card';
+import { Missing, SharePage } from '@/components/site/share-page';
+import { jarMetadata, loadJar, loadLogos, REVALIDATE } from '@/lib/share';
 
 type Props = { params: Promise<{ id: string }> };
 
-const load = async (id: string) =>
-  /^[0-9a-f-]{36}$/i.test(id) ? read<Jar>(`/social/jars/${id}`) : null;
+export const revalidate = REVALIDATE;
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
-  const jar = await load((await params).id);
-  if (!jar) return { title: 'Jar · Honey' };
-  return { title: `${jar.name} by @${jar.owner.handle} · Honey`, description: jar.thesis };
+  const { id } = await params;
+  return jarMetadata(await loadJar(id), id);
 }
 
-/** A shared public jar: its idea, its tokens and weights, and how it has done. */
+/**
+ * A shared jar (honeywallet.org/j/<id>): its card as the Feed shows it, and "Buy this
+ * jar", which opens it in Honey (its Copy buys it) or sends a phone to its store. With
+ * Honey installed the link itself opens the app (public/.well-known claims /j/*).
+ */
 export default async function JarPage({ params }: Props) {
-  const jar = await load((await params).id);
+  const { id } = await params;
+  const [jar, logos] = await Promise.all([loadJar(id), loadLogos()]);
   if (!jar) return <Missing what="jar" />;
   return (
-    <SharePage openIn={`u/${jar.owner.handle}`}>
-      <div className="flex items-center gap-3">
-        <Initial name={jar.owner.displayName} />
-        <div className="flex flex-col">
-          <span className="font-semibold">{jar.name}</span>
-          <span className="text-muted-foreground text-sm">by @{jar.owner.handle}</span>
-        </div>
-        <span className="ml-auto text-xl font-semibold">
-          <Change value={jar.returnSincePublish} />
-        </span>
-      </div>
-      {jar.thesis ? <p className="text-lg leading-relaxed">{jar.thesis}</p> : null}
-      <ul className="flex flex-col gap-1">
-        {jar.picks.map((p) => (
-          <li key={p.symbol} className="flex justify-between tabular-nums">
-            <span className="font-medium">{p.symbol}</span>
-            <span className="text-muted-foreground">{p.weight}%</span>
-          </li>
-        ))}
-      </ul>
-      <p className="text-muted-foreground text-sm">
-        {jar.copies} {jar.copies === 1 ? 'copy' : 'copies'} · return since it was published
-      </p>
+    <SharePage bare openIn={`jar/social-${jar.id}`} action="Buy this jar">
+      <PostHead who={jar.owner} words={jar.thesis || undefined} />
+      <StrategyWell
+        name={jar.name}
+        tokens={jar.picks}
+        move={jar.returnsHidden ? null : jar.returnSincePublish}
+        hidden={jar.holdingsHidden || jar.picks.length === 0}
+        note={jar.copies > 0 ? `${jar.copies} ${jar.copies === 1 ? 'copy' : 'copies'}` : undefined}
+        logos={logos}
+      />
+      {jar.returnsHidden ? null : (
+        <p className="text-muted-foreground text-sm">Return since it was published.</p>
+      )}
     </SharePage>
   );
 }

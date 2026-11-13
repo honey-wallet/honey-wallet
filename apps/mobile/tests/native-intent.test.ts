@@ -43,3 +43,16 @@ it('opens website /app links at the same screen in the app', () => {
     redirectSystemPath({ path: 'https://www.honeywallet.org/app/predict/1', initial: false }),
   ).toBe('/trade');
 });
+
+it('opens shared jar, thesis and profile links in the app', () => {
+  const id = '0b6c1f8e-2d4a-4c1e-9f3a-7e5d2b1a0c9d';
+  expect(redirectSystemPath({ path: `https://www.honeywallet.org/j/${id}`, initial: true })).toBe(
+    `/jar/social-${id}`,
+  );
+  expect(redirectSystemPath({ path: `/p/${id}`, initial: false })).toBe(`/jar/post-${id}`);
+  expect(redirectSystemPath({ path: 'https://honeywallet.org/u/alice', initial: false })).toBe(
+    '/u/alice',
+  );
+  // Not a share link: left to the usual handling.
+  expect(redirectSystemPath({ path: '/j/nope', initial: false })).toBe('/j/nope');
+});

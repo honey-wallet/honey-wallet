@@ -11,6 +11,12 @@ const nextConfig: NextConfig = {
      */
     qualities: [75, 96],
   },
+  // The share links' preview images read Inter (src/lib/og/fonts) and the bundled token
+  // logos (public/tokens) from disk (lib/og/card.tsx).
+  outputFileTracingIncludes: {
+    '/j/**': ['src/lib/og/fonts/*.ttf', 'public/tokens/*.png'],
+    '/p/**': ['src/lib/og/fonts/*.ttf', 'public/tokens/*.png'],
+  },
   // The pitch deck (deck/, built into public/deck by `pnpm build`) at /deck.
   async rewrites() {
     return [{ source: '/deck', destination: '/deck/index.html' }];

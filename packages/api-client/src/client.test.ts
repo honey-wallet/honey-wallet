@@ -130,6 +130,19 @@ describe('createApiClient', () => {
     expect(fetch).toHaveBeenCalledWith('http://api.test/api/v1/version', expect.anything());
   });
 
+  it('reads share-link snapshots signed out', async () => {
+    const fetch = mockFetch(200, { id: 'j1', name: 'Base bets' });
+    const api = createApiClient({ baseUrl: 'http://api.test', fetch });
+
+    await expect(api.publicJar('j1')).resolves.toMatchObject({ name: 'Base bets' });
+    await api.publicThesis('p/1');
+    expect(fetch.mock.calls.map((call) => call[0])).toEqual([
+      'http://api.test/api/v1/public/jars/j1',
+      'http://api.test/api/v1/public/posts/p%2F1',
+    ]);
+    expect(new Headers(fetch.mock.calls[0]?.[1]?.headers).get('authorization')).toBeNull();
+  });
+
   it('joins the waitlist with a JSON POST', async () => {
     const fetch = mockFetch(200, { status: 'joined' });
     const api = createApiClient({ baseUrl: 'http://api.test', fetch });

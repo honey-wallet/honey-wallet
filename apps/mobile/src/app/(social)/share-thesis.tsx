@@ -7,17 +7,21 @@ import { SheetRow, SheetScreen } from '@/components/sheets/Sheet';
 import { tap } from '@/lib/haptics';
 import { formatUsd } from '@/lib/mock-wallet';
 import { leaveSheetTo } from '@/lib/navigation';
+import { serverJarId, shareJarById, useSocial } from '@/lib/social';
 import { jarValue, useThesisJars } from '@/lib/thesis';
 import { makeStyles, radius, useTheme } from '@/theme';
 
 /**
- * Sharing a thesis is sharing a jar (2026-11-13): make a new one, or post one you
- * already have with the words it leads with. Replaces the old free-text composer.
+ * Sharing a thesis is sharing a jar (2026-11-13): make a new one, or share one you
+ * already have. One on the Feed goes straight to the share sheet with its link (chats
+ * show it as the jar's card); one only you see is posted first (jar-post), then shared.
  */
 export default function ShareThesisSheet() {
   const styles = useStyles();
   const c = useTheme();
   const mine = useThesisJars().filter((j) => j.mine && !j.groupId);
+  // Re-render when your published jars load, so each row knows it has a link.
+  useSocial();
   return (
     <SheetScreen title="Share a thesis">
       <PressableScale
@@ -54,7 +58,9 @@ export default function ShareThesisSheet() {
               accessory="chevron"
               onPress={() => {
                 tap();
-                router.replace({ pathname: '/jar-post', params: { id: jar.id } });
+                const serverId = serverJarId(jar.id);
+                if (serverId) void shareJarById(serverId, jar.name, jar.creator);
+                else router.replace({ pathname: '/jar-post', params: { id: jar.id, share: '1' } });
               }}
             />
           ))}

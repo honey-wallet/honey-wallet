@@ -28,9 +28,14 @@
 //!
 //! Group jars (`groups`): friends buy one jar together; a published group jar carries
 //! its members, and shows on every member's profile.
+//!
+//! Share links (`public`): one published jar or thesis as a signed-out viewer sees it,
+//! cacheable, for the site's share pages and their preview images.
 
 mod groups;
+mod public;
 pub(crate) use groups::{majority, record_created};
+pub use public::{JarSnapshot, ThesisSnapshot};
 
 use std::{
     collections::HashMap,
@@ -193,6 +198,7 @@ pub fn router_with(
         .route("/social/trades", post(record_trade))
         .route("/social/holders", get(holders))
         .merge(groups::routes())
+        .merge(public::routes())
         .with_state(SocialState {
             identity,
             market,
