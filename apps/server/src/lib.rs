@@ -16,6 +16,7 @@ pub mod aave_service;
 pub mod bridge_monitor;
 pub mod config;
 pub mod database;
+pub mod dex;
 pub mod earn_catalog;
 pub mod earn_service;
 pub mod error;
@@ -42,6 +43,7 @@ pub mod providers;
 pub mod push;
 pub mod reconciliation;
 pub mod redis_store;
+pub mod route_planner;
 pub mod routes;
 pub mod runtime;
 pub mod solana_relayer;
@@ -101,6 +103,9 @@ pub fn build_router_with_infrastructure(
         earn_catalog: infrastructure.earn().is_some(),
         authenticated_identity: identity.is_some(),
         redis: infrastructure.redis().is_some(),
+        // Set once DEX routing is built (`router`).
+        dex: false,
+        dex_sponsor: false,
     };
     Ok(router(
         config,
@@ -175,7 +180,7 @@ fn router(config: &Config, health: runtime::RuntimeHealth, services: RouterServi
         metrics,
         earn,
         work,
-        capability_adapters,
+        mut capability_adapters,
     } = services;
     // Supabase Auth identity (optional). Config is validated at startup; a client that
     // can't be built leaves the feature off rather than failing the whole API.
@@ -208,7 +213,30 @@ fn router(config: &Config, health: runtime::RuntimeHealth, services: RouterServi
             )
         }),
     );
-    let public_markets = public_markets.merge(portfolio);
+    // Honey's Solana fee payer; off unless switched on with its key.
+    let solana_relayer = solana_relayer::SolanaRelayer::from_env()
+        .map_err(|error| tracing::error!(%error, "Solana fee payer disabled"))
+        .ok()
+        .flatten()
+        .map(std::sync::Arc::new);
+    let buys = jar_buys(market.clone(), redis.clone());
+    // DEX routing (KyberSwap, Jupiter, GoPlus); builds offline, fetches lazily.
+    let dex = dex_service(
+        redis.clone(),
+        buys.clone(),
+        market.clone(),
+        solana_relayer.as_ref().map(|r| r.fee_payer()),
+        identity.as_ref().map(|i| i.pool().clone()),
+    );
+    // What the app shows: DEX tokens and routes only when `DEX_ENABLED`, free gas on
+    // swaps only when `DEX_SPONSOR_ENABLED` too.
+    capability_adapters.dex = dex.as_ref().is_some_and(|d| d.enabled());
+    capability_adapters.dex_sponsor = dex.as_ref().is_some_and(|d| d.sponsor_enabled());
+    let public_markets = public_markets.merge(portfolio).merge(
+        dex.clone()
+            .map(routes::dex::public_router)
+            .unwrap_or_default(),
+    );
     let public_markets = if let Some(redis) = redis.clone() {
         public_markets.route_layer(middleware::from_fn_with_state(
             routes::identity::AuthenticatedApiAdmission::new(
@@ -231,12 +259,6 @@ fn router(config: &Config, health: runtime::RuntimeHealth, services: RouterServi
     // jars and free gas; off unless its key is configured.
     let near_relayer = near_relayer::Relayer::from_env()
         .map_err(|error| tracing::error!(%error, "NEAR relayer disabled"))
-        .ok()
-        .flatten()
-        .map(std::sync::Arc::new);
-    // Honey's Solana fee payer; off unless switched on with its key.
-    let solana_relayer = solana_relayer::SolanaRelayer::from_env()
-        .map_err(|error| tracing::error!(%error, "Solana fee payer disabled"))
         .ok()
         .flatten()
         .map(std::sync::Arc::new);
@@ -286,9 +308,27 @@ fn router(config: &Config, health: runtime::RuntimeHealth, services: RouterServi
     // cannot silently omit protection before session lookup. Configuration GETs
     // colocated with these handlers also receive the generous IP-level budget;
     // their route-specific wallet quotas remain in the handlers that need them.
-    let buys = jar_buys(market.clone(), redis.clone());
     // EIP-7702 gas on Base, Arbitrum and Polygon; free gas lists its chains too.
-    let evm = evm_sponsor(identity.as_ref(), market.clone(), buys.clone());
+    let evm = evm_sponsor(identity.as_ref(), market.clone(), buys.clone(), dex.clone());
+    if let (Some(dex), Some(evm)) = (&dex, &evm) {
+        dex.set_evm_sponsored(evm.chain_ids());
+    }
+    // The route planner (`POST /routes/best`): NEAR Intents first, a DEX only when
+    // 1Click can't do the trade. Needs 1Click (jar buys) to be on.
+    let planner = buys.as_ref().map(|buys| {
+        std::sync::Arc::new(route_planner::Planner::new(
+            route_planner::LiveSources::new(
+                Some(buys.clone()),
+                market.clone(),
+                dex.clone(),
+                identity.as_ref().map(|i| i.pool().clone()),
+            )
+            .with_sponsors(
+                evm.as_ref().map(|e| e.chain_names()).unwrap_or_default(),
+                solana_relayer.is_some(),
+            ),
+        ))
+    });
     let private_api = Router::new()
         .merge(routes::account_identity::router_with_store(
             firebase_auth.clone(),
@@ -321,7 +361,18 @@ fn router(config: &Config, health: runtime::RuntimeHealth, services: RouterServi
             solana_relayer,
             near_relayer,
             evm.as_ref().map(|e| e.chain_names()).unwrap_or_default(),
+            dex.clone(),
         ))
+        .merge(
+            dex.clone()
+                .map(|dex| routes::dex::router(identity.clone(), dex))
+                .unwrap_or_default(),
+        )
+        .merge(
+            planner
+                .map(|planner| routes::best_route::router(identity.clone(), planner))
+                .unwrap_or_default(),
+        )
         .merge(routes::aave::router(identity.clone(), aave))
         .merge(routes::morpho::router(identity.clone(), morpho))
         .merge(routes::hyperliquid::router(identity.clone(), redis.clone()))
@@ -453,9 +504,11 @@ fn evm_sponsor(
     identity: Option<&identity::Identity>,
     market: Option<std::sync::Arc<market_data::MarketData>>,
     buys: Option<std::sync::Arc<jar_buys::JarBuys>>,
+    dex: Option<std::sync::Arc<dex::DexService>>,
 ) -> Option<std::sync::Arc<evm_sponsor::EvmSponsor>> {
     let pool = identity?.pool().clone();
-    let backend = std::sync::Arc::new(evm_sponsor::store::PgBackend::new(pool, market, buys));
+    let backend =
+        std::sync::Arc::new(evm_sponsor::store::PgBackend::new(pool, market, buys).with_dex(dex));
     evm_sponsor::EvmSponsor::from_env(backend)
         .map_err(|error| tracing::error!(%error, "EVM gas sponsorship disabled"))
         .ok()
@@ -466,6 +519,39 @@ fn evm_sponsor(
             sponsor.start_sweeper();
             sponsor
         })
+}
+
+/// DEX routing (off unless `DEX_ENABLED`; its routes then answer "not available"):
+/// quotes and provider rate budgets kept in Redis when it is configured (in memory
+/// otherwise); sponsored swaps only for people [`dex::PgGate`] lets through.
+fn dex_service(
+    redis: Option<redis_store::RedisStore>,
+    buys: Option<std::sync::Arc<jar_buys::JarBuys>>,
+    market: Option<std::sync::Arc<market_data::MarketData>>,
+    solana_payer: Option<String>,
+    pool: Option<sqlx::PgPool>,
+) -> Option<std::sync::Arc<dex::DexService>> {
+    match dex::DexService::from_env() {
+        Ok(dex) => {
+            let min_account_days = dex.config().sponsor_min_account_days;
+            let gate = pool.map(|pool| {
+                std::sync::Arc::new(dex::PgGate {
+                    pool,
+                    min_account_days,
+                }) as std::sync::Arc<dyn dex::SponsorGate>
+            });
+            Some(std::sync::Arc::new(
+                dex.with_redis(redis)
+                    .with_intents(buys, market)
+                    .with_solana_payer(solana_payer)
+                    .with_gate(gate),
+            ))
+        }
+        Err(error) => {
+            tracing::error!(%error, "DEX routing disabled");
+            None
+        }
+    }
 }
 
 /// Jar buy routes and shared jar DAOs.

@@ -14,6 +14,7 @@ import {
   SheetText,
   WalletSettingsRow,
 } from '@/components/sheets/Sheet';
+import { privateRoutes, setPrivateRoutes } from '@/lib/best-route';
 import { tap } from '@/lib/haptics';
 import { showToast } from '@/lib/toast';
 import { makeStyles, radius, useTheme } from '@/theme';
@@ -33,6 +34,8 @@ export default function SwapSettingsSheet() {
   const [slippage, setSlippage] = useState(5.5);
   const [smartRouting, setSmartRouting] = useState(true);
   const [deadline, setDeadline] = useState(30);
+  // Saved at once (lib/best-route): swaps and jars read it when they quote.
+  const { on: privateOnly } = privateRoutes.useValue();
 
   const go = (next: Page) => {
     tap();
@@ -69,6 +72,20 @@ export default function SwapSettingsSheet() {
               value={`${autoSlippage ? 'Auto · ' : ''}${slippage.toFixed(2)}%`}
               accessory="chevron"
               onPress={() => go('slippage')}
+            />
+            <SheetRow
+              title="Private routes only"
+              subtitle="NEAR Intents only. Without it, a swap NEAR Intents can't do uses a public DEX"
+              accessory={
+                <Toggle
+                  accessibilityLabel="Private routes only (NEAR Intents)"
+                  value={privateOnly}
+                  onValueChange={(v) => {
+                    tap();
+                    setPrivateRoutes(v);
+                  }}
+                />
+              }
             />
             {/* No Swap protection row: private submission isn't built, and a dead toggle
                 only advertised it. */}

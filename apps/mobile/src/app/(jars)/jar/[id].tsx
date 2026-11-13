@@ -59,6 +59,7 @@ import {
   lineSpanMs,
 } from '@/lib/jar-chart';
 import { useDaoJar } from '@/lib/jar-dao';
+import { dexLegText } from '@/lib/jar-dex';
 import { useJarValues } from '@/lib/jar-holdings';
 import { livePrices, useLivePrices, useTokenChart } from '@/lib/market';
 import { formatUsd, RANGE_LABEL } from '@/lib/mock-wallet';
@@ -103,7 +104,8 @@ import { makeStyles, radius, useTheme } from '@/theme';
 
 /** The jar's mark beside the hero: the height of the number plus its period line. */
 const HERO_ICON = 56;
-const FINAL = new Set(['SUCCESS', 'REFUNDED', 'FAILED', 'NOT_SENT']);
+// A DEX leg holding USDC waits for Finish or Move back (Activity), not for a poll.
+const FINAL = new Set(['SUCCESS', 'REFUNDED', 'FAILED', 'NOT_SENT', 'HOLDING_USDC']);
 const STATE_TEXT: Record<string, string> = {
   NOT_SENT: 'Not sent',
   PENDING_DEPOSIT: 'Waiting for payment',
@@ -113,7 +115,10 @@ const STATE_TEXT: Record<string, string> = {
   INCOMPLETE_DEPOSIT: 'Paid too little',
   REFUNDED: 'Refunded',
   FAILED: 'Failed',
+  HOLDING_USDC: 'Holding USDC',
 };
+const needsYou = (s: string) =>
+  s === 'FAILED' || s === 'INCOMPLETE_DEPOSIT' || s === 'HOLDING_USDC';
 const RANGE_POINTS: Record<JarRange, number> = {
   '1D': 2,
   '1W': 8,
@@ -902,20 +907,16 @@ function JarBody({
                 value={
                   <StatusPill
                     tone={
-                      l.status === 'SUCCESS'
-                        ? 'done'
-                        : l.status === 'FAILED' || l.status === 'INCOMPLETE_DEPOSIT'
-                          ? 'failed'
-                          : 'waiting'
+                      l.status === 'SUCCESS' ? 'done' : needsYou(l.status) ? 'failed' : 'waiting'
                     }
                     icon={
                       l.status === 'SUCCESS'
                         ? 'checkCircle'
-                        : l.status === 'FAILED' || l.status === 'INCOMPLETE_DEPOSIT'
+                        : needsYou(l.status)
                           ? 'warning'
                           : 'clock'
                     }
-                    text={STATE_TEXT[l.status] ?? l.status}
+                    text={dexLegText(l) ?? STATE_TEXT[l.status] ?? l.status}
                   />
                 }
               />

@@ -8,7 +8,8 @@ import { SkeletonBar, SkeletonReveal, useFirstLoad } from '@/components/motion/S
 import { Sticky } from '@/components/motion/Sticky';
 import { ProposalRow, ProposalRowSkeleton } from '@/components/wallet/MultisigParts';
 import { EmptyState, TokenIcon } from '@/components/wallet/parts';
-import { activityFeed, jarBuyRecords, swapRecords } from '@/lib/activity-feed';
+import { activityFeed, dexSwapRecords, jarBuyRecords, swapRecords } from '@/lib/activity-feed';
+import { useDexSwaps } from '@/lib/dex';
 import { tap } from '@/lib/haptics';
 import { loadSwapTokens, swapTokenList, useIntentsSwaps } from '@/lib/intents-swap';
 import { LOADS } from '@/lib/loads';
@@ -73,13 +74,18 @@ export function ActivitySection() {
   const spam = real ? items.filter((i) => isLikelySpam(i, known)) : [];
   // Swaps and jar buys this phone made: a watched wallet never pays, so it has none.
   const swaps = useIntentsSwaps();
+  const dexSwaps = useDexSwaps();
   const jars = useThesisJars();
   const local = useMemo(
     () =>
       real && !wallet.watchOnly
-        ? [...swapRecords(Object.values(swaps), wallet.id), ...jarBuyRecords(jars)]
+        ? [
+            ...swapRecords(Object.values(swaps), wallet.id),
+            ...dexSwapRecords(Object.values(dexSwaps), wallet.id),
+            ...jarBuyRecords(jars),
+          ]
         : [],
-    [real, wallet.watchOnly, wallet.id, swaps, jars],
+    [real, wallet.watchOnly, wallet.id, swaps, dexSwaps, jars],
   );
   const all = real
     ? activityFeed(showSpam ? items : items.filter((i) => !spam.includes(i)), local)

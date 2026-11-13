@@ -1,0 +1,430 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Route } from '../src/lib/jar-routes';
+import {
+  AERO,
+  ATTACKER,
+  approve,
+  deviceRpc,
+  dexDeps,
+  fakeServer,
+  GRAIL,
+  ME,
+  MY_SOL,
+  NOW,
+  quoteFor,
+  ROUTER,
+  routerCall,
+  TX,
+  USDC_ARB,
+} from './dex-fixtures';
+
+const WALLET = { id: 'w1', kind: 'wallet', addresses: { evm: ME, solana: MY_SOL, near: '' } };
+
+vi.mock('@/lib/api', () => ({ api: { jarBuyDeposit: vi.fn(async () => undefined) } }));
+vi.mock('@/lib/auth', () => ({ confirmOwner: vi.fn() }));
+vi.mock('@/lib/backend-session', () => ({ backendSessionToken: () => 'session' }));
+vi.mock('@/lib/dapp-sign', () => ({ prepareEvmSend: vi.fn() }));
+vi.mock('@/lib/vault', () => ({ privateKeyOf: vi.fn(async () => new Uint8Array(32).fill(7)) }));
+vi.mock('@/lib/market', () => ({ livePrices: () => ({}) }));
+vi.mock('@/lib/intents-swap', () => ({
+  fetchSwapTokens: vi.fn(async () => []),
+  intentsSwaps: { get: () => ({}) },
+}));
+vi.mock('@/lib/wallets', () => ({
+  wallets: { get: () => ({ activeId: 'w1', added: [WALLET] }) },
+}));
+
+const { payJarBuy, quoteJarBuy, USDC_ORIGINS } = await import('../src/lib/jar-buy');
+const jarDex = await import('../src/lib/jar-dex');
+const { jarBuyRecords } = await import('../src/lib/activity-feed');
+const { valueJar } = await import('../src/lib/jar-holdings');
+const { outstandingBatches } = await import('@/lib/evm-in-flight');
+
+const M = (usd: number) => BigInt(Math.round(usd * 1e6));
+const ARB_USDC_ASSET = 'nep141:arb-0xaf88d065e77c8cc2239327c5edb3a432268e5831.omft.near';
+const DEPOSIT = '0x4444444444444444444444444444444444444444';
+const inMinutes = (m: number) => new Date(Date.now() + m * 60_000).toISOString();
+
+const dexRoute = (symbol: string, chain: string, address: string, usd: number): Route => ({
+  symbol,
+  usd,
+  legs: [{ chain, venue: 'DEX', usd, units: 1, dex: { chain, address, decimals: 9 } }],
+  slippage: 0.003,
+  bridgeUsd: 0,
+  status: 'ok',
+});
+const intentsRoute = (symbol: string, usd: number, assetId: string): Route => ({
+  symbol,
+  usd,
+  legs: [{ chain: 'NEAR', venue: 'Pool', usd, units: 1, assetId }],
+  slippage: 0.001,
+  bridgeUsd: 0,
+  status: 'ok',
+});
+
+/** 1Click: a quote for each leg asked (to the wallet), and its own record confirming it. */
+function oneClick(destinationAsset = ARB_USDC_ASSET) {
+  const quote = vi.fn(
+    async (
+      _t: string,
+      input: {
+        originAsset: string;
+        refundTo: string;
+        legs: { destinationAsset: string; amount: string; recipient: string }[];
+      },
+    ) => ({
+      originAsset: input.originAsset,
+      totalUsd: 10,
+      capUsd: 250,
+      legs: input.legs.map((l) => ({
+        destinationAsset: l.destinationAsset,
+        depositAddress: DEPOSIT,
+        depositMemo: null,
+        amountIn: l.amount,
+        amountOut: ((BigInt(l.amount) * 995n) / 1000n).toString(),
+        minAmountOut: ((BigInt(l.amount) * 990n) / 1000n).toString(),
+        amountOutUsd: null,
+        deadline: inMinutes(15),
+        recipient: l.recipient,
+        refundTo: input.refundTo,
+        slippageBps: 100,
+        signature: null,
+      })),
+    }),
+  );
+  const fetcher = (async () =>
+    new Response(
+      JSON.stringify({
+        status: 'PENDING_DEPOSIT',
+        quoteResponse: {
+          quoteRequest: {
+            originAsset: USDC_ORIGINS.Base,
+            destinationAsset,
+            amount: '10000000',
+            recipient: ME,
+            refundTo: ME,
+            swapType: 'EXACT_INPUT',
+            depositType: 'ORIGIN_CHAIN',
+            recipientType: 'DESTINATION_CHAIN',
+            refundType: 'ORIGIN_CHAIN',
+            slippageTolerance: 100,
+          },
+          quote: { depositAddress: DEPOSIT, amountIn: '10000000', minAmountOut: '9900000' },
+        },
+      }),
+    )) as unknown as typeof fetch;
+  return { quote, fetcher };
+}
+
+const prices = async () => ({
+  [`dex:base:${AERO.toLowerCase()}`]: 1,
+  [`dex:arbitrum:${GRAIL.toLowerCase()}`]: 1,
+});
+
+beforeEach(() => {
+  outstandingBatches.set({});
+  jarDex.forgetConsent();
+});
+
+describe('a jar pick NEAR Intents doesn’t list', () => {
+  it('buys on the same chain with the USDC already there: one DEX swap, no 1Click', async () => {
+    const api = fakeServer();
+    const rpc = deviceRpc({ [TX('a')]: '0x1' });
+    const d = dexDeps(api, rpc);
+    const { quote, fetcher } = oneClick();
+    const quoted = await quoteJarBuy([dexRoute('AERO', 'Base', AERO, 10)], 0.01, {
+      balances: async () => ({ Base: M(25) }),
+      quote: quote as never,
+      fetcher,
+      dex: d,
+      dexPrices: prices,
+    });
+    expect(quote).not.toHaveBeenCalled();
+    expect(quoted.legs).toHaveLength(1);
+    expect(quoted.legs[0]).toMatchObject({
+      route: 'dex',
+      amountIn: '10000000',
+      dex: { chain: 'Base', bridged: false, stage: 'ready', aggregator: 'KyberSwap' },
+    });
+    const confirm = vi.fn(async () => true);
+    const sponsorEvm = vi.fn();
+    const paid = await payJarBuy(quoted.legs, undefined, undefined, {
+      confirm,
+      dex: d,
+      sponsorEvm,
+    });
+    expect(confirm).toHaveBeenCalledTimes(1);
+    // No 1Click deposit batch: the swap itself pays.
+    expect(sponsorEvm).not.toHaveBeenCalled();
+    expect(api.evmSubmit).toHaveBeenCalledWith(
+      'session',
+      expect.objectContaining({ quoteId: expect.any(String) }),
+    );
+    expect(paid[0]).toMatchObject({
+      status: 'PROCESSING',
+      txHash: TX('a'),
+      dex: { stage: 'swapping' },
+    });
+    // Lands: bought.
+    const after = await jarDex.advanceDexLegs(paid, {
+      dex: d,
+      bridge: vi.fn(),
+      wallet: () => WALLET,
+      moveStatus: () => undefined,
+      now: () => NOW,
+    });
+    expect(after[0]).toMatchObject({ status: 'SUCCESS', dex: { stage: 'done' } });
+  });
+
+  it('keeps NEAR Intents for tokens it lists', async () => {
+    const api = fakeServer();
+    const { quote, fetcher } = oneClick('nep141:base-0xbrett.omft.near');
+    const route: Route = {
+      ...intentsRoute('BRETT', 10, 'nep141:base-0xbrett.omft.near'),
+      legs: [
+        {
+          chain: 'Base',
+          venue: 'Pool',
+          usd: 10,
+          units: 1,
+          assetId: 'nep141:base-0xbrett.omft.near',
+        },
+      ],
+    };
+    const out = await quoteJarBuy([route], 0.01, {
+      balances: async () => ({ Base: M(25) }),
+      quote: quote as never,
+      fetcher,
+      tokens: async () => [{ assetId: 'nep141:base-0xbrett.omft.near', decimals: 6, price: 1 }],
+      dex: dexDeps(api),
+    });
+    expect(quote).toHaveBeenCalledTimes(1);
+    expect(out.legs[0]).toMatchObject({
+      depositAddress: DEPOSIT,
+      destinationAsset: 'nep141:base-0xbrett.omft.near',
+    });
+    expect(out.legs[0]?.route).toBeUndefined();
+    // The DEX was never asked.
+    expect(api.quote).not.toHaveBeenCalled();
+  });
+
+  describe('on another chain', () => {
+    const quoteCross = async (d: ReturnType<typeof dexDeps>) => {
+      const { quote, fetcher } = oneClick();
+      const quoted = await quoteJarBuy([dexRoute('GRAIL', 'Arbitrum', GRAIL, 10)], 0.01, {
+        balances: async () => ({ Base: M(25) }),
+        quote: quote as never,
+        fetcher,
+        tokens: async () => [{ assetId: ARB_USDC_ASSET, decimals: 6, price: 1 }],
+        usdcAsset: async () => ARB_USDC_ASSET,
+        dex: d,
+        dexPrices: prices,
+      });
+      return { quoted, quote };
+    };
+
+    it('sends 1Click USDC to the wallet on that chain, then buys there once it lands', async () => {
+      const api = fakeServer();
+      const d = dexDeps(api, deviceRpc({ [TX('a')]: '0x1' }));
+      const { quoted, quote } = await quoteCross(d);
+      expect(quote).toHaveBeenCalledWith(
+        'session',
+        expect.objectContaining({
+          originAsset: USDC_ORIGINS.Base,
+          legs: [{ destinationAsset: ARB_USDC_ASSET, amount: '10000000', recipient: ME }],
+        }),
+      );
+      // The DEX leg is quoted on what 1Click guarantees to deliver.
+      expect(api.quote).toHaveBeenCalledWith(
+        'session',
+        expect.objectContaining({ chain: 'Arbitrum', sellToken: USDC_ARB, sellAmount: '9900000' }),
+      );
+      const leg = quoted.legs[0];
+      expect(leg).toMatchObject({
+        route: 'dex',
+        depositAddress: DEPOSIT,
+        dex: { bridged: true, stage: 'bridging' },
+      });
+      // One Face ID pays the bridge (in Base's free-gas batch) and covers the DEX half.
+      const sendSponsored = vi.fn(async () => ({ hash: TX('d'), id: 'x' }));
+      const paid = await payJarBuy(quoted.legs, undefined, undefined, {
+        confirm: async () => true,
+        sponsorEvm: vi.fn(async () => ({ plan: {} as never, calls: [] })),
+        sendSponsored,
+        dex: d,
+      });
+      expect(paid[0]).toMatchObject({ status: 'KNOWN_DEPOSIT_TX', txHash: TX('d') });
+      expect(api.evmSubmit).not.toHaveBeenCalled();
+      // Activity: still waiting for the USDC.
+      const jar = { id: 'j1', name: 'L2s', mine: true, createdAt: NOW, buy: paid } as never;
+      expect(jarBuyRecords([jar])[0]?.row.detail).toBe(
+        'Buying GRAIL · waiting for USDC on Arbitrum',
+      );
+      // 1Click delivered 9.95 USDC on Arbitrum: the DEX half sells all of it.
+      const bridge = vi.fn(async (l: typeof leg) => ({
+        ...l,
+        status: 'SUCCESS' as const,
+        amountOut: '9950000',
+      }));
+      const deps = {
+        dex: d,
+        bridge,
+        wallet: () => WALLET,
+        moveStatus: () => undefined,
+        now: () => Date.now(),
+      };
+      const swapped = await jarDex.advanceDexLegs(paid, deps);
+      expect(api.quote).toHaveBeenLastCalledWith(
+        'session',
+        expect.objectContaining({ sellAmount: '9950000' }),
+      );
+      expect(swapped[0]).toMatchObject({
+        status: 'PROCESSING',
+        dex: { stage: 'swapping', swapTx: TX('a') },
+      });
+      const done = await jarDex.advanceDexLegs(swapped, deps);
+      expect(done[0]).toMatchObject({ status: 'SUCCESS', dex: { stage: 'done' } });
+    });
+
+    it('keeps the USDC when the DEX half fails, with Finish and Move back', async () => {
+      const api = fakeServer();
+      const rpc = deviceRpc({ [TX('a')]: '0x0' });
+      const d = dexDeps(api, rpc);
+      const { quoted } = await quoteCross(d);
+      const paid = await payJarBuy(quoted.legs, undefined, undefined, {
+        confirm: async () => true,
+        sponsorEvm: vi.fn(async () => ({ plan: {} as never, calls: [] })),
+        sendSponsored: vi.fn(async () => ({ hash: TX('d'), id: 'x' })),
+        dex: d,
+      });
+      const bridge = vi.fn(async (l: (typeof paid)[number]) => ({
+        ...l,
+        status: 'SUCCESS' as const,
+        amountOut: '9900000',
+      }));
+      const deps = {
+        dex: d,
+        bridge,
+        wallet: () => WALLET,
+        moveStatus: vi.fn(),
+        now: () => Date.now(),
+      };
+      // The swap went out and reverted on chain: the USDC never left.
+      const reverted = await jarDex.advanceDexLegs(await jarDex.advanceDexLegs(paid, deps), deps);
+      expect(reverted[0]).toMatchObject({
+        status: 'HOLDING_USDC',
+        dex: { stage: 'holding', usdc: '9900000' },
+      });
+      const jar = { id: 'j1', name: 'L2s', mine: true, createdAt: NOW, buy: reverted } as never;
+      expect(jarBuyRecords([jar])[0]?.row.detail).toBe('GRAIL · holding USDC on Arbitrum');
+      // The jar counts the USDC it holds, so its value never dips.
+      expect(valueJar({ buy: reverted }, () => null)).toEqual({ value: 9.9, cost: 10 });
+
+      // Finish: one more Face ID, a fresh quote, the swap again.
+      const confirm = vi.fn(async () => true);
+      api.evmSubmit.mockResolvedValueOnce({ id: 'sp-2', chainId: 42161, txHash: TX('e') });
+      const finished = await jarDex.finishDexLegs(reverted, {
+        dex: d,
+        wallet: () => WALLET,
+        confirm,
+        moveBack: vi.fn(),
+      });
+      expect(confirm).toHaveBeenCalledWith('Buy GRAIL with $9.90 of USDC');
+      expect(finished[0]).toMatchObject({
+        status: 'PROCESSING',
+        dex: { stage: 'swapping', swapTx: TX('e') },
+      });
+
+      // Move back: 1Click takes the USDC home to Base.
+      const moveBack = vi.fn(async () => 'move-deposit');
+      const moving = await jarDex.moveBackDexLegs(reverted, { moveBack });
+      expect(moveBack).toHaveBeenCalledWith({ from: 'Arbitrum', to: 'Base', amount: '9.9' });
+      expect(moving[0]).toMatchObject({
+        status: 'PROCESSING',
+        dex: { stage: 'moving', moveBack: 'move-deposit' },
+      });
+      deps.moveStatus.mockReturnValue('SUCCESS');
+      const home = await jarDex.advanceDexLegs(moving, deps);
+      expect(home[0]).toMatchObject({ status: 'REFUNDED', dex: { stage: 'moved' } });
+    });
+
+    it('never auto-signs a bridged leg’s requote that pays someone else (audit finding 1)', async () => {
+      // The review's quote is honest; the requote after the bridge lands is not: its
+      // JSON floor looks right, but the router calldata pays an attacker.
+      const api = fakeServer([
+        (req) => quoteFor(req),
+        (req) =>
+          quoteFor(req, {
+            evm: {
+              calls: [
+                approve(req.sellToken, ROUTER, BigInt(req.sellAmount)),
+                routerCall(req, BigInt(req.sellAmount) * 990n, (s) => {
+                  s.desc.dstReceiver = ATTACKER;
+                }),
+              ],
+            },
+          }),
+      ]);
+      const d = dexDeps(api);
+      const { quoted } = await quoteCross(d);
+      const paid = await payJarBuy(quoted.legs, undefined, undefined, {
+        confirm: async () => true,
+        sponsorEvm: vi.fn(async () => ({ plan: {} as never, calls: [] })),
+        sendSponsored: vi.fn(async () => ({ hash: TX('d'), id: 'x' })),
+        dex: d,
+      });
+      const bridge = vi.fn(async (l: (typeof paid)[number]) => ({
+        ...l,
+        status: 'SUCCESS' as const,
+        amountOut: '9900000',
+      }));
+      const out = await jarDex.advanceDexLegs(paid, {
+        dex: d,
+        bridge,
+        wallet: () => WALLET,
+        moveStatus: () => undefined,
+        now: () => Date.now(),
+      });
+      expect(api.quote).toHaveBeenCalledTimes(2);
+      expect(out[0]).toMatchObject({
+        status: 'HOLDING_USDC',
+        dex: { stage: 'holding', error: 'The quote changed. Review again.' },
+      });
+      expect(api.evmPrepare).not.toHaveBeenCalled();
+      expect(api.evmSubmit).not.toHaveBeenCalled();
+    });
+
+    it('waits as USDC when the quote fails or the confirmation has lapsed', async () => {
+      const api = fakeServer();
+      const d = dexDeps(api);
+      const { quoted } = await quoteCross(d);
+      const paid = await payJarBuy(quoted.legs, undefined, undefined, {
+        confirm: async () => true,
+        sponsorEvm: vi.fn(async () => ({ plan: {} as never, calls: [] })),
+        sendSponsored: vi.fn(async () => ({ hash: TX('d'), id: 'x' })),
+        dex: d,
+      });
+      const bridge = vi.fn(async (l: (typeof paid)[number]) => ({
+        ...l,
+        status: 'SUCCESS' as const,
+        amountOut: '9900000',
+      }));
+      const deps = {
+        dex: d,
+        bridge,
+        wallet: () => WALLET,
+        moveStatus: () => undefined,
+        now: () => Date.now(),
+      };
+      // The server has no route right now.
+      api.quote.mockRejectedValueOnce(new Error('down'));
+      const failed = await jarDex.advanceDexLegs(paid, deps);
+      expect(failed[0]).toMatchObject({ status: 'HOLDING_USDC', dex: { stage: 'holding' } });
+      // The app was restarted (or it took too long): nothing runs without asking.
+      jarDex.forgetConsent();
+      const lapsed = await jarDex.advanceDexLegs(paid, deps);
+      expect(lapsed[0]).toMatchObject({ status: 'HOLDING_USDC' });
+      expect(api.evmSubmit).not.toHaveBeenCalled();
+    });
+  });
+});

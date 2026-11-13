@@ -182,7 +182,8 @@ async fn capabilities_never_advertise_unimplemented_trading() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["schemaVersion"], 3);
     let features = body["features"].as_array().unwrap();
-    assert_eq!(features.len(), 15);
+    // 15 plus DEX routing's two, off by default (DEX_ENABLED, DEX_SPONSOR_ENABLED).
+    assert_eq!(features.len(), 17);
     assert!(features.iter().all(|f| {
         f["available"] == false
             && f["scope"] == "unavailable"
@@ -198,6 +199,8 @@ async fn capabilities_never_advertise_unimplemented_trading() {
                             | "earn_catalog"
                             | "prediction_markets"
                             | "price_stream"
+                            | "dex_swaps"
+                            | "dex_sponsored_swaps"
                     )
                 ) {
                     "not_configured"

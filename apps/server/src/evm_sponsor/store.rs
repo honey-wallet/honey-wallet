@@ -9,6 +9,7 @@ use uuid::Uuid;
 
 use super::{ChainSpec, SponsorBackend, Sponsorship};
 use crate::{
+    dex::{DexService, store::StoredQuote},
     error::AppError,
     gas_allowance::{self, GasCharge, GasLimits, NativeBudget, Reservation},
     identity::unavailable,
@@ -20,11 +21,23 @@ pub struct PgBackend {
     pool: PgPool,
     market: Option<Arc<MarketData>>,
     buys: Option<Arc<JarBuys>>,
+    dex: Option<Arc<DexService>>,
 }
 
 impl PgBackend {
     pub fn new(pool: PgPool, market: Option<Arc<MarketData>>, buys: Option<Arc<JarBuys>>) -> Self {
-        Self { pool, market, buys }
+        Self {
+            pool,
+            market,
+            buys,
+            dex: None,
+        }
+    }
+
+    /// DEX quotes the sponsor binds swaps to.
+    pub fn with_dex(mut self, dex: Option<Arc<DexService>>) -> Self {
+        self.dex = dex;
+        self
     }
 }
 
@@ -342,5 +355,28 @@ impl SponsorBackend for PgBackend {
         .await
         .map_err(unavailable)?;
         rows.into_iter().map(from_row).collect()
+    }
+
+    async fn dex_quote(&self, user: Uuid, id: Uuid) -> Result<Option<StoredQuote>, AppError> {
+        match &self.dex {
+            Some(dex) => dex.stored(user, id).await,
+            None => Ok(None),
+        }
+    }
+
+    async fn spend_dex_quote(&self, quote: &StoredQuote) -> Result<bool, AppError> {
+        match &self.dex {
+            Some(dex) => dex.spend(quote).await,
+            None => Ok(false),
+        }
+    }
+
+    async fn dex_sponsor_check(&self, user: Uuid) -> Result<(), AppError> {
+        match &self.dex {
+            Some(dex) => dex.sponsor_check(user).await,
+            None => Err(AppError::Unsupported(
+                "Honey isn't paying gas for swaps right now".into(),
+            )),
+        }
     }
 }

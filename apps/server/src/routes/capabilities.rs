@@ -16,6 +16,10 @@ pub struct RuntimeAdapters {
     pub earn_catalog: bool,
     pub authenticated_identity: bool,
     pub redis: bool,
+    /// `DEX_ENABLED`: DEX tokens, quotes and routes.
+    pub dex: bool,
+    /// `DEX_SPONSOR_ENABLED`: Honey pays gas for DEX swaps (per person, see `crate::dex`).
+    pub dex_sponsor: bool,
 }
 
 #[derive(Serialize)]
@@ -73,6 +77,8 @@ async fn capabilities(
         ("shared_wallets", &[][..]),
         ("recovery", &[][..]),
         ("price_stream", &[][..]),
+        ("dex_swaps", &["kyberswap", "jupiter"][..]),
+        ("dex_sponsored_swaps", &["kyberswap", "jupiter"][..]),
     ]
     .into_iter()
     .map(|(id, providers)| Feature {
@@ -282,6 +288,20 @@ async fn capabilities(
             "not_configured",
         );
     }
+    // DEX routing is either off (the app hides its tokens and routes) or live.
+    for (id, on) in [
+        ("dex_swaps", adapters.dex),
+        ("dex_sponsored_swaps", adapters.dex && adapters.dex_sponsor),
+    ] {
+        if on {
+            set_feature(&mut features, id, true, "production", "available");
+            if let Some(f) = features.iter_mut().find(|f| f.id == id) {
+                f.configured_providers = vec!["kyberswap", "jupiter"];
+            }
+        } else {
+            set_feature(&mut features, id, false, "unavailable", "not_configured");
+        }
+    }
     if let Some(hub) = hub
         && let Some(feature) = features.iter_mut().find(|f| f.id == "price_stream")
     {
@@ -398,6 +418,45 @@ mod tests {
             feature(&body, "bridge_quotes")["configuredProviders"],
             serde_json::json!(["near_intents"])
         );
+    }
+
+    #[tokio::test]
+    async fn dex_swaps_are_reported_off_unless_enabled() {
+        let off = capabilities(RuntimeAdapters::default()).await;
+        for id in ["dex_swaps", "dex_sponsored_swaps"] {
+            assert_eq!(feature(&off, id)["available"], false, "{id}");
+            assert_eq!(feature(&off, id)["scope"], "unavailable", "{id}");
+            assert_eq!(feature(&off, id)["reason"], "not_configured", "{id}");
+        }
+        let swaps = capabilities(RuntimeAdapters {
+            dex: true,
+            ..RuntimeAdapters::default()
+        })
+        .await;
+        assert_eq!(feature(&swaps, "dex_swaps")["available"], true);
+        assert_eq!(feature(&swaps, "dex_swaps")["scope"], "production");
+        assert_eq!(
+            feature(&swaps, "dex_swaps")["configuredProviders"],
+            serde_json::json!(["kyberswap", "jupiter"])
+        );
+        assert_eq!(feature(&swaps, "dex_sponsored_swaps")["available"], false);
+        // Sponsoring alone (without DEX_ENABLED) is still off.
+        let sponsor_only = capabilities(RuntimeAdapters {
+            dex_sponsor: true,
+            ..RuntimeAdapters::default()
+        })
+        .await;
+        assert_eq!(
+            feature(&sponsor_only, "dex_sponsored_swaps")["available"],
+            false
+        );
+        let both = capabilities(RuntimeAdapters {
+            dex: true,
+            dex_sponsor: true,
+            ..RuntimeAdapters::default()
+        })
+        .await;
+        assert_eq!(feature(&both, "dex_sponsored_swaps")["available"], true);
     }
 
     #[tokio::test]

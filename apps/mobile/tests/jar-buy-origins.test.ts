@@ -44,6 +44,7 @@ describe('which USDC pays', () => {
         { chain: 'Solana', symbol: 'SOL', amount: 3 },
         { chain: 'Arbitrum', symbol: 'USDC', amount: 50 },
       ]),
+      // Arbitrum's USDC pays DEX picks there (lib/jar-dex) and, since 2026-11-14, 1Click legs.
     ).toEqual({ Base: 1_500_000n, Solana: 20_123_456n, Arbitrum: 50_000_000n });
   });
 

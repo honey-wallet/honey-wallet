@@ -1,4 +1,5 @@
 import { router } from 'expo-router';
+import { dexAssetId, fetchAllDexTokens, findDexToken } from '@/lib/dex-tokens';
 import {
   bestPayWith,
   fetchSwapTokens,
@@ -26,13 +27,37 @@ export function presetBuy(holdings: readonly Holding[], symbol?: string) {
     updateSwap({ ...(buy ? { buy } : {}), ...(sell ? { sell } : {}) });
     return swap.get();
   };
+  // Not on NEAR Intents: Honey's DEX route, paid with USDC on the token's own chain
+  // (only when the server has DEX routes on), while the pair is still the one set here.
+  const dexFallback = (tokens: OneClickToken[], set: { sell: TokenRef; buy: TokenRef }) => {
+    if (!symbol || swapRefForSymbol(tokens, symbol)) return;
+    fetchAllDexTokens()
+      .then((all) => {
+        const dex = findDexToken(all, symbol);
+        const now = swap.get();
+        if (!dex || !sameToken(now.sell, set.sell) || !sameToken(now.buy, set.buy)) return;
+        updateSwap({
+          sell: { symbol: 'USDC', chain: dex.chain },
+          buy: {
+            symbol: dex.symbol,
+            chain: dex.chain,
+            assetId: dexAssetId(dex.chain, dex.address),
+          },
+        });
+      })
+      .catch(() => {});
+  };
   const cached = swapTokenList.get().tokens;
   const set = apply(cached);
-  if (cached) return;
+  if (cached) {
+    dexFallback(cached, set);
+    return;
+  }
   fetchSwapTokens()
     .then((tokens) => {
       const now = swap.get();
-      if (sameToken(now.sell, set.sell) && sameToken(now.buy, set.buy)) apply(tokens);
+      if (!sameToken(now.sell, set.sell) || !sameToken(now.buy, set.buy)) return;
+      dexFallback(tokens, apply(tokens));
     })
     .catch(() => {});
 }

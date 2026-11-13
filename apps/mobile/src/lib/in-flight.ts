@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { dexSwapMoving, dexSwaps, refreshDexSwaps } from '@/lib/dex';
 import {
   type IntentsSwap,
   intentsSwaps,
@@ -8,6 +9,7 @@ import {
   useIntentsSwaps,
 } from '@/lib/intents-swap';
 import { type BuyLeg, refreshJarBuy } from '@/lib/jar-buy';
+import { advanceDexLegs, holdingUsdc, isDexLeg } from '@/lib/jar-dex';
 import { refreshJarValues } from '@/lib/jar-holdings';
 import { type ThesisJar, thesisJars, updateJarBuy, useThesisJars } from '@/lib/thesis';
 import { showErrorToast, showToast } from '@/lib/toast';
@@ -21,8 +23,11 @@ import { showErrorToast, showToast } from '@/lib/toast';
 const POLL_MS = 10_000;
 /** Real jars' values (and their daily marks) are refreshed this often in the background. */
 const VALUE_MS = 5 * 60_000;
-/** A jar buy's legs are NEAR Intents swaps; these are done one way or another. */
-const LEG_FINAL = new Set(['SUCCESS', 'REFUNDED', 'FAILED', 'NOT_SENT']);
+/**
+ * A jar buy's legs are NEAR Intents swaps (or DEX swaps, lib/jar-dex); these are done one
+ * way or another. A DEX leg holding USDC waits for you (Finish or Move back), not for us.
+ */
+const LEG_FINAL = new Set(['SUCCESS', 'REFUNDED', 'FAILED', 'NOT_SENT', 'HOLDING_USDC']);
 
 /** Sent and not yet settled (a quote nobody paid isn't "in progress"). */
 export const swapMoving = (s: IntentsSwap) => !isFinal(s) && s.status !== 'QUOTED';
@@ -47,6 +52,12 @@ export function swapOutcome(s: IntentsSwap): { message: string; error: boolean }
 export function jarOutcome(jar: Pick<ThesisJar, 'name' | 'buy'>) {
   const legs = jar.buy ?? [];
   if (legsMoving(legs)) return null;
+  const held = legs.filter(holdingUsdc);
+  if (held.length)
+    return {
+      message: `${held.map((l) => l.symbol).join(', ')} wasn’t bought. Your USDC is safe: finish or move it back in Activity`,
+      error: true,
+    };
   const bought = legs.filter((l) => l.status === 'SUCCESS').length;
   if (bought === legs.length) return { message: `${jar.name} is bought`, error: false };
   if (bought === 0)
@@ -74,10 +85,14 @@ async function tick() {
   busy = true;
   try {
     await refreshSwaps().catch(() => {});
+    await refreshDexSwaps().catch(() => {});
     let landed = false;
     for (const jar of thesisJars.get()) {
       if (!jar.mine || !legsMoving(jar.buy)) continue;
-      const legs = await refreshJarBuy(jar.buy ?? []).catch(() => null);
+      let legs = await refreshJarBuy(jar.buy ?? []).catch(() => null);
+      if (!legs) continue;
+      if (legs.some(isDexLeg))
+        legs = await advanceDexLegs(legs, await dexLegDeps()).catch(() => legs);
       if (!legs) continue;
       landed ||= legs.some((l, i) => l.status === 'SUCCESS' && jar.buy?.[i]?.status !== 'SUCCESS');
       updateJarBuy(jar.id, legs);
@@ -104,8 +119,26 @@ function refreshWallet(walletId?: string) {
     .catch(() => {});
 }
 
+/** What lib/jar-dex needs from the app: 1Click's status, the paying wallet, Move back's state. */
+async function dexLegDeps(): Promise<Parameters<typeof advanceDexLegs>[1]> {
+  // Loaded on demand: the wallet list pulls in the vault.
+  const { wallets } = await import('@/lib/wallets');
+  return {
+    dex: {},
+    bridge: async (leg) => (await refreshJarBuy([leg]))[0] ?? leg,
+    wallet: () => {
+      const state = wallets.get();
+      const w = state.added.find((x) => x.id === state.activeId);
+      return w?.addresses && !w.watchOnly && !w.demo ? { id: w.id, addresses: w.addresses } : null;
+    },
+    moveStatus: (depositAddress) => intentsSwaps.get()[depositAddress]?.status,
+    now: () => Date.now(),
+  };
+}
+
 const anyMoving = () =>
   Object.values(intentsSwaps.get()).some(swapMoving) ||
+  Object.values(dexSwaps.get()).some(dexSwapMoving) ||
   thesisJars.get().some((j) => j.mine && legsMoving(j.buy));
 
 function syncPolling() {
@@ -144,6 +177,7 @@ export function useInFlightWatcher() {
       }
       syncPolling();
     });
+    const offDex = dexSwaps.subscribe(syncPolling);
     const offJars = thesisJars.subscribe(() => {
       for (const j of thesisJars.get()) {
         const was = jarStatus.get(j.id);
@@ -163,6 +197,7 @@ export function useInFlightWatcher() {
     const values = setInterval(() => void refreshJarValues().catch(() => {}), VALUE_MS);
     return () => {
       offSwaps();
+      offDex();
       offJars();
       clearInterval(values);
       if (polling) clearInterval(polling);

@@ -412,6 +412,103 @@ impl JarBuys {
     }
 }
 
+/// A 1Click dry quote: what a swap would deliver, with no deposit address made.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DryQuote {
+    pub amount_out: String,
+    pub min_amount_out: String,
+    /// 1Click's estimate, in seconds.
+    pub time_estimate: Option<u64>,
+}
+
+impl JarBuys {
+    /// A dry quote (`dry: true`) under Honey's partner key, for the route planner
+    /// (`route_planner`). It mints no deposit address, so nothing can be paid into it
+    /// and the per-buy cap doesn't apply. 1Click's own refusal ("Amount is too low…")
+    /// comes back as `BadRequest` with its message.
+    pub async fn dry_quote(
+        &self,
+        origin_asset: &str,
+        destination_asset: &str,
+        amount: &str,
+        recipient: &str,
+        refund_to: &str,
+        slippage_bps: u16,
+    ) -> Result<DryQuote, AppError> {
+        if !safe(origin_asset, 200)
+            || !safe(destination_asset, 200)
+            || !safe(recipient, 128)
+            || !safe(refund_to, 128)
+            || atomic(amount).is_none()
+            || slippage_bps == 0
+            || slippage_bps > MAX_SLIPPAGE_BPS
+        {
+            return Err(AppError::BadRequest("invalid NEAR Intents quote".into()));
+        }
+        let deadline = (OffsetDateTime::now_utc() + time::Duration::minutes(DEADLINE_MINUTES))
+            .replace_nanosecond(0)
+            .map_err(|_| AppError::Busy)?
+            .format(&Rfc3339)
+            .map_err(|_| AppError::Busy)?;
+        let payload = json!({
+            "dry": true, "swapType": "EXACT_INPUT", "depositType": "ORIGIN_CHAIN",
+            "recipientType": "DESTINATION_CHAIN", "refundType": "ORIGIN_CHAIN",
+            "originAsset": origin_asset, "destinationAsset": destination_asset,
+            "amount": amount, "recipient": recipient, "refundTo": refund_to,
+            "slippageTolerance": slippage_bps, "deadline": deadline,
+        });
+        let body = self
+            .call(
+                self.client
+                    .post(format!("{}/quote", self.origin))
+                    .json(&payload),
+            )
+            .await?;
+        check_dry(&body, &payload)
+    }
+}
+
+/// A dry quote must echo what was asked and keep its minimum within the slippage floor.
+fn check_dry(body: &Value, payload: &Value) -> Result<DryQuote, AppError> {
+    let request = body["quoteRequest"].as_object().ok_or(AppError::Busy)?;
+    for field in [
+        "originAsset",
+        "destinationAsset",
+        "amount",
+        "recipient",
+        "refundTo",
+        "slippageTolerance",
+        "dry",
+        "swapType",
+    ] {
+        if request.get(field) != payload.get(field) {
+            return Err(AppError::Busy);
+        }
+    }
+    let quote = &body["quote"];
+    let text = |f: &str| quote[f].as_str().filter(|s| safe(s, 128)).map(String::from);
+    let (Some(amount_in), Some(amount_out), Some(min_out)) =
+        (text("amountIn"), text("amountOut"), text("minAmountOut"))
+    else {
+        return Err(AppError::Busy);
+    };
+    let (Some(out), Some(min)) = (atomic(&amount_out), atomic(&min_out)) else {
+        return Err(AppError::Busy);
+    };
+    let bps = payload["slippageTolerance"]
+        .as_u64()
+        .ok_or(AppError::Busy)? as u128;
+    let floor = out / 10_000 * (10_000 - bps) + (out % 10_000) * (10_000 - bps) / 10_000;
+    if Some(amount_in.as_str()) != payload["amount"].as_str() || min > out || min < floor {
+        return Err(AppError::Busy);
+    }
+    Ok(DryQuote {
+        amount_out,
+        min_amount_out: min_out,
+        time_estimate: quote["timeEstimate"].as_u64().filter(|s| *s <= 24 * 3600),
+    })
+}
+
 fn safe_message(m: &str) -> bool {
     m.len() <= 200 && m.chars().all(|c| !c.is_control())
 }
@@ -752,5 +849,21 @@ mod tests {
         assert_eq!(atomic("0"), None);
         assert_eq!(atomic("1.5"), None);
         assert_eq!(atomic("-1"), None);
+    }
+
+    #[test]
+    fn a_live_dry_quote_is_read_and_a_changed_echo_is_refused() {
+        // A real 1Click dry quote (2026-11-10), the one the preview adapter pins.
+        let body: Value = serde_json::from_str(include_str!(
+            "providers/near_intents/live-dry-quote.fixture.json"
+        ))
+        .unwrap();
+        let mut payload = body["quoteRequest"].clone();
+        let q = check_dry(&body, &payload).unwrap();
+        assert_eq!(q.amount_out, "1999036020801959");
+        assert_eq!(q.min_amount_out, "1979045660593939");
+        assert_eq!(q.time_estimate, Some(47));
+        payload["recipient"] = json!("0x0000000000000000000000000000000000000001");
+        assert!(matches!(check_dry(&body, &payload), Err(AppError::Busy)));
     }
 }

@@ -1,0 +1,203 @@
+import { getAddress } from 'viem';
+import { describe, expect, it, vi } from 'vitest';
+import type { PlannedRoute } from '../src/lib/best-route';
+import type { Route } from '../src/lib/jar-routes';
+import { ME, MY_SOL, NOW, quoteFor, USDC_ARB } from './dex-fixtures';
+
+const WALLET = { id: 'w1', kind: 'wallet', addresses: { evm: ME, solana: MY_SOL } };
+
+vi.mock('@/lib/api', () => ({ api: { jarBuyDeposit: vi.fn(async () => undefined) } }));
+vi.mock('@/lib/auth', () => ({ confirmOwner: vi.fn() }));
+vi.mock('@/lib/backend-session', () => ({ backendSessionToken: () => 'session' }));
+vi.mock('@/lib/dapp-sign', () => ({ prepareEvmSend: vi.fn() }));
+vi.mock('@/lib/vault', () => ({ privateKeyOf: vi.fn() }));
+vi.mock('@/lib/wallets', () => ({
+  wallets: { get: () => ({ activeId: 'w1', added: [WALLET] }) },
+}));
+
+const { quoteJarBuy, JarBuyError, USDC_ORIGINS, PAY_CHAINS } = await import('../src/lib/jar-buy');
+
+const WBTC = getAddress('0x2f2a2543b76a4166549f7aab2e75bef0aefc5b0f');
+const WETH = getAddress('0x82af49447d8a07e3bd95bd0d56f35241523fbab1');
+const PICKS = {
+  BTC: { chain: 'Bitcoin', assetId: 'nep141:btc.omft.near', wrapped: WBTC, decimals: 8 },
+  ETH: { chain: 'Ethereum', assetId: 'nep141:eth.omft.near', wrapped: WETH, decimals: 18 },
+  SOL: { chain: 'Solana', assetId: 'nep141:sol.omft.near', wrapped: null, decimals: 9 },
+} as const;
+
+const route = (symbol: keyof typeof PICKS, usd: number): Route => ({
+  symbol,
+  usd,
+  legs: [
+    { chain: PICKS[symbol].chain, venue: 'Pool', usd, units: 1, assetId: PICKS[symbol].assetId },
+  ],
+  slippage: 0.001,
+  bridgeUsd: 0,
+  status: 'ok',
+});
+/** The founder's jar: $0.50 of USDC on Arbitrum across BTC, ETH and SOL. */
+const jar = () => [route('BTC', 0.17), route('ETH', 0.17), route('SOL', 0.16)];
+const balances = async () => ({ Arbitrum: 500_000n });
+
+/** What the planner answers when 1Click refuses a small leg: the wrapped major there. */
+function wrapped(symbol: keyof typeof PICKS, micro: bigint): PlannedRoute {
+  const pick = PICKS[symbol];
+  const buy = pick.wrapped as string;
+  const quote = quoteFor({
+    chain: 'Arbitrum',
+    sellToken: USDC_ARB,
+    buyToken: buy,
+    sellAmount: micro.toString(),
+    taker: ME,
+    slippageBps: 100,
+  });
+  quote.expiresAt = Date.now() + 60_000;
+  const held = symbol === 'BTC' ? 'WBTC' : 'WETH';
+  return {
+    best: {
+      kind: 'wrapped',
+      label: 'KyberSwap on Arbitrum',
+      legs: [],
+      buyToken: buy.toLowerCase(),
+      buyChain: 'arbitrum',
+      buySymbol: held,
+      buyDecimals: pick.decimals,
+      holdAs: `${symbol} (as ${held} on Arbitrum)`,
+      amountOut: quote.buyAmount,
+      minAmountOut: quote.minBuyAmount,
+      minOutUsd: (Number(micro) / 1e6) * 0.98,
+      gasUsd: 0,
+      sponsored: true,
+      netUsd: (Number(micro) / 1e6) * 0.98,
+      seconds: 5,
+    },
+    why: 'NEAR Intents can’t do this amount, so this uses KyberSwap on Arbitrum. Swaps here are public on-chain.',
+    fallback: 'amount',
+    holdAs: `${symbol} (as ${held} on Arbitrum)`,
+    dex: {
+      ask: {
+        chain: 'Arbitrum',
+        sellToken: USDC_ARB,
+        buyToken: buy,
+        sellAmount: micro,
+        taker: ME,
+        slippageBps: 100,
+        walletId: 'w1',
+      },
+      quote,
+    },
+    alternatives: [],
+  };
+}
+
+const intents = (): PlannedRoute =>
+  ({
+    best: { kind: 'intents', label: 'NEAR Intents' },
+    why: null,
+    fallback: null,
+    holdAs: null,
+    dex: null,
+    alternatives: [],
+  }) as unknown as PlannedRoute;
+
+const refused = (message: string) => Object.assign(new Error(message), { status: 400 });
+
+describe('jar legs take the planner’s route (privacy first)', () => {
+  it('pays from USDC on Arbitrum and Polygon, which 1Click takes', () => {
+    expect(PAY_CHAINS).toContain('Arbitrum');
+    expect(USDC_ORIGINS.Arbitrum).toBe(
+      'nep141:arb-0xaf88d065e77c8cc2239327c5edb3a432268e5831.omft.near',
+    );
+    expect(USDC_ORIGINS.Polygon).toMatch(/^nep141:pol-0x3c499c542cef5e3811e1192ce70d8cc03d5c3359/);
+  });
+
+  it('a leg 1Click can’t do is bought where the money is, as WBTC or WETH on Arbitrum', async () => {
+    const quote = vi.fn();
+    const dexPrices = vi.fn(async () => ({}));
+    const routeFor = vi.fn(async (ask: { toToken: string; amount: bigint }) =>
+      ask.toToken === PICKS.BTC.assetId ? wrapped('BTC', ask.amount) : wrapped('ETH', ask.amount),
+    );
+    const out = await quoteJarBuy([route('BTC', 0.17), route('ETH', 0.17)], 0.01, {
+      balances: async () => ({ Arbitrum: 340_000n }),
+      route: routeFor as never,
+      quote: quote as never,
+      dexPrices,
+    });
+    // Asked with the paying chain's USDC, wrapped versions allowed, refunds to the wallet.
+    expect(routeFor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fromChain: 'Arbitrum',
+        fromToken: expect.stringMatching(/^0xaf88/i),
+        amount: 170_000n,
+        wrapped: true,
+        fromAddress: ME,
+      }),
+    );
+    expect(quote).not.toHaveBeenCalled();
+    expect(out.legs).toHaveLength(2);
+    const btc = out.legs.find((l) => l.symbol === 'BTC');
+    expect(btc).toMatchObject({
+      route: 'dex',
+      holdAs: 'BTC (as WBTC on Arbitrum)',
+      why: expect.stringMatching(/^NEAR Intents can’t do this amount.*public on-chain\.$/),
+      dex: { chain: 'Arbitrum', bridged: false, stage: 'ready', token: WBTC },
+    });
+    expect(out.legs.find((l) => l.symbol === 'ETH')?.holdAs).toBe('ETH (as WETH on Arbitrum)');
+  });
+
+  it('every leg nothing can buy says why, in one line each, and nothing is paid', async () => {
+    const routeFor = vi.fn(async (ask: { toToken: string; amount: bigint }) => {
+      if (ask.toToken === PICKS.SOL.assetId)
+        throw refused('Amount is too low for bridge, try at least 1000000');
+      return ask.toToken === PICKS.BTC.assetId
+        ? wrapped('BTC', ask.amount)
+        : wrapped('ETH', ask.amount);
+    });
+    const error = await quoteJarBuy(jar(), 0.01, {
+      balances,
+      route: routeFor as never,
+    }).catch((e) => e);
+    expect(error).toBeInstanceOf(JarBuyError);
+    expect(error.legs).toEqual([
+      { symbol: 'SOL', reason: 'Amount is too low for bridge, try at least 1000000' },
+    ]);
+    expect(error.message).toBe(
+      'SOL: Amount is too low for bridge, try at least 1000000 Nothing was paid.',
+    );
+  });
+
+  it('a 1Click quote that fails names every leg it covered', async () => {
+    const error = await quoteJarBuy([route('ETH', 0.25), route('SOL', 0.25)], 0.01, {
+      balances,
+      route: async () => intents(),
+      quote: async () => {
+        throw new Error('NEAR Intents refused this request');
+      },
+    }).catch((e) => e);
+    expect(error).toBeInstanceOf(JarBuyError);
+    expect(error.legs).toEqual([
+      { symbol: 'ETH', reason: 'NEAR Intents refused this request' },
+      { symbol: 'SOL', reason: 'NEAR Intents refused this request' },
+    ]);
+  });
+
+  it('an unreachable planner leaves legs on NEAR Intents (older servers)', async () => {
+    const quote = vi.fn(async () => {
+      throw new Error('stop here');
+    });
+    await expect(
+      quoteJarBuy([route('ETH', 0.25)], 0.01, {
+        balances,
+        route: async () => {
+          throw new Error('Couldn’t find a route. Try again in a moment.');
+        },
+        quote: quote as never,
+      }),
+    ).rejects.toThrow('ETH: stop here');
+    expect(quote).toHaveBeenCalledWith(
+      'session',
+      expect.objectContaining({ originAsset: USDC_ORIGINS.Arbitrum, refundTo: ME }),
+    );
+    expect(NOW).toBeGreaterThan(0);
+  });
+});

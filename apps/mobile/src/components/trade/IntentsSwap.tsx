@@ -1,3 +1,4 @@
+import { toBaseUnits } from '@honey-wallet/keyring';
 import { router, useLocalSearchParams } from 'expo-router';
 import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { Text, TextInput, View } from 'react-native';
@@ -7,14 +8,35 @@ import { PressableScale } from '@/components/motion/PressableScale';
 import { SkeletonBar } from '@/components/motion/Skeleton';
 import { PillButton } from '@/components/onboarding/PillButton';
 import { Copyable, ExplorerLink } from '@/components/sheets/Details';
-import { SheetHeader } from '@/components/sheets/Sheet';
+import { SheetHeader, StatRow } from '@/components/sheets/Sheet';
+import { SuccessPage } from '@/components/sheets/SuccessPage';
 import { InlineTray } from '@/components/sheets/Tray';
 import { PopularPairs } from '@/components/trade/PopularPairs';
 import { Spinner } from '@/components/trade/SwapReview';
 import { InFlightBar } from '@/components/wallet/InFlightBar';
 import { applyKey, Keypad, PercentChips, TypedAmount } from '@/components/wallet/Keypad';
 import { SCREEN, TokenIcon } from '@/components/wallet/parts';
+import { confirmOwner } from '@/lib/auth';
 import { backendSession, backendSessionToken } from '@/lib/backend-session';
+import { planRoute } from '@/lib/best-route';
+import {
+  type DexQuoted,
+  dexGasNote,
+  dexNetworkCost,
+  dexTokenByAsset,
+  dexTokenList,
+  executeDex,
+  isDexAsset,
+  isDexChain,
+  loadDexTokens,
+  priceImpactText,
+  quoteDex,
+  routeLabel,
+  safetyLine,
+  saveDexSwap,
+  takerOn,
+  usdcOn,
+} from '@/lib/dex';
 import { useMoney } from '@/lib/fx';
 import { success, tap } from '@/lib/haptics';
 import { REFRESH_FAILED } from '@/lib/intents-quote';
@@ -37,6 +59,7 @@ import {
   type ReadySwap,
   readyToPay,
   refreshQuote,
+  SWAP_SLIPPAGE_BPS,
   type IntentsSwap as Swap,
   SwapTooSmall,
   sameToken,
@@ -55,6 +78,7 @@ import type { SendPlan } from '@/lib/send';
 import { serverNow } from '@/lib/server-clock';
 import { shareTrade } from '@/lib/social';
 import { type TokenRef, updateSwap, useSwap } from '@/lib/swap';
+import { TEST_MODE } from '@/lib/test-mode';
 import { explorerTxOn } from '@/lib/tx-receipt';
 import { requireWallet, useHasWallet } from '@/lib/wallet-gate';
 import { useWalletView } from '@/lib/wallet-view';
@@ -81,11 +105,28 @@ const KEY_HEIGHT = 52;
 const PAIRS_HEIGHT = 84;
 const PREVIEW_HEIGHT = 108;
 
-/** The pair from the shared swap store, moved onto swappable tokens when it isn't. */
+/**
+ * The pair from the shared swap store, moved onto swappable tokens when it isn't. A
+ * token NEAR Intents doesn't list (a `dex:` asset, lib/dex) trades against USDC on its
+ * own chain, so the other side becomes that USDC.
+ */
 function supportedPair(
   stored: { sell: TokenRef; buy: TokenRef },
   tokens: Parameters<typeof canSellRef>[1],
 ) {
+  const usdcHere = (t: TokenRef): TokenRef => ({ symbol: 'USDC', chain: t.chain });
+  const isUsdcOn = (t: TokenRef, chain: string) =>
+    t.symbol === 'USDC' && t.chain === chain && !t.assetId;
+  if (isDexAsset(stored.sell.assetId))
+    return {
+      sell: stored.sell,
+      buy: isUsdcOn(stored.buy, stored.sell.chain) ? stored.buy : usdcHere(stored.sell),
+    };
+  if (isDexAsset(stored.buy.assetId))
+    return {
+      sell: isUsdcOn(stored.sell, stored.buy.chain) ? stored.sell : usdcHere(stored.buy),
+      buy: stored.buy,
+    };
   const sell = canSellRef(stored.sell, tokens) ? stored.sell : FALLBACK_SELL;
   const buy =
     canBuyRef(stored.buy, tokens) && !sameToken(stored.buy, sell)
@@ -126,7 +167,12 @@ const message = (e: unknown, fallback: string) =>
 
 type TrayState =
   | { kind: 'review'; swap: Swap; note?: string }
-  | { kind: 'progress'; swap: Swap; error?: string };
+  | { kind: 'progress'; swap: Swap; error?: string }
+  | { kind: 'dexReview'; quoted: DexQuoted; why: string | null; note?: string }
+  | { kind: 'dexSent'; quoted: DexQuoted; why: string | null; hash: string };
+
+/** A DEX quote stays reviewable this long; past its own expiry it's re-quoted when sent. */
+const DEX_QUOTE_MS = 90_000;
 
 function IntentsSwapForm() {
   const styles = useStyles();
@@ -138,7 +184,14 @@ function IntentsSwapForm() {
   // NEAR Intents' live token list: every token and network a swap can reach.
   const { tokens } = swapTokenList.useValue();
   useEffect(loadSwapTokens, []);
+  // Honey's DEX list: tokens NEAR Intents doesn't list, traded with USDC on their chain.
+  const { tokens: dexList } = dexTokenList.useValue();
+  useEffect(loadDexTokens, []);
   const { sell, buy } = supportedPair(stored, tokens);
+  const sellDex = isDexAsset(sell.assetId) ? dexTokenByAsset(dexList ?? [], sell.assetId) : null;
+  const buyDex = isDexAsset(buy.assetId) ? dexTokenByAsset(dexList ?? [], buy.assetId) : null;
+  const dexMode = isDexAsset(sell.assetId) || isDexAsset(buy.assetId);
+  const dexToken = sellDex ?? buyDex;
   const sellAsset = tokens ? swapAssetOf(tokens, sell) : null;
   const buyAsset = tokens ? swapAssetOf(tokens, buy) : null;
   // Keep the store on the shown pair, so the pickers tick what's on screen.
@@ -153,8 +206,10 @@ function IntentsSwapForm() {
   const view = useWalletView();
   const holdings = 'holdings' in view ? (view.holdings ?? []) : [];
   const balance = holdings.find((h) => sameToken(h, sell))?.amount ?? 0;
-  const maxDecimals = sellAsset
-    ? Math.min(MAX_INPUT_DECIMALS, sellAsset.decimals)
+  const sellDecimals = sellDex?.decimals ?? sellAsset?.decimals;
+  const buyDecimals = buyDex?.decimals ?? buyAsset?.decimals ?? 6;
+  const maxDecimals = sellDecimals
+    ? Math.min(MAX_INPUT_DECIMALS, sellDecimals)
     : sell.symbol === 'USDC'
       ? 6
       : MAX_INPUT_DECIMALS;
@@ -177,8 +232,8 @@ function IntentsSwapForm() {
   }, [stored.presetAmount, sell.symbol, sellKey]);
 
   // 1Click's own prices, for the dollar line before a quote.
-  const sellPrice = sellAsset?.price ?? undefined;
-  const buyPrice = buyAsset?.price ?? undefined;
+  const sellPrice = sellDex?.priceUsd ?? sellAsset?.price ?? undefined;
+  const buyPrice = buyDex?.priceUsd ?? buyAsset?.price ?? undefined;
   // Before a quote: what the amount is worth in the other token at 1Click's prices,
   // marked as an estimate (the quote, with fees and slippage, is what's paid).
   const estimate = typed && sellPrice && buyPrice ? (typed * sellPrice) / buyPrice : null;
@@ -197,12 +252,31 @@ function IntentsSwapForm() {
   const [quoting, setQuoting] = useState(false);
   const flight = useRef(0);
   const asked = quote?.key === quoteKey ? quote.swap : null;
-  const now = useNow(asked ? 1000 : null);
+  // A DEX quote for exactly this pair and amount (a DEX token, or NEAR Intents couldn't
+  // do it: lib/best-route), reviewable for DEX_QUOTE_MS.
+  const [dexQuote, setDexQuote] = useState<{
+    key: string;
+    quoted: DexQuoted;
+    why: string | null;
+    at: number;
+  } | null>(null);
+  const now = useNow(asked || dexMode || dexQuote ? 1000 : null);
   const left = asked ? Date.parse(asked.deadline) - QUOTE_MARGIN_MS - now : 0;
   const current = asked && left > 0 ? asked : null;
-  const reason = unsupportedReason(sell, buy, tokens);
+  const reason = dexMode
+    ? dexList && !dexToken
+      ? `${(isDexAsset(sell.assetId) ? sell : buy).symbol} can’t be swapped right now.`
+      : null
+    : unsupportedReason(sell, buy, tokens);
+  const dexAsked = dexQuote?.key === quoteKey ? dexQuote : null;
+  const dexCurrent = dexAsked && now - dexAsked.at < DEX_QUOTE_MS ? dexAsked.quoted : null;
+  const safety = safetyLine(buyDex);
   const shownError =
-    error?.key === quoteKey ? error.text : asked && !current ? 'Quote expired.' : null;
+    error?.key === quoteKey
+      ? error.text
+      : (asked && !current) || (dexAsked && !dexCurrent)
+        ? 'Quote expired.'
+        : null;
   // Asking again for the same amount would only repeat "too small": a new amount clears it.
   const tooSmall = error?.key === quoteKey && !!error.tooSmall;
 
@@ -213,6 +287,69 @@ function IntentsSwapForm() {
     setQuoting(true);
     setError(null);
     try {
+      if (dexMode) {
+        // A token NEAR Intents doesn't list: through a DEX on its own chain. The planner
+        // says so (and why) with the server's quote, checked here (lib/best-route).
+        const chain = (dexToken?.chain ?? sell.chain) as string;
+        const taker = isDexChain(chain) ? takerOn(chain, wallet.addresses ?? {}) : undefined;
+        if (!dexToken || !isDexChain(chain) || !taker || sellDecimals === undefined)
+          throw new Error('Pick a wallet with keys on this device to swap.');
+        const ask = {
+          chain,
+          sellToken: sellDex?.address ?? usdcOn(chain),
+          buyToken: buyDex?.address ?? usdcOn(chain),
+          sellAmount: toBaseUnits(amount, sellDecimals),
+          taker,
+          slippageBps: SWAP_SLIPPAGE_BPS,
+          walletId: wallet.id,
+        };
+        const planned = await planRoute({
+          fromChain: chain,
+          fromToken: ask.sellToken,
+          amount: ask.sellAmount,
+          toChain: chain,
+          toToken: ask.buyToken,
+          taker,
+          slippageBps: SWAP_SLIPPAGE_BPS,
+          walletId: wallet.id,
+        }).catch(() => null);
+        // An older server without the planner: the DEX quote directly.
+        const quoted = planned?.dex ?? (await quoteDex(ask));
+        const why =
+          planned?.why ??
+          `Not on NEAR Intents, so this uses ${routeLabel(quoted.quote.aggregator, chain, false)}. Swaps here are public on-chain.`;
+        if (id === flight.current) setDexQuote({ key, quoted, why, at: Date.now() });
+        return;
+      }
+      // Both listed on one DEX chain: NEAR Intents unless it can't do this trade (too
+      // small, fees over half, or no answer), then the DEX the planner picked.
+      const chain = sell.chain;
+      const taker = isDexChain(chain) ? takerOn(chain, wallet.addresses ?? {}) : undefined;
+      if (
+        isDexChain(chain) &&
+        buy.chain === chain &&
+        taker &&
+        sellAsset?.contractAddress &&
+        buyAsset?.contractAddress &&
+        sellDecimals !== undefined &&
+        !askAddress
+      ) {
+        const planned = await planRoute({
+          fromChain: chain,
+          fromToken: sellAsset.contractAddress,
+          amount: toBaseUnits(amount, sellDecimals),
+          toChain: chain,
+          toToken: buyAsset.contractAddress,
+          taker,
+          slippageBps: SWAP_SLIPPAGE_BPS,
+          walletId: wallet.id,
+        }).catch(() => null);
+        if (planned?.dex) {
+          if (id === flight.current)
+            setDexQuote({ key, quoted: planned.dex, why: planned.why, at: Date.now() });
+          return;
+        }
+      }
       const swap = await quoteSwap({
         sell,
         buy,
@@ -300,16 +437,29 @@ function IntentsSwapForm() {
                     }
                   : quoting
                     ? { label: 'Getting quote…', onPress: () => undefined, disabled: true }
-                    : current
+                    : dexCurrent
                       ? {
                           label: 'Review swap',
                           onPress: () => {
                             tap();
-                            setTray({ kind: 'review', swap: current });
+                            setTray({
+                              kind: 'dexReview',
+                              quoted: dexCurrent,
+                              why: dexAsked?.why ?? null,
+                            });
                           },
                           disabled: false,
                         }
-                      : { label: 'Get quote', onPress: () => void getQuote(), disabled: false };
+                      : current
+                        ? {
+                            label: 'Review swap',
+                            onPress: () => {
+                              tap();
+                              setTray({ kind: 'review', swap: current });
+                            },
+                            disabled: false,
+                          }
+                        : { label: 'Get quote', onPress: () => void getQuote(), disabled: false };
 
   return (
     <View style={styles.flex}>
@@ -386,9 +536,11 @@ function IntentsSwapForm() {
             >
               {current
                 ? `≥ ${short(current.minAmountOut, current.buyDecimals)}`
-                : estimate
-                  ? `≈ ${formatBalance(estimate)}`
-                  : '0'}
+                : dexCurrent
+                  ? `≥ ${short(dexCurrent.quote.minBuyAmount, buyDecimals)}`
+                  : estimate
+                    ? `≈ ${formatBalance(estimate)}`
+                    : '0'}
             </Text>
             <TokenPill side="buy" token={buy} />
           </View>
@@ -400,6 +552,10 @@ function IntentsSwapForm() {
             <Text style={styles.meta}>
               {current.usdOutMin !== null ? `≈ ${money.format(current.usdOutMin)} · ` : ''}
               {arrivesIn(current.timeEstimate)}
+            </Text>
+          ) : dexCurrent ? (
+            <Text style={styles.meta}>
+              {routeLabel(dexCurrent.quote.aggregator, buy.chain, false)}
             </Text>
           ) : estimate ? (
             <Text style={styles.meta}>
@@ -447,6 +603,26 @@ function IntentsSwapForm() {
             <Icon name="warning" size={14} color={c.error} />
             <Text style={[styles.meta, styles.error, styles.flex]}>{reason ?? shownError}</Text>
           </View>
+        ) : dexCurrent ? (
+          <View style={styles.details}>
+            <DetailRow
+              label="Route"
+              value={routeLabel(dexCurrent.quote.aggregator, buy.chain, false)}
+            />
+            <DetailRow
+              label="You get at least"
+              value={`${short(dexCurrent.quote.minBuyAmount, buyDecimals)} ${buy.symbol}`}
+            />
+            {priceImpactText(dexCurrent.quote) ? (
+              <DetailRow label="Price impact" value={priceImpactText(dexCurrent.quote) ?? ''} />
+            ) : null}
+            <DetailRow label="Network cost" value={dexNetworkCost(dexCurrent.quote)} />
+            {dexGasNote(dexCurrent.quote) ? (
+              <Text style={styles.meta}>{dexGasNote(dexCurrent.quote)}</Text>
+            ) : null}
+            {safety ? <Text style={[styles.meta, styles.warn]}>{safety}</Text> : null}
+            {dexAsked?.why ? <Text style={styles.meta}>{dexAsked.why}</Text> : null}
+          </View>
         ) : current ? (
           <View style={styles.details}>
             <DetailRow label="Route" value="NEAR Intents" />
@@ -467,11 +643,13 @@ function IntentsSwapForm() {
               <PairPreview
                 sell={sell}
                 buy={buy}
-                sellPrice={sellAsset?.price ?? null}
-                buyPrice={buyAsset?.price ?? null}
+                sellPrice={sellPrice ?? null}
+                buyPrice={buyPrice ?? null}
                 external={askAddress}
+                dex={dexMode}
               />
             ) : null}
+            {safety && !preview ? <Text style={[styles.meta, styles.warn]}>{safety}</Text> : null}
           </>
         )}
       </View>
@@ -495,12 +673,110 @@ function IntentsSwapForm() {
 
       <InlineTray
         onClose={() => setTray(null)}
-        dismissible={!(tray?.kind === 'progress' && liveStatus(all, tray.swap) === 'SENDING')}
+        dismissible={
+          !(tray?.kind === 'progress' && liveStatus(all, tray.swap) === 'SENDING') &&
+          !(tray?.kind === 'dexReview' && paying.current)
+        }
       >
         {tray ? (
           <View style={styles.trayBody}>
-            <ContentSwap id={tray.kind} index={tray.kind === 'review' ? 0 : 1}>
-              {tray.kind === 'review' ? (
+            <ContentSwap
+              id={tray.kind}
+              index={tray.kind === 'review' || tray.kind === 'dexReview' ? 0 : 1}
+            >
+              {tray.kind === 'dexReview' ? (
+                <DexReviewStep
+                  quoted={tray.quoted}
+                  sell={sell}
+                  buy={buy}
+                  buyDecimals={buyDecimals}
+                  sellDecimals={sellDecimals ?? 6}
+                  why={tray.why}
+                  usdIn={sellPrice && typed ? typed * sellPrice : null}
+                  safety={safety}
+                  note={tray.note}
+                  onBack={() => setTray(null)}
+                  onConfirm={() => {
+                    if (paying.current) return;
+                    paying.current = true;
+                    const quoted = tray.quoted;
+                    const pay = `${unitsText(quoted.quote.sellAmount, sellDecimals ?? 6)} ${sell.symbol}`;
+                    void (async () => {
+                      try {
+                        // Test mode ends on its success page without signing (lib/test-mode).
+                        if (
+                          !TEST_MODE &&
+                          !(await confirmOwner(`Swap ${pay} for ${buy.symbol}`, true))
+                        )
+                          throw new Error('Swap cancelled.');
+                        const sent = await executeDex(quoted);
+                        saveDexSwap({
+                          hash: sent.hash,
+                          walletId: quoted.ask.walletId,
+                          chain: quoted.ask.chain,
+                          aggregator: sent.quote.aggregator,
+                          sell: {
+                            symbol: sell.symbol,
+                            amount: sent.quote.sellAmount,
+                            decimals: sellDecimals ?? 6,
+                          },
+                          buy: {
+                            symbol: buy.symbol,
+                            amount: sent.quote.minBuyAmount,
+                            decimals: buyDecimals,
+                          },
+                          status: 'SENT',
+                          at: Date.now(),
+                        });
+                        success();
+                        setAmount('');
+                        setDexQuote(null);
+                        setTray({
+                          kind: 'dexSent',
+                          quoted: { ...quoted, quote: sent.quote },
+                          why: tray.why,
+                          hash: sent.hash,
+                        });
+                      } catch (e) {
+                        const text = message(e, 'The swap didn’t send.');
+                        // Cancelled at the prompt: back to the review, nothing sent.
+                        if (/cancel/i.test(text)) {
+                          setTray({ kind: 'dexReview', quoted, why: tray.why, note: text });
+                          return;
+                        }
+                        // Anything else may have reached the network: never offer this
+                        // quote again, so it can't be paid twice.
+                        setDexQuote(null);
+                        setTray(null);
+                        setError({ key: quoteKey, text });
+                      } finally {
+                        paying.current = false;
+                      }
+                    })();
+                  }}
+                />
+              ) : tray.kind === 'dexSent' ? (
+                <SuccessPage
+                  compact
+                  title="Swap sent"
+                  detail={`It lands in a few seconds. Activity shows it.`}
+                  amount={{
+                    symbol: buy.symbol,
+                    text: `≥ ${short(tray.quoted.quote.minBuyAmount, buyDecimals)} ${buy.symbol}`,
+                  }}
+                  rows={[
+                    {
+                      label: 'Route',
+                      value: routeLabel(tray.quoted.quote.aggregator, buy.chain, false),
+                    },
+                    {
+                      label: 'Transaction',
+                      value: <Copyable value={tray.hash} toast="Transaction ID copied" />,
+                    },
+                  ]}
+                  onDone={() => setTray(null)}
+                />
+              ) : tray.kind === 'review' ? (
                 <ReviewStep
                   swap={tray.swap}
                   note={tray.note}
@@ -804,6 +1080,93 @@ function ReviewStep({
   );
 }
 
+/**
+ * A DEX swap's review: what you pay and the least you get, then the route, network cost,
+ * price impact (only over 1%) and that floor, with any safety flag as one line. Swap
+ * asks for Face ID; a quote that ran out is asked for again, never below this floor.
+ */
+function DexReviewStep({
+  quoted,
+  sell,
+  buy,
+  sellDecimals,
+  buyDecimals,
+  usdIn,
+  safety,
+  why,
+  note,
+  onBack,
+  onConfirm,
+}: {
+  quoted: DexQuoted;
+  sell: TokenRef;
+  buy: TokenRef;
+  sellDecimals: number;
+  buyDecimals: number;
+  usdIn: number | null;
+  safety: string | null;
+  /** Why a DEX, not NEAR Intents (lib/best-route): one plain line. */
+  why: string | null;
+  note?: string;
+  onBack: () => void;
+  onConfirm: () => void;
+}) {
+  const styles = useStyles();
+  const c = useTheme();
+  const q = quoted.quote;
+  const pay = `${unitsText(q.sellAmount, sellDecimals)} ${sell.symbol}`;
+  const get = `${short(q.minBuyAmount, buyDecimals)} ${buy.symbol}`;
+  const impact = priceImpactText(q);
+  const gasNote = dexGasNote(q);
+  // Dollar values read in Settings' Local currency (lib/fx).
+  const money = useMoney();
+  return (
+    <View>
+      <SheetHeader title="Review swap" />
+      <Leg title="You pay" text={pay} usd={usdIn ? money.format(usdIn) : ''} token={sell} />
+      <View style={styles.arrow}>
+        <Icon name="arrowDown" size={14} color={c.textSecondary} />
+      </View>
+      <Leg title="You get at least" text={get} usd="" token={buy} />
+      <View style={styles.rows}>
+        <StatRow label="Route" value={routeLabel(q.aggregator, buy.chain, false)} />
+        <StatRow label="Network cost" value={dexNetworkCost(q)} />
+        {impact ? <StatRow label="Price impact" value={impact} /> : null}
+        <StatRow label="You get at least" value={get} />
+      </View>
+      {why ? <Text style={styles.small}>{why}</Text> : null}
+      {gasNote ? <Text style={styles.small}>{gasNote}</Text> : null}
+      {safety ? <Text style={[styles.small, styles.warn]}>{safety}</Text> : null}
+      {note ? <Text style={[styles.small, styles.error]}>{note}</Text> : null}
+      <View style={styles.actions}>
+        <PressableScale
+          accessibilityRole="button"
+          accessibilityLabel="Back"
+          onPress={() => {
+            tap();
+            onBack();
+          }}
+          style={styles.back}
+        >
+          <Icon name="chevronLeft" size={18} color={c.text} />
+        </PressableScale>
+        <PressableScale
+          accessibilityRole="button"
+          accessibilityLabel="Swap"
+          onPress={() => {
+            tap();
+            onConfirm();
+          }}
+          style={styles.swap}
+        >
+          <Icon name="faceId" size={20} color={c.onPrimary} />
+          <Text style={styles.swapLabel}>Swap</Text>
+        </PressableScale>
+      </View>
+    </View>
+  );
+}
+
 type StepState = 'done' | 'active' | 'waiting' | 'failed';
 
 /** Sent → swapping → done or refunded, from the swap's saved state (polled). */
@@ -1021,22 +1384,27 @@ function PairPreview({
   sellPrice,
   buyPrice,
   external,
+  dex = false,
 }: {
   sell: TokenRef;
   buy: TokenRef;
   sellPrice: number | null;
   buyPrice: number | null;
   external: boolean;
+  /** A token NEAR Intents doesn't list: a DEX swap on its own chain. */
+  dex?: boolean;
 }) {
   const styles = useStyles();
   const rate = rateText(sell, buy, sellPrice, buyPrice);
   return (
     <View style={styles.details}>
       <DetailRow label="Rate" value={rate ?? '—'} />
-      <DetailRow label="Route" value="NEAR Intents" />
+      <DetailRow label="Route" value={dex ? routeLabel(null, buy.chain, false) : 'NEAR Intents'} />
       <DetailRow
         label={external ? 'Receive at' : 'If it can’t fill'}
-        value={external ? 'Address you enter' : `Refunded on ${sell.chain}`}
+        value={
+          external ? 'Address you enter' : dex ? 'Nothing is sold' : `Refunded on ${sell.chain}`
+        }
       />
     </View>
   );

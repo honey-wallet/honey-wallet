@@ -13,6 +13,7 @@ import { SuccessPage } from '@/components/sheets/SuccessPage';
 import { FlowTray, InlineTray } from '@/components/sheets/Tray';
 import { TokenIcon } from '@/components/wallet/parts';
 import { confirmOwner } from '@/lib/auth';
+import { dexGasNote, priceImpactText, routeLabel } from '@/lib/dex-tokens';
 import { SPONSORED_FEE } from '@/lib/evm-gas';
 import { useMoney } from '@/lib/fx';
 import { honeyPaysOn, useGasAllowance } from '@/lib/gas';
@@ -100,14 +101,35 @@ function JarSellSheet() {
   const payoutChain = sellIntoChain(into);
   // Each token's own network pays its swap's fee, in that network's coin, unless Honey's
   // free gas pays it (Solana, and NEAR tokens).
+  // A DEX sale (a token NEAR Intents doesn't list) pays its swap's fee only where Honey
+  // doesn't (Ethereum), then its onward 1Click payment like any other.
+  const dexSales = quote?.dex ?? [];
   const feeCoins = [
-    ...new Set(
-      (quote?.swaps ?? [])
-        .filter(({ swap }) => !honeyPaysOn(freeGas, swap.sell.chain, swap.sell.symbol))
-        .map(({ swap }) => nativeCoinOf(swap.sell.chain)),
-    ),
+    ...new Set([
+      ...[
+        ...(quote?.swaps ?? []).map(({ swap }) => swap),
+        ...dexSales.flatMap((x) => x.payout ?? []),
+      ]
+        .filter((swap) => !honeyPaysOn(freeGas, swap.sell.chain, swap.sell.symbol))
+        .map((swap) => nativeCoinOf(swap.sell.chain)),
+      ...dexSales.filter((x) => !x.quoted.quote.sponsored).map((x) => nativeCoinOf(x.chain)),
+    ]),
   ];
-  const networks = [...new Set((quote?.swaps ?? []).map(({ swap }) => swap.sell.chain))];
+  const networks = [
+    ...new Set([
+      ...(quote?.swaps ?? []).map(({ swap }) => swap.sell.chain),
+      ...dexSales.map((x) => x.chain),
+    ]),
+  ];
+  // Why a DEX sale's gas is the wallet's, or that a failed one still uses free gas.
+  const gasNotes = [
+    ...new Set(dexSales.map((x) => dexGasNote(x.quoted.quote)).filter((n) => n !== null)),
+  ];
+  const routes = dexSales.map((x) => ({
+    symbol: x.leg.symbol,
+    text: `${routeLabel(x.quoted.quote.aggregator, x.chain, false)}${x.payout ? ' → NEAR Intents' : ''}`,
+    impact: priceImpactText(x.quoted.quote),
+  }));
 
   const review = (amount: number, nextInto: SellInto = into) => {
     setUsd(amount);
@@ -267,11 +289,38 @@ function JarSellSheet() {
                         : '<$0.01'
                     }
                   />
+                  {routes.map((r) => (
+                    <StatRow
+                      key={r.symbol}
+                      label={routes.length > 1 ? `${r.symbol} route` : 'Route'}
+                      value={r.text}
+                    />
+                  ))}
+                  {routes
+                    .filter((r) => r.impact)
+                    .map((r) => (
+                      <StatRow
+                        key={`${r.symbol}-impact`}
+                        label={routes.length > 1 ? `${r.symbol} price impact` : 'Price impact'}
+                        value={r.impact ?? ''}
+                      />
+                    ))}
+                  {routes.length && quote ? (
+                    <StatRow
+                      label="You get at least"
+                      value={`${tokens(quote.amountOutMin)} ${into}`}
+                    />
+                  ) : null}
                   <StatRow
                     label="Total"
                     value={<Text style={styles.total}>{got === null ? '…' : formatUsd(got)}</Text>}
                   />
                 </View>
+                {gasNotes.map((n) => (
+                  <Text key={n} style={styles.note}>
+                    {n}
+                  </Text>
+                ))}
                 <PillButton
                   label={selling ? 'Selling…' : quoting ? 'Getting prices…' : 'Confirm sell'}
                   disabled={selling || quoting || (real && !quote)}
@@ -320,5 +369,6 @@ const useStyles = makeStyles((c) => ({
   inline: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   rowValue: { color: c.text, fontSize: 16 },
   total: { color: c.text, fontSize: 16, fontWeight: '600' },
+  note: { color: c.textSecondary, fontSize: 14, paddingTop: 8 },
   cta: { marginTop: 20 },
 }));

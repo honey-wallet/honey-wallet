@@ -26,12 +26,13 @@ import { AddFace, FACE, FaceRow, FaceTile } from '@/components/social/FaceTile';
 import { SocialAvatar, Trend } from '@/components/social/parts';
 import { Chip } from '@/components/wallet/Chip';
 import { EmptyState } from '@/components/wallet/parts';
+import { routeLabel } from '@/lib/dex-tokens';
 import { useMoney } from '@/lib/fx';
 import { inviteLabel, MAX_FRIENDS, dollars as plainDollars } from '@/lib/group-jar-core';
 import { friendPicks, groupError, startGroup } from '@/lib/group-jars';
 import { tap } from '@/lib/haptics';
 import { REFRESH_FAILED } from '@/lib/intents-quote';
-import { type BuyLeg, payJarBuy, QuoteRanOut, quoteJarBuy } from '@/lib/jar-buy';
+import { type BuyLeg, JarBuyError, payJarBuy, QuoteRanOut, quoteJarBuy } from '@/lib/jar-buy';
 import { blockedRoutes, describeRoute, useRoutes } from '@/lib/jar-routes';
 import { useBasketChart, useTokenChart } from '@/lib/market';
 import { formatUsd } from '@/lib/mock-wallet';
@@ -67,6 +68,7 @@ import {
 import { chatAsk, chatDraft } from '@/lib/thesis-chat';
 import { showErrorToast, showToast } from '@/lib/toast';
 import { requireSignIn } from '@/lib/wallet-gate';
+import { useWalletView } from '@/lib/wallet-view';
 import { useActiveWallet } from '@/lib/wallets';
 import { Gate, warningOn } from '@/lib/warnings';
 import { makeStyles, radius, useTheme } from '@/theme';
@@ -197,6 +199,20 @@ export default function NewThesisSheet() {
   // What the order costs on top of the tokens: price impact and pool fees, then bridging.
   const impactUsd = routes.reduce((sum, r) => sum + r.slippage * r.usd, 0);
   const bridgeUsd = routes.reduce((sum, r) => sum + r.bridgeUsd, 0);
+  // Picks NEAR Intents doesn't list buy through a DEX on their chain: straight from the
+  // USDC there, or carried there by NEAR Intents first (lib/jar-dex).
+  const view = useWalletView();
+  const held = 'holdings' in view ? (view.holdings ?? []) : [];
+  const usdcOn = (chain: string) =>
+    held.filter((h) => h.symbol === 'USDC' && h.chain === chain).reduce((s, h) => s + h.amount, 0);
+  const dexRoutes = routes.flatMap((r) =>
+    r.legs
+      .filter((l) => l.dex && l.usd > 0)
+      .map((l) => ({
+        symbol: r.symbol,
+        text: routeLabel(null, l.chain, usdcOn(l.chain) < l.usd),
+      })),
+  );
 
   const links = linksIn(text);
   const value = Number(amount) || 0;
@@ -281,6 +297,11 @@ export default function NewThesisSheet() {
   };
 
   const [buying, setBuying] = useState(false);
+  // What the buy is doing now, and one plain line per leg: the route a leg takes when
+  // it isn't NEAR Intents (and why), or why it can't be bought. Kept on screen: a buy
+  // never stops silently after "Paying…".
+  const [buyStage, setBuyStage] = useState<string | null>(null);
+  const [buyLines, setBuyLines] = useState<{ key: string; text: string; error?: boolean }[]>([]);
   // A shared wallet buys the jar for its members: the buy is a proposal they approve.
   const multisig = useActiveMultisig();
   const activeWallet = useActiveWallet();
@@ -381,6 +402,9 @@ export default function NewThesisSheet() {
       // Legs already paid, kept even if a later leg fails, so the money stays tracked.
       let sent: BuyLeg[] = [];
       let legCount = 0;
+      let routeLines: typeof buyLines = [];
+      setBuyLines([]);
+      setBuyStage('Getting quotes…');
       try {
         const quoteAndPay = async (again: boolean) => {
           const quoted = await quoteJarBuy(routes, maxSlip / 100, {}, jarPayWith.get()).catch(
@@ -389,8 +413,18 @@ export default function NewThesisSheet() {
             },
           );
           legCount = quoted.legs.length;
+          // Legs bought through a DEX say so, and what you'll hold.
+          routeLines = quoted.legs
+            .filter((l) => l.why)
+            .map((l) => ({
+              key: `route-${l.symbol}`,
+              text: `${l.holdAs ?? l.symbol}: ${l.why}`,
+            }));
+          setBuyLines(routeLines);
+          setBuyStage('Confirm to pay…');
           return payJarBuy(quoted.legs, (legs) => {
             sent = legs.filter((l) => l.txHash);
+            setBuyStage(`Paying ${Math.min(sent.length + 1, legCount)} of ${legCount}…`);
           });
         };
         // A quote that ran out before anything was paid (the confirm prompt sat open):
@@ -402,7 +436,19 @@ export default function NewThesisSheet() {
         toast = 'Paid. Swaps are on their way';
       } catch (error) {
         setBuying(false);
+        setBuyStage(null);
         const text = error instanceof Error ? error.message : 'Buy failed';
+        // Every leg that couldn't go, each with its reason, stays on the screen.
+        setBuyLines([
+          ...routeLines,
+          ...(error instanceof JarBuyError && error.legs.length
+            ? error.legs.map((l) => ({
+                key: `error-${l.symbol}`,
+                text: `${l.symbol}: ${l.reason}`,
+                error: true,
+              }))
+            : [{ key: 'error', text, error: true }]),
+        ]);
         if (!sent.length) {
           showToast(text);
           return;
@@ -413,6 +459,7 @@ export default function NewThesisSheet() {
         toast = `Paid ${sent.length} of ${legCount} swaps. ${text}`;
       }
       setBuying(false);
+      setBuyStage(null);
       // The payment leaves now; the tokens follow as each swap settles (lib/in-flight).
       refreshAfterChange(activeWallet);
     }
@@ -618,12 +665,17 @@ export default function NewThesisSheet() {
         onBack={() => setStep('proposal')}
         footer={
           <View style={styles.footer}>
+            {buyLines.map((l) => (
+              <Text key={l.key} style={[styles.footnote, l.error && styles.warn]}>
+                {l.text}
+              </Text>
+            ))}
             <PillButton
               label={
                 buying
                   ? friends.length
                     ? 'Inviting…'
-                    : 'Paying…'
+                    : (buyStage ?? 'Paying…')
                   : multisig
                     ? `Propose to ${activeWallet.label}`
                     : !name.trim()
@@ -792,6 +844,13 @@ export default function NewThesisSheet() {
                 value={`${copied.copyFee}% of profit, never of a loss`}
               />
             ) : null}
+            {dexRoutes.map((d) => (
+              <StatRow
+                key={d.symbol}
+                label={dexRoutes.length > 1 ? `${d.symbol} route` : 'Route'}
+                value={d.text}
+              />
+            ))}
             {liveRoutes ? null : <StatRow label="Routes" value="Sample" />}
             {warningOn('strategyFeesWarning') &&
             impactUsd + bridgeUsd > proposal.amount * 0.05 &&
