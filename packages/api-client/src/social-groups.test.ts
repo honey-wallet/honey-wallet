@@ -196,8 +196,18 @@ describe('push tokens', () => {
       body: { token: 'ExponentPushToken[x]', platform: 'ios' },
       auth: 'Bearer t',
     });
+    await api.registerPushToken('t', {
+      token: 'ExponentPushToken[x]',
+      platform: 'android',
+      wallets: [{ evm: '0xabc', solana: 'So1', near: 'a.near' }],
+    });
+    expect(sent(fetch, 1).body).toEqual({
+      token: 'ExponentPushToken[x]',
+      platform: 'android',
+      wallets: [{ evm: '0xabc', solana: 'So1', near: 'a.near' }],
+    });
     await api.removePushToken('t', 'ExponentPushToken[x]');
-    expect(sent(fetch, 1)).toEqual({
+    expect(sent(fetch, 2)).toEqual({
       url: 'http://api.test/api/v1/push/tokens/remove',
       method: 'POST',
       body: { token: 'ExponentPushToken[x]' },

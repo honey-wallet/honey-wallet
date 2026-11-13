@@ -120,7 +120,12 @@ impl Push {
         for (token, user) in tokens {
             by_user.entry(user).or_default().push(token);
         }
-        let messages = messages(&items, &by_user);
+        self.send_all(&messages(&items, &by_user)).await
+    }
+
+    /// Sends ready-made Expo messages in batches of 100 and forgets the devices Expo
+    /// says are gone. Returns how many Expo accepted.
+    pub async fn send_all(&self, messages: &[Value]) -> anyhow::Result<usize> {
         let mut accepted = 0;
         let mut gone = Vec::new();
         for batch in messages.chunks(BATCH) {

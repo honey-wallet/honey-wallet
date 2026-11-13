@@ -8,7 +8,14 @@ import { tap } from '@/lib/haptics';
  * buttons, and keeps that place while the tray closes rather than jumping.
  */
 /** `error`: something didn't work; it shows a warning instead of the check. */
-export type Toast = { id: number; message: string; top: boolean; error?: boolean };
+/** `pressable`: tapping it does something (`showToast`'s `onPress`), e.g. opens Activity. */
+export type Toast = {
+  id: number;
+  message: string;
+  top: boolean;
+  error?: boolean;
+  pressable?: boolean;
+};
 
 /** Newest first. Up to three stay visible, stacked; a fourth sends the oldest out. */
 const MAX_STACK = 3;
@@ -31,11 +38,34 @@ function set(next: Toast[]) {
   for (const listener of listeners) listener();
 }
 
-/** Shows a short confirmation, e.g. "Address copied", then hides it. */
-export function showToast(message: string, ms = 1800, error = false) {
+/** What tapping each pressable toast does, by id. */
+const presses = new Map<number, () => void>();
+
+/**
+ * Shows a short confirmation, e.g. "Address copied", then hides it. With `onPress`,
+ * tapping it runs that and dismisses it ("Received 5 USDC on Base" opens Activity).
+ */
+export function showToast(message: string, ms = 1800, error = false, onPress?: () => void) {
   const id = nextId++;
-  set([{ id, message, top: traysOpen > 0, error }, ...toasts].slice(0, MAX_STACK));
-  setTimeout(() => set(toasts.filter((t) => t.id !== id)), ms);
+  if (onPress) presses.set(id, onPress);
+  set(
+    [{ id, message, top: traysOpen > 0, error, pressable: !!onPress }, ...toasts].slice(
+      0,
+      MAX_STACK,
+    ),
+  );
+  setTimeout(() => {
+    presses.delete(id);
+    set(toasts.filter((t) => t.id !== id));
+  }, ms);
+}
+
+/** A pressable toast was tapped: runs its action and dismisses it. */
+export function pressToast(id: number) {
+  const action = presses.get(id);
+  presses.delete(id);
+  dismissToast(id);
+  action?.();
 }
 
 /** The same pill when something failed: a few words, a warning icon (review: errors showed a check). */

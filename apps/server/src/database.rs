@@ -8,7 +8,7 @@ use sqlx_core::migrate::{Migration, MigrationSource, MigrationType, Migrator};
 /// Latest schema version required before authenticated endpoints are ready.
 /// Keep this attached to the final embedded migration so readiness cannot drift
 /// from the migration list when the schema advances.
-pub const LATEST_SCHEMA_VERSION: i64 = 202611140001;
+pub const LATEST_SCHEMA_VERSION: i64 = 202611140002;
 const AUTH_CLEANUP_LOCK: i64 = 0x484f_4e45_5941_5554;
 
 #[derive(Debug)]
@@ -183,9 +183,15 @@ impl MigrationSource<'static> for EmbeddedMigrations {
                     false,
                 ),
                 migration(
-                    LATEST_SCHEMA_VERSION,
+                    202611140001,
                     "people search",
                     include_str!("../migrations/202611140001_people_search.sql"),
+                    false,
+                ),
+                migration(
+                    LATEST_SCHEMA_VERSION,
+                    "arrival watches",
+                    include_str!("../migrations/202611140002_arrival_watches.sql"),
                     false,
                 ),
             ])

@@ -23,7 +23,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { scheduleOnRN } from 'react-native-worklets';
 import { Icon } from '@/components/Icon';
 import { TAB_BAR_HEIGHT } from '@/components/wallet/TabBar';
-import { dismissToast, type Toast, useToasts } from '@/lib/toast';
+import { dismissToast, pressToast, type Toast, useToasts } from '@/lib/toast';
 import { makeStyles, radius, useTheme } from '@/theme';
 import { DURATION, EASE, lazy, SPRING } from '@/theme/motion';
 
@@ -168,6 +168,14 @@ function StackedToast({ toast, depth }: { toast: Toast; depth: number }) {
       if (!finished) drag.value = reduceMotion ? 0 : withSpring(0, SPRING.ui);
     });
 
+  // A pressable toast (an arrival) opens what it's about on a tap; a drag still dismisses.
+  const press = Gesture.Tap()
+    .enabled(depth === 0 && !!toast.pressable)
+    .onEnd((_e, success) => {
+      if (success) scheduleOnRN(pressToast, toast.id);
+    });
+  const gesture = Gesture.Exclusive(swipe, press);
+
   // Depth 1 dims to 0.6 and depth 2 to 0.36.
   const style = useAnimatedStyle(() => {
     const dim =
@@ -191,9 +199,11 @@ function StackedToast({ toast, depth }: { toast: Toast; depth: number }) {
   });
 
   return (
-    <GestureDetector gesture={swipe}>
+    <GestureDetector gesture={gesture}>
       <Animated.View
         accessibilityLiveRegion={depth === 0 ? 'polite' : 'none'}
+        accessibilityRole={toast.pressable ? 'button' : undefined}
+        accessibilityHint={toast.pressable ? 'Opens Activity' : undefined}
         importantForAccessibility={depth === 0 ? 'auto' : 'no-hide-descendants'}
         style={[styles.toast, style]}
       >

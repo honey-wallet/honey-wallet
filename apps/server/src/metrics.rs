@@ -78,6 +78,8 @@ pub struct Metrics {
     pub postgres_up: Gauge,
     pub redis_up: Gauge,
     pub draining: Gauge,
+    arrivals: Family<OutcomeLabels, Counter>,
+    pub arrival_wallets: Gauge,
 }
 impl Default for Metrics {
     fn default() -> Self {
@@ -112,6 +114,8 @@ impl Default for Metrics {
         let postgres_up = Gauge::default();
         let redis_up = Gauge::default();
         let draining = Gauge::default();
+        let arrivals = Family::default();
+        let arrival_wallets = Gauge::default();
         registry.register(
             "http_requests",
             "HTTP handler responses by route template, normalized method and status class",
@@ -253,6 +257,16 @@ impl Default for Metrics {
             redis_up.clone(),
         );
         registry.register("draining", "Server is draining", draining.clone());
+        registry.register(
+            "arrival_watch",
+            "Incoming-transfer watcher wallet reads and pushes by fixed outcome",
+            arrivals.clone(),
+        );
+        registry.register(
+            "arrival_watched_wallets",
+            "Wallets the incoming-transfer watcher read in its last cycle",
+            arrival_wallets.clone(),
+        );
         Self {
             registry,
             requests,
@@ -284,6 +298,8 @@ impl Default for Metrics {
             postgres_up,
             redis_up,
             draining,
+            arrivals,
+            arrival_wallets,
         }
     }
 }
@@ -518,6 +534,27 @@ impl Metrics {
                 operation,
             })
             .observe(elapsed);
+    }
+    /// One incoming-transfer watcher event; unknown outcomes are dropped.
+    pub fn arrival(&self, outcome: &str, count: u64) {
+        let outcome = match outcome {
+            "baseline" => "baseline",
+            "quiet" => "quiet",
+            "dust" => "dust",
+            "rate_limited" => "rate_limited",
+            "deduped" => "deduped",
+            "detected" => "detected",
+            "pushed" => "pushed",
+            "push_failed" => "push_failed",
+            "store_failed" => "store_failed",
+            "cycle" => "cycle",
+            "cycle_skipped" => "cycle_skipped",
+            "cycle_failed" => "cycle_failed",
+            _ => return,
+        };
+        self.arrivals
+            .get_or_create(&OutcomeLabels { outcome })
+            .inc_by(count);
     }
     pub fn background_failure(&self, reason: &str) {
         let outcome = match reason {

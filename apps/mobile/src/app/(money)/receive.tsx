@@ -1,4 +1,5 @@
 import { router } from 'expo-router';
+import { useEffect } from 'react';
 import { Text, View } from 'react-native';
 import { Avatar } from '@/components/Avatar';
 import { Icon } from '@/components/Icon';
@@ -6,11 +7,11 @@ import { IconSwap } from '@/components/motion/IconSwap';
 import { PressableScale } from '@/components/motion/PressableScale';
 import { SheetScreen, SheetText } from '@/components/sheets/Sheet';
 import { ChainPicker } from '@/components/wallet/ChainPicker';
+import { offerArrivalPush } from '@/lib/arrival-watcher';
 import { useCopy } from '@/lib/copy';
 import { demoLabel } from '@/lib/demo-money-copy';
 import { tap } from '@/lib/haptics';
 import { shortAddress } from '@/lib/mock-wallet';
-import { useArrivalToast } from '@/lib/portfolio-arrival';
 import { useProfile } from '@/lib/profile';
 import { receiveAddresses } from '@/lib/receive';
 import { useWalletRequired } from '@/lib/wallet-gate';
@@ -34,8 +35,11 @@ function ReceiveSheet() {
   const c = useTheme();
   const profile = useProfile();
   const wallet = useActiveWallet();
-  // While this is open, watch the chain and say when a deposit lands.
-  useArrivalToast(wallet);
+  // Arrivals show app-wide (lib/arrival-watcher); the first Receive offers notifications
+  // so a deposit that lands while Honey is closed still says so.
+  useEffect(() => {
+    if (!wallet.demo && wallet.addresses) offerArrivalPush();
+  }, [wallet.demo, wallet.addresses]);
   const isMain = isMainWallet(wallet);
   // Wallets with keys here have an address per chain; list them all, labelled.
   const list = receiveAddresses(wallet);
