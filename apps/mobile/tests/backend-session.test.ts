@@ -237,6 +237,19 @@ it('stores only a rotating refresh family, suspends on background and resumes af
   expect(mocks.storedRefresh).toContain('d'.repeat(64));
 });
 
+it('resumes quietly on coming back, without asking for Face ID', async () => {
+  await prepareBackendSignIn();
+  await approveBackendSignIn();
+  backendVisibility('background');
+  expect(backendSessionToken()).toBeNull();
+  backendVisibility('active');
+  mocks.confirm.mockClear();
+  await resumeBackendSession({ silent: true });
+  expect(mocks.confirm).not.toHaveBeenCalled();
+  expect(backendSessionToken()).toBe('b'.repeat(64));
+  expect(mocks.storedRefresh).toContain('d'.repeat(64));
+});
+
 it('forgets a suspended refresh family and attempts server-side revocation', async () => {
   await prepareBackendSignIn();
   await approveBackendSignIn();

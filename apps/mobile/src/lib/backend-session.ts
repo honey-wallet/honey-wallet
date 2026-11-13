@@ -268,8 +268,13 @@ export async function refreshResumeAvailability() {
   }
 }
 
-/** Resume a saved native session only after local owner confirmation and profile re-check. */
-export async function resumeBackendSession() {
+/**
+ * Resume a saved native session after a profile re-check. Tapping Sign in asks for Face ID;
+ * `silent` (the app launching or coming back to the front) doesn't, so you stay signed in
+ * like in any app. The refresh family sits in the device keychain, the app lock (when on)
+ * gates it, and anything that moves money still asks for Face ID itself.
+ */
+export async function resumeBackendSession({ silent = false }: { silent?: boolean } = {}) {
   if (isExtensionTarget()) return;
   const accountId = wallets.get().activeId;
   if (backendSession.get().busy || !foreground || !accountId) return;
@@ -301,7 +306,8 @@ export async function resumeBackendSession() {
       configuration.chainId !== expected.chainId
     )
       throw new Error('Saved session does not match this wallet or server.');
-    if (!(await confirmOwner('Resume Honey account', true)) || !valid(current, accountId)) return;
+    if (!silent && !(await confirmOwner('Resume Honey account', true))) return;
+    if (!valid(current, accountId)) return;
     issued = await api.refreshSession(record.refreshToken, record.deviceId);
     if (!valid(current, accountId)) {
       void api.signOut(issued.accessToken).catch(() => {});

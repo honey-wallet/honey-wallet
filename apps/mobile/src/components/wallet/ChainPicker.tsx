@@ -48,11 +48,11 @@ export function ChainPicker({
             style={[styles.row, isWeb && styles.rowWeb]}
           >
             {evm ? (
-              // One address for all of them: a few of their logos, overlapped.
+              // One address for all of them: every network Honey reads, overlapped.
               <View style={styles.stack}>
-                {EVM_LOGOS.slice(0, 3).map((symbol, i) => (
+                {EVM_LOGOS.map((symbol, i) => (
                   <View key={symbol} style={[styles.stacked, i > 0 && styles.overlap]}>
-                    <TokenIcon symbol={symbol} size={24} />
+                    <TokenIcon symbol={symbol} size={20} />
                   </View>
                 ))}
               </View>
@@ -118,7 +118,7 @@ const useStyles = makeStyles((c) => ({
     borderColor: c.card,
   },
   overlap: {
-    marginLeft: -10,
+    marginLeft: -11,
   },
   title: {
     color: c.text,

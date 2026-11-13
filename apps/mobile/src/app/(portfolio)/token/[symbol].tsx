@@ -27,6 +27,7 @@ import { StatRow } from '@/components/sheets/Sheet';
 import { FriendsHolding } from '@/components/social/FriendsHolding';
 import { TokenTheses } from '@/components/social/TokenTheses';
 import { Change, EmptyState, PushedScreen, TokenIcon } from '@/components/wallet/parts';
+import { openBuy } from '@/lib/buy';
 import { tap } from '@/lib/haptics';
 import { LOADS } from '@/lib/loads';
 import {
@@ -119,7 +120,8 @@ export default function TokenScreen() {
     onPress: () => {
       // Browsing without a wallet: get one, then back to this token.
       if (!requireWallet(`buy ${symbol}`, `/token/${symbol}`)) return;
-      router.push({ pathname: '/buy', params: { symbol } });
+      // Straight to buying it with what you hold (cash, once live, is offered too).
+      openBuy('holdings' in view ? (view.holdings ?? []) : [], symbol);
     },
   };
   // No wallet yet: just Buy (the way in); nothing to sell or send.

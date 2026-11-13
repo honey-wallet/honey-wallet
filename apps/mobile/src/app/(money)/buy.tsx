@@ -3,13 +3,13 @@ import { Text, View } from 'react-native';
 import { Icon, type IconName } from '@/components/Icon';
 import { PressableScale } from '@/components/motion/PressableScale';
 import { SheetScreen } from '@/components/sheets/Sheet';
+import { presetBuy } from '@/lib/buy';
 import { tap } from '@/lib/haptics';
-import { fetchSwapTokens, sameToken, swapRefForSymbol } from '@/lib/intents-swap';
 import { leaveSheetTo } from '@/lib/navigation';
 // import { isWeb } from '@/lib/platform';
 import { COMING_SOON, SOON, SOON_OPACITY } from '@/lib/surface';
-import { pickToken, swap } from '@/lib/swap';
 import { useWalletRequired } from '@/lib/wallet-gate';
+import { useWalletView } from '@/lib/wallet-view';
 import { makeStyles, radius, useTheme } from '@/theme';
 
 /** Buy (or sell) sheet: with cash, or by swapping what you already hold. */
@@ -25,6 +25,8 @@ function BuySheet() {
   const c = useTheme();
   const selling = mode === 'sell';
   const what = symbol ?? 'crypto';
+  const view = useWalletView();
+  const holdings = 'holdings' in view ? (view.holdings ?? []) : [];
 
   // No card or bank provider is connected outside test mode yet: the option stays,
   // dimmed with Coming soon, and does nothing (lib/surface SOON). Swapping is live.
@@ -55,13 +57,19 @@ function BuySheet() {
       icon: 'trade',
       title: 'Swap tokens',
       hint: 'Trade using your existing balance',
-      onPress: () => openSwap(selling ? undefined : symbol),
+      onPress: () => {
+        // Buying: Swap set up to buy the token with the best one you hold.
+        if (!selling) presetBuy(holdings, symbol);
+        leaveSheetTo('/trade', { navigate: true });
+      },
     },
   ];
   // review: no trading in the extension, so Swap (a link into /trade) is phone-only.
   // review: Swap is back in the extension.
   // const options = isWeb ? allOptions.filter((o) => o.icon !== 'trade') : allOptions;
-  const options = allOptions;
+  // Buying with cash shows only once it's live (Buy goes straight to Swap until then,
+  // lib/buy `openBuy`); selling for cash stays, dimmed, as coming soon.
+  const options = allOptions.filter((o) => selling || !o.soon);
 
   return (
     <SheetScreen title={selling ? `Sell ${what}` : `Buy ${what}`}>
@@ -93,25 +101,6 @@ function BuySheet() {
       </View>
     </SheetScreen>
   );
-}
-
-/**
- * Opens Swap; from a token page's Buy, with that token on the buy side (1Click's entry
- * for the symbol, lib/intents-swap `swapRefForSymbol`). The list is usually cached; if it
- * arrives after Swap opens, it's only applied while the buy side is still untouched, and
- * without it Swap keeps its last pair.
- */
-function openSwap(buySymbol?: string) {
-  if (buySymbol) {
-    const before = swap.get().buy;
-    fetchSwapTokens()
-      .then((tokens) => {
-        const ref = swapRefForSymbol(tokens, buySymbol);
-        if (ref && sameToken(swap.get().buy, before)) pickToken('buy', ref);
-      })
-      .catch(() => {});
-  }
-  leaveSheetTo('/trade', { navigate: true });
 }
 
 const useStyles = makeStyles((c) => ({

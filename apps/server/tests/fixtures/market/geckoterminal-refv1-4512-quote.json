@@ -1,0 +1,31 @@
+{
+  "data": {
+    "id": "5eed5969-5943-4917-96f9-e2028e795b7c",
+    "type": "ohlcv_request_response",
+    "attributes": {
+      "ohlcv_list": [
+        [1794585600, 3.4899999999999998, 3.52, 3.4799999999999995, 3.51, 12995.350568187687],
+        [
+          1794571200, 3.54, 3.6199999999999997, 3.4499999999999997, 3.4899999999999998,
+          65705.99105287465
+        ],
+        [1794556800, 3.5, 3.56, 3.4699999999999998, 3.54, 39580.91709246866],
+        [1794542400, 3.3299999999999996, 3.55, 3.27, 3.5, 67795.55402890164]
+      ]
+    }
+  },
+  "meta": {
+    "base": {
+      "name": "Wrapped NEAR fungible token",
+      "symbol": "wNEAR",
+      "coingecko_coin_id": "wrapped-near",
+      "address": "wrap.near"
+    },
+    "quote": {
+      "name": "USDC",
+      "symbol": "USDC",
+      "coingecko_coin_id": "usd-coin",
+      "address": "17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1"
+    }
+  }
+}

@@ -3,6 +3,8 @@
 //! app stays well under their rate limits (DexScreener ~300/min, GeckoTerminal ~30/min).
 //! Token pages (About, links, logo, caps, charts) come from CoinGecko, by the CoinGecko id
 //! the 1Click list gives each asset, so a look-alike symbol never gets another coin's page.
+//! Price charts fall back to DefiLlama (keyless, same CoinGecko ids), then to the deepest
+//! pool's GeckoTerminal candles, while CoinGecko is limiting us.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -18,6 +20,8 @@ const GECKOTERMINAL: &str = "https://api.geckoterminal.com/api/v2";
 /// Token pages: description, links, logo, caps and price history. Keyless works (a few
 /// calls a minute); `COINGECKO_API_KEY` (a free demo key) raises that to 30 a minute.
 const COINGECKO: &str = "https://api.coingecko.com/api/v3";
+/// Price charts when CoinGecko is down or limiting us: keyless, keyed by CoinGecko id.
+const DEFILLAMA_COINS: &str = "https://coins.llama.fi";
 /// Descriptions and links barely change; caps on the page may be this old.
 const INFO_TTL: Duration = Duration::from_secs(30 * 60);
 /// Names, logos, caps, 24h volume and change for every token 1Click lists: one CoinGecko
@@ -489,6 +493,7 @@ pub struct MarketData {
     oneclick: String,
     coingecko: String,
     coingecko_key: Option<String>,
+    defillama: String,
     /// Set when CoinGecko rate-limits us; until then only cached answers are served.
     coingecko_quiet_until: std::sync::Mutex<Option<Instant>>,
     cache: RwLock<HashMap<String, (Instant, Cached)>>,
@@ -538,6 +543,7 @@ impl MarketData {
             oneclick,
             coingecko: COINGECKO.into(),
             coingecko_key: None,
+            defillama: DEFILLAMA_COINS.into(),
             coingecko_quiet_until: std::sync::Mutex::new(None),
             cache: RwLock::new(HashMap::new()),
             gecko: RwLock::new(HashMap::new()),
@@ -549,6 +555,12 @@ impl MarketData {
     /// Points CoinGecko calls somewhere else (tests).
     pub fn with_coingecko(mut self, base: String) -> Self {
         self.coingecko = base;
+        self
+    }
+
+    /// Points DefiLlama chart calls somewhere else (tests).
+    pub fn with_defillama(mut self, base: String) -> Self {
+        self.defillama = base;
         self
     }
 
@@ -783,7 +795,9 @@ impl MarketData {
         }
     }
 
-    /// USD prices for one symbol over one range, oldest first.
+    /// USD prices for one symbol over one range, oldest first: CoinGecko, else DefiLlama,
+    /// else the deepest pool's candles. Each range's series is cached for its TTL, and
+    /// the last one is served, however old, when every source fails.
     pub async fn token_chart(
         &self,
         symbol: &str,
@@ -791,39 +805,97 @@ impl MarketData {
     ) -> Result<TokenChart, Unavailable> {
         let symbol = symbol.trim().to_string();
         let id = self.coingecko_id(&symbol).await?;
-        let days = range.days();
-        let key = format!("chart:{id}:{days}");
-        let fresh = self.gecko_cached(&key, range.ttl()).await;
+        let key = format!("chart:{id}:{}", range.days());
+        if let Some(Cached::Chart(c)) = self.gecko_cached(&key, range.ttl()).await {
+            return Ok(c.for_range(symbol, range));
+        }
         let flight = self.gecko_flight(&key);
-        let _turn = match fresh {
-            Some(_) => None,
-            None => Some(flight.lock().await),
-        };
-        let fresh = match fresh {
-            Some(c) => Some(c),
-            None => self.gecko_cached(&key, range.ttl()).await,
-        };
-        let series = match fresh {
-            Some(Cached::Chart(c)) => c,
-            _ => {
-                let path = format!("/coins/{id}/market_chart?vs_currency=usd&days={days}");
-                match self.coingecko_get(&path).await {
-                    Ok(body) => {
-                        let chart = parse_market_chart(&body);
-                        if chart.prices.len() < 2 {
-                            return Err(Unavailable);
-                        }
-                        self.gecko_store(key, Cached::Chart(chart.clone())).await;
-                        chart
-                    }
-                    Err(e) => match self.gecko_stale(&key).await {
-                        Some(Cached::Chart(c)) => c,
-                        _ => return Err(e),
-                    },
-                }
+        let _turn = flight.lock().await;
+        // Someone else's request may have filled it while this one waited.
+        if let Some(Cached::Chart(c)) = self.gecko_cached(&key, range.ttl()).await {
+            return Ok(c.for_range(symbol, range));
+        }
+        let series = match self.fetch_chart(&symbol, &id, range).await {
+            Some(chart) => {
+                self.gecko_store(key, Cached::Chart(chart.clone())).await;
+                chart
             }
+            None => match self.gecko_stale(&key).await {
+                Some(Cached::Chart(c)) => c,
+                _ => return Err(Unavailable),
+            },
         };
         Ok(series.for_range(symbol, range))
+    }
+
+    /// A fresh series from the first source that has one.
+    async fn fetch_chart(&self, symbol: &str, id: &str, range: ChartRange) -> Option<TokenChart> {
+        let path = format!(
+            "/coins/{id}/market_chart?vs_currency=usd&days={}",
+            range.days()
+        );
+        if let Ok(body) = self.coingecko_get(&path).await {
+            let chart = parse_market_chart(&body);
+            if chart.prices.len() >= 2 {
+                return Some(chart);
+            }
+        }
+        if let Some(chart) = self.llama_chart(id, range).await {
+            tracing::info!(id, range = range.label(), "price chart from defillama");
+            return Some(chart);
+        }
+        let chart = self.pool_chart(symbol, range).await;
+        if chart.is_some() {
+            tracing::info!(id, range = range.label(), "price chart from geckoterminal");
+        }
+        chart
+    }
+
+    /// DefiLlama's prices for a CoinGecko id over the range's window.
+    async fn llama_chart(&self, id: &str, range: ChartRange) -> Option<TokenChart> {
+        let (window, period, label) = range.llama();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?
+            .as_secs();
+        let url = format!(
+            "{}/chart/coingecko:{id}?start={}&span={}&period={label}",
+            self.defillama,
+            now.saturating_sub(window),
+            window / period + 1
+        );
+        let chart = parse_llama_chart(&self.get(&url).await.ok()?, id);
+        (chart.prices.len() >= 2).then_some(chart)
+    }
+
+    /// Candles from the deepest pool `token_market` found, in USD. GeckoTerminal and
+    /// DexScreener can disagree on which side of a pool is the base token, so the side
+    /// whose last close sits near the token's price is the one used.
+    async fn pool_chart(&self, symbol: &str, range: ChartRange) -> Option<TokenChart> {
+        let market = self.token_market(symbol).await.ok()?;
+        let price = market.price_usd.filter(|p| *p > 0.0)?;
+        let pool = market.chart?;
+        let network = gecko_network(pool.chain)?;
+        if !valid_pool_id(&pool.pool) {
+            return None;
+        }
+        let (timeframe, aggregate, limit) = range.ohlcv();
+        for side in ["base", "quote"] {
+            let url = format!(
+                "{}/networks/{network}/pools/{}/ohlcv/{timeframe}?aggregate={aggregate}\
+                 &limit={limit}&currency=usd&token={side}",
+                self.geckoterminal, pool.pool
+            );
+            let chart = parse_ohlcv_chart(&self.get(&url).await.ok()?);
+            let near_price = chart
+                .prices
+                .last()
+                .is_some_and(|last| (last - price).abs() <= price * MAX_COIN_PRICE_GAP);
+            if chart.prices.len() >= 2 && near_price {
+                return Some(chart);
+            }
+        }
+        None
     }
 
     async fn cached(&self, key: &str, ttl: Duration) -> Option<Cached> {
@@ -982,12 +1054,7 @@ impl MarketData {
     /// Up to 90 daily closes for one pool.
     pub async fn history(&self, chain: &str, pool: &str) -> Result<History, Unavailable> {
         let network = gecko_network(chain).ok_or(Unavailable)?;
-        if pool.is_empty()
-            || pool.len() > 100
-            || !pool
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
-        {
+        if !valid_pool_id(pool) {
             return Err(Unavailable);
         }
         let key = format!("history:{network}:{pool}");
@@ -1002,6 +1069,15 @@ impl MarketData {
         self.store(key, Cached::History(history.clone())).await;
         Ok(history)
     }
+}
+
+/// Pool ids as DexScreener and GeckoTerminal write them; anything else never reaches a URL.
+fn valid_pool_id(pool: &str) -> bool {
+    !pool.is_empty()
+        && pool.len() <= 100
+        && pool
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
 }
 
 /// Honey's chart ranges. "All" is a year: keyless CoinGecko serves at most 365 days.
@@ -1046,6 +1122,30 @@ impl ChartRange {
             Self::Week => "7",
             Self::Month => "30",
             Self::Year | Self::All => "365",
+        }
+    }
+
+    /// DefiLlama's window in seconds, and its step in seconds and as written in the URL:
+    /// about as many points as CoinGecko gives for the same range.
+    fn llama(self) -> (u64, u64, &'static str) {
+        const MINUTE: u64 = 60;
+        const HOUR: u64 = 60 * MINUTE;
+        const DAY: u64 = 24 * HOUR;
+        match self {
+            Self::Hour | Self::Day => (DAY, 5 * MINUTE, "5m"),
+            Self::Week => (7 * DAY, HOUR, "1h"),
+            Self::Month => (30 * DAY, 4 * HOUR, "4h"),
+            Self::Year | Self::All => (365 * DAY, DAY, "1d"),
+        }
+    }
+
+    /// GeckoTerminal's candle size, aggregate and count for the same window.
+    fn ohlcv(self) -> (&'static str, u32, u32) {
+        match self {
+            Self::Hour | Self::Day => ("minute", 5, 288),
+            Self::Week => ("hour", 1, 168),
+            Self::Month => ("hour", 4, 180),
+            Self::Year | Self::All => ("day", 1, 365),
         }
     }
 
@@ -1330,16 +1430,40 @@ fn parse_coin(symbol: &str, id: &str, body: &Value) -> Option<TokenInfo> {
 
 /// `{"prices": [[ms, usd], …]}` → a series, oldest first, positive prices only.
 fn parse_market_chart(body: &Value) -> TokenChart {
-    let mut rows: Vec<(i64, f64)> = body["prices"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|r| {
-            let t = r.get(0)?.as_f64()? as i64;
-            let p = num(r.get(1)?)?;
-            (p > 0.0).then_some((t, p))
-        })
-        .collect();
+    series(
+        body["prices"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|r| Some((r.get(0)?.as_f64()? as i64, num(r.get(1)?)?))),
+    )
+}
+
+/// DefiLlama's `{"coins": {"coingecko:near": {"prices": [{"timestamp": s, "price": usd}]}}}`.
+fn parse_llama_chart(body: &Value, id: &str) -> TokenChart {
+    series(
+        body["coins"][format!("coingecko:{id}")]["prices"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|r| Some((r["timestamp"].as_i64()? * 1000, num(&r["price"])?))),
+    )
+}
+
+/// GeckoTerminal candles, `[s, open, high, low, close, volume]` newest first → the closes.
+fn parse_ohlcv_chart(body: &Value) -> TokenChart {
+    series(
+        body.pointer("/data/attributes/ohlcv_list")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|r| Some((r.get(0)?.as_i64()? * 1000, num(r.get(4)?)?))),
+    )
+}
+
+/// `(ms, usd)` rows → a series, oldest first, one price per time, positive prices only.
+fn series(rows: impl Iterator<Item = (i64, f64)>) -> TokenChart {
+    let mut rows: Vec<(i64, f64)> = rows.filter(|(_, p)| *p > 0.0).collect();
     rows.sort_by_key(|r| r.0);
     rows.dedup_by_key(|r| r.0);
     TokenChart {
@@ -1969,6 +2093,48 @@ mod tests {
     }
 
     #[test]
+    fn defillama_and_pool_candles_parse_into_millisecond_series() {
+        let llama: Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/market/defillama-near-1h.json"
+        ))
+        .unwrap();
+        let chart = parse_llama_chart(&llama, "near");
+        assert_eq!(chart.prices.len(), 6);
+        assert_eq!(chart.times[0], 1_793_985_471_000);
+        assert!(chart.times.windows(2).all(|w| w[0] < w[1]));
+        assert!(parse_llama_chart(&llama, "ethereum").prices.is_empty());
+
+        let candles: Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/market/geckoterminal-refv1-4512-quote.json"
+        ))
+        .unwrap();
+        let chart = parse_ohlcv_chart(&candles);
+        assert_eq!(chart.prices.len(), 4);
+        assert!(chart.times.windows(2).all(|w| w[0] < w[1]), "oldest first");
+        assert_eq!(chart.prices.last(), Some(&3.51), "the newest close");
+        assert_eq!(*chart.times.last().unwrap(), 1_794_585_600_000);
+    }
+
+    #[test]
+    fn fallback_windows_match_each_range() {
+        for range in [
+            ChartRange::Day,
+            ChartRange::Week,
+            ChartRange::Month,
+            ChartRange::Year,
+        ] {
+            let (window, period, _) = range.llama();
+            let (_, aggregate, limit) = range.ohlcv();
+            assert!(window / period >= 168 && window / period <= 365);
+            assert!(aggregate >= 1 && limit <= 1000);
+        }
+        assert_eq!(ChartRange::Hour.llama(), ChartRange::Day.llama());
+        assert_eq!(ChartRange::All.llama(), ChartRange::Year.llama());
+        assert!(valid_pool_id("refv1-4512"));
+        assert!(!valid_pool_id("../x"));
+    }
+
+    #[test]
     fn chart_ranges_parse_like_the_app_labels() {
         assert_eq!(ChartRange::parse("1w"), Some(ChartRange::Week));
         assert_eq!(ChartRange::parse("All"), Some(ChartRange::All));
@@ -1983,7 +2149,8 @@ mod tests {
             "http://127.0.0.1:9".into(),
             "http://127.0.0.1:9".into(),
         )
-        .with_coingecko("http://127.0.0.1:9".into());
+        .with_coingecko("http://127.0.0.1:9".into())
+        .with_defillama("http://127.0.0.1:9".into());
         // Not curated and no 1Click list reachable: no id, so no request at all.
         assert!(m.token_info("ZZZQ").await.is_err());
         assert!(m.token_chart("ZZZQ", ChartRange::Week).await.is_err());

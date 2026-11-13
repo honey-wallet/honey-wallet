@@ -8,6 +8,7 @@ import { ApiError } from '@honey-wallet/api-client';
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '@/lib/api';
 import { CHAINS, type Chain, MARKET, type MarketToken } from '@/lib/mock-wallet';
+import { type HeldToken, holdingsHistory, type PriceSeries } from '@/lib/portfolio-history';
 import { createStore } from '@/lib/store';
 import { TEST_MODE } from '@/lib/test-mode';
 import { addTokenLogos } from '@/lib/token-logos';
@@ -128,7 +129,8 @@ const CHART_STALE_MS: Record<ChartRangeId, number> = {
   '1Y': 3 * 60 * 60_000,
   All: 3 * 60 * 60_000,
 };
-type ChartEntry = { prices?: number[]; at: number; loading: boolean };
+/** `times` (Unix ms) pair with `prices`, for lining several tokens up (Portfolio). */
+type ChartEntry = { prices?: number[]; times?: number[]; at: number; loading: boolean };
 const charts = createStore<Record<string, ChartEntry>>({});
 
 async function loadChart(symbol: string, range: ChartRangeId) {
@@ -137,10 +139,17 @@ async function loadChart(symbol: string, range: ChartRangeId) {
   if (entry?.loading || (entry && Date.now() - entry.at < CHART_STALE_MS[range])) return;
   charts.set((prev) => ({ ...prev, [key]: { ...prev[key], at: Date.now(), loading: true } }));
   let prices: number[] | undefined;
+  let times: number[] | undefined;
   try {
-    prices = (await api.tokenChart(symbol, range)).prices.filter(
-      (n) => Number.isFinite(n) && n > 0,
-    );
+    const chart = await api.tokenChart(symbol, range);
+    prices = [];
+    times = [];
+    for (let i = 0; i < chart.prices.length; i++) {
+      const p = chart.prices[i];
+      if (!Number.isFinite(p) || p <= 0) continue;
+      prices.push(p);
+      times.push(chart.times?.[i] ?? Number.NaN);
+    }
   } catch {
     // Missing stays missing: the chart says there's no history.
   }
@@ -148,6 +157,7 @@ async function loadChart(symbol: string, range: ChartRangeId) {
     ...prev,
     [key]: {
       prices: prices ?? prev[key]?.prices,
+      times: prices ? times : prev[key]?.times,
       at: prices ? Date.now() : Date.now() - CHART_STALE_MS[range] + STALE_MS,
       loading: false,
     },
@@ -168,6 +178,63 @@ export function useTokenChart(symbol: string, range: ChartRangeId, enabled = tru
     prices: entry?.prices ?? [],
     loading: enabled && (!entry || (entry.loading && !entry.prices)),
   };
+}
+
+/** Portfolio charts this many of a wallet's largest holdings; the rest count at today's value. */
+const HOLDINGS_CHARTED = 12;
+const HOUR_MS = 3_600_000;
+/** How far back each range reaches, for a wallet of only stablecoins (no chart to go by). */
+const RANGE_SPAN_MS: Record<ChartRangeId, number> = {
+  '1H': HOUR_MS,
+  '1D': 24 * HOUR_MS,
+  '1W': 7 * 24 * HOUR_MS,
+  '1M': 30 * 24 * HOUR_MS,
+  '1Y': 365 * 24 * HOUR_MS,
+  All: 365 * 24 * HOUR_MS,
+};
+
+/** A wallet holding priced as a dollar stablecoin. */
+const stableHolding = (h: HeldToken & { name?: string }) =>
+  isDollar({ symbol: h.symbol, name: h.name, price: h.amount > 0 ? h.usd / h.amount : 0 });
+
+/**
+ * A real wallet's value over `range`: what it holds now along each token's price chart
+ * (see portfolio-history.ts). `history` is null while loading or when nothing has a
+ * chart; `charted` are the symbols whose moves Performance lists.
+ */
+export function useHoldingsChart(
+  holdings: (HeldToken & { name?: string })[],
+  range: ChartRangeId,
+  enabled = true,
+) {
+  const all = charts.useValue();
+  const charted = holdings
+    .filter((h) => h.amount > 0 && h.usd > 0 && !stableHolding(h))
+    .sort((a, b) => b.usd - a.usd)
+    .slice(0, HOLDINGS_CHARTED)
+    .map((h) => h.symbol);
+  const symbols = charted.join(',');
+  useEffect(() => {
+    if (!enabled) return;
+    for (const s of symbols.split(',').filter(Boolean)) void loadChart(s, range);
+  }, [symbols, range, enabled]);
+  const entries = charted.map((s) => all[`${s}:${range}`]);
+  const loading = enabled && entries.some((e) => !e || (e.loading && !e.prices));
+  const held = holdings.map((h) => `${h.symbol}:${h.amount}:${h.usd}`).join(',');
+  const loaded = entries.map((e) => `${e?.at ?? 0}:${e?.prices?.length ?? 0}`).join(',');
+  // Recomputed when a chart or a balance changes, not on every render: a new array would
+  // redraw the line.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `held` and `loaded` stand for the inputs.
+  const history = useMemo(() => {
+    if (!enabled || loading) return null;
+    const series: Record<string, PriceSeries> = {};
+    charted.forEach((s, i) => {
+      const e = entries[i];
+      if (e?.prices && e.times) series[s] = { times: e.times, prices: e.prices };
+    });
+    return holdingsHistory(holdings, series, stableHolding, RANGE_SPAN_MS[range], Date.now());
+  }, [held, loaded, range, enabled, loading]);
+  return { history, loading, charted };
 }
 
 /** Points in a basket's combined series. */

@@ -201,6 +201,30 @@ pub fn usd_value(tokens: &[OneClickToken], asset: &str, amount: &str) -> Option<
     Some(amount as f64 / 10f64.powi(token.decimals as i32) * price)
 }
 
+/// What a buy pays, in dollars: every leg's `amount` (atomic units of the origin asset) at
+/// 1Click's price for that asset and its decimals. Any asset 1Click lists and prices can
+/// pay, stable or not (USDC, ETH, SOL…), so the cap is in dollars whatever pays.
+pub fn origin_usd<'a>(
+    tokens: &[OneClickToken],
+    origin_asset: &str,
+    amounts: impl IntoIterator<Item = &'a str>,
+) -> Result<f64, AppError> {
+    let origin = tokens
+        .iter()
+        .find(|t| t.asset_id == origin_asset)
+        .ok_or_else(|| AppError::BadRequest("NEAR Intents can't take that asset".into()))?;
+    if !origin.price.is_some_and(|p| p.is_finite() && p > 0.0) {
+        return Err(AppError::Busy);
+    }
+    let mut total = 0.0;
+    for amount in amounts {
+        total += usd_value(tokens, origin_asset, amount).ok_or_else(|| {
+            AppError::BadRequest("amount must be a positive whole number of atomic units".into())
+        })?;
+    }
+    Ok(total)
+}
+
 fn safe(s: &str, max: usize) -> bool {
     !s.is_empty() && s.len() <= max && s.bytes().all(|b| b.is_ascii_graphic())
 }
@@ -291,21 +315,12 @@ impl JarBuys {
             ));
         }
         let tokens = self.market.tokens().await.map_err(|_| AppError::Busy)?;
-        let origin = tokens
-            .iter()
-            .find(|t| t.asset_id == input.origin_asset)
-            .ok_or_else(|| AppError::BadRequest("NEAR Intents can't take that asset".into()))?;
-        let price = origin
-            .price
-            .filter(|p| p.is_finite() && *p > 0.0)
-            .ok_or(AppError::Busy)?;
-        let mut total_usd = 0.0;
+        let total_usd = origin_usd(
+            &tokens,
+            &input.origin_asset,
+            input.legs.iter().map(|l| l.amount.as_str()),
+        )?;
         for leg in &input.legs {
-            let amount = atomic(&leg.amount).ok_or_else(|| {
-                AppError::BadRequest(
-                    "amount must be a positive whole number of atomic units".into(),
-                )
-            })?;
             if !safe(&leg.recipient, 128)
                 || !tokens.iter().any(|t| t.asset_id == leg.destination_asset)
             {
@@ -313,7 +328,6 @@ impl JarBuys {
                     "unsupported destination or recipient".into(),
                 ));
             }
-            total_usd += amount as f64 / 10f64.powi(origin.decimals as i32) * price;
         }
         if total_usd > self.cap_usd {
             return Err(AppError::BadRequest(format!(
@@ -648,6 +662,58 @@ mod tests {
         assert_eq!(usd_value(&tokens, "nep141:usdc", "25000000"), Some(25.0));
         assert_eq!(usd_value(&tokens, "nep141:other", "1"), None);
         assert_eq!(usd_value(&tokens, "nep141:usdc", "0"), None);
+    }
+
+    fn token(asset_id: &str, symbol: &str, decimals: u8, price: Option<f64>) -> OneClickToken {
+        OneClickToken {
+            asset_id: asset_id.into(),
+            blockchain: "base".into(),
+            symbol: symbol.into(),
+            decimals,
+            price,
+            contract_address: None,
+            coingecko_id: None,
+        }
+    }
+
+    #[test]
+    fn prices_a_non_stable_origin_by_its_own_price_and_decimals() {
+        let tokens = vec![
+            token("nep141:base.omft.near", "ETH", 18, Some(3_000.0)),
+            token("nep141:sol.omft.near", "SOL", 9, Some(150.0)),
+            token("nep141:base-usdc.omft.near", "USDC", 6, Some(0.9998)),
+            token("nep141:unpriced", "X", 18, None),
+        ];
+        // Two legs of ETH on Base: 0.01 ETH ($30) and 0.0201 ETH ($60.30).
+        let eth = origin_usd(
+            &tokens,
+            "nep141:base.omft.near",
+            ["10000000000000000", "20100000000000000"],
+        )
+        .unwrap();
+        assert!((eth - 90.3).abs() < 1e-9, "{eth}");
+        // 1.5 SOL at $150 is $225: under the $250 default cap; 2 SOL ($300) is over it.
+        let sol = origin_usd(&tokens, "nep141:sol.omft.near", ["1500000000"]).unwrap();
+        assert!((sol - 225.0).abs() < 1e-9);
+        assert!(sol <= DEFAULT_CAP_USD);
+        let over = origin_usd(&tokens, "nep141:sol.omft.near", ["2000000000"]).unwrap();
+        assert!(over > DEFAULT_CAP_USD);
+        // USDC still counts at its own price.
+        let usdc = origin_usd(&tokens, "nep141:base-usdc.omft.near", ["25000000"]).unwrap();
+        assert!((usdc - 24.995).abs() < 1e-9);
+        // Unlisted, unpriced, or a bad amount: refused.
+        assert!(matches!(
+            origin_usd(&tokens, "nep141:other", ["1"]),
+            Err(AppError::BadRequest(_))
+        ));
+        assert!(matches!(
+            origin_usd(&tokens, "nep141:unpriced", ["1"]),
+            Err(AppError::Busy)
+        ));
+        assert!(matches!(
+            origin_usd(&tokens, "nep141:base.omft.near", ["1.5"]),
+            Err(AppError::BadRequest(_))
+        ));
     }
 
     #[test]

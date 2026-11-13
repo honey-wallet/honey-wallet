@@ -262,6 +262,33 @@ export function canSellRef(ref: TokenRef, tokens?: OneClickToken[] | null) {
   return !!t && canSell(t);
 }
 
+/**
+ * What Buy pays with by default: the USDC holding worth the most, else the largest
+ * holding this wallet can sell (`canSellRef`; never native NEAR). Null when it holds
+ * nothing it can pay with. `except` (the token being bought) is skipped.
+ */
+export function bestPayWith(
+  holdings: readonly {
+    symbol: string;
+    chain: string;
+    usd: number;
+    amount: number;
+    assetId?: string;
+  }[],
+  tokens?: OneClickToken[] | null,
+  except?: TokenRef | null,
+): TokenRef | null {
+  const payable = holdings
+    .filter((h) => h.amount > 0 && h.usd > 0)
+    .map((h) => ({
+      usd: h.usd,
+      ref: { symbol: h.symbol, chain: h.chain, ...(h.assetId ? { assetId: h.assetId } : {}) },
+    }))
+    .filter(({ ref }) => canSellRef(ref, tokens) && !(except && sameToken(ref, except)))
+    .sort((a, b) => b.usd - a.usd);
+  return (payable.find((p) => p.ref.symbol === 'USDC') ?? payable[0])?.ref ?? null;
+}
+
 /** Whether `ref` can be bought: listed by NEAR Intents (assumed until the list loads). */
 export const canBuyRef = (ref: TokenRef, tokens?: OneClickToken[] | null) =>
   !isNativeNear(ref) && (!tokens?.length || !!findAsset(tokens, ref));
@@ -529,6 +556,38 @@ function swapAddresses(
 const usdOf = (units: bigint, decimals: number, price: number | null) =>
   price ? (Number(units) / 10 ** decimals) * price : null;
 
+/** A swap too small for NEAR Intents' fixed fees; a larger amount fixes it, a new quote doesn't. */
+export class SwapTooSmall extends Error {
+  constructor(readonly minUsd: number) {
+    super(`Too small to swap: try at least $${minUsd.toFixed(2)}.`);
+  }
+}
+
+/**
+ * The smallest swap, in dollars rounded up to the cent, whose guaranteed payout keeps
+ * `MIN_VALUE_KEPT` of its value when NEAR Intents takes a fixed `feeUsd` (its withdrawal
+ * fee, about $0.0053 on Arbitrum, is what sinks tiny swaps). Null when no amount under
+ * the cap would do.
+ */
+export function smallestSwapUsd(feeUsd: number, slippageBps = SWAP_SLIPPAGE_BPS) {
+  const kept = 1 - slippageBps / 10_000;
+  const usd = Math.ceil(((feeUsd * kept) / (kept - MIN_VALUE_KEPT)) * 100 - 1e-9) / 100;
+  return Number.isFinite(usd) && usd > 0 && usd <= MAX_SWAP_USD ? usd : null;
+}
+
+/**
+ * 1Click refuses amounts under what its bridge can carry ("Amount is too low for bridge,
+ * try at least 5358", in the sold token's atomic units; that minimum is about its
+ * withdrawal fee). Turned into the smallest swap this app would accept, else null.
+ */
+function bridgeMinimum(error: unknown, origin: OneClickToken): SwapTooSmall | null {
+  const m =
+    error instanceof Error ? /too low.*try at least (\d{1,38})\b/i.exec(error.message) : null;
+  const feeUsd = m?.[1] ? usdOf(BigInt(m[1]), origin.decimals, origin.price) : null;
+  const min = feeUsd === null ? null : smallestSwapUsd(feeUsd);
+  return min === null ? null : new SwapTooSmall(min);
+}
+
 /**
  * The server's quote must be exactly the one leg asked for: same assets and amount, a
  * deposit address valid on the chain you pay from with no memo, payout and refund to
@@ -672,12 +731,16 @@ export async function quoteSwap(
       `Your NEAR account isn’t set up for ${buy.symbol} yet. Receive some ${buy.symbol} on NEAR first, or pick another network.`,
     );
 
-  const quote = await d.quote(token, {
-    originAsset: origin.assetId,
-    refundTo,
-    slippageBps: SWAP_SLIPPAGE_BPS,
-    legs: [{ destinationAsset: destination.assetId, amount: amountIn.toString(), recipient }],
-  });
+  const quote = await d
+    .quote(token, {
+      originAsset: origin.assetId,
+      refundTo,
+      slippageBps: SWAP_SLIPPAGE_BPS,
+      legs: [{ destinationAsset: destination.assetId, amount: amountIn.toString(), recipient }],
+    })
+    .catch((error: unknown) => {
+      throw bridgeMinimum(error, origin) ?? error;
+    });
   const leg = checkSwapQuote(
     quote,
     {
@@ -692,10 +755,16 @@ export async function quoteSwap(
   const usdOutMin = usdOf(BigInt(leg.minAmountOut), destination.decimals, destination.price);
   // Without a price for what's bought, the value check below can't run: no quote.
   if (usdOutMin === null) throw new Error(`Couldn’t price ${buy.symbol} right now. Try again.`);
-  if (usdIn > 0 && usdOutMin < usdIn * MIN_VALUE_KEPT)
+  if (usdIn > 0 && usdOutMin < usdIn * MIN_VALUE_KEPT) {
+    // What NEAR Intents keeps of this swap, in dollars; on tiny swaps it's mostly a fixed
+    // fee, so a larger amount clears the bar.
+    const usdOut = usdOf(BigInt(leg.amountOut), destination.decimals, destination.price) ?? 0;
+    const min = smallestSwapUsd(usdIn - usdOut);
+    if (min !== null && min > usdIn) throw new SwapTooSmall(min);
     throw new Error(
       'Fees would take more than half of this swap. Try a larger amount or another network.',
     );
+  }
   const swap: IntentsSwap = {
     walletId: wallet.id,
     sell: tokenRef(origin),

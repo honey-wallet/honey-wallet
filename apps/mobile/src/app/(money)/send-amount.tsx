@@ -123,7 +123,13 @@ export default function SendAmountSheet() {
   const sendToken = (token as { token?: SendToken }).token;
   const price = token.usd / token.amount;
   const value = Number(amount) || 0;
-  const tokenValue = unit === 'usd' ? value / price : value;
+  // Dollars are rounded to cents, so "$0.01" of USDC at $0.9995 is 0.010005, a hair over a
+  // 0.01 balance. Within half a cent over the whole balance, it means all of it.
+  const typed = unit === 'usd' ? value / price : value;
+  const tokenValue =
+    unit === 'usd' && typed > token.amount && (typed - token.amount) * price < 0.005
+      ? token.amount
+      : typed;
   const usdValue = unit === 'usd' ? value : value * price;
   const insufficient = tokenValue > token.amount * (1 + 1e-9);
   const ready = value > 0 && !insufficient;
