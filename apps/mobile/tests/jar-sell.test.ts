@@ -28,9 +28,12 @@ const quoteSwap = vi.fn(
     amountIn: input.amount,
     amountOut: input.sell.symbol === 'SOL' ? '2500000' : '3990000',
     minAmountOut: input.sell.symbol === 'SOL' ? '2475000' : '3950000',
+    deadline: deadlineOf(input.sell.symbol),
     status: 'QUOTED',
   }),
 );
+/** Each quote's deadline: 10 minutes off unless a test says otherwise. */
+let deadlineOf = (_symbol: string) => new Date(Date.now() + 600_000).toISOString();
 const prepareSwapPayment = vi.fn(
   async (swap: { depositAddress: string }, deps: { prepare: unknown }) => {
     calls.push(`prepare ${swap.depositAddress}`);
@@ -116,6 +119,7 @@ beforeEach(() => {
   calls.length = 0;
   failOn = '';
   quoteSwap.mockClear();
+  deadlineOf = () => new Date(Date.now() + 600_000).toISOString();
 });
 
 describe('sellUnits', () => {
@@ -197,6 +201,33 @@ describe('executeJarSell', () => {
       ['nep141:wrap.near', '1000000000000000000000000', 'KNOWN_DEPOSIT_TX'],
       ['nep141:sol.omft.near', '25000000', 'KNOWN_DEPOSIT_TX'],
     ]);
+  });
+
+  it('checks every swap’s deadline before paying any (money audit 13)', async () => {
+    thesisJars.set([jar()]);
+    // The second swap's quote is about to run out: nothing is asked for or paid.
+    deadlineOf = (symbol) =>
+      new Date(Date.now() + (symbol === 'SOL' ? 30_000 : 600_000)).toISOString();
+    const q = await quoteJarSell(jar(), 13, 13);
+    const confirm = vi.fn(async () => true);
+    await expect(executeJarSell(jar(), q, () => true, { confirm })).rejects.toThrow('ran out');
+    expect(confirm).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
+    // Fine at review, but the prompt sat open past the second one's deadline: nothing paid.
+    deadlineOf = (symbol) =>
+      new Date(Date.now() + (symbol === 'SOL' ? 120_000 : 600_000)).toISOString();
+    const late = await quoteJarSell(jar(), 13, 13);
+    let now = Date.now();
+    await expect(
+      executeJarSell(jar(), late, () => true, {
+        now: () => now,
+        confirm: async () => {
+          now += 90_000;
+          return true;
+        },
+      }),
+    ).rejects.toThrow('ran out');
+    expect(calls).toEqual([]);
   });
 
   it('removes the jar once all of it is sold', async () => {
