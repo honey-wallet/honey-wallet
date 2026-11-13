@@ -41,6 +41,7 @@ import { confirmOwner } from '@/lib/auth';
 import { backendSessionToken } from '@/lib/backend-session';
 import { prepareEvmSend } from '@/lib/dapp-sign';
 import { sendSponsored, sponsorEvm } from '@/lib/evm-gas';
+import { assertNoSponsoredInFlight } from '@/lib/evm-in-flight';
 import {
   atomic,
   quoteChanged as changed,
@@ -501,6 +502,8 @@ export async function payJarBuy(
         for (const l of baseLegs) checkDeadline(l.deadline);
         sponsoredHash = (await d.sendSponsored(key, sponsorship)).hash;
       } else {
+        // A free-gas batch Honey may still send could land as well as these.
+        await assertNoSponsoredInFlight(BASE_CHAIN_ID, from);
         nonce = await client.getTransactionCount({ address: from, blockTag: 'pending' });
       }
     }

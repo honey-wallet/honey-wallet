@@ -351,9 +351,10 @@ impl SponsorBackend for MemoryBackend {
         chain: &'static ChainSpec,
         usd_micros: i64,
         _: &str,
+        native: NativeBudget,
     ) -> Result<GasCharge, AppError> {
         let mut m = self.0.lock().unwrap();
-        if usd_micros > m.remaining {
+        if usd_micros > m.remaining || native.amount > native.room {
             return Err(AppError::GasNotCovered);
         }
         m.remaining -= usd_micros;
@@ -428,6 +429,41 @@ impl SponsorBackend for MemoryBackend {
             .find(|r| r.id == id && r.user_id == user)
             .cloned())
     }
+    async fn rebid(
+        &self,
+        id: Uuid,
+        bumps: u32,
+        hash: B256,
+        max_fee: u128,
+        tip: u128,
+        cancel: bool,
+    ) -> Result<bool, AppError> {
+        let mut m = self.0.lock().unwrap();
+        let row = m.rows.iter_mut().find(|r| r.id == id).unwrap();
+        if row.status != "sent" || row.bumps != bumps {
+            return Ok(false);
+        }
+        row.later.push(hash);
+        row.max_fee = max_fee;
+        row.tip = tip;
+        if cancel {
+            row.cancel = Some(hash);
+        }
+        row.bumps += 1;
+        row.bumped_at = Some(NOW as i64);
+        Ok(true)
+    }
+    async fn unsettled(&self) -> Result<Vec<Sponsorship>, AppError> {
+        Ok(self
+            .0
+            .lock()
+            .unwrap()
+            .rows
+            .iter()
+            .filter(|r| r.status == "sent")
+            .cloned()
+            .collect())
+    }
 }
 
 /// A scripted node: an account's code, the simulation's outcome and what it was sent.
@@ -440,6 +476,10 @@ struct Node {
     sent: Mutex<Vec<Vec<u8>>>,
     simulated: Mutex<Vec<Value>>,
     receipt: Mutex<Value>,
+    /// Receipts by transaction hash, before `receipt` (which answers for any hash).
+    receipts: Mutex<HashMap<String, Value>>,
+    /// The relayer's mined nonce count (`latest`); its pending count is always 9.
+    relayer_mined: Mutex<u64>,
 }
 
 impl Default for Node {
@@ -453,6 +493,8 @@ impl Default for Node {
             sent: Mutex::default(),
             simulated: Mutex::default(),
             receipt: Mutex::new(Value::Null),
+            receipts: Mutex::default(),
+            relayer_mined: Mutex::new(9),
         }
     }
 }
@@ -471,6 +513,8 @@ impl EvmRpc for Node {
                     .eq_ignore_ascii_case(&ACCOUNT.to_string())
                 {
                     json!("0x3")
+                } else if params[1] == "latest" {
+                    json!(format!("0x{:x}", *self.relayer_mined.lock().unwrap()))
                 } else {
                     json!("0x9")
                 }
@@ -494,7 +538,10 @@ impl EvmRpc for Node {
             "eth_maxPriorityFeePerGas" => json!("0xf4240"),
             "eth_getBalance" => json!(format!("0x{:x}", *self.relayer_balance.lock().unwrap())),
             "eth_estimateGas" => {
-                if params[0]["from"].as_str() == Some(&ACCOUNT.to_string()) {
+                if params[0]["to"] == params[0]["from"] {
+                    // The relayer's cancel: a plain transfer to itself.
+                    json!("0x5208")
+                } else if params[0]["from"].as_str() == Some(&ACCOUNT.to_string()) {
                     json!("0xc350")
                 } else {
                     self.simulated.lock().unwrap().push(params[0].clone());
@@ -512,7 +559,13 @@ impl EvmRpc for Node {
                 self.sent.lock().unwrap().push(raw.clone());
                 json!(hx(keccak256(&raw).as_slice()))
             }
-            "eth_getTransactionReceipt" => self.receipt.lock().unwrap().clone(),
+            "eth_getTransactionReceipt" => {
+                let hash = params[0].as_str().unwrap();
+                match self.receipts.lock().unwrap().get(hash) {
+                    Some(receipt) => receipt.clone(),
+                    None => self.receipt.lock().unwrap().clone(),
+                }
+            }
             "eth_getTransactionByHash" => Value::Null,
             other => panic!("unexpected {other}"),
         })
@@ -950,8 +1003,97 @@ async fn reverted_transactions_still_count_and_the_background_task_settles() {
     assert_eq!(status.cost_usd_micros, Some(cost));
 }
 
+fn decode(raw: &[u8]) -> TxEnvelope {
+    TxEnvelope::decode_2718(&mut &raw[..]).unwrap()
+}
+
+/// The dropped-transaction exploit: releasing the charge of a transaction the node no
+/// longer shows (it may still land, or sit stuck holding the relayer's nonce). Instead
+/// it is resent with higher fees, cancelled at its nonce once the wallet's deadline has
+/// passed, and its charge stays until that nonce is mined.
 #[tokio::test]
-async fn a_payment_the_chain_never_saw_is_dropped_and_given_back() {
+async fn a_stuck_payment_is_bumped_then_cancelled_and_stays_charged() {
+    let f = fixture();
+    let calls = [usdc_call(FRIEND, 1)];
+    let plan = f
+        .sponsor
+        .prepare(f.user, prepare_request(&calls))
+        .await
+        .unwrap();
+    let submitted = f
+        .sponsor
+        .submit(f.user, submit_request(&f, &plan, &calls))
+        .await
+        .unwrap();
+    let first = decode(&f.node.sent.lock().unwrap()[0]);
+    assert_eq!(first.nonce(), 9);
+
+    // Three minutes on, not mined: the same batch again, same nonce, higher fees.
+    f.backend.0.lock().unwrap().rows[0].created_at = NOW as i64 - STUCK_SECS - 60;
+    f.sponsor.sweep().await;
+    let bumped = decode(&f.node.sent.lock().unwrap()[1]);
+    assert_eq!(bumped.nonce(), 9);
+    assert_eq!(bumped.input(), first.input());
+    assert!(bumped.max_fee_per_gas() > first.max_fee_per_gas() * 9 / 8);
+    assert!(
+        bumped.max_priority_fee_per_gas().unwrap()
+            > first.max_priority_fee_per_gas().unwrap() * 9 / 8
+    );
+    // Not again until it has had its own chance.
+    f.sponsor.sweep().await;
+    assert_eq!(f.node.sent.lock().unwrap().len(), 2);
+
+    // Past the wallet's deadline: a zero-value transfer to the relayer at that nonce.
+    {
+        let mut m = f.backend.0.lock().unwrap();
+        m.rows[0].created_at = NOW as i64 - DOOMED_AFTER_SECS - 1;
+        m.rows[0].bumped_at = Some(NOW as i64 - STUCK_SECS);
+    }
+    f.sponsor.sweep().await;
+    let cancel = decode(&f.node.sent.lock().unwrap()[2]);
+    assert_eq!(cancel.nonce(), 9);
+    assert_eq!(cancel.to(), Some(f.sponsor.relayer()));
+    assert_eq!(cancel.value(), U256::ZERO);
+    assert!(cancel.input().is_empty());
+    assert!(cancel.max_fee_per_gas() > bumped.max_fee_per_gas());
+    {
+        let m = f.backend.0.lock().unwrap();
+        assert!(m.released.is_empty(), "never given back while it may land");
+        assert_eq!(m.rows[0].status, "sent");
+        assert_eq!(
+            m.rows[0].cancel,
+            Some(keccak256(&f.node.sent.lock().unwrap()[2]))
+        );
+    }
+    // The person can't send another payment on this network meanwhile.
+    assert!(matches!(
+        f.sponsor
+            .submit(f.user, submit_request(&f, &plan, &calls))
+            .await,
+        Err(AppError::Conflict(_))
+    ));
+
+    // The cancel is mined: the nonce is settled at what it cost, and the app hears
+    // that the payment never ran.
+    let cancel_hash = hx(keccak256(&f.node.sent.lock().unwrap()[2]).as_slice());
+    f.node.receipts.lock().unwrap().insert(
+        cancel_hash,
+        json!({ "status": "0x1", "gasUsed": "0x5208", "effectiveGasPrice": "0x989680" }),
+    );
+    *f.node.relayer_mined.lock().unwrap() = 10;
+    let status = f.sponsor.status(f.user, submitted.id).await.unwrap();
+    assert_eq!(status.status, "dropped");
+    let m = f.backend.0.lock().unwrap();
+    assert_eq!(m.rows[0].status, "replaced");
+    assert!(m.released.is_empty());
+    let cost = to_usd_micros(21_000 * 10_000_000, 18, 2_000.0).unwrap();
+    assert_eq!(m.settled, vec![(m.reserved[0].id, cost)]);
+}
+
+/// A nonce taken while none of Honey's transactions at it shows a receipt: never
+/// released; after a long while it counts at what was reserved.
+#[tokio::test]
+async fn a_nonce_taken_unseen_is_charged_at_its_reservation() {
     let f = fixture();
     let calls = [usdc_call(FRIEND, 1)];
     let plan = f
@@ -963,15 +1105,18 @@ async fn a_payment_the_chain_never_saw_is_dropped_and_given_back() {
         .submit(f.user, submit_request(&f, &plan, &calls))
         .await
         .unwrap();
-    // Half an hour on, no receipt and the node doesn't know it: the next payment drops
-    // it (giving its reservation back) instead of waiting forever.
+    *f.node.relayer_mined.lock().unwrap() = 10;
+    f.sponsor.sweep().await;
+    assert_eq!(f.backend.0.lock().unwrap().rows[0].status, "sent");
     f.backend.0.lock().unwrap().rows[0].created_at = NOW as i64 - DROPPED_AFTER_SECS - 1;
-    f.sponsor
-        .submit(f.user, submit_request(&f, &plan, &calls))
-        .await
-        .unwrap();
+    f.sponsor.sweep().await;
     let m = f.backend.0.lock().unwrap();
     assert_eq!(m.rows[0].status, "dropped");
-    assert_eq!(m.released, vec![m.reserved[0].id]);
-    assert_eq!(m.rows[1].status, "sent");
+    assert!(m.released.is_empty());
+    assert_eq!(
+        m.settled,
+        vec![(m.reserved[0].id, m.reserved[0].usd_micros)]
+    );
+    // No replacement was sent for a nonce already taken.
+    assert_eq!(f.node.sent.lock().unwrap().len(), 1);
 }

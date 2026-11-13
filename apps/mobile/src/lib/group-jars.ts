@@ -237,28 +237,31 @@ export async function startGroup(
   return created;
 }
 
+/** Groups whose NEAR account check already ran this session. */
+const onNear = new Set<string>();
+
 /**
- * Asks Honey to pay your NEAR network fees for this group. Quietly carries on when it
- * can't (already paid for, or a hiccup); remembers when Honey isn't paying at all.
+ * Makes sure your NEAR account is on chain so Honey can pay your gas for this group's
+ * calls (Honey activates an account it hasn't seen with one yoctoNEAR; it never sends
+ * NEAR). Once per group per session, after the group goes ahead. Quietly carries on
+ * when it can't (already done, or a hiccup); remembers when Honey isn't paying at all.
  */
-async function sponsor(groupId: string, account: string) {
+async function ensureOnNear(g: SocialGroup) {
+  if (onNear.has(g.id) || g.status === 'inviting') return;
+  onNear.add(g.id);
   try {
-    const result = await api.jarDaoSponsor(token(), { account, groupId });
+    const result = await api.jarDaoSponsor(token(), { account: myNearAccount(), groupId: g.id });
     if (result === null) sponsorOff.set(true);
   } catch {
-    // 409: already paid for this group. Anything else: you pay your own fees.
+    // 409: already done for this account. Anything else: you pay your own fees.
   }
 }
 
-/**
- * Join = accept with your NEAR account, then Honey pays its fees where it can (Honey
- * only tops up members who have accepted, and only the account they joined with).
- */
+/** Join = accept with your NEAR account. */
 export async function joinGroup(id: string) {
   if (isDemoGroup(id)) return demo(id, 'join');
   const account = myNearAccount();
   const joined = put(await api.socialAcceptGroup(token(), id, account));
-  await sponsor(id, account);
   // Votes and "add your share" come while you're away: the moment to ask.
   void enableGroupPush();
   return joined;
@@ -276,9 +279,45 @@ export async function goAhead(id: string, solo: boolean) {
 }
 
 /**
+ * Asks Honey's relayer to create the group's DAO (Honey pays its 0.1 NEAR deposit and
+ * the gas; the server builds the same policy from the group's members). True once it
+ * exists and checks out on NEAR here; false only when Honey said it isn't paying, before
+ * anything was sent, so you create it yourself. Anything else throws: a creation may be
+ * on its way, and a second one must never be paid for.
+ */
+async function createViaHoney(g: SocialGroup, dao: string, me: string, accounts: string[]) {
+  let made: { dao: string } | null;
+  try {
+    made = await api.jarDaoCreateDao(token(), { groupId: g.id, nearAccount: me });
+  } catch (error) {
+    // Created and recorded on an earlier try whose answer was lost.
+    if (!(error instanceof ApiError && error.status === 409)) throw error;
+    const now = await api.socialGroup(token(), g.id);
+    if (now.dao !== dao) throw error;
+    made = { dao };
+  }
+  if (!made) {
+    sponsorOff.set(true);
+    return false;
+  }
+  if (made.dao !== dao)
+    throw new Error('Honey named a different jar for this group. Don’t use it; contact Honey.');
+  // Honey's word isn't enough: its policy, the group's people and a majority rule, on NEAR.
+  await verifyGroupDao(g.id, dao, accounts);
+  trackGroupDao({
+    dao,
+    label: g.name,
+    threshold: majority(accounts.length),
+    people: accounts.length,
+  });
+  return true;
+}
+
+/**
  * Creator: creates the group's DAO on NEAR with every member who joined and the
- * majority rule, then tells the server (which checks both on chain). A DAO already
- * created on an earlier try is reused, so a failed report can simply be tried again.
+ * majority rule (Honey's relayer pays when it's on, else you do), then tells the server
+ * (which checks both on chain). A DAO already created on an earlier try is reused, so a
+ * failed report can simply be tried again.
  */
 export async function createGroupOnChain(g: SocialGroup) {
   if (isDemoGroup(g.id)) return demo(g.id, 'create');
@@ -289,8 +328,7 @@ export async function createGroupOnChain(g: SocialGroup) {
   const name = groupDaoName(g.name, g.id);
   const dao = daoAccountId(name);
   const made = wallets.get().added.some((w) => w.kind === 'multisig' && w.address === dao);
-  if (!made) {
-    await sponsor(g.id, me);
+  if (!made && !(await createViaHoney(g, dao, me, accounts))) {
     await createGroupDao({
       name,
       label: g.name,
@@ -379,6 +417,7 @@ export async function payShare(g: SocialGroup, nearUsdc: number | null) {
   // Where it goes is Honey's word too: check the DAO on NEAR (and its pin) first.
   await verifyGroupDao(g.id, dao, knownAccounts(g));
   if (nearUsdc !== null && nearUsdc >= g.shareUsd) {
+    await ensureOnNear(g);
     relayForGroup(dao, g.id);
     const txHash = await payShareFromNear(dao, g.shareUsd);
     // The server reads the transfer from NEAR; give finality a moment.
@@ -446,6 +485,7 @@ function walletOf(g: SocialGroup) {
 export async function proposeBuy(g: SocialGroup, routes: Route[], usdcAtomic: bigint) {
   if (isDemoGroup(g.id)) return demo(g.id, 'buy');
   const { walletId, dao } = walletOf(g);
+  await ensureOnNear(g);
   const legs = fitLegs(
     routes.flatMap((r) =>
       r.legs
@@ -463,6 +503,7 @@ export async function proposeBuy(g: SocialGroup, routes: Route[], usdcAtomic: bi
 export async function approveVote(g: SocialGroup, proposalId: number) {
   if (isDemoGroup(g.id)) return demo(g.id, 'approve');
   const { walletId, dao } = walletOf(g);
+  await ensureOnNear(g);
   // Who's still in comes from NEAR (lib/jar-dao), not from Honey's list.
   await approveGroupProposal(walletId, dao, proposalId);
   return syncGroup(g.id);
@@ -472,6 +513,7 @@ export async function approveVote(g: SocialGroup, proposalId: number) {
 export async function leaveGroup(g: SocialGroup) {
   if (isDemoGroup(g.id)) return demo(g.id, 'leave');
   const { walletId, dao } = walletOf(g);
+  await ensureOnNear(g);
   const id = await proposeGroupPayout(walletId, dao, { kind: 'leave', name: g.name });
   return record(g, 'leave', id);
 }
@@ -480,6 +522,7 @@ export async function leaveGroup(g: SocialGroup) {
 export async function cashOutGroup(g: SocialGroup) {
   if (isDemoGroup(g.id)) return demo(g.id, 'cashout');
   const { walletId, dao } = walletOf(g);
+  await ensureOnNear(g);
   const id = await proposeGroupPayout(walletId, dao, { kind: 'cashout', name: g.name });
   return record(g, 'cashout', id);
 }

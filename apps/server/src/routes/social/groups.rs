@@ -1016,6 +1016,24 @@ async fn created(
             "it isn't time to create the group".into(),
         ));
     }
+    record_created(pool, chain(&state)?, id, me, &dao, given).await?;
+    load_group(pool, id, me).await.map(Json)
+}
+
+/// Records `dao` as group `id`'s DAO (created by its creator `me`, on their phone or by
+/// Honey's relayer): checked on NEAR first (members exactly the group's accounts, the
+/// majority rule, the factory's official Sputnik code, whose hash is recorded so Honey's
+/// relayer only pays for calls on a DAO still running it), then the group moves to
+/// `funding` and the others are told. `given` is the creator's NEAR account when it
+/// isn't on file yet.
+pub(crate) async fn record_created(
+    pool: &PgPool,
+    jar_dao: &crate::jar_dao::JarDao,
+    id: Uuid,
+    me: Uuid,
+    dao: &str,
+    given: Option<String>,
+) -> Result<(), AppError> {
     let accounts: Vec<(Uuid, Option<String>)> = sqlx::query_as(
         "SELECT user_id, near_account FROM social_group_members
          WHERE group_id = $1 AND state = 'accepted'",
@@ -1037,7 +1055,7 @@ async fn created(
         expected.insert(account);
     }
     let people = accounts.len() as u32;
-    let chain = dao_state(&state, &dao).await?;
+    let chain = jar_dao.state(dao, &[format!("nep141:{USDC_NEAR}")]).await?;
     let members: HashSet<String> = chain.members.iter().cloned().collect();
     if members != expected || chain.members.len() != members.len() {
         return Err(AppError::BadRequest(
@@ -1052,7 +1070,7 @@ async fn created(
     }
     // The factory's official Sputnik code, recorded: Honey's relayer only pays for calls
     // on a DAO still running it.
-    let code = self::chain(&state)?.sputnik_code(&dao).await?;
+    let code = jar_dao.sputnik_code(dao).await?;
 
     let mut tx = pool.begin().await.map_err(unavailable)?;
     let g = lock(&mut tx, id).await?;
@@ -1086,7 +1104,7 @@ async fn created(
          WHERE id = $1",
     )
     .bind(id)
-    .bind(&dao)
+    .bind(dao)
     .bind(&code)
     .execute(&mut *tx)
     .await;
@@ -1108,7 +1126,7 @@ async fn created(
     )
     .await?;
     tx.commit().await.map_err(unavailable)?;
-    load_group(pool, id, me).await.map(Json)
+    Ok(())
 }
 
 /// Asks 1Click for the swap that paid `deposit`.

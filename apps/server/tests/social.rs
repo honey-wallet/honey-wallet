@@ -1357,6 +1357,41 @@ struct Chain {
     sent: Vec<String>,
     /// The JSON-RPC error `send_tx` answers with instead of accepting a transaction.
     send_error: Option<Value>,
+    /// Accounts not on chain (even `*.sputnik-dao.near` ones) until a transaction makes
+    /// them: a transfer to one, or the factory's `create` of a DAO, which also takes
+    /// the DAO's members and threshold from the policy it was created with.
+    absent: Vec<String>,
+    /// The factory calls the relayer sent: (DAO name, its decoded args, deposit).
+    created: Vec<(String, Value, u128)>,
+}
+
+/// A relayer transaction's receiver and, for a function call, its method, args and
+/// deposit (borsh `Transaction` V0 with one action).
+fn decode_relayer_tx(signed_base64: &str) -> (String, Option<(String, Vec<u8>, u128)>) {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    let bytes = STANDARD.decode(signed_base64).unwrap();
+    let mut at = 0usize;
+    let mut take = |n: usize| {
+        let out = bytes[at..at + n].to_vec();
+        at += n;
+        out
+    };
+    let len = |b: Vec<u8>| u32::from_le_bytes(b.try_into().unwrap()) as usize;
+    let signer = len(take(4));
+    take(signer + 1 + 32 + 8);
+    let receiver_len = len(take(4));
+    let receiver = String::from_utf8(take(receiver_len)).unwrap();
+    take(32 + 4);
+    if take(1)[0] != 2 {
+        return (receiver, None);
+    }
+    let method_len = len(take(4));
+    let method = String::from_utf8(take(method_len)).unwrap();
+    let args_len = len(take(4));
+    let args = take(args_len);
+    take(8);
+    let deposit = u128::from_le_bytes(take(16).try_into().unwrap());
+    (receiver, Some((method, args, deposit)))
 }
 
 /// The factory's default (official) code hash in the double.
@@ -1441,6 +1476,14 @@ async fn near_rpc(chain: SharedChain) -> String {
                         };
                         ok(view_bytes(&value))
                     }
+                    (Some("query"), Some("view_account"))
+                        if chain
+                            .absent
+                            .iter()
+                            .any(|a| p["account_id"].as_str() == Some(a)) =>
+                    {
+                        err("UNKNOWN_ACCOUNT")
+                    }
                     (Some("query"), Some("view_account")) => {
                         let account = p["account_id"].as_str().unwrap();
                         let code = chain.codes.get(account).cloned().unwrap_or_else(|| {
@@ -1472,6 +1515,39 @@ async fn near_rpc(chain: SharedChain) -> String {
                             return axum::Json(json!({ "jsonrpc": "2.0", "id": 1, "error": error }));
                         }
                         let hash = signed_tx_hash(&signed);
+                        let (receiver, call) = decode_relayer_tx(&signed);
+                        if let Some((method, args, deposit)) = call
+                            && receiver == "sputnik-dao.near"
+                            && method == "create"
+                        {
+                            let outer: Value = serde_json::from_slice(&args).unwrap();
+                            let name = outer["name"].as_str().unwrap().to_string();
+                            let inner: Value = serde_json::from_slice(
+                                &base64::engine::general_purpose::STANDARD
+                                    .decode(outer["args"].as_str().unwrap())
+                                    .unwrap(),
+                            )
+                            .unwrap();
+                            let dao = format!("{name}.sputnik-dao.near");
+                            chain.absent.retain(|a| *a != dao);
+                            let policy = &inner["policy"];
+                            chain.members = policy["roles"][0]["kind"]["Group"]
+                                .as_array()
+                                .unwrap()
+                                .iter()
+                                .map(|m| m.as_str().unwrap().to_string())
+                                .collect();
+                            chain.threshold = policy["default_vote_policy"]["threshold"]
+                                .as_str()
+                                .unwrap()
+                                .parse()
+                                .unwrap();
+                            chain.created.push((name, inner, deposit));
+                        } else {
+                            // A transfer makes its receiver exist.
+                            chain.absent.retain(|a| *a != receiver);
+                            chain.balances.entry(receiver).or_insert_with(|| "1".into());
+                        }
                         chain.txs.entry(hash.clone()).or_insert_with(|| json!({
                             "status": { "SuccessValue": "" },
                             "transaction": { "hash": hash },
@@ -2260,9 +2336,10 @@ async fn group_jars_invite_create_pay_buy_publish_leave_and_cash_out() {
     // Invited isn't joined: no top-up until someone accepts with their NEAR account.
     let (status, _) = sponsor(&dave, &"d".repeat(64), third_id).await;
     assert_eq!(status, StatusCode::CONFLICT, "invitees get nothing");
-    // The creator gets nothing while only inviting (no farming top-ups with empty groups).
+    // Nothing while only inviting (no farming with groups that never go anywhere).
     let (status, _) = sponsor(&alice, &a, third_id).await;
     assert_eq!(status, StatusCode::CONFLICT, "creator waits for a friend");
+    // Neither Bob's nor Alice's implicit account is on chain yet (no balance).
     let (status, body) = call(
         &app,
         "POST",
@@ -2279,12 +2356,9 @@ async fn group_jars_invite_create_pay_buy_publish_leave_and_cash_out() {
         StatusCode::BAD_REQUEST,
         "not Bob's account in the group"
     );
-    let (status, sent) = sponsor(&bob, &b, third_id).await;
-    assert_eq!(status, StatusCode::OK, "{sent}");
-    assert_eq!(sent["status"], "sent");
-    assert_eq!(sent["amount"], "30000000000000000000000");
+    // Still only inviting: nothing yet.
     let (status, _) = sponsor(&bob, &b, third_id).await;
-    assert_eq!(status, StatusCode::CONFLICT, "once per person and group");
+    assert_eq!(status, StatusCode::CONFLICT, "not while inviting");
     let (status, body) = call(
         &app,
         "POST",
@@ -2294,7 +2368,22 @@ async fn group_jars_invite_create_pay_buy_publish_leave_and_cash_out() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    // An account already holding enough gets nothing.
+    // The top-up farming exploit: Honey sends no NEAR anyone could spend. An account
+    // not on chain yet gets one yoctoNEAR so it exists (relayed calls need it).
+    let (status, sent) = sponsor(&bob, &b, third_id).await;
+    assert_eq!(status, StatusCode::OK, "{sent}");
+    assert_eq!(sent["status"], "sent");
+    assert_eq!(sent["amount"], "1");
+    // A fresh rate-limit window (three asks per two minutes each).
+    sqlx::query("DELETE FROM auth_rate_limits")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    // Now on chain: nothing more, ever.
+    let (status, sent) = sponsor(&bob, &b, third_id).await;
+    assert_eq!(status, StatusCode::OK, "{sent}");
+    assert_eq!(sent["status"], "not_needed");
+    // An account already on chain gets nothing.
     chain
         .lock()
         .unwrap()
@@ -2303,10 +2392,10 @@ async fn group_jars_invite_create_pay_buy_publish_leave_and_cash_out() {
     let (_, sent) = sponsor(&alice, &a, third_id).await;
     assert_eq!(sent["status"], "not_needed");
     chain.lock().unwrap().balances.remove(&a);
-    // The creator's DAO deposit while the DAO is about to be created.
+    // The creator gets the same as anyone (their DAO is /jar-dao/create-dao's job).
     let (status, sent) = sponsor(&alice, &a, third_id).await;
     assert_eq!(status, StatusCode::OK, "{sent}");
-    assert_eq!(sent["amount"], "120000000000000000000000");
+    assert_eq!(sent["amount"], "1");
     // An account is topped up once ever, whoever asks and from whichever group.
     let (_, fourth) = call(
         &app,
@@ -2326,6 +2415,17 @@ async fn group_jars_invite_create_pay_buy_publish_leave_and_cash_out() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = call(
+        &app,
+        "POST",
+        &format!("/social/groups/{fourth_id}/go-ahead"),
+        Some(&alice),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    // Even were it gone from chain again.
+    chain.lock().unwrap().absent.push(b.clone());
     let (status, _) = sponsor(&carol, &b, fourth_id).await;
     assert_eq!(status, StatusCode::CONFLICT, "once per account");
     assert_eq!(chain.lock().unwrap().sent.len(), 2);
@@ -3075,8 +3175,24 @@ async fn fee_budgets_floor_and_verified_identity_bound_what_honey_pays() {
     };
     let sponsor = "/jar-dao/sponsor";
     let ask = |account: &str| json!({ "account": account, "groupId": id });
+    // Nobody's implicit account is on chain yet, nor the group's DAO.
+    let group_uuid = Uuid::parse_str(&id).unwrap();
+    let dao_name = routes::jar_dao::group_dao_name("Budget jar", group_uuid);
+    let dao = format!("{dao_name}.sputnik-dao.near");
+    chain.lock().unwrap().absent = vec![a.clone(), b.clone(), c.clone(), dao.clone()];
+    let (status, g) = call(
+        &app,
+        "POST",
+        &format!("/social/groups/{id}/go-ahead"),
+        Some(&alice),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{g}");
+    let activation = honey_server::near_relayer::relay_reserve(0, 1);
     let strict = FeeLimits {
-        sponsor_daily: NEAR / 20,
+        // Room for one activation today.
+        sponsor_daily: activation * 3 / 2,
         require_verified_identity: true,
         ..FeeLimits::default()
     };
@@ -3091,7 +3207,7 @@ async fn fee_budgets_floor_and_verified_identity_bound_what_honey_pays() {
     let (status, _) =
         post_with_account(&honey(strict.clone()), sponsor, &bob, Some(&email), ask(&b)).await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
-    // Google: linked to Bob's wallet, then paid.
+    // Google: linked to Bob's wallet, then his account activated (one yoctoNEAR).
     let google = firebase_token(&firebase_key, "BobGoogle1", "google.com");
     let (status, sent) = post_with_account(
         &honey(strict.clone()),
@@ -3102,7 +3218,7 @@ async fn fee_budgets_floor_and_verified_identity_bound_what_honey_pays() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{sent}");
-    assert_eq!(sent["amount"], "30000000000000000000000");
+    assert_eq!(sent["amount"], "1");
     // The same Google account can't vouch for a second wallet.
     let (status, _) = post_with_account(
         &honey(strict.clone()),
@@ -3113,7 +3229,7 @@ async fn fee_budgets_floor_and_verified_identity_bound_what_honey_pays() {
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT);
-    // Carol's own Apple sign-in links, but the day's NEAR budget (0.05) is spent.
+    // Carol's own Apple sign-in links, but the day's NEAR budget is spent.
     let apple = firebase_token(&firebase_key, "CarolApple1", "apple.com");
     let (status, body) = post_with_account(
         &honey(strict.clone()),
@@ -3126,13 +3242,13 @@ async fn fee_budgets_floor_and_verified_identity_bound_what_honey_pays() {
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
     assert_eq!(body["error"]["code"], "sponsor_off");
     fresh_minute().await;
-    // With room in the budget, the relayer's floor (0.2 NEAR) still holds: 0.21 NEAR
-    // can't pay 0.03 NEAR. The link is remembered: no token needed now.
+    // With room in the budget, the relayer's floor (0.2 NEAR) still holds. The link is
+    // remembered: no token needed now.
     let roomy = FeeLimits {
         require_verified_identity: true,
         ..FeeLimits::default()
     };
-    relayer_balance(&(NEAR / 5 + NEAR / 100).to_string());
+    relayer_balance(&(NEAR / 5 + activation / 2).to_string());
     let (status, _) =
         post_with_account(&honey(roomy.clone()), sponsor, &carol, None, ask(&c)).await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "below the floor");
@@ -3140,59 +3256,95 @@ async fn fee_budgets_floor_and_verified_identity_bound_what_honey_pays() {
     let (status, sent) =
         post_with_account(&honey(roomy.clone()), sponsor, &carol, None, ask(&c)).await;
     assert_eq!(status, StatusCode::OK, "{sent}");
-    // A person's 30-day NEAR budget: the creator's 0.12 NEAR doesn't fit in 0.1.
+
+    // The creator's DAO: Honey's relayer creates it (deposit and gas), never sending
+    // the creator NEAR. Only the creator, and within their own 30-day budget.
     sqlx::query(
         "INSERT INTO user_verified_identities (user_id, firebase_uid, provider)
          SELECT creator, 'AliceApple1', 'apple.com' FROM social_groups WHERE id = $1",
     )
-    .bind(Uuid::parse_str(&id).unwrap())
+    .bind(group_uuid)
     .execute(&db.pool)
     .await
     .unwrap();
+    let create = "/jar-dao/create-dao";
+    let make = json!({ "groupId": id });
+    let (status, _) =
+        post_with_account(&honey(roomy.clone()), create, &bob, None, make.clone()).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "only the creator");
     let tight = FeeLimits {
         sponsor_user: NEAR / 10,
         ..roomy.clone()
     };
-    let (status, _) = post_with_account(&honey(tight), sponsor, &alice, None, ask(&a)).await;
+    let (status, body) = post_with_account(&honey(tight), create, &alice, None, make.clone()).await;
     assert_eq!(
         status,
         StatusCode::SERVICE_UNAVAILABLE,
         "past Alice's own budget"
     );
-    let (status, sent) =
-        post_with_account(&honey(roomy.clone()), sponsor, &alice, None, ask(&a)).await;
-    assert_eq!(status, StatusCode::OK, "{sent}");
-    assert_eq!(
-        sent["amount"], "120000000000000000000000",
-        "the DAO deposit"
-    );
+    assert_eq!(body["error"]["code"], "sponsor_off");
+    let (status, made) =
+        post_with_account(&honey(roomy.clone()), create, &alice, None, make.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{made}");
+    assert_eq!(made["dao"], dao.as_str());
+    assert_eq!(made["status"], "created");
+    {
+        let chain = chain.lock().unwrap();
+        let [(name, args, deposit)] = chain.created.as_slice() else {
+            panic!("one DAO created")
+        };
+        assert_eq!(name, &dao_name);
+        assert_eq!(*deposit, NEAR / 10);
+        // Exactly the group's accepted members' accounts and the majority rule.
+        let mut members: Vec<&str> = args["policy"]["roles"][0]["kind"]["Group"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m.as_str().unwrap())
+            .collect();
+        members.sort();
+        let mut expected = vec![a.as_str(), b.as_str(), c.as_str()];
+        expected.sort();
+        assert_eq!(members, expected);
+        assert_eq!(args["policy"]["default_vote_policy"]["threshold"], "2");
+        assert_eq!(args["policy"]["proposal_bond"], "0");
+    }
+    // Recorded as /created would: funding, with the factory's code hash.
+    let (status, g) = call(
+        &app,
+        "GET",
+        &format!("/social/groups/{id}"),
+        Some(&alice),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{g}");
+    assert_eq!(g["dao"], dao.as_str());
+    assert_eq!(g["status"], "funding");
+    let code: Option<String> =
+        sqlx::query_scalar("SELECT dao_code_hash FROM social_groups WHERE id = $1")
+            .bind(group_uuid)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(code.as_deref(), Some(SPUTNIK_CODE));
+    // Once: the group has its DAO now.
+    let (status, _) = post_with_account(&honey(roomy.clone()), create, &alice, None, make).await;
+    assert_eq!(status, StatusCode::CONFLICT);
     let paid: String =
         sqlx::query_scalar("SELECT sum(yocto::numeric)::text FROM social_group_sponsorships")
             .fetch_one(&db.pool)
             .await
             .unwrap();
-    assert_eq!(paid, "180000000000000000000000");
+    let create_reserve =
+        honey_server::near_relayer::relay_reserve(150 * 1_000_000_000_000, NEAR / 10);
+    assert_eq!(paid, (2 * activation + create_reserve).to_string());
 
     // Relays: the day's gas budget is NEAR too.
-    let dao = "budget.sputnik-dao.near";
-    {
-        let mut chain = chain.lock().unwrap();
-        chain.members = vec![a.clone(), b.clone(), c.clone()];
-        chain.threshold = 2;
-        chain.proposals = vec![proposal(0, &a, "InProgress")];
-    }
-    let (status, g) = call(
-        &app,
-        "POST",
-        &format!("/social/groups/{id}/created"),
-        Some(&alice),
-        Some(json!({ "dao": dao })),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{g}");
+    chain.lock().unwrap().proposals = vec![proposal(0, &a, "InProgress")];
     let vote = signed_delegate(
         &a_seed,
-        dao,
+        &dao,
         &[(
             "act_proposal",
             json!({ "id": 0, "action": "VoteApprove" }),
@@ -3203,7 +3355,7 @@ async fn fee_budgets_floor_and_verified_identity_bound_what_honey_pays() {
     );
     let relay = json!({ "groupId": id, "signedDelegate": vote });
     let starved = FeeLimits {
-        relay_daily: NEAR / 1_000, // 0.001 NEAR: less than one 30 Tgas reservation (0.003)
+        relay_daily: NEAR / 1_000, // 0.001 NEAR: less than one 30 Tgas reservation (0.0044)
         ..roomy.clone()
     };
     let (status, body) = post_with_account(
@@ -3219,7 +3371,7 @@ async fn fee_budgets_floor_and_verified_identity_bound_what_honey_pays() {
     let (status, body) =
         post_with_account(&honey(roomy), "/jar-dao/relay", &alice, None, relay).await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    // Only the sponsor transfers and the one relay were sent.
+    // Only the two activations, the DAO creation and the one relay were sent.
     assert_eq!(chain.lock().unwrap().sent.len(), 4);
 
     db.close().await;

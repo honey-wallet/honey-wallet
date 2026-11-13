@@ -30,6 +30,7 @@
 //! its members, and shows on every member's profile.
 
 mod groups;
+pub(crate) use groups::{majority, record_created};
 
 use std::{
     collections::HashMap,

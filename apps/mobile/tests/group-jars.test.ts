@@ -1,5 +1,5 @@
 import type { JarDaoProposal, SocialGroup, SocialGroupMember } from '@honey-wallet/api-client';
-import { buyKind, USDC_INTENTS } from '@honey-wallet/keyring';
+import { buyKind, createDaoCall, USDC_INTENTS } from '@honey-wallet/keyring';
 import { describe, expect, it } from 'vitest';
 import {
   checkPayout,
@@ -92,6 +92,62 @@ describe('group jar labels', () => {
   it('names the DAO after the jar and the group, within Sputnik’s rules', () => {
     expect(groupDaoName('AI capex boom!', '1A2B3C4D-5e6f')).toBe('ai-capex-boom-1a2b3c4d');
     expect(groupDaoName('🙂', 'abcdef12-0000')).toBe('jar-abcdef12');
+  });
+
+  it('names the DAO exactly as the server does when Honey creates it', () => {
+    // Pinned in apps/server src/routes/jar_dao.rs `creates_the_dao_the_app_creates`.
+    const id = '3f2a9c1e-7b44-4d0a-9e61-0c5d2b8a7f10';
+    expect(groupDaoName('Trip to Goa!', id)).toBe('trip-to-goa-3f2a9c1e');
+    expect(groupDaoName('  ', id)).toBe('jar-3f2a9c1e');
+    expect(groupDaoName('Ünïcode ☕ Jar', id)).toBe('n-code-jar-3f2a9c1e');
+    expect(groupDaoName('a very long group name that keeps going', id)).toBe(
+      'a-very-long-group-name-t-3f2a9c1e',
+    );
+    expect(groupDaoName('abcdefghijklmnopqrstuvw---xyz', id)).toBe(
+      'abcdefghijklmnopqrstuvw-3f2a9c1e',
+    );
+  });
+
+  it('creates the DAO with the policy the server builds when Honey creates it', () => {
+    const call = createDaoCall({
+      name: 'trip-to-goa-3f2a9c1e',
+      purpose: 'Honey shared jar',
+      members: [A, B, C],
+      threshold: 2,
+    });
+    const outer = JSON.parse(new TextDecoder().decode(call.args));
+    expect(outer.name).toBe('trip-to-goa-3f2a9c1e');
+    const args = JSON.parse(atob(outer.args));
+    // The same JSON as the server's `create_dao_call` (pinned there too).
+    expect(args).toEqual({
+      config: { name: 'trip-to-goa-3f2a9c1e', purpose: 'Honey shared jar', metadata: '' },
+      policy: {
+        roles: [
+          {
+            name: 'members',
+            kind: { Group: [A, B, C] },
+            permissions: [
+              'function_call:AddProposal',
+              'vote:AddProposal',
+              'add_member_to_role:AddProposal',
+              'remove_member_from_role:AddProposal',
+              'policy_update_default_vote_policy:AddProposal',
+              '*:VoteApprove',
+              '*:VoteReject',
+              '*:VoteRemove',
+            ],
+            vote_policy: {},
+          },
+        ],
+        default_vote_policy: { weight_kind: 'RoleWeight', quorum: '0', threshold: '2' },
+        proposal_bond: '0',
+        proposal_period: '86400000000000',
+        bounty_bond: '0',
+        bounty_forgiveness_period: '86400000000000',
+      },
+    });
+    expect(call.deposit).toBe(10n ** 23n);
+    expect(call.gas).toBe(150n * 10n ** 12n);
   });
 });
 

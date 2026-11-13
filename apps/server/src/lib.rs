@@ -426,7 +426,12 @@ fn evm_sponsor(
         .map_err(|error| tracing::error!(%error, "EVM gas sponsorship disabled"))
         .ok()
         .flatten()
-        .map(std::sync::Arc::new)
+        .map(|sponsor| {
+            let sponsor = std::sync::Arc::new(sponsor);
+            // Moves stuck relayer nonces (fee bumps, cancels) even when nobody asks.
+            sponsor.start_sweeper();
+            sponsor
+        })
 }
 
 /// Jar buy routes and shared jar DAOs.

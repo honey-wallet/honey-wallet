@@ -33,7 +33,7 @@ use std::{any::Any, collections::HashMap, sync::Arc, time::Duration};
 
 use alloy_consensus::{SignableTransaction, TxEip1559, TxEip7702, TxEnvelope};
 use alloy_eips::{
-    eip2718::Encodable2718,
+    eip2718::{Decodable2718, Encodable2718},
     eip2930::AccessList,
     eip7702::{Authorization, SignedAuthorization},
 };
@@ -45,7 +45,7 @@ use uuid::Uuid;
 
 use crate::{
     error::AppError,
-    gas_allowance::{GasCharge, to_usd_micros},
+    gas_allowance::{GasCharge, NativeBudget, to_usd_micros},
     json_rpc::RpcError,
 };
 
@@ -69,8 +69,17 @@ pub const MAX_CALLS: usize = 6;
 pub const DEADLINE_SECS: u64 = 600;
 /// How long the relayer waits for a receipt before leaving it to the status check.
 const RECEIPT_WAIT: Duration = Duration::from_secs(180);
-/// A transaction still unseen this long after sending was dropped.
+/// A nonce mined by none of the transactions Honey sent at it (a lagging node) counts at
+/// its reservation once this long has passed.
 const DROPPED_AFTER_SECS: i64 = 30 * 60;
+/// A relayer transaction not mined this long after it (or its last replacement) was
+/// sent is resent with higher fees.
+const STUCK_SECS: i64 = 120;
+/// Most replacements at one nonce (fee bumps, then the cancel and its bumps).
+const MAX_REBIDS: u32 = 6;
+/// Past the wallet's deadline (at most `DEADLINE_SECS` + 60 after sending) its batch can
+/// only revert, so the nonce is taken by a zero-value transfer to the relayer itself.
+const DOOMED_AFTER_SECS: i64 = DEADLINE_SECS as i64 + 90;
 const GWEI: u128 = 1_000_000_000;
 
 /// A chain Honey can pay gas on. Native coins have 18 decimals on all three.
@@ -616,7 +625,8 @@ pub struct StatusResponse {
     pub id: Uuid,
     pub chain_id: u64,
     pub tx_hash: String,
-    /// `pending`, `success`, `reverted` or `dropped`.
+    /// `pending`, `success`, `reverted` or `dropped` (it never ran and never will: the
+    /// node refused it, or another transaction took its relayer nonce).
     pub status: String,
     /// What it cost Honey once known, in USD micros.
     pub cost_usd_micros: Option<i64>,
@@ -639,11 +649,25 @@ pub struct Sponsorship {
     pub delegated: bool,
     pub reserved_wei: u128,
     pub native_usd: f64,
-    /// `sent`, `success`, `reverted` or `dropped`.
+    /// `sent`, `success`, `reverted`, `replaced` (the cancel took its nonce) or
+    /// `dropped` (refused by the node, or its nonce taken by something unseen).
     pub status: String,
     pub actual_usd_micros: Option<i64>,
     /// Unix seconds.
     pub created_at: i64,
+    /// The signed transaction as first sent (to resend it with higher fees); empty for
+    /// rows recorded before it was kept.
+    pub raw: Vec<u8>,
+    /// Fees of the last transaction sent at this nonce.
+    pub max_fee: u128,
+    pub tip: u128,
+    /// Every later transaction at this nonce: fee bumps of the original, then the cancel.
+    pub later: Vec<B256>,
+    /// The zero-value transfer to the relayer that replaced it, once sent.
+    pub cancel: Option<B256>,
+    pub bumps: u32,
+    /// Unix seconds of the last replacement.
+    pub bumped_at: Option<i64>,
 }
 
 /// What the service needs from the database, the gas ledger and 1Click.
@@ -659,12 +683,15 @@ pub trait SponsorBackend: Send + Sync {
     async fn native_price(&self, chain: &ChainSpec) -> Option<f64>;
     /// The person's allowance left, capped by the chain's room today, in USD micros.
     async fn remaining(&self, user: Uuid, chain: &ChainSpec) -> Result<i64, AppError>;
+    /// Reserves `usd_micros`, refused unless the relayer's room covers `native` on top of
+    /// every pending reservation on this chain.
     async fn reserve(
         &self,
         user: Uuid,
         chain: &'static ChainSpec,
         usd_micros: i64,
         reference: &str,
+        native: NativeBudget,
     ) -> Result<GasCharge, AppError>;
     async fn settle(&self, charge: &GasCharge, usd_micros: i64) -> Result<(), AppError>;
     async fn release(&self, charge: &GasCharge) -> Result<(), AppError>;
@@ -693,6 +720,19 @@ pub trait SponsorBackend: Send + Sync {
         actual_usd_micros: Option<i64>,
     ) -> Result<(), AppError>;
     async fn find(&self, id: Uuid, user: Uuid) -> Result<Option<Sponsorship>, AppError>;
+    /// Claims replacement number `bumps + 1` of a still-sent row (false when another
+    /// replica got there first), recording its hash and fees before it is broadcast.
+    async fn rebid(
+        &self,
+        id: Uuid,
+        bumps: u32,
+        hash: B256,
+        max_fee: u128,
+        tip: u128,
+        cancel: bool,
+    ) -> Result<bool, AppError>;
+    /// Every row still `sent` for a while, for the sweeper.
+    async fn unsettled(&self) -> Result<Vec<Sponsorship>, AppError>;
 }
 
 /// JSON-RPC per chain.
@@ -1261,15 +1301,23 @@ impl EvmSponsor {
         if reserved_usd > self.config.max_tx_usd_micros {
             return Err(AppError::GasNotCovered);
         }
-        if self.relayer_balance(chain).await?
-            < self.config.floor(chain).saturating_add(reserved_wei)
-        {
+        let balance = self.relayer_balance(chain).await?;
+        if balance < self.config.floor(chain).saturating_add(reserved_wei) {
             tracing::warn!(chain = chain.name, "EVM relayer at its floor");
             return Err(AppError::GasNotCovered);
         }
         let charge = self
             .backend
-            .reserve(user, chain, reserved_usd, &digest.to_string())
+            .reserve(
+                user,
+                chain,
+                reserved_usd,
+                &digest.to_string(),
+                NativeBudget {
+                    amount: reserved_wei,
+                    room: balance.saturating_sub(self.config.floor(chain)),
+                },
+            )
             .await?;
 
         // One relayer nonce at a time per chain, across replicas.
@@ -1306,7 +1354,14 @@ impl EvmSponsor {
             }
         };
         tx.nonce = relayer_nonce;
-        let (raw, tx_hash) = tx.sign(&self.key)?;
+        let (raw, tx_hash) = match tx.sign(&self.key) {
+            Ok(signed) => signed,
+            Err(error) => {
+                drop(lock);
+                let _ = self.backend.release(&charge).await;
+                return Err(error);
+            }
+        };
         let row = Sponsorship {
             id: Uuid::new_v4(),
             user_id: user,
@@ -1323,6 +1378,13 @@ impl EvmSponsor {
             status: "sent".into(),
             actual_usd_micros: None,
             created_at: (self.now)() as i64,
+            raw: raw.clone(),
+            max_fee: tx.max_fee,
+            tip: tx.tip,
+            later: Vec::new(),
+            cancel: None,
+            bumps: 0,
+            bumped_at: None,
         };
         // Recorded before broadcasting: a transaction that may land is always counted.
         if let Err(error) = self.backend.record(&row).await {
@@ -1340,10 +1402,10 @@ impl EvmSponsor {
             // The node refused it: nothing was spent.
             Err(RpcError::Rpc(error)) => {
                 tracing::warn!(chain = chain.name, %error, "relayer transaction refused");
+                let _ = self.backend.release(&charge).await;
                 self.backend
                     .finish(row.id, "dropped", None, Some(0))
                     .await?;
-                self.backend.release(&charge).await?;
                 return Err(AppError::Conflict(
                     "The network refused it. Try again in a moment.".into(),
                 ));
@@ -1373,51 +1435,189 @@ impl EvmSponsor {
         Ok(response)
     }
 
-    /// Settles a sent sponsorship from its receipt; `sent` while there's none yet, and
-    /// `dropped` (released) once the chain hasn't seen it for half an hour.
+    /// Settles a sent sponsorship from the receipt of whichever transaction took its
+    /// nonce (the original, a fee bump of it, or the cancel); `sent` while none has. A
+    /// sent transaction is never simply forgotten: while its nonce isn't mined it is
+    /// resent with higher fees every `STUCK_SECS`, and once the wallet's deadline has
+    /// passed it is replaced by a zero-value transfer to the relayer at the same nonce.
+    /// The charge stays reserved until that nonce is mined.
     async fn refresh(&self, row: &Sponsorship) -> Result<String, AppError> {
         if row.status != "sent" {
             return Ok(row.status.clone());
         }
         let chain = chain(row.chain_id).ok_or(AppError::Busy)?;
-        let hash = row.tx_hash.to_string();
-        let receipt = self
-            .rpc(chain, "eth_getTransactionReceipt", json!([hash]))
+        for hash in std::iter::once(row.tx_hash).chain(row.later.iter().copied()) {
+            let receipt = self
+                .rpc(
+                    chain,
+                    "eth_getTransactionReceipt",
+                    json!([hash.to_string()]),
+                )
+                .await?;
+            if receipt.is_null() {
+                continue;
+            }
+            let used = quantity(&receipt["gasUsed"])?;
+            let price = quantity(&receipt["effectiveGasPrice"])?;
+            let l1 = match receipt.get("l1Fee") {
+                Some(v) if !v.is_null() => quantity(v)?,
+                _ => 0,
+            };
+            let wei = used.saturating_mul(price).saturating_add(l1);
+            let usd = self.usd(wei, row.native_usd)?;
+            let status = if row.cancel == Some(hash) {
+                "replaced"
+            } else if receipt["status"].as_str() == Some("0x1") {
+                "success"
+            } else {
+                "reverted"
+            };
+            self.backend.settle(&row.charge, usd).await?;
+            self.backend
+                .finish(row.id, status, Some(wei), Some(usd))
+                .await?;
+            return Ok(status.into());
+        }
+        let now = (self.now)() as i64;
+        let mined = self
+            .rpc(
+                chain,
+                "eth_getTransactionCount",
+                json!([row.relayer.to_string(), "latest"]),
+            )
             .await?;
-        if receipt.is_null() {
-            let age = (self.now)() as i64 - row.created_at;
-            if age > DROPPED_AFTER_SECS
-                && self
-                    .rpc(chain, "eth_getTransactionByHash", json!([hash]))
-                    .await?
-                    .is_null()
-            {
+        if quantity(&mined)? > u128::from(row.relayer_nonce) {
+            // Its nonce is taken, so it can never land; no receipt of ours shows yet (a
+            // lagging node). Past a while it counts at what was reserved.
+            if now - row.created_at > DROPPED_AFTER_SECS {
+                tracing::error!(chain = chain.name, id = %row.id, "relayer nonce taken by an unseen transaction");
                 self.backend
-                    .finish(row.id, "dropped", None, Some(0))
+                    .settle(&row.charge, row.charge.usd_micros)
                     .await?;
-                self.backend.release(&row.charge).await?;
+                self.backend
+                    .finish(row.id, "dropped", None, Some(row.charge.usd_micros))
+                    .await?;
                 return Ok("dropped".into());
             }
             return Ok("sent".into());
         }
-        let used = quantity(&receipt["gasUsed"])?;
-        let price = quantity(&receipt["effectiveGasPrice"])?;
-        let l1 = match receipt.get("l1Fee") {
-            Some(v) if !v.is_null() => quantity(v)?,
-            _ => 0,
-        };
-        let wei = used.saturating_mul(price).saturating_add(l1);
-        let usd = self.usd(wei, row.native_usd)?;
-        let status = if receipt["status"].as_str() == Some("0x1") {
-            "success"
+        let since = now - row.bumped_at.unwrap_or(row.created_at);
+        if since >= STUCK_SECS && row.bumps < MAX_REBIDS {
+            // Once the wallet's batch can no longer run, cancel; before that, bump it (a
+            // row without its bytes can only wait for its deadline).
+            let cancel = row.cancel.is_some() || now - row.created_at > DOOMED_AFTER_SECS;
+            if (cancel || !row.raw.is_empty())
+                && let Err(error) = self.rebid(chain, row, cancel).await
+            {
+                tracing::warn!(chain = chain.name, %error, "resending a relayer transaction failed");
+            }
+        }
+        Ok("sent".into())
+    }
+
+    /// Resends the transaction at `row`'s nonce with fees at least 12.5% above the last
+    /// (and at least today's): the original batch again, or (`cancel`) a zero-value
+    /// transfer to the relayer itself. Recorded before it is broadcast.
+    async fn rebid(
+        &self,
+        chain: &ChainSpec,
+        row: &Sponsorship,
+        cancel: bool,
+    ) -> Result<(), AppError> {
+        let (now_fee, now_tip) = self.fees(chain).await.unwrap_or((0, 0));
+        let bump = |old: u128, now: u128| now.max(old.saturating_mul(9) / 8 + 1);
+        let max_fee = bump(row.max_fee, now_fee);
+        let tip = bump(row.tip, now_tip).min(max_fee);
+        if max_fee > chain.max_fee_per_gas.saturating_mul(2) {
+            tracing::error!(
+                chain = chain.name,
+                max_fee,
+                "relayer transaction stuck above the fee cap"
+            );
+            return Ok(());
+        }
+        let (raw, hash) = if cancel {
+            let estimate = self
+                .rpc(
+                    chain,
+                    "eth_estimateGas",
+                    json!([{ "from": row.relayer.to_string(), "to": row.relayer.to_string(), "value": "0x0" }]),
+                )
+                .await
+                .and_then(|v| quantity(&v))
+                .unwrap_or(21_000);
+            let gas_limit = u64::try_from(estimate.saturating_mul(13) / 10)
+                .unwrap_or(u64::MAX)
+                .max(21_000);
+            let tx = TxEip1559 {
+                chain_id: chain.id,
+                nonce: row.relayer_nonce,
+                gas_limit,
+                max_fee_per_gas: max_fee,
+                max_priority_fee_per_gas: tip,
+                to: TxKind::Call(row.relayer),
+                value: U256::ZERO,
+                access_list: AccessList::default(),
+                input: Bytes::new(),
+            };
+            let sig = self.key.sign(&tx.signature_hash())?;
+            let raw = TxEnvelope::from(tx.into_signed(sig)).encoded_2718();
+            let hash = keccak256(&raw);
+            (raw, hash)
         } else {
-            "reverted"
+            rebid_raw(&row.raw, max_fee, tip, &self.key)?
         };
-        self.backend.settle(&row.charge, usd).await?;
-        self.backend
-            .finish(row.id, status, Some(wei), Some(usd))
-            .await?;
-        Ok(status.into())
+        if !self
+            .backend
+            .rebid(row.id, row.bumps, hash, max_fee, tip, cancel)
+            .await?
+        {
+            return Ok(());
+        }
+        match self
+            .rpc
+            .call(chain.id, "eth_sendRawTransaction", json!([hx(&raw)]))
+            .await
+        {
+            Ok(_) => {
+                tracing::info!(chain = chain.name, cancel, %hash, "relayer transaction resent")
+            }
+            // Known either way: if it never lands, the next refresh tries again.
+            Err(error) => tracing::warn!(chain = chain.name, %error, "relayer resend refused"),
+        }
+        Ok(())
+    }
+
+    /// Refreshes every sponsorship still in flight (receipts, fee bumps, cancels), so a
+    /// stuck relayer nonce moves even when nobody asks about it.
+    pub async fn sweep(&self) {
+        let rows = match self.backend.unsettled().await {
+            Ok(rows) => rows,
+            Err(error) => {
+                tracing::warn!(%error, "evm sponsorship sweep failed");
+                return;
+            }
+        };
+        for row in rows {
+            if let Err(error) = self.refresh(&row).await {
+                tracing::warn!(%error, "evm sponsorship refresh failed");
+            }
+        }
+    }
+
+    /// Runs [`Self::sweep`] every minute in the background (needs a Tokio runtime).
+    pub fn start_sweeper(self: &Arc<Self>) {
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let me = Arc::clone(self);
+        runtime.spawn(async move {
+            let mut every = tokio::time::interval(Duration::from_secs(60));
+            loop {
+                every.tick().await;
+                me.sweep().await;
+            }
+        });
     }
 
     /// The person's own sponsorship, settling it if its receipt has arrived.
@@ -1442,6 +1642,12 @@ impl EvmSponsor {
         } else {
             (row.status.clone(), row.actual_usd_micros)
         };
+        // For the app a cancelled batch is one that never ran.
+        let status = if status == "replaced" {
+            "dropped".to_string()
+        } else {
+            status
+        };
         Ok(StatusResponse {
             id,
             chain_id: row.chain_id,
@@ -1450,6 +1656,36 @@ impl EvmSponsor {
             cost_usd_micros: cost,
         })
     }
+}
+
+/// `raw` (a relayer transaction Honey signed) again with new fees, same nonce and body.
+fn rebid_raw(
+    raw: &[u8],
+    max_fee: u128,
+    tip: u128,
+    key: &RelayerKey,
+) -> Result<(Vec<u8>, B256), AppError> {
+    let envelope = TxEnvelope::decode_2718(&mut &raw[..]).map_err(|_| AppError::Busy)?;
+    let signed: TxEnvelope = match envelope {
+        TxEnvelope::Eip1559(signed) => {
+            let mut tx = signed.tx().clone();
+            tx.max_fee_per_gas = max_fee;
+            tx.max_priority_fee_per_gas = tip;
+            let sig = key.sign(&tx.signature_hash())?;
+            tx.into_signed(sig).into()
+        }
+        TxEnvelope::Eip7702(signed) => {
+            let mut tx = signed.tx().clone();
+            tx.max_fee_per_gas = max_fee;
+            tx.max_priority_fee_per_gas = tip;
+            let sig = key.sign(&tx.signature_hash())?;
+            tx.into_signed(sig).into()
+        }
+        _ => return Err(AppError::Busy),
+    };
+    let raw = signed.encoded_2718();
+    let hash = keccak256(&raw);
+    Ok((raw, hash))
 }
 
 /// The wallet's 7702 authorization: exactly Calibur, this chain (never 0, which would

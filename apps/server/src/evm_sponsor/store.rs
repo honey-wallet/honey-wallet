@@ -4,13 +4,13 @@ use std::{any::Any, sync::Arc};
 
 use alloy_primitives::{Address, B256};
 use async_trait::async_trait;
-use sqlx::PgPool;
+use sqlx::{PgPool, Row as _, postgres::PgRow};
 use uuid::Uuid;
 
 use super::{ChainSpec, SponsorBackend, Sponsorship};
 use crate::{
     error::AppError,
-    gas_allowance::{self, GasCharge, GasLimits, Reservation},
+    gas_allowance::{self, GasCharge, GasLimits, NativeBudget, Reservation},
     identity::unavailable,
     jar_buys::JarBuys,
     market_data::MarketData,
@@ -32,55 +32,65 @@ fn lower(a: Address) -> String {
     format!("{a:#x}")
 }
 
-type Row = (
-    Uuid,
-    Option<Uuid>,
-    Uuid,
-    i64,
-    i64,
-    String,
-    String,
-    i64,
-    String,
-    String,
-    bool,
-    String,
-    f64,
-    String,
-    Option<i64>,
-    i64,
-);
-
 const COLUMNS: &str = "id, user_id, charge_id, charge_usd_micros, chain_id, account, relayer,
     relayer_nonce, tx_hash, digest, delegated, reserved_wei, native_usd, status,
-    actual_usd_micros, extract(epoch FROM created_at)::bigint";
+    actual_usd_micros, extract(epoch FROM created_at)::bigint AS created_unix, raw_tx,
+    max_fee_wei, tip_wei, later_hashes, cancel_hash, bumps,
+    extract(epoch FROM bumped_at)::bigint AS bumped_unix";
 
-fn from_row(r: Row) -> Result<Sponsorship, AppError> {
-    let chain = super::chain(r.4 as u64).ok_or(AppError::Busy)?;
+fn from_row(r: PgRow) -> Result<Sponsorship, AppError> {
+    let get_err = |_| AppError::Busy;
+    let chain_id: i64 = r.try_get("chain_id").map_err(get_err)?;
+    let chain = super::chain(chain_id as u64).ok_or(AppError::Busy)?;
     let parse_hash = |s: &str| s.parse::<B256>().map_err(|_| AppError::Busy);
     let parse_addr = |s: &str| s.parse::<Address>().map_err(|_| AppError::Busy);
-    let user = r.1.unwrap_or_default();
+    let wei = |s: Option<String>| -> Result<u128, AppError> {
+        s.map(|s| s.parse().map_err(|_| AppError::Busy))
+            .transpose()
+            .map(Option::unwrap_or_default)
+    };
+    let user: Option<Uuid> = r.try_get("user_id").map_err(get_err)?;
+    let user = user.unwrap_or_default();
+    let text = |name: &str| r.try_get::<String, _>(name).map_err(|_| AppError::Busy);
+    let raw: Option<String> = r.try_get("raw_tx").map_err(get_err)?;
+    let raw = match raw {
+        Some(raw) => alloy_primitives::hex::decode(raw).map_err(|_| AppError::Busy)?,
+        None => Vec::new(),
+    };
+    let later: Vec<String> = r.try_get("later_hashes").map_err(get_err)?;
+    let cancel: Option<String> = r.try_get("cancel_hash").map_err(get_err)?;
+    let bumps: i32 = r.try_get("bumps").map_err(get_err)?;
     Ok(Sponsorship {
-        id: r.0,
+        id: r.try_get("id").map_err(get_err)?,
         user_id: user,
         charge: GasCharge {
-            id: r.2,
+            id: r.try_get("charge_id").map_err(get_err)?,
             user_id: user,
             chain: chain.name,
-            usd_micros: r.3,
+            usd_micros: r.try_get("charge_usd_micros").map_err(get_err)?,
         },
         chain_id: chain.id,
-        account: parse_addr(&r.5)?,
-        relayer: parse_addr(&r.6)?,
-        relayer_nonce: r.7 as u64,
-        tx_hash: parse_hash(&r.8)?,
-        digest: parse_hash(&r.9)?,
-        delegated: r.10,
-        reserved_wei: r.11.parse().map_err(|_| AppError::Busy)?,
-        native_usd: r.12,
-        status: r.13,
-        actual_usd_micros: r.14,
-        created_at: r.15,
+        account: parse_addr(&text("account")?)?,
+        relayer: parse_addr(&text("relayer")?)?,
+        relayer_nonce: r.try_get::<i64, _>("relayer_nonce").map_err(get_err)? as u64,
+        tx_hash: parse_hash(&text("tx_hash")?)?,
+        digest: parse_hash(&text("digest")?)?,
+        delegated: r.try_get("delegated").map_err(get_err)?,
+        reserved_wei: text("reserved_wei")?.parse().map_err(|_| AppError::Busy)?,
+        native_usd: r.try_get("native_usd").map_err(get_err)?,
+        status: text("status")?,
+        actual_usd_micros: r.try_get("actual_usd_micros").map_err(get_err)?,
+        created_at: r.try_get("created_unix").map_err(get_err)?,
+        raw,
+        max_fee: wei(r.try_get("max_fee_wei").map_err(get_err)?)?,
+        tip: wei(r.try_get("tip_wei").map_err(get_err)?)?,
+        later: later
+            .iter()
+            .map(|h| parse_hash(h))
+            .collect::<Result<_, _>>()?,
+        cancel: cancel.as_deref().map(parse_hash).transpose()?,
+        bumps: bumps.max(0) as u32,
+        bumped_at: r.try_get("bumped_unix").map_err(get_err)?,
     })
 }
 
@@ -140,7 +150,8 @@ impl SponsorBackend for PgBackend {
             gas_allowance::remaining(&self.pool, user, &[chain.name], &GasLimits::from_env())
                 .await?;
         let today = left.chains_today.get(chain.name).copied().unwrap_or(0);
-        Ok(left.remaining.min(today))
+        let mine_today = left.user_chains_today.get(chain.name).copied().unwrap_or(0);
+        Ok(left.remaining.min(today).min(mine_today))
     }
 
     async fn reserve(
@@ -149,6 +160,7 @@ impl SponsorBackend for PgBackend {
         chain: &'static ChainSpec,
         usd_micros: i64,
         reference: &str,
+        native: NativeBudget,
     ) -> Result<GasCharge, AppError> {
         gas_allowance::reserve_with(
             &self.pool,
@@ -157,8 +169,9 @@ impl SponsorBackend for PgBackend {
             usd_micros,
             &Reservation {
                 kind: "evm_7702",
-                new_accounts: 0,
                 reference: Some(reference),
+                native: Some(native),
+                ..Reservation::default()
             },
             &GasLimits::from_env(),
         )
@@ -178,7 +191,7 @@ impl SponsorBackend for PgBackend {
         chain_id: u64,
         account: Address,
     ) -> Result<Option<Sponsorship>, AppError> {
-        let row: Option<Row> = sqlx::query_as(&format!(
+        let row = sqlx::query(&format!(
             "SELECT {COLUMNS} FROM evm_sponsorships
              WHERE chain_id = $1 AND account = $2 AND status = 'sent'"
         ))
@@ -223,8 +236,9 @@ impl SponsorBackend for PgBackend {
         sqlx::query(
             "INSERT INTO evm_sponsorships
                (id, user_id, charge_id, charge_usd_micros, chain_id, account, relayer,
-                relayer_nonce, tx_hash, digest, delegated, reserved_wei, native_usd)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
+                relayer_nonce, tx_hash, digest, delegated, reserved_wei, native_usd, raw_tx,
+                max_fee_wei, tip_wei)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)",
         )
         .bind(row.id)
         .bind(row.user_id)
@@ -239,6 +253,9 @@ impl SponsorBackend for PgBackend {
         .bind(row.delegated)
         .bind(row.reserved_wei.to_string())
         .bind(row.native_usd)
+        .bind((!row.raw.is_empty()).then(|| super::hx(&row.raw)))
+        .bind(row.max_fee.to_string())
+        .bind(row.tip.to_string())
         .execute(&self.pool)
         .await
         .map_err(|error| match &error {
@@ -275,7 +292,7 @@ impl SponsorBackend for PgBackend {
     }
 
     async fn find(&self, id: Uuid, user: Uuid) -> Result<Option<Sponsorship>, AppError> {
-        let row: Option<Row> = sqlx::query_as(&format!(
+        let row = sqlx::query(&format!(
             "SELECT {COLUMNS} FROM evm_sponsorships WHERE id = $1 AND user_id = $2"
         ))
         .bind(id)
@@ -284,5 +301,46 @@ impl SponsorBackend for PgBackend {
         .await
         .map_err(unavailable)?;
         row.map(from_row).transpose()
+    }
+
+    async fn rebid(
+        &self,
+        id: Uuid,
+        bumps: u32,
+        hash: B256,
+        max_fee: u128,
+        tip: u128,
+        cancel: bool,
+    ) -> Result<bool, AppError> {
+        let updated = sqlx::query(
+            "UPDATE evm_sponsorships
+             SET later_hashes = array_append(later_hashes, $3), max_fee_wei = $4, tip_wei = $5,
+                 cancel_hash = CASE WHEN $6 THEN $3 ELSE cancel_hash END,
+                 bumps = bumps + 1, bumped_at = clock_timestamp()
+             WHERE id = $1 AND status = 'sent' AND bumps = $2",
+        )
+        .bind(id)
+        .bind(bumps as i32)
+        .bind(hash.to_string())
+        .bind(max_fee.to_string())
+        .bind(tip.to_string())
+        .bind(cancel)
+        .execute(&self.pool)
+        .await
+        .map_err(unavailable)?
+        .rows_affected();
+        Ok(updated == 1)
+    }
+
+    async fn unsettled(&self) -> Result<Vec<Sponsorship>, AppError> {
+        let rows = sqlx::query(&format!(
+            "SELECT {COLUMNS} FROM evm_sponsorships
+             WHERE status = 'sent' AND created_at < clock_timestamp() - interval '1 minute'
+             ORDER BY created_at LIMIT 200"
+        ))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(unavailable)?;
+        rows.into_iter().map(from_row).collect()
     }
 }

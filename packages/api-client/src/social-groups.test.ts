@@ -111,7 +111,7 @@ describe('group jars', () => {
       body: { account: 'b'.repeat(64), groupId: 'g1' },
     });
 
-    const on = mockFetch(200, { status: 'sent', amount: '30000000000000000000000', txHash: 'h' });
+    const on = mockFetch(200, { status: 'sent', amount: '1', txHash: 'h' });
     const sponsored = createApiClient({ baseUrl: 'http://api.test', fetch: on });
     await expect(
       sponsored.jarDaoSponsor('t', { account: 'b'.repeat(64), groupId: 'g1' }),
@@ -124,6 +124,35 @@ describe('group jars', () => {
     await expect(
       twice.jarDaoSponsor('t', { account: 'b'.repeat(64), groupId: 'g1' }),
     ).rejects.toBeInstanceOf(ApiError);
+  });
+
+  it('asks Honey to create a group DAO; only sponsor_off means create it yourself', async () => {
+    const made = mockFetch(200, {
+      dao: 'trip-3f2a9c1e.sputnik-dao.near',
+      status: 'created',
+      txHash: 'h',
+    });
+    const api = createApiClient({ baseUrl: 'http://api.test', fetch: made });
+    await expect(
+      api.jarDaoCreateDao('t', { groupId: 'g1', nearAccount: 'a'.repeat(64) }),
+    ).resolves.toMatchObject({ dao: 'trip-3f2a9c1e.sputnik-dao.near', status: 'created' });
+    expect(sent(made)).toMatchObject({
+      url: 'http://api.test/api/v1/jar-dao/create-dao',
+      method: 'POST',
+      body: { groupId: 'g1', nearAccount: 'a'.repeat(64) },
+    });
+
+    const off = createApiClient({
+      baseUrl: 'http://api.test',
+      fetch: mockFetch(503, { error: { code: 'sponsor_off', message: 'off' } }),
+    });
+    await expect(off.jarDaoCreateDao('t', { groupId: 'g1' })).resolves.toBe(null);
+    // A busy server may already have sent it: never "create it yourself".
+    const busy = createApiClient({
+      baseUrl: 'http://api.test',
+      fetch: mockFetch(503, { error: { code: 'busy', message: 'busy' } }),
+    });
+    await expect(busy.jarDaoCreateDao('t', { groupId: 'g1' })).rejects.toBeInstanceOf(ApiError);
   });
 
   it('relays a signed delegate, or says to pay your own gas when the relayer is off', async () => {

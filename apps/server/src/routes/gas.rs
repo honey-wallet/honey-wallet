@@ -38,7 +38,7 @@ use crate::{
     identity::Identity,
     jar_dao::{INTENTS, USDC_NEAR, is_account},
     market_data::MarketData,
-    near_relayer::{Relayer, SignedDelegate},
+    near_relayer::{Relayer, SignedDelegate, relay_reserve},
     solana_relayer::{SolanaRelayer, Sponsored},
 };
 
@@ -49,8 +49,6 @@ const SMALL_CALL_GAS: u64 = 30 * TGAS;
 const TRANSFER_CALL_GAS: u64 = 100 * TGAS;
 /// All of one relay: a registration then a transfer call.
 const RELAY_MAX_GAS: u64 = SMALL_CALL_GAS + TRANSFER_CALL_GAS;
-/// yoctoNEAR per gas a relay is reserved at until its outcome says what it burnt.
-const RESERVE_GAS_PRICE: u128 = 100_000_000;
 /// The most Honey puts down to register a receiver on a token (0.0025 NEAR; tokens
 /// ask 0.00125).
 pub const MAX_STORAGE_DEPOSIT: u128 = 25 * 10u128.pow(20);
@@ -392,9 +390,8 @@ async fn near_relay(
             ));
         }
     }
-    let reserve = u128::from(delegate.total_gas())
-        .saturating_mul(RESERVE_GAS_PRICE)
-        .saturating_add(plan.deposits);
+    // Attached gas plus conversion fees and gas-price headroom, plus deposits.
+    let reserve = relay_reserve(delegate.total_gas(), plan.deposits);
     let balance = relayer.balance(relayer.account()).await?;
     if balance < s.near_floor.saturating_add(reserve) {
         tracing::warn!("near relayer is at its floor");
@@ -409,6 +406,10 @@ async fn near_relay(
         usd,
         &Reservation {
             kind: "near_relay",
+            native: Some(gas_allowance::NativeBudget {
+                amount: reserve,
+                room: balance.saturating_sub(s.near_floor),
+            }),
             ..Reservation::default()
         },
         &s.limits,

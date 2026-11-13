@@ -9,15 +9,25 @@
 //! per person and per day. Off (503 `relayer_off`) unless `JAR_RELAYER_ENABLED=1` and
 //! the relayer key is set.
 //!
-//! `POST /jar-dao/sponsor` pays a group jar member's network fees: a small NEAR
-//! transfer from Honey's relayer to the NEAR account they joined the group with, once
-//! per account, under NEAR budgets. Off (503) unless `RELAYER_ACCOUNT_ID` and
-//! `RELAYER_PRIVATE_KEY` are set.
+//! `POST /jar-dao/create-dao` creates a group's DAO for its creator: Honey's relayer
+//! calls the Sputnik factory itself (paying the 0.1 NEAR deposit and the gas), with the
+//! policy the server builds from the group's accepted members, the NEAR accounts they
+//! joined with and the majority rule (exactly what the app's `createGroupDao` creates and
+//! checks on chain), then records the DAO as `/social/groups/{id}/created` does.
+//!
+//! `POST /jar-dao/sponsor` sends nobody NEAR they could spend: a member's implicit
+//! account that isn't on chain yet gets one yoctoNEAR so it exists (relayed calls need
+//! their sender's account), once per account; otherwise it's `not_needed`. Members' DAO
+//! calls and shares go through `/jar-dao/relay`.
+//!
+//! Both are off (503 `sponsor_off`) unless `RELAYER_ACCOUNT_ID` and
+//! `RELAYER_PRIVATE_KEY` are set, and stay within `JAR_SPONSOR_*` NEAR budgets.
 //!
 //! Anyone can make a wallet key, so per-person limits alone are per-key limits. What
-//! bounds Honey's spend: the daily NEAR budgets, the relayer balance floor, paying only
-//! accepted members' own accounts, and (`SPONSOR_REQUIRE_VERIFIED_IDENTITY=1`) a linked
-//! Sign in with Apple or Google.
+//! bounds Honey's spend: the daily NEAR budgets, the relayer balance floor (less every
+//! pending NEAR reservation), paying only for accepted members' own accounts and their
+//! group's DAO, and (`SPONSOR_REQUIRE_VERIFIED_IDENTITY=1`) a linked Sign in with Apple
+//! or Google.
 
 use crate::{
     error::AppError,
@@ -26,7 +36,7 @@ use crate::{
     identity::{Identity, unavailable},
     jar_buys::{BuyLeg, BuyQuote, BuyRequest, JarBuys},
     jar_dao::{DaoState, DepositCheck, INTENTS, JAR_ROLE, JarDao, USDC_NEAR, is_jar_dao},
-    near_relayer::{CREATOR_TOP_UP, MEMBER_TOP_UP, Relayer, SignedDelegate, is_implicit},
+    near_relayer::{ACTIVATION, DelegateCall, Relayer, SignedDelegate, is_implicit, relay_reserve},
 };
 use axum::{
     Json, Router,
@@ -52,10 +62,19 @@ const ADD_PROPOSAL_MAX_GAS: u64 = 50 * TGAS;
 const VOTE_MAX_GAS: u64 = 30 * TGAS;
 /// A share: USDC's `ft_transfer_call` into intents.near (the app attaches 100 Tgas).
 const SHARE_MAX_GAS: u64 = 100 * TGAS;
-/// yoctoNEAR per gas a relay is reserved at until its outcome says what it burnt
-/// (NEAR's minimum gas price).
-const RESERVE_GAS_PRICE: u128 = 100_000_000;
 const YOCTO_PER_NEAR: u128 = 10u128.pow(24);
+/// The Sputnik factory every jar DAO is created by.
+pub const SPUTNIK_FACTORY: &str = "sputnik-dao.near";
+/// What the factory's `create` takes: the DAO's storage (packages/keyring
+/// `DAO_CREATE_DEPOSIT`).
+pub const DAO_CREATE_DEPOSIT: u128 = YOCTO_PER_NEAR / 10;
+/// Gas attached to the factory call (packages/keyring `createDaoCall`).
+const DAO_CREATE_GAS: u64 = 150 * TGAS;
+/// One day of Sputnik voting, in nanoseconds (keyring `VOTING_PERIOD_NS`).
+const VOTING_PERIOD_NS: &str = "86400000000000";
+/// A creation whose outcome is still unknown after this long may be tried again (a
+/// second factory call for a name already taken fails and refunds its deposit).
+const CREATE_RETRY_MINUTES: i32 = 30;
 /// The header carrying a Firebase ID token (Sign in with Apple or Google) alongside
 /// the wallet session, to link the two.
 pub const ACCOUNT_TOKEN_HEADER: &str = "x-firebase-token";
@@ -64,9 +83,11 @@ pub const ACCOUNT_TOKEN_HEADER: &str = "x-firebase-token";
 /// needed. From the environment (`FeeLimits::from_env`); see `.env.example`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FeeLimits {
-    /// `JAR_SPONSOR_DAILY_BUDGET_NEAR` (1): top-ups across everyone per 24 hours.
+    /// `JAR_SPONSOR_DAILY_BUDGET_NEAR` (0.3): DAO creations (deposit and gas) and account
+    /// activations across everyone per 24 hours.
     pub sponsor_daily: u128,
-    /// `JAR_SPONSOR_USER_BUDGET_NEAR` (0.2): top-ups one person gets per 30 days.
+    /// `JAR_SPONSOR_USER_BUDGET_NEAR` (0.2): what one person's creations and activations
+    /// may cost per 30 days.
     pub sponsor_user: u128,
     /// `JAR_RELAY_DAILY_BUDGET_NEAR` (0.25): relayed gas across everyone per 24 hours.
     pub relay_daily: u128,
@@ -74,15 +95,15 @@ pub struct FeeLimits {
     pub relay_user_daily: u128,
     /// `RELAYER_BALANCE_FLOOR_NEAR` (0.2): Honey stops paying before its relayer drops below.
     pub relayer_floor: u128,
-    /// `SPONSOR_REQUIRE_VERIFIED_IDENTITY` (off): top-ups and relays only for wallets
-    /// linked to a Sign in with Apple or Google.
+    /// `SPONSOR_REQUIRE_VERIFIED_IDENTITY` (off): creations, activations and relays only
+    /// for wallets linked to a Sign in with Apple or Google.
     pub require_verified_identity: bool,
 }
 
 impl Default for FeeLimits {
     fn default() -> Self {
         Self {
-            sponsor_daily: YOCTO_PER_NEAR,
+            sponsor_daily: 3 * YOCTO_PER_NEAR / 10,
             sponsor_user: YOCTO_PER_NEAR / 5,
             relay_daily: YOCTO_PER_NEAR / 4,
             relay_user_daily: YOCTO_PER_NEAR / 20,
@@ -174,6 +195,7 @@ pub fn router_with(
         .route("/jar-dao/buy-quote", post(buy_quote))
         .route("/jar-dao/relay", post(relay))
         .route("/jar-dao/sponsor", post(sponsor))
+        .route("/jar-dao/create-dao", post(create_dao))
         .with_state(StateData {
             identity,
             dao,
@@ -546,20 +568,30 @@ async fn check_dao_code(
 }
 
 /// Charges `yocto` of Honey's NEAR to the person's free gas (`gas_allowance`), priced
-/// with 1Click's NEAR price. None when the ledger says no (allowance or NEAR's daily
-/// total used up, or no price): the phone pays its own fees.
+/// with 1Click's NEAR price, checking it against the relayer's `room` (its balance less
+/// its floor) on top of every pending NEAR reservation. `own_cap` marks a charge capped
+/// by its own per-person NEAR budget (jar relays, DAO creations), left out of the
+/// generic per-chain daily cap. None when the ledger says no (allowance or NEAR's daily
+/// total used up, the relayer's room, or no price): the phone pays its own fees.
 async fn charge_near(
     s: &StateData,
     pool: &PgPool,
     user: Uuid,
     yocto: u128,
+    room: u128,
     kind: &str,
+    own_cap: bool,
 ) -> Result<Option<GasCharge>, AppError> {
     let market = s.dao.market().map(|m| m.as_ref());
     let charged = match gas_allowance::usd_micros(market, "near", yocto).await {
         Ok(usd) => {
             let what = Reservation {
                 kind,
+                exempt_usd_micros: if own_cap { usd } else { 0 },
+                native: Some(gas_allowance::NativeBudget {
+                    amount: yocto,
+                    room,
+                }),
                 ..Reservation::default()
             };
             gas_allowance::reserve_with(pool, user, "near", usd, &what, &s.gas).await
@@ -590,10 +622,22 @@ async fn settle_near(
     gas_allowance::set_reference(pool, charge, hash).await
 }
 
-/// Whether the relayer can pay `amount` and stay at or above the floor.
-async fn above_floor(relayer: &Relayer, floor: u128, amount: u128) -> Result<bool, AppError> {
+/// The relayer's room above its floor, when it can pay `amount` and stay at or above it.
+async fn above_floor(
+    relayer: &Relayer,
+    floor: u128,
+    amount: u128,
+) -> Result<Option<u128>, AppError> {
     let balance = relayer.balance(relayer.account()).await?;
-    Ok(balance >= floor.saturating_add(amount))
+    Ok((balance >= floor.saturating_add(amount)).then(|| balance - floor))
+}
+
+/// Gives a reservation back on a path where nothing was sent; a failure to do so is
+/// logged (the reservation then stays counted, which only errs on Honey's side).
+async fn give_back(pool: &PgPool, charge: &GasCharge) {
+    if let Err(error) = gas_allowance::release(pool, charge).await {
+        tracing::warn!(%error, "releasing a NEAR gas reservation failed");
+    }
 }
 
 /// One budget decision at a time: count and claim inside one transaction holding a
@@ -690,55 +734,39 @@ async fn relay(
             ));
         }
     }
-    let reserve = u128::from(delegate.total_gas()) * RESERVE_GAS_PRICE;
-    if !above_floor(relayer, s.limits.relayer_floor, reserve).await? {
+    // Attached gas plus conversion fees and gas-price headroom.
+    let reserve = relay_reserve(delegate.total_gas(), 0);
+    let Some(room) = above_floor(relayer, s.limits.relayer_floor, reserve).await? else {
         return Ok(relayer_off());
-    }
-    let Some(charge) = charge_near(&s, pool, user, reserve, "jar_dao_relay").await? else {
+    };
+    let Some(charge) = charge_near(&s, pool, user, reserve, room, "jar_dao_relay", true).await?
+    else {
         return Ok(relayer_off());
     };
 
     let id = Uuid::new_v4();
-    let mut tx = budget_lock(pool, "honey:jar_dao_relay").await?;
-    let (today, mine): (String, String) = sqlx::query_as(
-        "SELECT COALESCE(sum(gas_yocto::numeric), 0)::text,
-                COALESCE(sum(gas_yocto::numeric) FILTER (WHERE user_id = $1), 0)::text
-         FROM jar_dao_relays WHERE created_at > clock_timestamp() - interval '1 day'",
-    )
-    .bind(user)
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(unavailable)?;
-    if yocto(&today)?.saturating_add(reserve) > s.limits.relay_daily
-        || yocto(&mine)?.saturating_add(reserve) > s.limits.relay_user_daily
-    {
-        drop(tx);
-        gas_allowance::release(pool, &charge).await?;
-        return Ok(relayer_off());
+    // Until the relay is handed to NEAR, any failure gives the reservation back.
+    let claimed = claim_relay(
+        &s,
+        pool,
+        id,
+        user,
+        input.group_id,
+        &delegate,
+        relayer,
+        reserve,
+    );
+    match claimed.await {
+        Ok(true) => {}
+        Ok(false) => {
+            give_back(pool, &charge).await;
+            return Ok(relayer_off());
+        }
+        Err(error) => {
+            give_back(pool, &charge).await;
+            return Err(error);
+        }
     }
-    let methods = delegate
-        .actions
-        .iter()
-        .map(|a| a.method.as_str())
-        .collect::<Vec<_>>()
-        .join(",");
-    sqlx::query(
-        "INSERT INTO jar_dao_relays
-           (id, user_id, group_id, sender, receiver, methods, relayer, gas_yocto)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
-    )
-    .bind(id)
-    .bind(user)
-    .bind(input.group_id)
-    .bind(&delegate.sender)
-    .bind(&delegate.receiver)
-    .bind(&methods)
-    .bind(relayer.account())
-    .bind(reserve.to_string())
-    .execute(&mut *tx)
-    .await
-    .map_err(unavailable)?;
-    tx.commit().await.map_err(unavailable)?;
 
     match relayer.relay(&delegate).await {
         Ok(relayed) => {
@@ -767,17 +795,127 @@ async fn relay(
         }
         // NEAR refused it before running anything: it doesn't count.
         Err(Ok(error)) => {
+            give_back(pool, &charge).await;
             sqlx::query("DELETE FROM jar_dao_relays WHERE id = $1")
                 .bind(id)
                 .execute(pool)
                 .await
                 .map_err(unavailable)?;
-            gas_allowance::release(pool, &charge).await?;
             Err(error)
         }
         // Unknown outcome (it may still land): its reservation stays counted.
         Err(Err(error)) => Err(error),
     }
+}
+
+/// Claims a relay within the jar relay budgets (per person and in all, per 24 hours)
+/// under their lock; false when it doesn't fit.
+#[allow(clippy::too_many_arguments)]
+async fn claim_relay(
+    s: &StateData,
+    pool: &PgPool,
+    id: Uuid,
+    user: Uuid,
+    group: Uuid,
+    delegate: &SignedDelegate,
+    relayer: &Relayer,
+    reserve: u128,
+) -> Result<bool, AppError> {
+    let mut tx = budget_lock(pool, "honey:jar_dao_relay").await?;
+    let (today, mine): (String, String) = sqlx::query_as(
+        "SELECT COALESCE(sum(gas_yocto::numeric), 0)::text,
+                COALESCE(sum(gas_yocto::numeric) FILTER (WHERE user_id = $1), 0)::text
+         FROM jar_dao_relays WHERE created_at > clock_timestamp() - interval '1 day'",
+    )
+    .bind(user)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(unavailable)?;
+    if yocto(&today)?.saturating_add(reserve) > s.limits.relay_daily
+        || yocto(&mine)?.saturating_add(reserve) > s.limits.relay_user_daily
+    {
+        return Ok(false);
+    }
+    let methods = delegate
+        .actions
+        .iter()
+        .map(|a| a.method.as_str())
+        .collect::<Vec<_>>()
+        .join(",");
+    sqlx::query(
+        "INSERT INTO jar_dao_relays
+           (id, user_id, group_id, sender, receiver, methods, relayer, gas_yocto)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+    )
+    .bind(id)
+    .bind(user)
+    .bind(group)
+    .bind(&delegate.sender)
+    .bind(&delegate.receiver)
+    .bind(&methods)
+    .bind(relayer.account())
+    .bind(reserve.to_string())
+    .execute(&mut *tx)
+    .await
+    .map_err(unavailable)?;
+    tx.commit().await.map_err(unavailable)?;
+    Ok(true)
+}
+
+/// Claims Honey paying `yocto` for `user` in `group` (a DAO creation, `account` the
+/// DAO; or an activation, `account` the member's) within the sponsor budgets (per
+/// person per 30 days, in all per 24 hours) under their lock. `Ok(None)` when it
+/// doesn't fit; `Ok(Some(false))` when this person or account was already paid for.
+async fn claim_sponsorship(
+    s: &StateData,
+    pool: &PgPool,
+    group: Uuid,
+    user: Uuid,
+    account: &str,
+    yocto_amount: u128,
+) -> Result<Option<bool>, AppError> {
+    let mut tx = budget_lock(pool, "honey:jar_dao_sponsor").await?;
+    let (today, mine): (String, String) = sqlx::query_as(
+        "SELECT COALESCE(sum(yocto::numeric)
+                  FILTER (WHERE created_at > clock_timestamp() - interval '1 day'), 0)::text,
+                COALESCE(sum(yocto::numeric) FILTER (WHERE user_id = $1), 0)::text
+         FROM social_group_sponsorships
+         WHERE created_at > clock_timestamp() - interval '30 days'",
+    )
+    .bind(user)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(unavailable)?;
+    if yocto(&today)?.saturating_add(yocto_amount) > s.limits.sponsor_daily
+        || yocto(&mine)?.saturating_add(yocto_amount) > s.limits.sponsor_user
+    {
+        return Ok(None);
+    }
+    // Once per person and group (primary key) and once per account (unique index).
+    let claimed = sqlx::query(
+        "INSERT INTO social_group_sponsorships (group_id, user_id, account, yocto)
+         VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
+    )
+    .bind(group)
+    .bind(user)
+    .bind(account)
+    .bind(yocto_amount.to_string())
+    .execute(&mut *tx)
+    .await
+    .map_err(unavailable)?
+    .rows_affected();
+    tx.commit().await.map_err(unavailable)?;
+    Ok(Some(claimed == 1))
+}
+
+async fn unclaim_sponsorship(pool: &PgPool, group: Uuid, user: Uuid) -> Result<(), AppError> {
+    sqlx::query("DELETE FROM social_group_sponsorships WHERE group_id = $1 AND user_id = $2")
+        .bind(group)
+        .bind(user)
+        .execute(pool)
+        .await
+        .map_err(unavailable)?;
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -792,9 +930,9 @@ struct SponsorRequest {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SponsorResult {
-    /// `sent`, or `not_needed` when the account already holds enough.
+    /// `sent` (the account was activated), or `not_needed` when it's already on chain.
     status: &'static str,
-    /// yoctoNEAR sent ("0" when not needed).
+    /// yoctoNEAR sent ("0" when not needed, "1" for an activation).
     amount: String,
     tx_hash: Option<String>,
 }
@@ -803,12 +941,20 @@ fn sponsor_off() -> Response {
     off("sponsor_off", NOT_PAYING)
 }
 
-/// Tops up a group member's implicit account so Honey pays their network fees: 0.03
-/// NEAR, or 0.12 NEAR for the creator when the group's DAO is about to be created (its
-/// 0.1 NEAR deposit). Only for members who accepted, only to the NEAR account they
-/// joined the group with, only while it holds less than that, once per account, within
-/// the NEAR budgets (per person per 30 days, in all per 24 hours) and above the
-/// relayer's floor.
+fn not_needed() -> Response {
+    Json(SponsorResult {
+        status: "not_needed",
+        amount: "0".into(),
+        tx_hash: None,
+    })
+    .into_response()
+}
+
+/// Makes sure a group member's NEAR account exists so Honey can relay their calls: an
+/// implicit account not on chain yet gets one yoctoNEAR (a zero-balance account), once
+/// per account, within the sponsor budgets and above the relayer's floor. Honey never
+/// sends a member NEAR they could spend: their DAO calls and share go through
+/// `/jar-dao/relay`, and the creator's DAO through `/jar-dao/create-dao`.
 async fn sponsor(
     State(s): State<StateData>,
     headers: HeaderMap,
@@ -830,14 +976,9 @@ async fn sponsor(
         ));
     }
     let pool = identity.pool();
-    type Row = (Uuid, String, Option<String>, String, Option<String>, bool);
+    type Row = (String, String, Option<String>);
     let row: Option<Row> = sqlx::query_as(
-        "SELECT g.creator, g.status, g.dao, m.state, m.near_account,
-                NOT EXISTS (SELECT 1 FROM social_group_members o
-                            WHERE o.group_id = g.id AND o.state = 'accepted'
-                              AND o.near_account IS NULL)
-                AND (SELECT count(*) FROM social_group_members o
-                     WHERE o.group_id = g.id AND o.state = 'accepted') >= 2
+        "SELECT g.status, m.state, m.near_account
          FROM social_groups g
          JOIN social_group_members m ON m.group_id = g.id AND m.user_id = $2
          WHERE g.id = $1",
@@ -847,18 +988,10 @@ async fn sponsor(
     .fetch_optional(pool)
     .await
     .map_err(unavailable)?;
-    let (creator, status, dao, state, near, all_on_near) = row.ok_or(AppError::NotFound)?;
+    let (status, state, near) = row.ok_or(AppError::NotFound)?;
     if state != "accepted" {
         return Err(AppError::Conflict(
             "join the group before Honey pays your fees".into(),
-        ));
-    }
-    if !matches!(
-        status.as_str(),
-        "inviting" | "creating" | "funding" | "buying" | "active"
-    ) {
-        return Err(AppError::Conflict(
-            "this group doesn't need fees paid".into(),
         ));
     }
     // Only the NEAR account this person joined the group with: never one named now.
@@ -867,21 +1000,18 @@ async fn sponsor(
             "that isn't your account in this group".into(),
         ));
     }
-    // The creator needs fees only to create the DAO, which happens once a friend has
-    // joined (`creating`); sponsoring them while still inviting would let anyone farm
-    // top-ups by opening groups that never go anywhere.
-    if creator == user && status == "inviting" {
+    // Not while only inviting: no farming with groups that never go anywhere.
+    if !matches!(
+        status.as_str(),
+        "creating" | "funding" | "buying" | "active"
+    ) {
         return Err(AppError::Conflict(
-            "Honey pays the creator's fees once a friend joins".into(),
+            "this group doesn't need fees paid yet".into(),
         ));
     }
-    // The DAO deposit only while the DAO is about to be created: the group is
-    // `creating`, has no DAO yet, and everyone in it (two or more) has a NEAR account.
-    let amount = if creator == user && status == "creating" && dao.is_none() && all_on_near {
-        CREATOR_TOP_UP
-    } else {
-        MEMBER_TOP_UP
-    };
+    if relayer.exists(account).await? {
+        return Ok(not_needed());
+    }
     if s.limits.require_verified_identity
         && verified_identity(&s, &headers, pool, user).await?.is_none()
     {
@@ -899,62 +1029,41 @@ async fn sponsor(
             "Honey already paid this account's fees".into(),
         ));
     }
-    if relayer.balance(account).await? >= amount {
-        return Ok(Json(SponsorResult {
-            status: "not_needed",
-            amount: "0".into(),
-            tx_hash: None,
-        })
-        .into_response());
-    }
-    if !above_floor(relayer, s.limits.relayer_floor, amount).await? {
-        return Ok(sponsor_off());
-    }
-    let Some(charge) = charge_near(&s, pool, user, amount, "jar_dao_sponsor").await? else {
+    // The transfer's own gas (it creates the account) and the yoctoNEAR.
+    let reserve = relay_reserve(0, ACTIVATION);
+    let Some(room) = above_floor(relayer, s.limits.relayer_floor, reserve).await? else {
         return Ok(sponsor_off());
     };
-
-    let mut tx = budget_lock(pool, "honey:jar_dao_sponsor").await?;
-    let (today, mine): (String, String) = sqlx::query_as(
-        "SELECT COALESCE(sum(yocto::numeric)
-                  FILTER (WHERE created_at > clock_timestamp() - interval '1 day'), 0)::text,
-                COALESCE(sum(yocto::numeric) FILTER (WHERE user_id = $1), 0)::text
-         FROM social_group_sponsorships
-         WHERE created_at > clock_timestamp() - interval '30 days'",
-    )
-    .bind(user)
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(unavailable)?;
-    if yocto(&today)?.saturating_add(amount) > s.limits.sponsor_daily
-        || yocto(&mine)?.saturating_add(amount) > s.limits.sponsor_user
-    {
-        drop(tx);
-        gas_allowance::release(pool, &charge).await?;
+    let Some(charge) =
+        charge_near(&s, pool, user, reserve, room, "jar_dao_activate", false).await?
+    else {
         return Ok(sponsor_off());
+    };
+    match claim_sponsorship(&s, pool, input.group_id, user, account, reserve).await {
+        Ok(Some(true)) => {}
+        Ok(Some(false)) => {
+            give_back(pool, &charge).await;
+            return Err(AppError::Conflict(
+                "Honey already paid your fees for this group".into(),
+            ));
+        }
+        Ok(None) => {
+            give_back(pool, &charge).await;
+            return Ok(sponsor_off());
+        }
+        Err(error) => {
+            give_back(pool, &charge).await;
+            return Err(error);
+        }
     }
-    // Once per person and group (primary key) and once per account (unique index).
-    let claimed = sqlx::query(
-        "INSERT INTO social_group_sponsorships (group_id, user_id, account, yocto)
-         VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
-    )
-    .bind(input.group_id)
-    .bind(user)
-    .bind(account)
-    .bind(amount.to_string())
-    .execute(&mut *tx)
-    .await
-    .map_err(unavailable)?
-    .rows_affected();
-    tx.commit().await.map_err(unavailable)?;
-    if claimed == 0 {
-        gas_allowance::release(pool, &charge).await?;
-        return Err(AppError::Conflict(
-            "Honey already paid your fees for this group".into(),
-        ));
-    }
-    match relayer.transfer(account, amount).await {
+    match relayer.transfer(account, ACTIVATION).await {
         Ok(hash) => {
+            if let Err(error) = gas_allowance::settle(pool, &charge, charge.usd_micros).await {
+                tracing::warn!(%error, "settling an activation failed");
+            }
+            if let Err(error) = gas_allowance::set_reference(pool, &charge, &hash).await {
+                tracing::warn!(%error, "naming an activation's transaction failed");
+            }
             sqlx::query(
                 "UPDATE social_group_sponsorships SET tx_hash = $3
                  WHERE group_id = $1 AND user_id = $2",
@@ -965,31 +1074,303 @@ async fn sponsor(
             .execute(pool)
             .await
             .map_err(unavailable)?;
-            gas_allowance::settle(pool, &charge, charge.usd_micros).await?;
-            gas_allowance::set_reference(pool, &charge, &hash).await?;
             Ok(Json(SponsorResult {
                 status: "sent",
-                amount: amount.to_string(),
+                amount: ACTIVATION.to_string(),
                 tx_hash: Some(hash),
             })
             .into_response())
         }
         // NEAR refused it: nothing was sent, so the person may ask again.
         Err(Ok(error)) => {
-            sqlx::query(
-                "DELETE FROM social_group_sponsorships WHERE group_id = $1 AND user_id = $2",
-            )
-            .bind(input.group_id)
-            .bind(user)
-            .execute(pool)
-            .await
-            .map_err(unavailable)?;
-            gas_allowance::release(pool, &charge).await?;
+            give_back(pool, &charge).await;
+            unclaim_sponsorship(pool, input.group_id, user).await?;
             Err(error)
         }
         // Unknown outcome (it may still land): the claim stays.
         Err(Err(error)) => Err(error),
     }
+}
+
+/// The DAO name the app gives a group (`groupDaoName` in lib/group-jar-core.ts, with
+/// keyring `jarDaoName`): the group's name lowercased, every run of other characters a
+/// dash, trimmed, at most 24 characters (or `jar`), then a dash and the first eight
+/// characters of the group's id.
+pub fn group_dao_name(name: &str, group: Uuid) -> String {
+    let mut slug = String::new();
+    for c in name.to_lowercase().chars() {
+        if c.is_ascii_lowercase() || c.is_ascii_digit() {
+            slug.push(c);
+        } else if !slug.ends_with('-') {
+            slug.push('-');
+        }
+    }
+    let slug: String = slug.trim_matches('-').chars().take(30).collect();
+    let base: String = slug.chars().take(24).collect();
+    let base = base.trim_end_matches('-');
+    let base = if base.is_empty() { "jar" } else { base };
+    let id: String = group
+        .to_string()
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .take(8)
+        .collect();
+    format!("{base}-{}", id.to_lowercase())
+}
+
+/// The factory call the app makes for a jar DAO (keyring `createDaoCall` with
+/// `jarPolicy`): one `members` group role holding only the proposal kinds Honey uses and
+/// the three votes, role-weight default rule with quorum 0 and the given threshold,
+/// proposal and bounty bonds of 0, one-day periods, 0.1 NEAR and 150 Tgas.
+pub fn create_dao_call(name: &str, members: &[String], threshold: u32) -> DelegateCall {
+    let permissions: Vec<String> = [
+        "function_call",
+        "vote",
+        "add_member_to_role",
+        "remove_member_from_role",
+        "policy_update_default_vote_policy",
+    ]
+    .iter()
+    .map(|kind| format!("{kind}:AddProposal"))
+    .chain(["*:VoteApprove", "*:VoteReject", "*:VoteRemove"].map(String::from))
+    .collect();
+    let args = serde_json::json!({
+        "config": { "name": name, "purpose": "Honey shared jar", "metadata": "" },
+        "policy": {
+            "roles": [{
+                "name": JAR_ROLE,
+                "kind": { "Group": members },
+                "permissions": permissions,
+                "vote_policy": {},
+            }],
+            "default_vote_policy": {
+                "weight_kind": "RoleWeight",
+                "quorum": "0",
+                "threshold": threshold.to_string(),
+            },
+            "proposal_bond": "0",
+            "proposal_period": VOTING_PERIOD_NS,
+            "bounty_bond": "0",
+            "bounty_forgiveness_period": VOTING_PERIOD_NS,
+        },
+    });
+    let outer = serde_json::json!({ "name": name, "args": STANDARD.encode(args.to_string()) });
+    DelegateCall {
+        method: "create".into(),
+        args: outer.to_string().into_bytes(),
+        gas: DAO_CREATE_GAS,
+        deposit: DAO_CREATE_DEPOSIT,
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CreateDaoRequest {
+    group_id: Uuid,
+    /// The creator's NEAR implicit account, when the group doesn't have it yet.
+    near_account: Option<String>,
+}
+
+/// `JarDaoCreateResult`.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateDaoResult {
+    /// `<name>.sputnik-dao.near`, recorded as the group's DAO.
+    dao: String,
+    /// `created`, or `exists` when it was already on chain (an earlier try).
+    status: &'static str,
+    tx_hash: Option<String>,
+}
+
+/// Creates the group's DAO with Honey's relayer paying (see the module docs): only for
+/// the creator, only while the group is `creating` with two or more members who all
+/// joined with a NEAR account, once per group, within the sponsor budgets and above the
+/// relayer's floor. 503 `sponsor_off` (before anything is sent) means the creator
+/// creates it themselves; a DAO already on chain under the group's name is checked and
+/// recorded instead of created again.
+async fn create_dao(
+    State(s): State<StateData>,
+    headers: HeaderMap,
+    input: Result<Json<CreateDaoRequest>, JsonRejection>,
+) -> Result<Response, AppError> {
+    let identity = s.identity.as_ref().ok_or(AppError::Unauthorized)?;
+    let user = signed_in(&s, &headers).await?;
+    let Some(relayer) = s.relayer.as_ref() else {
+        return Ok(sponsor_off());
+    };
+    identity
+        .rate_limit_pair("jar_create_dao", &user.to_string(), 600, 5)
+        .await?;
+    let Json(input) = input.map_err(|e| AppError::BadRequest(e.body_text()))?;
+    let given = match input.near_account.as_deref().map(str::trim) {
+        Some(account) if is_implicit(account) => Some(account.to_string()),
+        Some(_) => {
+            return Err(AppError::BadRequest(
+                "a group's DAO is made of NEAR implicit accounts".into(),
+            ));
+        }
+        None => None,
+    };
+    let pool = identity.pool();
+    let group: Option<(Uuid, String, String, Option<String>)> =
+        sqlx::query_as("SELECT creator, name, status, dao FROM social_groups WHERE id = $1")
+            .bind(input.group_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(unavailable)?;
+    let (creator, name, status, dao) = group.ok_or(AppError::NotFound)?;
+    if creator != user {
+        return Err(AppError::Forbidden);
+    }
+    if status != "creating" || dao.is_some() {
+        return Err(AppError::Conflict(
+            "it isn't time to create the group".into(),
+        ));
+    }
+    let rows: Vec<(Uuid, Option<String>)> = sqlx::query_as(
+        "SELECT user_id, near_account FROM social_group_members
+         WHERE group_id = $1 AND state = 'accepted'",
+    )
+    .bind(input.group_id)
+    .fetch_all(pool)
+    .await
+    .map_err(unavailable)?;
+    let mut members: Vec<String> = Vec::with_capacity(rows.len());
+    for (member, account) in &rows {
+        let account = if *member == user {
+            account.clone().or_else(|| given.clone())
+        } else {
+            account.clone()
+        };
+        let Some(account) = account.filter(|a| is_implicit(a)) else {
+            return Err(AppError::Conflict(
+                "everyone in the group needs a NEAR account first".into(),
+            ));
+        };
+        if members.contains(&account) {
+            return Err(AppError::Conflict(
+                "two people in the group share a NEAR account".into(),
+            ));
+        }
+        members.push(account);
+    }
+    if members.len() < 2 {
+        return Err(AppError::Conflict(
+            "a group needs a friend before its jar is created".into(),
+        ));
+    }
+    let name = group_dao_name(&name, input.group_id);
+    let dao = format!("{name}.{SPUTNIK_FACTORY}");
+    let threshold = super::social::majority(members.len() as u32);
+    // The creator's account first, as the app orders it.
+    let mine = rows
+        .iter()
+        .position(|(member, _)| *member == user)
+        .ok_or(AppError::Forbidden)?;
+    members.swap(0, mine);
+    let given_for_record = rows
+        .iter()
+        .find(|(member, account)| *member == user && account.is_none())
+        .and(given);
+
+    let (status, tx_hash) = if relayer.exists(&dao).await? {
+        ("exists", None)
+    } else {
+        if s.limits.require_verified_identity
+            && verified_identity(&s, &headers, pool, user).await?.is_none()
+        {
+            return Ok(off("sponsor_off", NEEDS_SIGN_IN));
+        }
+        let call = create_dao_call(&name, &members, threshold);
+        let reserve = relay_reserve(call.gas, call.deposit);
+        let Some(room) = above_floor(relayer, s.limits.relayer_floor, reserve).await? else {
+            return Ok(sponsor_off());
+        };
+        // A creation whose outcome never showed (no DAO long after) may be tried again.
+        sqlx::query(
+            "DELETE FROM social_group_sponsorships
+             WHERE group_id = $1 AND user_id = $2 AND account = $3
+               AND created_at < clock_timestamp() - make_interval(mins => $4)",
+        )
+        .bind(input.group_id)
+        .bind(user)
+        .bind(&dao)
+        .bind(CREATE_RETRY_MINUTES)
+        .execute(pool)
+        .await
+        .map_err(unavailable)?;
+        let Some(charge) =
+            charge_near(&s, pool, user, reserve, room, "jar_dao_create", true).await?
+        else {
+            return Ok(sponsor_off());
+        };
+        match claim_sponsorship(&s, pool, input.group_id, user, &dao, reserve).await {
+            Ok(Some(true)) => {}
+            Ok(Some(false)) => {
+                give_back(pool, &charge).await;
+                return Err(AppError::Conflict(
+                    "Honey is still creating this group's jar. Try again in a few minutes.".into(),
+                ));
+            }
+            Ok(None) => {
+                give_back(pool, &charge).await;
+                return Ok(sponsor_off());
+            }
+            Err(error) => {
+                give_back(pool, &charge).await;
+                return Err(error);
+            }
+        }
+        match relayer.call(SPUTNIK_FACTORY, &call).await {
+            Ok(relayed) => {
+                // The deposit stays with the DAO when it was created, and comes back to
+                // the relayer when the factory failed.
+                let spent = if relayed.succeeded {
+                    relayed.burnt.saturating_add(call.deposit)
+                } else {
+                    relayed.burnt
+                };
+                if let Err(error) = settle_near(&s, pool, &charge, spent, &relayed.hash).await {
+                    tracing::warn!(%error, "settling a DAO creation failed");
+                }
+                if !relayed.succeeded {
+                    // Nothing was created: the creator may try again.
+                    unclaim_sponsorship(pool, input.group_id, user).await?;
+                    return Err(AppError::Conflict(
+                        "NEAR didn't create the group's jar. Try again in a moment.".into(),
+                    ));
+                }
+                sqlx::query(
+                    "UPDATE social_group_sponsorships SET tx_hash = $3
+                     WHERE group_id = $1 AND user_id = $2",
+                )
+                .bind(input.group_id)
+                .bind(user)
+                .bind(&relayed.hash)
+                .execute(pool)
+                .await
+                .map_err(unavailable)?;
+                ("created", Some(relayed.hash))
+            }
+            // NEAR refused it before running anything: nothing was spent.
+            Err(Ok(error)) => {
+                give_back(pool, &charge).await;
+                unclaim_sponsorship(pool, input.group_id, user).await?;
+                return Err(error);
+            }
+            // Unknown outcome (it may still land): the claim and reservation stay.
+            Err(Err(error)) => return Err(error),
+        }
+    };
+    // Checked on chain and recorded exactly as the creator's own report would be.
+    super::social::record_created(pool, &s.dao, input.group_id, user, &dao, given_for_record)
+        .await?;
+    Ok(Json(CreateDaoResult {
+        dao,
+        status,
+        tx_hash,
+    })
+    .into_response())
 }
 
 #[cfg(test)]
@@ -1124,13 +1505,70 @@ mod tests {
             assert_eq!(parse_near(bad), None, "{bad}");
         }
         let limits = FeeLimits::default();
-        // Sized for a ~5 NEAR relayer: a day of top-ups can't reach the floor alone.
-        assert_eq!(limits.sponsor_daily, YOCTO_PER_NEAR);
+        // Two DAO creations a day across everyone.
+        assert_eq!(limits.sponsor_daily, 3 * YOCTO_PER_NEAR / 10);
+        let create = relay_reserve(DAO_CREATE_GAS, DAO_CREATE_DEPOSIT);
+        assert!(2 * create <= limits.sponsor_daily && 3 * create > limits.sponsor_daily);
         assert_eq!(limits.relayer_floor, YOCTO_PER_NEAR / 5);
-        assert!(limits.relay_daily < limits.sponsor_daily);
+        assert!(relay_reserve(RELAY_MAX_GAS, 0) <= limits.relay_user_daily);
         assert!(!limits.require_verified_identity);
-        // A person's 30-day top-ups cover a creator's DAO deposit and a member top-up.
-        assert!(limits.sponsor_user >= CREATOR_TOP_UP + MEMBER_TOP_UP);
+        // A person's 30-day budget covers creating one group's DAO and an activation.
+        assert!(limits.sponsor_user >= create + relay_reserve(0, ACTIVATION));
+    }
+
+    /// The DAO Honey's relayer creates is the one the app would: same name, and the
+    /// policy shape the app's `checkJarPolicy` accepts (packages/keyring `jarPolicy`).
+    #[test]
+    fn creates_the_dao_the_app_creates() {
+        let id: Uuid = "3f2a9c1e-7b44-4d0a-9e61-0c5d2b8a7f10".parse().unwrap();
+        assert_eq!(group_dao_name("Trip to Goa!", id), "trip-to-goa-3f2a9c1e");
+        assert_eq!(group_dao_name("  ", id), "jar-3f2a9c1e");
+        assert_eq!(group_dao_name("Ünïcode ☕ Jar", id), "n-code-jar-3f2a9c1e");
+        assert_eq!(
+            group_dao_name("a very long group name that keeps going", id),
+            "a-very-long-group-name-t-3f2a9c1e"
+        );
+        assert_eq!(
+            group_dao_name("abcdefghijklmnopqrstuvw---xyz", id),
+            "abcdefghijklmnopqrstuvw-3f2a9c1e"
+        );
+
+        let members = vec!["a".repeat(64), "b".repeat(64), "c".repeat(64)];
+        let call = create_dao_call("trip-to-goa-3f2a9c1e", &members, 2);
+        assert_eq!(call.method, "create");
+        assert_eq!(call.deposit, 10u128.pow(23));
+        assert_eq!(call.gas, 150 * TGAS);
+        let outer: Value = serde_json::from_slice(&call.args).unwrap();
+        assert_eq!(outer["name"], "trip-to-goa-3f2a9c1e");
+        let args: Value =
+            serde_json::from_slice(&STANDARD.decode(outer["args"].as_str().unwrap()).unwrap())
+                .unwrap();
+        let expected = serde_json::json!({
+            "config": { "name": "trip-to-goa-3f2a9c1e", "purpose": "Honey shared jar", "metadata": "" },
+            "policy": {
+                "roles": [{
+                    "name": "members",
+                    "kind": { "Group": members },
+                    "permissions": [
+                        "function_call:AddProposal",
+                        "vote:AddProposal",
+                        "add_member_to_role:AddProposal",
+                        "remove_member_from_role:AddProposal",
+                        "policy_update_default_vote_policy:AddProposal",
+                        "*:VoteApprove",
+                        "*:VoteReject",
+                        "*:VoteRemove"
+                    ],
+                    "vote_policy": {}
+                }],
+                "default_vote_policy": { "weight_kind": "RoleWeight", "quorum": "0", "threshold": "2" },
+                "proposal_bond": "0",
+                "proposal_period": "86400000000000",
+                "bounty_bond": "0",
+                "bounty_forgiveness_period": "86400000000000"
+            }
+        });
+        assert_eq!(args, expected);
     }
 
     #[test]

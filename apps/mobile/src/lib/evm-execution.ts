@@ -2,6 +2,7 @@ import type { OperationRecovery } from '@honey-wallet/api-client';
 import { evmAddressOfKey, signEvmTransaction } from '@honey-wallet/keyring';
 import { confirmOwner } from '@/lib/auth';
 import { backendSession, backendSessionToken } from '@/lib/backend-session';
+import { assertNoSponsoredInFlight } from '@/lib/evm-in-flight';
 import { privateKeyOf } from '@/lib/vault';
 import { wallets } from '@/lib/wallets';
 
@@ -35,6 +36,8 @@ export async function signReviewedEvm(
   if (!(await confirmOwner(`Confirm ${provider} transaction`, true)))
     throw new Error('Transaction cancelled.');
   assertCurrent();
+  // A free-gas batch Honey may still send from this wallet could land as well.
+  await assertNoSponsoredInFlight(Number(identity.chainId), identity.signer);
   const key = await privateKeyOf(accountId, 'evm');
   const signed: string[] = [];
   try {

@@ -19,6 +19,7 @@ const {
   canSellRef,
   checkSwapQuote,
   executeSwapPayment,
+  fetchSwapTokens,
   intentsSwaps,
   needsMemoWarning,
   parseOneClickTokens,
@@ -565,6 +566,28 @@ describe('quote → pay', () => {
       legs: [{ destinationAsset: SOL, amount: '2000000000000000', recipient: MY_SOL }],
     });
     expect(result).toMatchObject({ depositAddress: DEPOSIT, timeEstimate: 25, usdIn: 4 });
+  });
+
+  it('refuses a quote when what’s bought has no price (its value can’t be checked)', async () => {
+    const tokens = await fetchSwapTokens(oneClick(), NOW);
+    const sol = tokens.find((t) => t.assetId === SOL) as { price: number | null };
+    const was = sol.price;
+    sol.price = null;
+    try {
+      const ask = vi.fn(async () => quote());
+      await expect(
+        quoteSwap(
+          {
+            sell: { symbol: 'ETH', chain: 'Base' },
+            buy: { symbol: 'SOL', chain: 'Solana' },
+            amount: '0.002',
+          },
+          { fetcher: oneClick(), quote: ask, now: () => NOW },
+        ),
+      ).rejects.toThrow('Couldn’t price SOL');
+    } finally {
+      sol.price = was;
+    }
   });
 
   it('refuses a server quote that refunds or pays someone else', async () => {

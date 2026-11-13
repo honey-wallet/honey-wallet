@@ -144,9 +144,16 @@ async fn serve(app: Router) -> String {
 
 const USDC_NEAR: &str = "17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1";
 
-/// 1Click's list with SOL at $150, wNEAR at $3 and USDC on NEAR.
+/// The Solana mint the tests pay in (1Click lists it).
+fn listed_mint() -> String {
+    bs58::encode([8u8; 32]).into_string()
+}
+
+/// 1Click's list with SOL at $150, wNEAR at $3, USDC on NEAR and a Solana token.
 async fn one_click() -> Arc<MarketData> {
     let body = json!([
+        { "assetId": "nep141:sol-usdc.omft.near", "blockchain": "sol", "symbol": "USDC",
+          "decimals": 6, "price": 1.0, "contractAddress": listed_mint() },
         { "assetId": "nep141:sol.omft.near", "blockchain": "sol", "symbol": "SOL",
           "decimals": 9, "price": 150.0, "contractAddress": null },
         { "assetId": "nep141:wrap.near", "blockchain": "near", "symbol": "wNEAR",
@@ -185,6 +192,8 @@ async fn the_ledger_caps_each_person_and_each_chain() {
     let pool = &db.pool;
     let mut limits = GasLimits::default();
     limits.chain_daily.insert("solana".into(), USD / 2);
+    // The per-person per-chain daily cap has its own section below.
+    limits.user_chain_daily_default = USD;
     let plain = Reservation::default();
 
     // $0.40 on Solana fits; $0.20 more would take Solana's day past $0.50.
@@ -257,6 +266,7 @@ async fn the_ledger_caps_each_person_and_each_chain() {
         .unwrap();
     let mut roomy = GasLimits::default();
     roomy.chain_daily.insert("base".into(), 100 * USD);
+    roomy.user_chain_daily_default = USD;
     let tasks: Vec<_> = (0..20)
         .map(|_| {
             let pool = db.pool.clone();
@@ -293,6 +303,90 @@ async fn the_ledger_caps_each_person_and_each_chain() {
     .await
     .unwrap();
     assert_eq!(today, USD);
+
+    // The per-chain DoS: one person can't take a chain's whole day. $0.10 each per chain
+    // per day by default; rent (capped by new_accounts) is left out of it.
+    let dave = Uuid::new_v4();
+    sqlx::query("INSERT INTO users (id) VALUES ($1)")
+        .bind(dave)
+        .execute(pool)
+        .await
+        .unwrap();
+    let defaults = GasLimits::default();
+    gas_allowance::reserve_with(pool, dave, "arbitrum", 60_000, &plain, &defaults)
+        .await
+        .unwrap();
+    let over = gas_allowance::reserve_with(pool, dave, "arbitrum", 50_000, &plain, &defaults).await;
+    assert!(matches!(over, Err(AppError::GasNotCovered)), "{over:?}");
+    // Another chain has its own $0.10.
+    gas_allowance::reserve_with(pool, dave, "polygon", 50_000, &plain, &defaults)
+        .await
+        .unwrap();
+    // A token account's rent rides outside the daily cap ($0.31 with $0.30 of rent).
+    let rent = Reservation {
+        new_accounts: 1,
+        exempt_usd_micros: 300_000,
+        ..Reservation::default()
+    };
+    gas_allowance::reserve_with(pool, dave, "solana", 310_000, &rent, &defaults)
+        .await
+        .unwrap();
+    let left = gas_allowance::remaining(pool, dave, &["solana", "arbitrum"], &defaults)
+        .await
+        .unwrap();
+    assert_eq!(left.user_chains_today["solana"], USD / 10 - 10_000);
+    assert_eq!(left.user_chains_today["arbitrum"], USD / 10 - 60_000);
+    // An exempt part larger than the charge is refused outright.
+    let silly = Reservation {
+        exempt_usd_micros: 2,
+        ..Reservation::default()
+    };
+    let refused = gas_allowance::reserve_with(pool, dave, "near", 1, &silly, &defaults).await;
+    assert!(matches!(refused, Err(AppError::GasNotCovered)));
+    // A configured cap per chain.
+    let mut tight = GasLimits::default();
+    tight.user_chain_daily.insert("near".into(), 5_000);
+    let over = gas_allowance::reserve_with(pool, dave, "near", 6_000, &plain, &tight).await;
+    assert!(matches!(over, Err(AppError::GasNotCovered)));
+
+    // Settling above the reservation records what it cost, and the caps see it.
+    let erin = Uuid::new_v4();
+    sqlx::query("INSERT INTO users (id) VALUES ($1)")
+        .bind(erin)
+        .execute(pool)
+        .await
+        .unwrap();
+    let small = gas_allowance::reserve_with(pool, erin, "polygon", 10_000, &plain, &defaults)
+        .await
+        .unwrap();
+    gas_allowance::settle(pool, &small, 95_000).await.unwrap();
+    let over = gas_allowance::reserve_with(pool, erin, "polygon", 10_000, &plain, &defaults).await;
+    assert!(matches!(over, Err(AppError::GasNotCovered)), "{over:?}");
+    let left = gas_allowance::remaining(pool, erin, &["polygon"], &defaults)
+        .await
+        .unwrap();
+    assert_eq!(left.remaining, USD - 95_000);
+
+    // The relayer floor counts every pending reservation: two requests that each fit
+    // the relayer's room alone can't both have it.
+    let budget = |amount| Reservation {
+        native: Some(gas_allowance::NativeBudget {
+            amount,
+            room: 1_000,
+        }),
+        ..Reservation::default()
+    };
+    let first = gas_allowance::reserve_with(pool, erin, "ethereum", 1, &budget(700), &defaults)
+        .await
+        .unwrap();
+    let second =
+        gas_allowance::reserve_with(pool, dave, "ethereum", 1, &budget(700), &defaults).await;
+    assert!(matches!(second, Err(AppError::GasNotCovered)), "{second:?}");
+    // Once settled (landed, the balance shows it) it no longer counts as pending.
+    gas_allowance::settle(pool, &first, 1).await.unwrap();
+    gas_allowance::reserve_with(pool, dave, "ethereum", 1, &budget(700), &defaults)
+        .await
+        .unwrap();
     db.close().await;
 }
 
@@ -308,6 +402,8 @@ struct Sol {
     /// balance less `spend`).
     simulation_error: Value,
     simulated_after: Option<u64>,
+    /// The simulation leaves out the relayer's balance after it.
+    simulated_without_balance: bool,
     /// `sendTransaction`'s JSON-RPC error instead of accepting.
     send_error: Option<Value>,
     /// What the relayer loses in a landed transaction.
@@ -323,6 +419,7 @@ impl Default for Sol {
             blockhash_valid: true,
             simulation_error: Value::Null,
             simulated_after: None,
+            simulated_without_balance: false,
             send_error: None,
             spend: 0,
             sent: Vec::new(),
@@ -343,29 +440,49 @@ async fn solana_rpc(state: Arc<Mutex<Sol>>) -> String {
                 let ok = |result: Value| json!({ "jsonrpc": "2.0", "id": 1, "result": result });
                 let slot = json!({ "slot": 1 });
                 let answer = match body["method"].as_str().unwrap() {
-                    "getBalance" => ok(json!({ "context": slot, "value": s.relayer_balance })),
+                    "getBalance" => {
+                        assert_eq!(p[1]["commitment"], "processed");
+                        ok(json!({ "context": slot, "value": s.relayer_balance }))
+                    }
                     "isBlockhashValid" => {
                         ok(json!({ "context": slot, "value": s.blockhash_valid }))
                     }
-                    "getAccountInfo" => ok(json!({ "context": slot, "value":
-                        if s.account_exists { json!({ "lamports": RENT, "data": ["", "base64"],
-                            "owner": TOKEN_PROGRAM, "executable": false }) } else { Value::Null } })),
+                    // Mints are listed tokens; the recipient's account is never asked about
+                    // (Honey reserves its rent whether or not it exists).
+                    "getAccountInfo" => {
+                        assert_eq!(p[1]["commitment"], "processed");
+                        let mint = [8u8; 32];
+                        let value = if p[0] == bs58::encode(mint).into_string()
+                            || p[0] == bs58::encode([9u8; 32]).into_string()
+                        {
+                            json!({ "lamports": 1_461_600,
+                                    "data": [STANDARD.encode([0u8; 82]), "base64"],
+                                    "owner": TOKEN_PROGRAM, "executable": false })
+                        } else {
+                            panic!("asked about {}", p[0])
+                        };
+                        ok(json!({ "context": slot, "value": value }))
+                    }
                     "getMinimumBalanceForRentExemption" => {
                         assert_eq!(p[0], 165);
                         ok(json!(RENT))
                     }
                     "getFeeForMessage" => ok(json!({ "context": slot, "value": 10_000 })),
                     "simulateTransaction" => {
-                        let after = s
-                            .simulated_after
-                            .unwrap_or(s.relayer_balance - s.spend);
+                        let after = s.simulated_after.unwrap_or(s.relayer_balance - s.spend);
+                        let accounts = if s.simulated_without_balance {
+                            json!([null])
+                        } else {
+                            json!([{ "lamports": after }])
+                        };
                         ok(json!({ "context": slot, "value": {
-                            "err": s.simulation_error, "logs": [],
-                            "accounts": [{ "lamports": after }] } }))
+                            "err": s.simulation_error, "logs": [], "accounts": accounts } }))
                     }
                     "sendTransaction" => {
                         if let Some(error) = s.send_error.clone() {
-                            return axum::Json(json!({ "jsonrpc": "2.0", "id": 1, "error": error }));
+                            return axum::Json(
+                                json!({ "jsonrpc": "2.0", "id": 1, "error": error }),
+                            );
                         }
                         let wire = STANDARD.decode(p[0].as_str().unwrap()).unwrap();
                         let id = bs58::encode(&wire[1..65]).into_string();
@@ -467,7 +584,7 @@ async fn solana_fee_payer_pays_only_for_checked_payments() {
     let (user_pair, _) = solana_key(5);
     let user: [u8; 32] = user_pair.public_key().as_ref().try_into().unwrap();
     // A USDC payment opening the recipient's token account, as the app builds it.
-    let usdc = |dest: [u8; 32]| {
+    let usdc_of = |dest: [u8; 32], mint: [u8; 32]| {
         message(
             &[
                 fee_payer,
@@ -475,7 +592,7 @@ async fn solana_fee_payer_pays_only_for_checked_payments() {
                 [6; 32],
                 dest,
                 [5; 32],
-                [8; 32],
+                mint,
                 pk(SYSTEM_PROGRAM),
                 pk(TOKEN_PROGRAM),
                 pk(ATA_PROGRAM),
@@ -485,6 +602,15 @@ async fn solana_fee_payer_pays_only_for_checked_payments() {
                 (8, vec![0, 3, 4, 5, 6, 7], vec![1]),
                 (7, vec![2, 5, 3, 1], transfer_checked(5_000_000)),
             ],
+        )
+    };
+    let usdc = |dest: [u8; 32]| usdc_of(dest, [8; 32]);
+    // The same payment into an account that exists: the app leaves the creation out.
+    let usdc_existing = |dest: [u8; 32]| {
+        message(
+            &[fee_payer, user, [6; 32], dest, [8; 32], pk(TOKEN_PROGRAM)],
+            2,
+            &[(5, vec![2, 4, 3, 1], transfer_checked(5_000_000))],
         )
     };
     let sponsor = "/gas/solana/sponsor";
@@ -574,7 +700,9 @@ async fn solana_fee_payer_pays_only_for_checked_payments() {
     .await;
     assert_eq!(status, StatusCode::PAYMENT_REQUIRED, "{body}");
     assert_eq!(body["error"]["code"], "gas_not_covered");
-    // Into an account that already exists: no rent, so it's paid.
+    // The close-then-recreate rent drain: an account that exists right now can be
+    // closed (its rent back to its owner) before the payment lands, so naming Honey as
+    // its funder still reserves the rent and takes a new-account slot. Refused here.
     {
         let mut s = state.lock().unwrap();
         s.account_exists = true;
@@ -588,8 +716,43 @@ async fn solana_fee_payer_pays_only_for_checked_payments() {
         Some(wire(&user_pair, &usdc([17; 32]))),
     )
     .await;
+    assert_eq!(status, StatusCode::PAYMENT_REQUIRED, "{body}");
+    assert_eq!(state.lock().unwrap().sent.len(), 1);
+    // Without the creation (what the app sends for an existing account): paid.
+    let (status, body) = call(
+        &app,
+        "POST",
+        sponsor,
+        Some(&alice),
+        Some(wire(&user_pair, &usdc_existing([17; 32]))),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(state.lock().unwrap().sent.len(), 2);
+    // A token 1Click doesn't list: Honey opens no account for it.
+    let (status, body) = call(
+        &app,
+        "POST",
+        sponsor,
+        Some(&carol),
+        Some(wire(&user_pair, &usdc_of([19; 32], [9; 32]))),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    // Named as funder of an account that existed when it ran: Honey paid no rent (the
+    // fee payer's real loss says so), so the new-account slot comes back.
+    let (status, body) = call(
+        &app,
+        "POST",
+        sponsor,
+        Some(&carol),
+        Some(wire(&user_pair, &usdc([21; 32]))),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(state.lock().unwrap().sent.len(), 3);
+    let (_, view) = call(&app, "GET", "/gas/allowance", Some(&carol), None).await;
+    assert_eq!(view["chains"][0]["newAccountsLeft"], 1);
 
     // Never sent: SOL from the relayer, a forged user signature, a stale blockhash, a
     // simulation that fails or moves more of the relayer's SOL than the fee.
@@ -663,6 +826,18 @@ async fn solana_fee_payer_pays_only_for_checked_payments() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     state.lock().unwrap().simulated_after = None;
+    // A simulation that doesn't say what it left the relayer with: refused.
+    state.lock().unwrap().simulated_without_balance = true;
+    let (status, _) = call(
+        &app,
+        "POST",
+        sponsor,
+        Some(&bob),
+        Some(wire(&user_pair, &pay)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    state.lock().unwrap().simulated_without_balance = false;
     // The node refusing it: the reservation is given back.
     state.lock().unwrap().send_error = Some(json!({ "code": -32002, "message": "preflight" }));
     let (status, _) = call(
@@ -675,7 +850,7 @@ async fn solana_fee_payer_pays_only_for_checked_payments() {
     .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     state.lock().unwrap().send_error = None;
-    assert_eq!(state.lock().unwrap().sent.len(), 2);
+    assert_eq!(state.lock().unwrap().sent.len(), 3);
     let bobs: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM gas_charges c JOIN wallet_memberships w ON w.user_id = c.user_id
          WHERE w.address = $1",
@@ -711,9 +886,13 @@ async fn solana_fee_payer_pays_only_for_checked_payments() {
         &db.pool,
         carol_id,
         "near",
-        999_000,
+        // $0.0015 of it went on the payment above.
+        997_500,
         &Reservation::default(),
-        &GasLimits::default(),
+        &GasLimits {
+            user_chain_daily_default: USD,
+            ..GasLimits::default()
+        },
     )
     .await
     .unwrap();
@@ -727,7 +906,7 @@ async fn solana_fee_payer_pays_only_for_checked_payments() {
     )
     .await;
     assert_eq!(status, StatusCode::PAYMENT_REQUIRED, "{body}");
-    assert_eq!(state.lock().unwrap().sent.len(), 2);
+    assert_eq!(state.lock().unwrap().sent.len(), 3);
 
     // Switched off: 402 for everyone.
     let off = routes::gas::router_with(

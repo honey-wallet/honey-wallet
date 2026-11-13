@@ -204,6 +204,12 @@ export default function SendAmountSheet() {
       setPage('sent');
     } catch (error) {
       showErrorToast(error instanceof Error ? error.message : 'Send failed');
+      // Signed or handed to Honey: its outcome may be unknown, so never offer this plan
+      // again. Back to the amount, where Review reads the chain afresh.
+      if (plan.spent?.()) {
+        setPlan(null);
+        setPage('amount');
+      }
     } finally {
       setBusy(false);
     }
@@ -493,6 +499,7 @@ export default function SendAmountSheet() {
                         value={<Text style={styles.rowAddress}>{plan.to}</Text>}
                       />
                       <StatRow label="Network cost" value={plan.fee} />
+                      {plan.setup ? <StatRow label="Setup" value={plan.setup} /> : null}
                     </>
                   ) : (
                     <StatRow label="Network cost" value="<$0.01" />

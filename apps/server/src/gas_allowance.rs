@@ -8,6 +8,16 @@
 //! transaction really cost, or [`release`] when nothing was spent (the network refused
 //! it before running anything). A reservation whose outcome is unknown stays counted.
 //!
+//! Each person also has a daily cap per chain (`GAS_USER_DAILY_USD_<CHAIN>`, $0.10 by
+//! default), so one person can't use up a chain's daily total and lock everyone else out.
+//! The part of a charge capped by its own rule (Solana rent, counted in `new_accounts`; a
+//! group DAO's NEAR deposit, one per group) is left out of that daily cap.
+//!
+//! A reservation may also name what it can move out of the relayer in native units: it is
+//! then refused unless the relayer's balance, less its floor, covers it on top of every
+//! reservation on that chain still pending (so racing requests can't take a relayer
+//! below its floor).
+//!
 //! Decisions are made one at a time under a PostgreSQL advisory lock, so neither a
 //! person's allowance nor a chain's daily total can be overshot by racing requests.
 //! Native gas is priced with 1Click's live prices ([`usd_micros`]); without a price the
@@ -39,6 +49,11 @@ pub const DEFAULT_DAILY: [(&str, i64); 5] = [
     ("arbitrum", USD / 2),
     ("polygon", USD / 2),
 ];
+/// `GAS_USER_DAILY_USD_<CHAIN>` default: $0.10 per person per chain per 24 hours.
+pub const DEFAULT_USER_CHAIN_DAILY: i64 = USD / 10;
+/// How long a pending reservation still counts against a relayer's balance: past this
+/// its transaction has landed (and the balance shows it) or can no longer land.
+pub const PENDING_NATIVE_MINUTES: i64 = 15;
 /// `GAS_SOLANA_USER_NEW_ACCOUNTS_30D` default: Honey pays the rent of one new Solana
 /// token account per person per 30 days (rent, ~0.002 SOL, is the costliest part).
 pub const DEFAULT_NEW_ACCOUNTS_30D: i64 = 1;
@@ -65,6 +80,10 @@ pub struct GasLimits {
     pub chain_daily_default: i64,
     /// New accounts (rent) Honey pays per person per chain per 30 days.
     pub new_accounts_30d: i64,
+    /// Per person per chain, rolling 24 hours, by chain name (exempt parts left out).
+    pub user_chain_daily: HashMap<String, i64>,
+    /// For chains without their own entry.
+    pub user_chain_daily_default: i64,
 }
 
 impl Default for GasLimits {
@@ -77,13 +96,16 @@ impl Default for GasLimits {
                 .collect(),
             chain_daily_default: DEFAULT_CHAIN_DAILY,
             new_accounts_30d: DEFAULT_NEW_ACCOUNTS_30D,
+            user_chain_daily: HashMap::new(),
+            user_chain_daily_default: DEFAULT_USER_CHAIN_DAILY,
         }
     }
 }
 
 impl GasLimits {
-    /// `GAS_USER_30D_USD`, `GAS_DAILY_USD_<CHAIN>` (e.g. `GAS_DAILY_USD_SOLANA`) and
-    /// `GAS_SOLANA_USER_NEW_ACCOUNTS_30D`. A malformed value logs and keeps the default.
+    /// `GAS_USER_30D_USD`, `GAS_DAILY_USD_<CHAIN>` (e.g. `GAS_DAILY_USD_SOLANA`),
+    /// `GAS_USER_DAILY_USD_<CHAIN>` and `GAS_SOLANA_USER_NEW_ACCOUNTS_30D`. A malformed
+    /// value logs and keeps the default.
     pub fn from_env() -> Self {
         let defaults = Self::default();
         let usd = |name: &str, default: i64| match std::env::var(name) {
@@ -94,16 +116,22 @@ impl GasLimits {
             _ => default,
         };
         let mut chain_daily = defaults.chain_daily.clone();
+        let mut user_chain_daily = defaults.user_chain_daily.clone();
         for (name, value) in std::env::vars() {
-            if let Some(chain) = name.strip_prefix("GAS_DAILY_USD_") {
-                let chain = chain.to_ascii_lowercase();
-                if valid_chain(&chain) && !value.trim().is_empty() {
-                    match parse_usd(&value) {
-                        Some(limit) => {
-                            chain_daily.insert(chain, limit);
-                        }
-                        None => tracing::error!(name, "not a dollar amount; using the default"),
+            let (map, chain) = if let Some(chain) = name.strip_prefix("GAS_DAILY_USD_") {
+                (&mut chain_daily, chain)
+            } else if let Some(chain) = name.strip_prefix("GAS_USER_DAILY_USD_") {
+                (&mut user_chain_daily, chain)
+            } else {
+                continue;
+            };
+            let chain = chain.to_ascii_lowercase();
+            if valid_chain(&chain) && !value.trim().is_empty() {
+                match parse_usd(&value) {
+                    Some(limit) => {
+                        map.insert(chain, limit);
                     }
+                    None => tracing::error!(name, "not a dollar amount; using the default"),
                 }
             }
         }
@@ -117,7 +145,16 @@ impl GasLimits {
             chain_daily,
             chain_daily_default: defaults.chain_daily_default,
             new_accounts_30d,
+            user_chain_daily,
+            user_chain_daily_default: defaults.user_chain_daily_default,
         }
+    }
+
+    pub fn user_chain_daily(&self, chain: &str) -> i64 {
+        self.user_chain_daily
+            .get(chain)
+            .copied()
+            .unwrap_or(self.user_chain_daily_default)
     }
 
     pub fn chain_daily(&self, chain: &str) -> i64 {
@@ -165,6 +202,11 @@ pub struct Reservation<'a> {
     /// The transaction it pays for, when known up front: a second reservation for the
     /// same transaction is refused (409).
     pub reference: Option<&'a str>,
+    /// The part of the charge capped by its own rule (rent, a DAO deposit), left out of
+    /// the per-person per-chain daily cap. At most the charge.
+    pub exempt_usd_micros: i64,
+    /// What it may move out of the relayer, checked against the relayer's room.
+    pub native: Option<NativeBudget>,
 }
 
 impl Default for Reservation<'_> {
@@ -173,8 +215,19 @@ impl Default for Reservation<'_> {
             kind: "sponsored",
             new_accounts: 0,
             reference: None,
+            exempt_usd_micros: 0,
+            native: None,
         }
     }
+}
+
+/// A reservation's native outflow and the relayer's room for it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NativeBudget {
+    /// Most the transaction can move out of the relayer (lamports, yoctoNEAR, wei).
+    pub amount: u128,
+    /// The relayer's balance less its floor, read just before reserving.
+    pub room: u128,
 }
 
 /// Reserves `usd_micros` of Honey's free gas for `user_id` on `chain`: refused with
@@ -209,7 +262,10 @@ pub async fn reserve_with(
     if !valid_chain(chain) {
         return Err(AppError::Internal(anyhow::anyhow!("invalid gas chain")));
     }
-    if usd_micros <= 0 || !(0..=16).contains(&what.new_accounts) {
+    if usd_micros <= 0
+        || !(0..=16).contains(&what.new_accounts)
+        || !(0..=usd_micros).contains(&what.exempt_usd_micros)
+    {
         return Err(AppError::GasNotCovered);
     }
     let mut tx = pool.begin().await.map_err(unavailable)?;
@@ -232,12 +288,15 @@ pub async fn reserve_with(
             ));
         }
     }
-    let (mine, today, accounts): (i64, i64, i64) = sqlx::query_as(
+    let (mine, today, accounts, mine_here_today): (i64, i64, i64, i64) = sqlx::query_as(
         "SELECT
             COALESCE(sum(usd_micros) FILTER (WHERE user_id = $1), 0)::bigint,
             COALESCE(sum(usd_micros) FILTER (
                 WHERE chain = $2 AND created_at > clock_timestamp() - interval '1 day'), 0)::bigint,
-            COALESCE(sum(new_accounts) FILTER (WHERE user_id = $1 AND chain = $2), 0)::bigint
+            COALESCE(sum(new_accounts) FILTER (WHERE user_id = $1 AND chain = $2), 0)::bigint,
+            COALESCE(sum(GREATEST(usd_micros - exempt_usd_micros, 0)) FILTER (
+                WHERE user_id = $1 AND chain = $2
+                  AND created_at > clock_timestamp() - interval '1 day'), 0)::bigint
          FROM gas_charges
          WHERE created_at > clock_timestamp() - interval '30 days'",
     )
@@ -246,17 +305,38 @@ pub async fn reserve_with(
     .fetch_one(&mut *tx)
     .await
     .map_err(unavailable)?;
+    let capped_here = usd_micros - what.exempt_usd_micros;
     if mine.saturating_add(usd_micros) > limits.user_30d
         || today.saturating_add(usd_micros) > limits.chain_daily(chain)
+        || mine_here_today.saturating_add(capped_here) > limits.user_chain_daily(chain)
         || (what.new_accounts > 0
             && accounts.saturating_add(what.new_accounts) > limits.new_accounts_30d)
     {
         return Err(AppError::GasNotCovered);
     }
+    if let Some(native) = what.native {
+        let pending: String = sqlx::query_scalar(
+            "SELECT COALESCE(sum(native_atomic), 0)::text FROM gas_charges
+             WHERE chain = $1 AND state = 'pending'
+               AND created_at > clock_timestamp() - make_interval(mins => $2::int)",
+        )
+        .bind(chain)
+        .bind(PENDING_NATIVE_MINUTES as i32)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(unavailable)?;
+        let pending: u128 = pending.parse().map_err(|_| AppError::Busy)?;
+        if pending.saturating_add(native.amount) > native.room {
+            tracing::warn!(chain, "relayer at its floor once pending reservations land");
+            return Err(AppError::GasNotCovered);
+        }
+    }
     let id = Uuid::new_v4();
     let inserted = sqlx::query(
-        "INSERT INTO gas_charges (id, user_id, chain, usd_micros, kind, new_accounts, reference)
-         VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT DO NOTHING",
+        "INSERT INTO gas_charges
+           (id, user_id, chain, usd_micros, kind, new_accounts, reference, exempt_usd_micros,
+            native_atomic)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::numeric) ON CONFLICT DO NOTHING",
     )
     .bind(id)
     .bind(user_id)
@@ -265,6 +345,8 @@ pub async fn reserve_with(
     .bind(what.kind)
     .bind(what.new_accounts as i32)
     .bind(what.reference)
+    .bind(what.exempt_usd_micros)
+    .bind(what.native.map(|n| n.amount.to_string()))
     .execute(&mut *tx)
     .await
     .map_err(unavailable)?
@@ -283,18 +365,48 @@ pub async fn reserve_with(
     })
 }
 
-/// Records what a sponsored transaction really cost (its outcome is known).
+/// Records what a sponsored transaction really cost (its outcome is known). Whatever it
+/// cost is what counts from now on, in the person's allowance and the chain's daily total
+/// (both sum the ledger), even when it cost more than was reserved: that is logged loudly,
+/// since a reservation is meant to be the worst case.
 pub async fn settle(
     pool: &PgPool,
     charge: &GasCharge,
     actual_usd_micros: i64,
 ) -> Result<(), AppError> {
+    settle_with(pool, charge, actual_usd_micros, None).await
+}
+
+/// [`settle`], also correcting how many new accounts it paid rent for (on-chain truth:
+/// a token account that already existed when it ran cost no rent) and dropping the
+/// exempt part with it.
+pub async fn settle_with(
+    pool: &PgPool,
+    charge: &GasCharge,
+    actual_usd_micros: i64,
+    new_accounts: Option<i64>,
+) -> Result<(), AppError> {
+    let actual = actual_usd_micros.max(0);
+    if actual > charge.usd_micros {
+        tracing::error!(
+            chain = charge.chain,
+            reserved = charge.usd_micros,
+            actual,
+            "gas charge settled above its reservation; recorded at what it cost"
+        );
+    }
+    let new_accounts = new_accounts.map(|n| n.clamp(0, 16) as i32);
     sqlx::query(
-        "UPDATE gas_charges SET usd_micros = $2, state = 'settled', settled_at = clock_timestamp()
+        "UPDATE gas_charges
+         SET usd_micros = $2, state = 'settled', settled_at = clock_timestamp(),
+             new_accounts = COALESCE($3, new_accounts),
+             exempt_usd_micros = CASE WHEN $3 = 0 THEN 0
+                                      ELSE LEAST(exempt_usd_micros, $2) END
          WHERE id = $1",
     )
     .bind(charge.id)
-    .bind(actual_usd_micros.max(0))
+    .bind(actual)
+    .bind(new_accounts)
     .execute(pool)
     .await
     .map_err(unavailable)?;
@@ -335,6 +447,8 @@ pub struct Remaining {
     pub chains_today: HashMap<String, i64>,
     /// New accounts Honey still pays rent for, per asked chain.
     pub new_accounts_left: HashMap<String, i64>,
+    /// Room left in this person's own daily cap on each asked chain.
+    pub user_chains_today: HashMap<String, i64>,
 }
 
 pub async fn remaining(
@@ -353,12 +467,16 @@ pub async fn remaining(
     .map_err(unavailable)?;
     let mut chains_today = HashMap::new();
     let mut new_accounts_left = HashMap::new();
+    let mut user_chains_today = HashMap::new();
     for chain in chains {
-        let (today, accounts): (i64, i64) = sqlx::query_as(
+        let (today, accounts, mine_today): (i64, i64, i64) = sqlx::query_as(
             "SELECT
                 COALESCE(sum(usd_micros) FILTER (
                     WHERE created_at > clock_timestamp() - interval '1 day'), 0)::bigint,
-                COALESCE(sum(new_accounts) FILTER (WHERE user_id = $2), 0)::bigint
+                COALESCE(sum(new_accounts) FILTER (WHERE user_id = $2), 0)::bigint,
+                COALESCE(sum(GREATEST(usd_micros - exempt_usd_micros, 0)) FILTER (
+                    WHERE user_id = $2
+                      AND created_at > clock_timestamp() - interval '1 day'), 0)::bigint
              FROM gas_charges
              WHERE chain = $1 AND created_at > clock_timestamp() - interval '30 days'",
         )
@@ -375,12 +493,17 @@ pub async fn remaining(
             chain.to_string(),
             (limits.new_accounts_30d - accounts).max(0),
         );
+        user_chains_today.insert(
+            chain.to_string(),
+            (limits.user_chain_daily(chain) - mine_today).max(0),
+        );
     }
     Ok(Remaining {
         limit: limits.user_30d,
         remaining: (limits.user_30d - mine).max(0),
         chains_today,
         new_accounts_left,
+        user_chains_today,
     })
 }
 
@@ -522,6 +645,8 @@ mod tests {
         assert_eq!(limits.chain_daily("polygon"), USD / 2);
         assert_eq!(limits.chain_daily("somewhere_new"), USD / 2);
         assert_eq!(limits.new_accounts_30d, 1);
+        assert_eq!(limits.user_chain_daily("base"), USD / 10);
+        assert_eq!(limits.user_chain_daily("solana"), USD / 10);
         assert!(valid_chain("solana") && valid_chain("near") && !valid_chain("Base!"));
     }
 }

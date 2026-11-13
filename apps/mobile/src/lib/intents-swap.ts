@@ -690,7 +690,9 @@ export async function quoteSwap(
     { refundTo, slippageBps: SWAP_SLIPPAGE_BPS, usdIn, now: d.now() },
   );
   const usdOutMin = usdOf(BigInt(leg.minAmountOut), destination.decimals, destination.price);
-  if (usdOutMin !== null && usdIn > 0 && usdOutMin < usdIn * MIN_VALUE_KEPT)
+  // Without a price for what's bought, the value check below can't run: no quote.
+  if (usdOutMin === null) throw new Error(`Couldn’t price ${buy.symbol} right now. Try again.`);
+  if (usdIn > 0 && usdOutMin < usdIn * MIN_VALUE_KEPT)
     throw new Error(
       'Fees would take more than half of this swap. Try a larger amount or another network.',
     );

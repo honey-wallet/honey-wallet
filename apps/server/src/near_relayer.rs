@@ -1,11 +1,14 @@
-//! Honey's NEAR relayer: tops up a group member's implicit account with a little NEAR
-//! so Honey pays their network fees (`POST /jar-dao/sponsor`), and wraps a member's
-//! NEP-366 `SignedDelegateAction` in a transaction it pays for (`POST /jar-dao/relay`).
-//! Off unless `RELAYER_ACCOUNT_ID` and `RELAYER_PRIVATE_KEY` are set.
+//! Honey's NEAR relayer: wraps a member's NEP-366 `SignedDelegateAction` in a
+//! transaction it pays for (`POST /jar-dao/relay`, `POST /gas/near/relay`), creates a
+//! group's DAO itself (`POST /jar-dao/create-dao`: the factory call with Honey's policy,
+//! deposit and gas paid by the relayer), and activates a member's implicit account that
+//! isn't on chain yet with one yoctoNEAR (`POST /jar-dao/sponsor`). It never sends
+//! anyone NEAR they could spend. Off unless `RELAYER_ACCOUNT_ID` and
+//! `RELAYER_PRIVATE_KEY` are set.
 //!
-//! It signs exactly two kinds of transaction, both borsh `Transaction` (V0) with one
-//! action: a `Transfer`, or a `Delegate` carrying the member's signed delegate action
-//! unchanged. Ed25519 is ring's (no extra crates). Byte layouts are pinned against
+//! It signs exactly three kinds of transaction, all borsh `Transaction` (V0) with one
+//! action: a `Transfer`, a `FunctionCall` (only the DAO factory's `create`, built by the
+//! server), or a `Delegate` carrying the member's signed delegate action unchanged. Ed25519 is ring's (no extra crates). Byte layouts are pinned against
 //! near-api-js 7.3.1 output (`packages/keyring/src/fixtures/near.json` and
 //! `near-delegate.json`). The key is never logged or serialized. Nonces are reserved
 //! under a lock (two requests never race for one), and the lock is released before
@@ -22,10 +25,27 @@ use zeroize::Zeroizing;
 
 use crate::{error::AppError, jar_dao::is_account, json_rpc::RpcError};
 
-/// 0.03 NEAR: enough gas for a member's joins, deposit and votes.
-pub const MEMBER_TOP_UP: u128 = 3 * 10u128.pow(22);
-/// 0.12 NEAR: the creator also pays the DAO's 0.1 NEAR storage deposit.
-pub const CREATOR_TOP_UP: u128 = 12 * 10u128.pow(22);
+/// One yoctoNEAR: what creates a member's implicit account on chain (a zero-balance
+/// account, NEP-448) so their relayed calls can run. Nothing anyone could spend.
+pub const ACTIVATION: u128 = 1;
+const TGAS: u64 = 1_000_000_000_000;
+/// NEAR's minimum gas price, in yoctoNEAR per gas.
+pub const MIN_GAS_PRICE: u128 = 100_000_000;
+/// Gas the relayer buys on top of what a relayed call attaches: the Delegate action's own
+/// send and execution fees and each inner action's base fees (well under 1 Tgas each),
+/// counted generously.
+pub const CONVERSION_GAS: u64 = 5 * TGAS;
+
+/// The most a relay of `attached` gas (plus `deposits`) can cost the relayer, in
+/// yoctoNEAR: the attached gas and its conversion fees at the minimum gas price, with 25%
+/// headroom for a gas price above the minimum.
+pub fn relay_reserve(attached: u64, deposits: u128) -> u128 {
+    u128::from(attached.saturating_add(CONVERSION_GAS))
+        .saturating_mul(MIN_GAS_PRICE)
+        .saturating_mul(5)
+        / 4
+        + deposits
+}
 
 /// A NEAR implicit account: 64 lowercase hex characters (an Ed25519 public key).
 pub fn is_implicit(account: &str) -> bool {
@@ -103,6 +123,24 @@ impl RelayerKey {
         ))
     }
 
+    /// A function call from the relayer itself.
+    pub fn sign_function_call(
+        &self,
+        nonce: u64,
+        receiver: &str,
+        block_hash: &[u8; 32],
+        call: &DelegateCall,
+    ) -> (String, String) {
+        self.sign(&encode_function_call(
+            &self.account,
+            &self.public_key(),
+            nonce,
+            receiver,
+            block_hash,
+            call,
+        ))
+    }
+
     /// A transaction to the delegate's sender carrying its signed delegate action.
     pub fn sign_delegate(
         &self,
@@ -165,6 +203,25 @@ pub fn encode_transfer(
     let mut out = encode_header(signer, public_key, nonce, receiver, block_hash);
     out.push(3); // Action::Transfer
     out.extend_from_slice(&amount.to_le_bytes());
+    out
+}
+
+/// Borsh `Transaction` V0 with one `FunctionCall` action.
+pub fn encode_function_call(
+    signer: &str,
+    public_key: &[u8; 32],
+    nonce: u64,
+    receiver: &str,
+    block_hash: &[u8; 32],
+    call: &DelegateCall,
+) -> Vec<u8> {
+    let mut out = encode_header(signer, public_key, nonce, receiver, block_hash);
+    out.push(2); // Action::FunctionCall
+    borsh_string(&mut out, &call.method);
+    out.extend_from_slice(&(call.args.len() as u32).to_le_bytes());
+    out.extend_from_slice(&call.args);
+    out.extend_from_slice(&call.gas.to_le_bytes());
+    out.extend_from_slice(&call.deposit.to_le_bytes());
     out
 }
 
@@ -507,6 +564,40 @@ impl Relayer {
         Ok(hash)
     }
 
+    /// Calls `receiver` from the relayer itself (the DAO factory's `create`), waits for
+    /// finality and reports what it burnt. Errors as in `transfer`.
+    pub async fn call(&self, receiver: &str, call: &DelegateCall) -> Result<Relayed, SendError> {
+        let hash = self
+            .submit(|nonce, block_hash, _| {
+                Ok(self
+                    .key
+                    .sign_function_call(nonce, receiver, block_hash, call))
+            })
+            .await?;
+        let outcome = self.outcome(&hash, "FINAL").await?;
+        Ok(Relayed {
+            succeeded: executed_ok(&outcome),
+            burnt: tokens_burnt(&outcome),
+            hash,
+        })
+    }
+
+    /// Whether `account` exists on chain.
+    pub async fn exists(&self, account: &str) -> Result<bool, AppError> {
+        let result = self
+            .rpc(
+                "query",
+                json!({ "request_type": "view_account", "finality": "final", "account_id": account }),
+            )
+            .await;
+        match result {
+            Ok(view) if view.get("amount").is_some() => Ok(true),
+            Ok(_) => Err(AppError::Busy),
+            Err(error) if error.is_unknown_account() => Ok(false),
+            Err(_) => Err(AppError::Busy),
+        }
+    }
+
     /// Wraps a member's signed delegate action in a relayer-paid transaction, sends
     /// it and waits for finality. Refuses one that is already expired or expires too
     /// far ahead. Errors as in `transfer`.
@@ -826,6 +917,53 @@ mod tests {
         });
         assert_eq!(tokens_burnt(&outcome), 981_600_001_046_000_000_000);
         assert_eq!(tokens_burnt(&json!({})), 0);
+    }
+
+    /// A relayer function call encodes like near-api-js's FunctionCall action (variant 2,
+    /// method, args, gas, deposit) after the same header as a transfer.
+    #[test]
+    fn function_calls_encode_after_the_transfer_header() {
+        let key = test_key();
+        let block = [7u8; 32];
+        let call = DelegateCall {
+            method: "create".into(),
+            args: b"{}".to_vec(),
+            gas: 150 * TGAS,
+            deposit: 10u128.pow(23),
+        };
+        let tx = encode_function_call(
+            TEST_ACCOUNT,
+            &key.public_key(),
+            9,
+            "sputnik-dao.near",
+            &block,
+            &call,
+        );
+        let header = encode_header(
+            TEST_ACCOUNT,
+            &key.public_key(),
+            9,
+            "sputnik-dao.near",
+            &block,
+        );
+        assert_eq!(&tx[..header.len()], header.as_slice());
+        let mut action = vec![2u8];
+        action.extend_from_slice(&6u32.to_le_bytes());
+        action.extend_from_slice(b"create");
+        action.extend_from_slice(&2u32.to_le_bytes());
+        action.extend_from_slice(b"{}");
+        action.extend_from_slice(&(150 * TGAS).to_le_bytes());
+        action.extend_from_slice(&10u128.pow(23).to_le_bytes());
+        assert_eq!(&tx[header.len()..], action.as_slice());
+    }
+
+    #[test]
+    fn relay_reservations_cover_conversion_fees_and_headroom() {
+        // 300 Tgas at the minimum price is 0.03 NEAR; the reservation covers more.
+        let reserve = relay_reserve(300 * TGAS, 0);
+        assert!(reserve > 300 * u128::from(TGAS) * MIN_GAS_PRICE);
+        assert_eq!(reserve, 305 * u128::from(TGAS) * MIN_GAS_PRICE * 5 / 4);
+        assert_eq!(relay_reserve(0, 7), relay_reserve(0, 0) + 7);
     }
 
     #[test]

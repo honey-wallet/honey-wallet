@@ -68,6 +68,8 @@ import type {
   JarBuyRequest,
   JarBuyStatus,
   JarDaoBuyRequest,
+  JarDaoCreateDaoRequest,
+  JarDaoCreateDaoResult,
   JarDaoDepositCheck,
   JarDaoRelayRequest,
   JarDaoRelayResult,
@@ -358,8 +360,8 @@ export function createApiClient({ baseUrl, fetch: fetchImpl = fetch }: ApiClient
     jarDaoBuyQuote: (token: string, input: JarDaoBuyRequest, init?: RequestInit) =>
       request<JarBuyQuote>('/api/v1/jar-dao/buy-quote', authorizedJson(token, input, init)),
     /**
-     * Asks Honey to pay a group member's NEAR network fees (a small top-up to the NEAR
-     * account they joined the group with, once per account; members who accepted only).
+     * Makes sure a group member's NEAR account is on chain so Honey can relay their calls
+     * (one yoctoNEAR to the account they joined the group with, once per account).
      * Null while Honey isn't paying fees (503: off, past its budgets, or the server wants
      * an Apple or Google sign-in): the member pays their own. 409 when already paid.
      */
@@ -376,6 +378,29 @@ export function createApiClient({ baseUrl, fetch: fetchImpl = fetch }: ApiClient
         );
       } catch (error) {
         if (error instanceof ApiError && error.status === 503) return null;
+        throw error;
+      }
+    },
+    /**
+     * Creator: asks Honey's relayer to create the group's DAO (deposit and gas paid by
+     * Honey) and record it. Null only on 503 `sponsor_off` (Honey isn't paying, decided
+     * before anything was sent): the creator creates it themselves. Anything else
+     * throws, since a creation may already be on its way.
+     */
+    jarDaoCreateDao: async (token: string, input: JarDaoCreateDaoRequest, init?: RequestInit) => {
+      try {
+        return await request<JarDaoCreateDaoResult>(
+          '/api/v1/jar-dao/create-dao',
+          authorizedJson(
+            token,
+            { groupId: input.groupId, nearAccount: input.nearAccount },
+            init,
+            accountTokenHeader(input.accountToken),
+          ),
+        );
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 503 && error.code === 'sponsor_off')
+          return null;
         throw error;
       }
     },

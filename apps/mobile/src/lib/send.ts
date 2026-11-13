@@ -27,7 +27,14 @@ import {
 import { isAddress } from 'viem';
 import { confirmOwner } from '@/lib/auth';
 import { SPONSORED_FEE, sendSponsored, sponsorEvm } from '@/lib/evm-gas';
-import { covers, type FreeGasDeps, freeGas, refusedBeforeSigning } from '@/lib/gas';
+import { assertNoSponsoredInFlight } from '@/lib/evm-in-flight';
+import {
+  covers,
+  type FreeGasDeps,
+  freeGas,
+  refusedBeforeSigning,
+  waitForBlockhashExpiry,
+} from '@/lib/gas';
 import {
   ftTransferTx,
   prepare,
@@ -76,8 +83,29 @@ export type SendPlan = Readonly<{
   note?: string;
   /** Honey pays the network fee (`fee` then reads "Free · paid by Honey"). */
   sponsored?: boolean;
+  /** A review line for Honey's first free-gas payment on this chain (its 7702 setup). */
+  setup?: string;
+  /**
+   * Single use: true once `execute` got past the prompt (signed, or handed to Honey).
+   * Its outcome may be unknown, so a retry needs a fresh review, never this plan again.
+   */
+  spent?: () => boolean;
   execute: (isCurrent: () => boolean) => Promise<SendResult>;
 }>;
+
+const USED = 'This send was already used. Check Activity, then review it again.';
+
+/** `spent` and `spend` for one plan: `spend` throws the second time. */
+function singleUse() {
+  let used = false;
+  return {
+    spent: () => used,
+    spend() {
+      if (used) throw new Error(USED);
+      used = true;
+    },
+  };
+}
 
 /** Named mainnet accounts (alice.near) or implicit ones (64 hex); bare words are too easy to mistype. */
 const isNearRecipient = (t: string) =>
@@ -122,6 +150,16 @@ export type SendDeps = {
   sendSponsored: typeof sendSponsored;
   /** Honey's free gas on Solana (fee payer) and NEAR (relayer). */
   freeGas: FreeGasDeps;
+  /**
+   * Asks before the wallet pays a fee Honey said it would pay. Never `confirm`: flows
+   * that confirmed everything up front (jar buys and sells) pass a quiet `confirm`, and
+   * paying yourself after all must still be asked.
+   */
+  confirmFallback: (reason: string) => Promise<boolean>;
+  /** Resolves once a Solana blockhash can no longer land (device RPC); throws if not soon. */
+  waitExpired: typeof waitForBlockhashExpiry;
+  /** Throws while a free-gas EVM batch Honey may still send is outstanding. */
+  inFlight: typeof assertNoSponsoredInFlight;
 };
 
 const evmRpc = (chainId: number) => {
@@ -142,6 +180,9 @@ const defaults: SendDeps = {
   sponsorEvm,
   sendSponsored,
   freeGas,
+  confirmFallback: (reason) => confirmOwner(reason, true),
+  waitExpired: waitForBlockhashExpiry,
+  inFlight: assertNoSponsoredInFlight,
 };
 
 /** Throws unless `wallet` is still the active, key-backed, real wallet. */
@@ -209,6 +250,7 @@ export async function prepareSend(
     });
     if (sponsored) {
       const { sponsorship } = sponsored;
+      const once = singleUse();
       return Object.freeze({
         chain,
         symbol,
@@ -219,10 +261,17 @@ export async function prepareSend(
         feeAmount: 0,
         feeSymbol: coin,
         sponsored: true,
+        setup:
+          sponsorship.plan.authorizationNonce !== null
+            ? `Sets up free gas on ${chain} for this wallet`
+            : undefined,
+        spent: once.spent,
         execute: async (isCurrent) => {
+          if (once.spent()) throw new Error(USED);
           assertWallet(wallet, isCurrent);
           if (!(await d.confirm(`Send ${amount} ${symbol}`))) throw new Error('Send cancelled');
           assertWallet(wallet, isCurrent);
+          once.spend();
           const key = await d.keyOf(wallet.id, 'evm');
           let hash: `0x${string}`;
           try {
@@ -253,6 +302,7 @@ export async function prepareSend(
       throw error;
     });
     const fee = format(plan.feeEstimate, 18);
+    const once = singleUse();
     return Object.freeze({
       chain,
       symbol,
@@ -262,10 +312,15 @@ export async function prepareSend(
       fee: `${fee} ${coin}`,
       feeAmount: Number(fee),
       feeSymbol: coin,
+      spent: once.spent,
       execute: async (isCurrent) => {
+        if (once.spent()) throw new Error(USED);
         assertWallet(wallet, isCurrent);
         if (!(await d.confirm(`Send ${amount} ${symbol}`))) throw new Error('Send cancelled');
         assertWallet(wallet, isCurrent);
+        // A free-gas batch Honey may still send could land as well as this one.
+        await d.inFlight(chainId, from, { rpc });
+        once.spend();
         const key = await d.keyOf(wallet.id, 'evm');
         let signed: `0x${string}`;
         try {
@@ -328,6 +383,7 @@ export async function prepareSend(
     // token account when it's new): you sign once, Honey co-signs and sends.
     const free = await solanaFreeGas(rpc, d, transfer);
     if (free) {
+      const once = singleUse();
       return Object.freeze({
         chain,
         symbol,
@@ -341,10 +397,13 @@ export async function prepareSend(
         note: free.createsRecipientAccount
           ? `Honey also pays to open their ${symbol} account.`
           : undefined,
+        spent: once.spent,
         execute: async (isCurrent) => {
+          if (once.spent()) throw new Error(USED);
           assertWallet(wallet, isCurrent);
           if (!(await d.confirm(`Send ${amount} ${symbol}`))) throw new Error('Send cancelled');
           assertWallet(wallet, isCurrent);
+          once.spend();
           // A fresh blockhash after the prompt: Honey refuses one about to expire.
           const fresh = await prepareSolanaTransfer(rpc, {
             ...transfer,
@@ -366,13 +425,17 @@ export async function prepareSend(
               throw new Error(
                 'This may already have gone through. Check Activity before trying again.',
               );
-            // Honey didn't sign it, so it can never land: you pay this one.
+            // Honey said no before signing. Ask, then wait until the message Honey was
+            // given can't land any more (its blockhash expired) before paying yourself.
             if (
-              !(await d.confirm(
+              !(await d.confirmFallback(
                 `Honey isn’t covering gas right now — you pay this one. Send ${amount} ${symbol}`,
               ))
             )
               throw new Error('Send cancelled');
+            await d.waitExpired(rpc, fresh.lastValidBlockHeight, {
+              landed: { address: from, message: fresh.message },
+            });
             assertWallet(wallet, isCurrent);
             return payYourself(await prepareSolanaTransfer(rpc, transfer));
           }
@@ -390,6 +453,7 @@ export async function prepareSend(
 
     const plan = await prepareSolanaTransfer(rpc, transfer);
     const fee = format(plan.feeLamports, 9);
+    const once = singleUse();
     return Object.freeze({
       chain,
       symbol,
@@ -402,10 +466,13 @@ export async function prepareSend(
       note: plan.createsRecipientAccount
         ? `Includes a one-time fee to open their ${symbol} account.`
         : undefined,
+      spent: once.spent,
       execute: async (isCurrent) => {
+        if (once.spent()) throw new Error(USED);
         assertWallet(wallet, isCurrent);
         if (!(await d.confirm(`Send ${amount} ${symbol}`))) throw new Error('Send cancelled');
         assertWallet(wallet, isCurrent);
+        once.spend();
         return payYourself(plan);
       },
     });
@@ -427,6 +494,7 @@ export async function prepareSend(
       return prepareNearFt(wallet, from, to, units, amount, d, { contract: USDC_NEAR, symbol });
     if (symbol !== 'NEAR') throw new Error(`Sending ${symbol} on NEAR isn’t supported yet`);
     const review = await d.nearClient('mainnet').prepare(from, to, amount);
+    const once = singleUse();
     return Object.freeze({
       chain,
       symbol,
@@ -437,8 +505,10 @@ export async function prepareSend(
       fee: '<0.001 NEAR',
       feeAmount: 0.001,
       feeSymbol: 'NEAR',
+      spent: once.spent,
       execute: async (isCurrent) => {
         assertWallet(wallet, isCurrent);
+        once.spend();
         // sendNear asks for the device lock, re-checks the wallet and the review's age,
         // saves the signed bytes before broadcasting, and reads the final outcome.
         const receipt = await d.sendNear(wallet.id, review, isCurrent);
@@ -566,6 +636,7 @@ async function prepareNearFt(
     account.exists && storage <= MAX_FREE_STORAGE
       ? await d.freeGas.allowance().catch(() => null)
       : null;
+  const once = singleUse();
   if (covers(allowance, 'near', cost, 24)) {
     return Object.freeze({
       chain: 'NEAR' as Chain,
@@ -578,11 +649,14 @@ async function prepareNearFt(
       feeSymbol: 'NEAR',
       sponsored: true,
       note: registered ? undefined : `Honey also pays to register their account for ${symbol}.`,
+      spent: once.spent,
       execute: async (isCurrent) => {
+        if (once.spent()) throw new Error(USED);
         assertWallet(wallet, isCurrent);
         if (!(await d.confirm(`Send ${amount} ${symbol} to ${to}`)))
           throw new Error('Send cancelled');
         assertWallet(wallet, isCurrent);
+        once.spend();
         const delegate = await prepareDelegate(rpc, from, tx.receiverId, tx.actions);
         const relayed = await signNearDelegate(wallet.id, delegate, d.keyOf)
           .then((signed) => d.freeGas.nearRelay(signed))
@@ -596,7 +670,7 @@ async function prepareNearFt(
         // Honey didn't pay (or didn't say). Pay it yourself with the delegate's own
         // nonce: whichever lands first, the other can never land too.
         if (
-          !(await d.confirm(
+          !(await d.confirmFallback(
             `Honey isn’t covering gas right now — you pay this one. Send ${amount} ${symbol} to ${to}`,
           ))
         )
@@ -632,11 +706,14 @@ async function prepareNearFt(
     note: registered
       ? undefined
       : `Their account isn’t set up for ${symbol} yet, so ${nearText(storage)} NEAR registers it first.`,
+    spent: once.spent,
     execute: async (isCurrent) => {
+      if (once.spent()) throw new Error(USED);
       assertWallet(wallet, isCurrent);
       if (!(await d.confirm(`Send ${amount} ${symbol} to ${to}`)))
         throw new Error('Send cancelled');
       assertWallet(wallet, isCurrent);
+      once.spend();
       // Fresh nonce and block hash after the prompt, then sign and wait for finality.
       const prepared = await prepare(rpc, from, tx.receiverId, tx.actions);
       const hash = await d.sendNearCall(rpc, wallet.id, prepared, d.keyOf);

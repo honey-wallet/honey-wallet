@@ -847,7 +847,11 @@ export interface JarBuyRequest {
   intents?: boolean;
 }
 
-/** `POST /api/v1/jar-dao/sponsor`: Honey pays a group member's NEAR network fees. */
+/**
+ * `POST /api/v1/jar-dao/sponsor`: makes a group member's NEAR implicit account exist
+ * (one yoctoNEAR, once per account) so Honey can relay their calls. Honey never sends
+ * a member NEAR they could spend.
+ */
 export interface JarDaoSponsorRequest {
   /** The NEAR implicit account (64 hex characters) the member joined the group with. */
   account: string;
@@ -861,10 +865,32 @@ export interface JarDaoSponsorRequest {
 }
 
 export interface JarDaoSponsorResult {
-  /** `not_needed`: the account already holds enough NEAR (nothing sent). */
+  /** `not_needed`: the account is already on chain (nothing sent). */
   status: 'sent' | 'not_needed';
-  /** yoctoNEAR sent: 0.03 NEAR, or 0.12 NEAR to the creator as the DAO is about to be created. */
+  /** yoctoNEAR sent: "1" (the activation), or "0". */
   amount: string;
+  txHash: string | null;
+}
+
+/**
+ * `POST /api/v1/jar-dao/create-dao`: the group's creator asks Honey's relayer to create
+ * the group's DAO (it pays the 0.1 NEAR deposit and the gas). The server builds the
+ * policy from the group's accepted members and their NEAR accounts with the majority
+ * rule, exactly as the app's own `createGroupDao` would, and records the DAO.
+ */
+export interface JarDaoCreateDaoRequest {
+  groupId: string;
+  /** The creator's NEAR implicit account, when the group doesn't have it yet. */
+  nearAccount?: string;
+  /** As in `JarDaoSponsorRequest`. */
+  accountToken?: string;
+}
+
+export interface JarDaoCreateDaoResult {
+  /** `<name>.sputnik-dao.near`, now the group's DAO. */
+  dao: string;
+  /** `exists`: it was already on chain (an earlier try), checked and recorded. */
+  status: 'created' | 'exists';
   txHash: string | null;
 }
 

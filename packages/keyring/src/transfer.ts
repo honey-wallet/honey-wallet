@@ -300,6 +300,8 @@ export type SolanaTransferPlan = Readonly<{
   createsRecipientAccount: boolean;
   /** Set when the message names Honey's fee payer: what it would pay. */
   sponsored?: { feePayer: string; lamports: bigint };
+  /** The last block height the message's blockhash is valid for, when the node said. */
+  lastValidBlockHeight?: number;
 }>;
 
 /** An SPL token on the classic Token program: its mint and the decimals it must have. */
@@ -358,12 +360,15 @@ export async function prepareSolanaTransfer(
   if (amount <= 0n) throw new Error('Amount must be more than zero');
   const [blockhash, balance] = await Promise.all([
     rpc('getLatestBlockhash', [{ commitment: 'confirmed' }]) as Promise<{
-      value?: { blockhash?: string };
+      value?: { blockhash?: string; lastValidBlockHeight?: number };
     }>,
     rpc('getBalance', [from, { commitment: 'confirmed' }]) as Promise<{ value?: number }>,
   ]);
   const recent = blockhash?.value?.blockhash;
   if (!recent) throw new Error('No recent blockhash');
+  const valid = blockhash?.value?.lastValidBlockHeight;
+  const lastValidBlockHeight =
+    typeof valid === 'number' && Number.isSafeInteger(valid) && valid > 0 ? valid : undefined;
   const lamports = BigInt(balance?.value ?? 0);
   if (!token) {
     const fee = feePayer ? 0n : SOLANA_BASE_FEE;
@@ -387,6 +392,7 @@ export async function prepareSolanaTransfer(
       feeLamports: fee,
       createsRecipientAccount: false,
       sponsored: feePayer ? { feePayer, lamports: networkFee } : undefined,
+      lastValidBlockHeight,
     });
   }
   const { mint, decimals } = token;
@@ -440,6 +446,7 @@ export async function prepareSolanaTransfer(
     feeLamports,
     createsRecipientAccount: creates,
     sponsored: feePayer ? { feePayer, lamports: cost } : undefined,
+    lastValidBlockHeight,
   });
 }
 

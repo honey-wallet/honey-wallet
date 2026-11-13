@@ -17,11 +17,20 @@
 //!   `CreateAccount`, `Assign`, nonce instructions, any other program) is refused.
 //! - The relayer appears in no instruction at all, except as the funder of an
 //!   Associated Token `CreateIdempotent` whose new account is the destination of a
-//!   token transfer from the user in the same transaction (at most one per transaction;
-//!   its rent is capped per person in the gas ledger).
+//!   token transfer from the user in the same transaction (at most one per transaction,
+//!   for a mint 1Click lists). Whenever Honey is named as that funder, the full rent is
+//!   reserved and one new account is counted against the person's cap, whether or not
+//!   the account exists right now: an account that exists when checked can be closed
+//!   (its rent going back to whoever owns it) before the transaction lands, which would
+//!   otherwise let anyone farm Honey's SOL. The app leaves the creation out when the
+//!   account already exists. The rent is sized from the mint's real account size
+//!   (Token-2022 extensions included); the cap is corrected after landing from what the
+//!   fee payer really lost.
 //! - At least one payment; the recent blockhash must still be valid; the user's
-//!   signature must verify; the simulation must succeed and must not move more of the
-//!   relayer's SOL than the fee plus that rent.
+//!   signature must verify; the simulation must succeed and must report the relayer's
+//!   balance after it, which must not have dropped by more than the fee plus that rent.
+//! - The relayer's balance (read at `processed`) less every Solana reservation still
+//!   pending must keep it above its floor.
 //!
 //! The key is never logged or serialized.
 
@@ -66,10 +75,56 @@ const MAX_KEYS: usize = 24;
 const MAX_WIRE: usize = 1232;
 /// A memo longer than this is refused.
 const MAX_MEMO: usize = 566;
-/// Token account sizes, for rent: classic SPL, and Token-2022 with ImmutableOwner (what
-/// the Associated Token program creates).
+/// A classic SPL token account (and a Token-2022 account's base before its extensions).
 const TOKEN_ACCOUNT_SIZE: u64 = 165;
-const TOKEN_2022_ACCOUNT_SIZE: u64 = 170;
+/// A Token-2022 mint without extensions.
+const MINT_SIZE: usize = 82;
+
+/// The size of the token account the Associated Token program opens for a Token-2022
+/// mint whose account data is `mint`: the base account, its account-type byte, then a
+/// TLV entry for ImmutableOwner (always) and for each account extension the mint's
+/// extensions require (TransferFeeAmount, NonTransferableAccount, TransferHookAccount,
+/// PausableAccount). A mint with an extension this doesn't know is refused: Honey
+/// doesn't pay to open an account it can't size.
+pub fn token_2022_account_size(mint: &[u8]) -> Result<u64, &'static str> {
+    // Account type byte, then TLV entries of (u16 type, u16 length, data).
+    const TLV: u64 = 4;
+    let mut size = TOKEN_ACCOUNT_SIZE + 1 + TLV; // ImmutableOwner
+    if mint.len() == MINT_SIZE {
+        return Ok(size);
+    }
+    let base = TOKEN_ACCOUNT_SIZE as usize;
+    if mint.len() < base + 1 || mint[base] != 1 {
+        return Err("Honey can't open an account for this token");
+    }
+    let mut at = base + 1;
+    while at + 4 <= mint.len() {
+        let kind = u16::from_le_bytes([mint[at], mint[at + 1]]);
+        let len = usize::from(u16::from_le_bytes([mint[at + 2], mint[at + 3]]));
+        if kind == 0 {
+            break;
+        }
+        size += match kind {
+            // TransferFeeConfig → TransferFeeAmount (u64 withheld).
+            1 => TLV + 8,
+            // NonTransferable → NonTransferableAccount; Pausable → PausableAccount.
+            9 | 26 => TLV,
+            // TransferHook → TransferHookAccount (bool transferring).
+            14 => TLV + 1,
+            // Mint-only extensions: close authority, default state, interest, permanent
+            // delegate, metadata and group pointers and data, scaled UI amount.
+            3 | 6 | 10 | 12 | 18 | 19 | 20 | 21 | 22 | 23 | 25 => 0,
+            _ => return Err("Honey can't open an account for this token"),
+        };
+        at = at
+            .checked_add(4 + len)
+            .ok_or("Honey can't open an account for this token")?;
+    }
+    if at > mint.len() {
+        return Err("Honey can't open an account for this token");
+    }
+    Ok(size)
+}
 
 fn b58(key: &[u8; 32]) -> String {
     bs58::encode(key).into_string()
@@ -264,13 +319,21 @@ impl Message {
     }
 }
 
+/// An associated token account the relayer is named as funder of.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Funded {
+    pub account: [u8; 32],
+    pub mint: [u8; 32],
+    pub token_program: &'static str,
+}
+
 /// What a checked transaction does that costs Honey anything.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Checked {
     pub user: [u8; 32],
     pub blockhash: [u8; 32],
-    /// Associated token accounts the relayer funds, with their token program.
-    pub funded_accounts: Vec<([u8; 32], &'static str)>,
+    /// Associated token accounts the relayer funds.
+    pub funded_accounts: Vec<Funded>,
     /// Network fee: base fee for both signatures plus any priority fee.
     pub fee_lamports: u64,
 }
@@ -305,7 +368,7 @@ pub fn check(wire: &Wire, relayer: &[u8; 32]) -> Result<Checked, &'static str> {
     let name = |i: usize| keys.get(i).map(b58);
     let mut payments = 0usize;
     let mut destinations: Vec<usize> = Vec::new();
-    let mut funded: Vec<(usize, &'static str)> = Vec::new();
+    let mut funded: Vec<(usize, usize, &'static str)> = Vec::new();
     let mut unit_limit: Option<u32> = None;
     let mut unit_price: Option<u64> = None;
     let mut other_than_budget = false;
@@ -366,7 +429,7 @@ pub fn check(wire: &Wire, relayer: &[u8; 32]) -> Result<Checked, &'static str> {
                     return Err("bad token account creation");
                 }
                 match ix.accounts[0] {
-                    0 if relayer_at == [0] => funded.push((ix.accounts[1], token)),
+                    0 if relayer_at == [0] => funded.push((ix.accounts[1], ix.accounts[3], token)),
                     1 if relayer_at.is_empty() => {}
                     _ => return Err("bad token account creation"),
                 }
@@ -414,7 +477,7 @@ pub fn check(wire: &Wire, relayer: &[u8; 32]) -> Result<Checked, &'static str> {
     if funded.len() > 1 {
         return Err("Honey opens at most one token account per payment");
     }
-    if funded.iter().any(|(ata, _)| !destinations.contains(ata)) {
+    if funded.iter().any(|(ata, _, _)| !destinations.contains(ata)) {
         return Err("Honey only opens the account a payment goes to");
     }
     // A price without a limit would be charged on the default (larger) unit count.
@@ -428,7 +491,14 @@ pub fn check(wire: &Wire, relayer: &[u8; 32]) -> Result<Checked, &'static str> {
     Ok(Checked {
         user,
         blockhash: msg.blockhash,
-        funded_accounts: funded.iter().map(|(i, t)| (keys[*i], *t)).collect(),
+        funded_accounts: funded
+            .iter()
+            .map(|(account, mint, token_program)| Funded {
+                account: keys[*account],
+                mint: keys[*mint],
+                token_program,
+            })
+            .collect(),
         fee_lamports: LAMPORTS_PER_SIGNATURE * 2 + priority,
     })
 }
@@ -572,10 +642,12 @@ impl SolanaRelayer {
         self.rpc(method, params).await.map_err(|_| AppError::Busy)
     }
 
+    /// At `processed`: the freshest view, so a balance or an account that is about to
+    /// change is seen as early as possible.
     async fn balance(&self, address: &str) -> Result<u64, AppError> {
         self.read(
             "getBalance",
-            json!([address, { "commitment": "confirmed" }]),
+            json!([address, { "commitment": "processed" }]),
         )
         .await?["value"]
             .as_u64()
@@ -614,31 +686,27 @@ impl SolanaRelayer {
             ));
         }
 
-        // Rent for each token account Honey opens that doesn't exist yet.
+        // Full rent for every token account Honey is named as funder of, existing or not
+        // (see the module docs), sized from the mint's real account size.
         let mut rent = 0u64;
         let mut new_accounts = 0i64;
-        for (ata, token) in &checked.funded_accounts {
-            let info = self
-                .read(
-                    "getAccountInfo",
-                    json!([b58(ata), { "encoding": "base64", "commitment": "confirmed",
-                                       "dataSlice": { "offset": 0, "length": 0 } }]),
-                )
-                .await?;
-            if info["value"].is_null() {
-                let size = if *token == TOKEN_2022_PROGRAM {
-                    TOKEN_2022_ACCOUNT_SIZE
-                } else {
-                    TOKEN_ACCOUNT_SIZE
-                };
-                let lamports = self
-                    .read("getMinimumBalanceForRentExemption", json!([size]))
-                    .await?
-                    .as_u64()
-                    .ok_or(AppError::Busy)?;
-                rent = rent.saturating_add(lamports);
-                new_accounts += 1;
+        for funded in &checked.funded_accounts {
+            if !mint_listed(market, &funded.mint).await {
+                return Err(AppError::BadRequest(
+                    "Honey only opens accounts for tokens it lists".into(),
+                ));
             }
+            let size = self.account_size(funded).await?;
+            let lamports = self
+                .read(
+                    "getMinimumBalanceForRentExemption",
+                    json!([size, { "commitment": "processed" }]),
+                )
+                .await?
+                .as_u64()
+                .ok_or(AppError::Busy)?;
+            rent = rent.saturating_add(lamports);
+            new_accounts += 1;
         }
         // The network's own fee for this message, if higher than the computed one.
         let quoted = self
@@ -660,6 +728,8 @@ impl SolanaRelayer {
             tracing::warn!("solana relayer is at its floor");
             return Err(AppError::GasNotCovered);
         }
+        // Checked again under the ledger's lock, less every pending Solana reservation.
+        let room = u128::from(before.saturating_sub(self.limits.floor_lamports));
 
         // Co-sign (not sent yet), then simulate exactly what would be sent.
         wire.signatures[0] = self.key.sign(&wire.message);
@@ -681,10 +751,15 @@ impl SolanaRelayer {
                 "Solana wouldn't run this transaction".into(),
             ));
         }
-        // Nothing may move more of the relayer's SOL than the fee and the rent.
-        if let Some(after) = value["accounts"][0]["lamports"].as_u64()
-            && before.saturating_sub(after) > worst
-        {
+        // Nothing may move more of the relayer's SOL than the fee and the rent, and a
+        // simulation that doesn't say what it left the relayer with proves nothing.
+        let Some(after) = value["accounts"][0]["lamports"].as_u64() else {
+            tracing::error!("solana sponsor refused: simulation without the relayer's balance");
+            return Err(AppError::Unsupported(
+                "Solana didn't say what this would cost".into(),
+            ));
+        };
+        if before.saturating_sub(after) > worst {
             tracing::error!("solana sponsor refused: simulated relayer outflow above estimate");
             return Err(AppError::BadRequest(
                 "this transaction spends Honey's SOL".into(),
@@ -692,6 +767,14 @@ impl SolanaRelayer {
         }
 
         let usd = gas_allowance::usd_micros(market, "solana", u128::from(worst)).await?;
+        // The rent's share of the charge is capped per person by `new_accounts`.
+        let exempt = if rent > 0 {
+            gas_allowance::usd_micros(market, "solana", u128::from(rent))
+                .await?
+                .min(usd)
+        } else {
+            0
+        };
         let charge = gas_allowance::reserve_with(
             pool,
             user,
@@ -701,6 +784,11 @@ impl SolanaRelayer {
                 kind: "solana_fee_payer",
                 new_accounts,
                 reference: Some(&signature),
+                exempt_usd_micros: exempt,
+                native: Some(gas_allowance::NativeBudget {
+                    amount: u128::from(worst),
+                    room,
+                }),
             },
             limits,
         )
@@ -746,9 +834,15 @@ impl SolanaRelayer {
             let actual = gas_allowance::usd_micros(market, "solana", u128::from(lamports))
                 .await
                 .unwrap_or(charge.usd_micros);
+            // Rent Honey was named for but didn't pay (the account existed when it ran)
+            // gives the person's new-account cap back; on-chain truth, so it can't be farmed.
+            let accounts = (rent > 0 && lamports < rent).then_some(0);
             // Sent: the answer must be the signature, whatever the bookkeeping says (an
             // unsettled charge stays counted at its reservation).
-            if gas_allowance::settle(pool, &charge, actual).await.is_err() {
+            if gas_allowance::settle_with(pool, &charge, actual, accounts)
+                .await
+                .is_err()
+            {
                 tracing::warn!("solana sponsor: settling a charge failed");
             }
         }
@@ -757,6 +851,31 @@ impl SolanaRelayer {
             state,
             lamports: spent,
         })
+    }
+
+    /// The size of the token account the Associated Token program would open for
+    /// `funded`, from its mint's account (which must belong to that token program).
+    async fn account_size(&self, funded: &Funded) -> Result<u64, AppError> {
+        let info = self
+            .read(
+                "getAccountInfo",
+                json!([b58(&funded.mint), { "encoding": "base64", "commitment": "processed" }]),
+            )
+            .await?;
+        let value = &info["value"];
+        if value.is_null() || value["owner"].as_str() != Some(funded.token_program) {
+            return Err(AppError::BadRequest(
+                "that isn't a token Honey knows".into(),
+            ));
+        }
+        if funded.token_program != TOKEN_2022_PROGRAM {
+            return Ok(TOKEN_ACCOUNT_SIZE);
+        }
+        let data = value["data"][0]
+            .as_str()
+            .and_then(|d| STANDARD.decode(d).ok())
+            .ok_or(AppError::Busy)?;
+        token_2022_account_size(&data).map_err(|why| AppError::BadRequest(why.into()))
     }
 
     /// `success`, `failure` or `pending` once polling gives up.
@@ -805,6 +924,21 @@ impl SolanaRelayer {
         let post = tx["meta"]["postBalances"][0].as_u64()?;
         Some(pre.saturating_sub(post))
     }
+}
+
+/// Whether 1Click lists `mint` on Solana: Honey only opens token accounts for tokens it
+/// lists (no market data: none).
+async fn mint_listed(market: Option<&MarketData>, mint: &[u8; 32]) -> bool {
+    let Some(market) = market else {
+        return false;
+    };
+    let Ok(tokens) = market.tokens().await else {
+        return false;
+    };
+    let mint = b58(mint);
+    tokens
+        .iter()
+        .any(|t| t.blockchain == "sol" && t.contract_address.as_deref() == Some(mint.as_str()))
 }
 
 #[cfg(test)]
@@ -934,7 +1068,14 @@ pub(crate) mod tests {
         assert!(checked.funded_accounts.is_empty());
 
         let checked = check(&signed(&f.user, usdc_send(&f, 0)), &f.relayer.public()).unwrap();
-        assert_eq!(checked.funded_accounts, vec![(DEST, TOKEN_PROGRAM)]);
+        assert_eq!(
+            checked.funded_accounts,
+            vec![Funded {
+                account: DEST,
+                mint: MINT,
+                token_program: TOKEN_PROGRAM
+            }]
+        );
         // The user may open it themselves too.
         assert!(check(&signed(&f.user, usdc_send(&f, 1)), &f.relayer.public()).is_ok());
     }
@@ -1195,12 +1336,47 @@ pub(crate) mod tests {
         let usdc = check(&wire("usdcWireBase64"), &fee_payer).unwrap();
         assert_eq!(b58(&usdc.user), f["user"].as_str().unwrap());
         assert_eq!(usdc.funded_accounts.len(), 1);
-        assert_eq!(usdc.funded_accounts[0].1, TOKEN_PROGRAM);
+        assert_eq!(usdc.funded_accounts[0].token_program, TOKEN_PROGRAM);
         assert_eq!(usdc.fee_lamports, 10_000);
         let sol = check(&wire("solWireBase64"), &fee_payer).unwrap();
         assert!(sol.funded_accounts.is_empty());
         // Anyone else's fee payer: refused.
         assert!(check(&wire("solWireBase64"), &key(78).public()).is_err());
+    }
+
+    /// Rent sized from the mint: Token-2022 extensions that add account data raise it;
+    /// an extension Honey can't size is refused rather than under-reserved.
+    #[test]
+    fn token_2022_rent_follows_the_mints_extensions() {
+        let plain = vec![0u8; MINT_SIZE];
+        assert_eq!(token_2022_account_size(&plain), Ok(170));
+        let with = |exts: &[(u16, u16)]| {
+            let mut m = vec![0u8; 165];
+            m.push(1); // AccountType::Mint
+            for (kind, len) in exts {
+                m.extend_from_slice(&kind.to_le_bytes());
+                m.extend_from_slice(&len.to_le_bytes());
+                m.extend(std::iter::repeat_n(0u8, usize::from(*len)));
+            }
+            m
+        };
+        // Transfer fee (+12), hook (+5), metadata pointer and metadata (+0).
+        assert_eq!(
+            token_2022_account_size(&with(&[(1, 108), (14, 64), (18, 64), (19, 90)])),
+            Ok(170 + 12 + 5)
+        );
+        // Non-transferable and pausable add an empty TLV each.
+        assert_eq!(token_2022_account_size(&with(&[(9, 0), (26, 33)])), Ok(178));
+        // Confidential transfers or an unknown extension: refused.
+        assert!(token_2022_account_size(&with(&[(4, 65)])).is_err());
+        assert!(token_2022_account_size(&with(&[(99, 0)])).is_err());
+        // Truncated TLV, or not a mint.
+        let mut cut = with(&[(1, 108)]);
+        cut.truncate(cut.len() - 1);
+        assert!(token_2022_account_size(&cut).is_err());
+        let mut account = with(&[]);
+        account[165] = 2;
+        assert!(token_2022_account_size(&account).is_err());
     }
 
     #[test]

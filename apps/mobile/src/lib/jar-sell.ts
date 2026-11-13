@@ -115,7 +115,13 @@ export async function quoteJarSell(
   );
   const units = (s: string, d: number) => Number(s) / 10 ** d;
   // Dollars: 1Click prices the minimum; the expected payout scales from it.
-  const usdMin = (x: IntentsSwap) => x.usdOutMin ?? x.usdIn;
+  // Every swap's payout must be priced (never the amount sold standing in for it).
+  const usdMin = (x: IntentsSwap) => {
+    if (x.usdOutMin === null)
+      throw new Error(`Couldn’t price ${x.buy.symbol} right now. Try again.`);
+    return x.usdOutMin;
+  };
+  for (const { swap } of swaps) usdMin(swap);
   const usdExpected = (x: IntentsSwap) =>
     Number(x.minAmountOut) > 0
       ? usdMin(x) * (Number(x.amountOut) / Number(x.minAmountOut))

@@ -18,7 +18,9 @@ vi.mock('@/lib/profile', () => ({
 const { prepareSend } = await import('@/lib/send');
 const { wallets } = await import('@/lib/wallets');
 const { SPONSORED_FEE } = await import('@/lib/evm-gas');
-const { covers, honeyPaysOn } = await import('@/lib/gas');
+const { covers, honeyPaysOn, refusedBeforeSigning, waitForBlockhashExpiry } = await import(
+  '@/lib/gas'
+);
 
 const hexToBytes = (hex: string) =>
   Uint8Array.from(hex.match(/../g) ?? [], (b) => Number.parseInt(b, 16));
@@ -65,9 +67,14 @@ const allowance = (over: { newAccountsLeft?: number; remaining?: number } = {}):
 });
 
 /** A Solana RPC double: no SOL at all, 5 USDC, the recipient has no USDC account yet. */
-function solanaRpc(sent: string[]) {
+function solanaRpc(sent: string[], heights: number[] = [1_000_200]) {
   const answers: Record<string, unknown> = {
-    getLatestBlockhash: { value: { blockhash: base58.encode(new Uint8Array(32).fill(9)) } },
+    getLatestBlockhash: {
+      value: {
+        blockhash: base58.encode(new Uint8Array(32).fill(9)),
+        lastValidBlockHeight: 1_000_150,
+      },
+    },
     getBalance: { value: 0 },
     getTokenAccountBalance: { value: { amount: '5000000' } },
     getAccountInfo: { value: null },
@@ -75,6 +82,7 @@ function solanaRpc(sent: string[]) {
     getSignatureStatuses: { value: [{ confirmationStatus: 'confirmed', err: null }] },
   };
   return async (method: string, params: unknown) => {
+    if (method === 'getBlockHeight') return heights.length > 1 ? heights.shift() : heights[0];
     if (method === 'sendTransaction') {
       sent.push((params as string[])[0] as string);
       return 'own-signature';
@@ -125,7 +133,9 @@ describe('Solana: Honey’s fee payer', () => {
   it('pays its own fee when Honey refuses before signing, asking again', async () => {
     const sent: string[] = [];
     const confirm = vi.fn(async (_reason: string) => true);
-    const rpc = solanaRpc(sent);
+    // The first message's blockhash is still valid twice, then expired.
+    const heights = [1_000_100, 1_000_150, 1_000_151];
+    const rpc = solanaRpc(sent, heights);
     // This wallet has SOL for its own fee.
     const withSol = async (method: string, params: unknown) =>
       method === 'getBalance' ? { value: 10_000_000 } : rpc(method, params);
@@ -136,6 +146,8 @@ describe('Solana: Honey’s fee payer', () => {
         rpcFor: () => withSol,
         keyOf: keyOf as never,
         confirm,
+        confirmFallback: confirm,
+        waitExpired: (r, h) => waitForBlockhashExpiry(r, h, { sleep: async () => {} }),
         freeGas: {
           allowance: async () => allowance(),
           solanaSponsor: async () => {
@@ -149,8 +161,104 @@ describe('Solana: Honey’s fee payer', () => {
     expect(result.hash).toBeTruthy();
     expect(confirm).toHaveBeenCalledTimes(2);
     expect(confirm.mock.calls[1]?.[0]).toMatch(/you pay this one/);
+    // Paid only once the first message could no longer land.
+    expect(heights).toEqual([1_000_151]);
     expect(sent).toHaveLength(1);
     expect(base64.decode(sent[0] ?? '')[0]).toBe(1);
+  });
+
+  /** A Solana send whose Honey answer is `error`, with SOL for its own fee. */
+  const refusedWith = async (
+    error: unknown,
+    over: Partial<Parameters<typeof prepareSend>[2]> = {},
+    heights?: number[],
+  ) => {
+    const sent: string[] = [];
+    const rpc = solanaRpc(sent, heights);
+    const withSol = async (method: string, params: unknown) =>
+      method === 'getBalance' ? { value: 10_000_000 } : rpc(method, params);
+    const plan = await prepareSend(
+      wallet,
+      { chain: 'Solana', symbol: 'USDC', to: SOL_TO, amount: '1' },
+      {
+        rpcFor: () => withSol,
+        keyOf: keyOf as never,
+        confirm: async () => true,
+        confirmFallback: async () => true,
+        waitExpired: (r, h) =>
+          waitForBlockhashExpiry(r, h, { sleep: async () => {}, intervalMs: 1, timeoutMs: 3 }),
+        freeGas: {
+          allowance: async () => allowance(),
+          solanaSponsor: async () => {
+            throw error;
+          },
+          nearRelay: vi.fn(),
+        },
+        ...over,
+      },
+    );
+    return { plan, sent };
+  };
+
+  it('treats a 409, a 5xx or a proxy’s error page as maybe sent: never pays again', async () => {
+    for (const error of [
+      new ApiError(409, 'conflict', 'Honey already paid for this transaction'),
+      new ApiError(503, 'busy', 'busy'),
+      new ApiError(502, 'unknown', 'Bad gateway'),
+      new ApiError(500, 'internal', 'oops'),
+    ]) {
+      const { plan, sent } = await refusedWith(error);
+      await expect(plan.execute(() => true)).rejects.toThrow('may already have gone through');
+      expect(sent).toEqual([]);
+    }
+    expect(refusedBeforeSigning(new ApiError(402, 'gas_not_covered', ''))).toBe(true);
+    expect(refusedBeforeSigning(new ApiError(400, 'unknown', ''))).toBe(false);
+  });
+
+  it('never pays itself while the first message could still land', async () => {
+    // The chain never passes the first blockhash's last valid height.
+    const { plan, sent } = await refusedWith(
+      new ApiError(402, 'gas_not_covered', 'no'),
+      {},
+      [1_000_150],
+    );
+    await expect(plan.execute(() => true)).rejects.toThrow('hasn’t expired yet');
+    expect(sent).toEqual([]);
+    // Nor when the node never said how long the blockhash lasts.
+    await expect(waitForBlockhashExpiry(async () => 2e9, undefined)).rejects.toThrow(
+      'hasn’t expired yet',
+    );
+  });
+
+  it('asks before paying itself even when the flow confirmed up front (jar buys and sells)', async () => {
+    // A quiet `confirm`, as jar buys and sells pass; the fallback still asks (here: no).
+    const { plan, sent } = await refusedWith(new ApiError(402, 'gas_not_covered', 'no'), {
+      confirmFallback: async () => false,
+    });
+    await expect(plan.execute(() => true)).rejects.toThrow('Send cancelled');
+    expect(sent).toEqual([]);
+  });
+
+  it('is single use: a second execute never signs again', async () => {
+    const sent: string[] = [];
+    const solanaSponsor = vi.fn(async () => {
+      throw new TypeError('Network request failed');
+    });
+    const plan = await prepareSend(
+      wallet,
+      { chain: 'Solana', symbol: 'USDC', to: SOL_TO, amount: '1' },
+      {
+        rpcFor: () => solanaRpc(sent),
+        keyOf: keyOf as never,
+        confirm: async () => true,
+        freeGas: { allowance: async () => allowance(), solanaSponsor, nearRelay: vi.fn() },
+      },
+    );
+    expect(plan.spent?.()).toBe(false);
+    await expect(plan.execute(() => true)).rejects.toThrow('may already have gone through');
+    expect(plan.spent?.()).toBe(true);
+    await expect(plan.execute(() => true)).rejects.toThrow('already used');
+    expect(solanaSponsor).toHaveBeenCalledTimes(1);
   });
 
   it('never pays twice when Honey’s answer is lost', async () => {
@@ -259,6 +367,7 @@ describe('NEAR: Honey’s relayer', () => {
       nearRpc: (() => nearRpc({ nonce })) as never,
       keyOf: keyOf as never,
       confirm: async () => true,
+      confirmFallback: async () => true,
       sendNearCall,
       // This account has NEAR for its own fee here.
       nearClient: (() => ({

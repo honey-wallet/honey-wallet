@@ -1,5 +1,6 @@
 import type { Answer, Approval } from '@honey-wallet/extension/protocol';
 import {
+  evmAddressOfKey,
   evmNetwork,
   parseTypedData,
   reviewSolanaTransaction,
@@ -11,6 +12,7 @@ import {
   signSolanaTransaction,
 } from '@honey-wallet/keyring';
 import { createPublicClient, type Hex, http, type TransactionSerializable } from 'viem';
+import { assertNoSponsoredInFlight } from '@/lib/evm-in-flight';
 import { requestJsonRpc } from '@/lib/json-rpc';
 import { privateKeyOf } from '@/lib/vault';
 
@@ -555,6 +557,8 @@ export async function performApproval(
         const { client } = clientFor(chainId);
         // The exact nonce, gas limit, and fee caps shown in the approval screen are
         // the values signed. Never silently refresh them after the user's consent.
+        // A free-gas batch Honey may still send from this wallet could land as well.
+        await assertNoSponsoredInFlight(chainId, evmAddressOfKey(key));
         const signed = await signEvmTransaction(key, reviewedEvmSend.unsigned);
         return { id, result: await client.sendRawTransaction({ serializedTransaction: signed }) };
       }

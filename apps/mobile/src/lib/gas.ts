@@ -89,12 +89,99 @@ export function honeyPaysOn(allowance: GasAllowance | null, chain: string, symbo
 }
 
 /**
- * Whether Honey answered "no" before signing anything (an HTTP error it sent), so the
- * transaction can't land and the wallet may pay its own fee. Anything else (no answer,
- * a timeout) may mean it was sent.
+ * Whether Honey explicitly refused before its fee payer signed (an app error code it
+ * sent: a bad or uncovered transaction, a sign-in or rate limit, or Solana refusing it
+ * in simulation or preflight), so the transaction was never sent. Anything else (no
+ * answer, a timeout, a proxy's error page, a 409 or 5xx) may mean it was sent.
  */
+const REFUSED = new Set([
+  'bad_request',
+  'gas_not_covered',
+  'forbidden',
+  'unauthorized',
+  'too_many_requests',
+  'unsupported',
+]);
 export function refusedBeforeSigning(error: unknown) {
-  return error instanceof ApiError && error.status >= 400 && error.status !== 504;
+  return error instanceof ApiError && REFUSED.has(error.code);
+}
+
+type Rpc = (method: string, params: unknown) => Promise<unknown>;
+
+/**
+ * Waits until no transaction using a blockhash valid through `lastValidBlockHeight` can
+ * land: the device's own RPC reports a finalized block height past it (about a minute
+ * after the blockhash was fetched). Throws when that can't be shown in time, or the
+ * height isn't known, so the caller never pays for something Honey may still send.
+ */
+export async function waitForBlockhashExpiry(
+  rpc: Rpc,
+  lastValidBlockHeight: number | undefined,
+  {
+    intervalMs = 3_000,
+    timeoutMs = 180_000,
+    sleep = defaultSleep,
+    landed,
+  }: {
+    intervalMs?: number;
+    timeoutMs?: number;
+    sleep?: (ms: number) => Promise<void>;
+    /** The message handed to Honey: after expiry, refuse if it landed in the meantime. */
+    landed?: { address: string; message: Uint8Array };
+  } = {},
+) {
+  const notYet = () =>
+    new Error(
+      'Honey’s earlier try hasn’t expired yet. Check Activity, then try again in a minute.',
+    );
+  if (!Number.isSafeInteger(lastValidBlockHeight) || (lastValidBlockHeight as number) <= 0)
+    throw notYet();
+  for (let waited = 0; ; waited += intervalMs) {
+    const height = await rpc('getBlockHeight', [{ commitment: 'finalized' }]).catch(() => null);
+    if (typeof height === 'number' && height > (lastValidBlockHeight as number)) {
+      if (landed && (await messageLanded(rpc, landed.address, landed.message)))
+        throw new Error('Honey’s earlier try went through. Check Activity.');
+      return;
+    }
+    if (waited >= timeoutMs) throw notYet();
+    await sleep(intervalMs);
+  }
+}
+
+const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/**
+ * Whether a transaction carrying exactly `message` landed for `address`: its recent
+ * transactions are read from the device's own RPC and compared byte for byte (a wire
+ * transaction ends with its message). Unknown answers count as landed, so the caller
+ * never pays twice on a guess.
+ */
+export async function messageLanded(rpc: Rpc, address: string, message: Uint8Array) {
+  const recent = await rpc('getSignaturesForAddress', [
+    address,
+    { limit: 10, commitment: 'confirmed' },
+  ]).catch(() => null);
+  if (!Array.isArray(recent)) return true;
+  for (const entry of recent as { signature?: string }[]) {
+    if (typeof entry?.signature !== 'string') return true;
+    const tx = await rpc('getTransaction', [
+      entry.signature,
+      { encoding: 'base64', commitment: 'confirmed', maxSupportedTransactionVersion: 0 },
+    ]).catch(() => undefined);
+    if (tx === undefined) return true;
+    const wire = (tx as { transaction?: [string, string] } | null)?.transaction?.[0];
+    if (typeof wire !== 'string') continue;
+    const bytes = Uint8Array.from(atob(wire), (ch) => ch.charCodeAt(0));
+    if (endsWith(bytes, message)) return true;
+  }
+  return false;
+}
+
+function endsWith(bytes: Uint8Array, tail: Uint8Array) {
+  if (tail.length === 0 || bytes.length < tail.length) return false;
+  const start = bytes.length - tail.length;
+  for (let i = 0; i < tail.length; i++) if (bytes[start + i] !== tail[i]) return false;
+  return true;
 }
 
 /** What `lib/send.ts` needs from Honey's free gas (tests pass their own). */
