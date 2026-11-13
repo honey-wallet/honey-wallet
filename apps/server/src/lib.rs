@@ -20,7 +20,9 @@ pub mod earn_catalog;
 pub mod earn_service;
 pub mod error;
 pub mod evm_envelope;
+pub mod evm_sponsor;
 pub mod firebase_auth;
+pub mod gas_allowance;
 pub mod http_runtime;
 pub mod hyperliquid_perps;
 pub mod identity;
@@ -42,6 +44,7 @@ pub mod reconciliation;
 pub mod redis_store;
 pub mod routes;
 pub mod runtime;
+pub mod solana_relayer;
 pub mod submissions;
 pub mod supervision;
 pub mod swap_review;
@@ -214,6 +217,19 @@ fn router(config: &Config, health: runtime::RuntimeHealth, services: RouterServi
         .map(|dao| std::sync::Arc::new(dao.with_market(market.clone())))
         .map_err(|error| tracing::error!(%error, "jar DAOs disabled"))
         .ok();
+    // Honey's NEAR relayer (one instance: it owns the key's nonces), shared by group
+    // jars and free gas; off unless its key is configured.
+    let near_relayer = near_relayer::Relayer::from_env()
+        .map_err(|error| tracing::error!(%error, "NEAR relayer disabled"))
+        .ok()
+        .flatten()
+        .map(std::sync::Arc::new);
+    // Honey's Solana fee payer; off unless switched on with its key.
+    let solana_relayer = solana_relayer::SolanaRelayer::from_env()
+        .map_err(|error| tracing::error!(%error, "Solana fee payer disabled"))
+        .ok()
+        .flatten()
+        .map(std::sync::Arc::new);
     let market_data_router = market
         .clone()
         .map(routes::market::router)
@@ -260,6 +276,9 @@ fn router(config: &Config, health: runtime::RuntimeHealth, services: RouterServi
     // cannot silently omit protection before session lookup. Configuration GETs
     // colocated with these handlers also receive the generous IP-level budget;
     // their route-specific wallet quotas remain in the handlers that need them.
+    let buys = jar_buys(market.clone(), redis.clone());
+    // EIP-7702 gas on Base, Arbitrum and Polygon; free gas lists its chains too.
+    let evm = evm_sponsor(identity.as_ref(), market.clone(), buys.clone());
     let private_api = Router::new()
         .merge(routes::account_identity::router_with_store(
             firebase_auth.clone(),
@@ -276,10 +295,18 @@ fn router(config: &Config, health: runtime::RuntimeHealth, services: RouterServi
         ))
         .merge(jar_buys_router(
             identity.clone(),
-            market.clone(),
-            redis.clone(),
+            buys.clone(),
             jar_dao.clone(),
+            near_relayer.clone(),
             firebase_auth,
+        ))
+        .merge(routes::gas_evm::router(identity.clone(), evm.clone()))
+        .merge(routes::gas::router(
+            identity.clone(),
+            market.clone(),
+            solana_relayer,
+            near_relayer,
+            evm.as_ref().map(|e| e.chain_names()).unwrap_or_default(),
         ))
         .merge(routes::aave::router(identity.clone(), aave))
         .merge(routes::morpho::router(identity.clone(), morpho))
@@ -371,34 +398,51 @@ fn push_sender(identity: Option<&identity::Identity>) -> Option<std::sync::Arc<p
         .map(std::sync::Arc::new)
 }
 
-/// Real jar buys through NEAR Intents; needs market data for prices and the cap.
-fn jar_buys_router(
-    identity: Option<identity::Identity>,
+/// Real jar buys (and swaps) through NEAR Intents; needs market data for prices and the
+/// cap. Shared with EVM gas sponsorship, which checks deposits against its quotes.
+fn jar_buys(
     market: Option<std::sync::Arc<market_data::MarketData>>,
     redis: Option<redis_store::RedisStore>,
+) -> Option<std::sync::Arc<jar_buys::JarBuys>> {
+    market.and_then(|market| match jar_buys::JarBuys::from_env(market) {
+        Ok(buys) => Some(std::sync::Arc::new(buys.with_redis(redis))),
+        Err(error) => {
+            tracing::error!(%error, "jar buys disabled");
+            None
+        }
+    })
+}
+
+/// EIP-7702 gas sponsorship on Base, Arbitrum and Polygon; off unless
+/// `EVM_SPONSOR_ENABLED=1`, the relayer key and PostgreSQL are all there.
+fn evm_sponsor(
+    identity: Option<&identity::Identity>,
+    market: Option<std::sync::Arc<market_data::MarketData>>,
+    buys: Option<std::sync::Arc<jar_buys::JarBuys>>,
+) -> Option<std::sync::Arc<evm_sponsor::EvmSponsor>> {
+    let pool = identity?.pool().clone();
+    let backend = std::sync::Arc::new(evm_sponsor::store::PgBackend::new(pool, market, buys));
+    evm_sponsor::EvmSponsor::from_env(backend)
+        .map_err(|error| tracing::error!(%error, "EVM gas sponsorship disabled"))
+        .ok()
+        .flatten()
+        .map(std::sync::Arc::new)
+}
+
+/// Jar buy routes and shared jar DAOs.
+fn jar_buys_router(
+    identity: Option<identity::Identity>,
+    buys: Option<std::sync::Arc<jar_buys::JarBuys>>,
     jar_dao: Option<std::sync::Arc<jar_dao::JarDao>>,
+    relayer: Option<std::sync::Arc<near_relayer::Relayer>>,
     firebase_auth: Option<firebase_auth::FirebaseVerifier>,
 ) -> Router {
-    let buys = market
-        .clone()
-        .and_then(|market| match jar_buys::JarBuys::from_env(market) {
-            Ok(buys) => Some(std::sync::Arc::new(buys.with_redis(redis.clone()))),
-            Err(error) => {
-                tracing::error!(%error, "jar buys disabled");
-                None
-            }
-        });
     let router = match &buys {
         Some(buys) => routes::jar_buys::router(identity.clone(), buys.clone()),
         None => Router::new(),
     };
     // Shared jar DAOs: chain reads and INTENTS quotes; works without market data for reads.
     // Honey's gas relayer (group jar fee top-ups) is off unless its key is configured.
-    let relayer = near_relayer::Relayer::from_env()
-        .map_err(|error| tracing::error!(%error, "NEAR relayer disabled"))
-        .ok()
-        .flatten()
-        .map(std::sync::Arc::new);
     match jar_dao {
         Some(dao) => router.merge(routes::jar_dao::router_with(
             identity,

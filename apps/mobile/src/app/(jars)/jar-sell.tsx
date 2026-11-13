@@ -13,6 +13,8 @@ import { SuccessPage } from '@/components/sheets/SuccessPage';
 import { FlowTray, InlineTray } from '@/components/sheets/Tray';
 import { TokenIcon } from '@/components/wallet/parts';
 import { confirmOwner } from '@/lib/auth';
+import { SPONSORED_FEE } from '@/lib/evm-gas';
+import { honeyPaysOn, useGasAllowance } from '@/lib/gas';
 import { success, tap } from '@/lib/haptics';
 import {
   executeJarSell,
@@ -22,7 +24,7 @@ import {
   type SellInto,
   sellIntoChain,
 } from '@/lib/jar-sell';
-import { formatUsd } from '@/lib/mock-wallet';
+import { formatUsd, nativeCoinOf } from '@/lib/mock-wallet';
 import { SOON } from '@/lib/surface';
 import { TEST_MODE } from '@/lib/test-mode';
 import { jarValue, thesisJars, useThesisJars } from '@/lib/thesis';
@@ -61,6 +63,7 @@ function JarSellSheet() {
   const [quoting, setQuoting] = useState(false);
   // What the jar is sold for: USDC on Base unless you pick ETH or SOL on the review.
   const [into, setInto] = useState<SellInto>('USDC');
+  const freeGas = useGasAllowance();
   const asked = useRef(0);
   const mounted = useRef(true);
   useEffect(
@@ -90,12 +93,13 @@ function JarSellSheet() {
       ? '…'
       : `${formatUsd(usd)} of ${into}`;
   const payoutChain = sellIntoChain(into);
-  // Each token's own network pays its swap's fee, in that network's coin.
+  // Each token's own network pays its swap's fee, in that network's coin, unless Honey's
+  // free gas pays it (Solana, and NEAR tokens).
   const feeCoins = [
     ...new Set(
-      (quote?.swaps ?? []).map(({ swap }) =>
-        swap.sell.chain === 'Solana' ? 'SOL' : swap.sell.chain === 'NEAR' ? 'NEAR' : 'ETH',
-      ),
+      (quote?.swaps ?? [])
+        .filter(({ swap }) => !honeyPaysOn(freeGas, swap.sell.chain, swap.sell.symbol))
+        .map(({ swap }) => nativeCoinOf(swap.sell.chain)),
     ),
   ];
   const networks = [...new Set((quote?.swaps ?? []).map(({ swap }) => swap.sell.chain))];
@@ -246,9 +250,11 @@ function JarSellSheet() {
                     label="Network cost"
                     value={
                       real
-                        ? feeCoins.length
-                          ? `Paid in ${feeCoins.join(' and ')}`
-                          : '…'
+                        ? !quote
+                          ? '…'
+                          : feeCoins.length
+                            ? `Paid in ${feeCoins.join(' and ')}`
+                            : SPONSORED_FEE
                         : '<$0.01'
                     }
                   />

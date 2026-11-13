@@ -118,6 +118,11 @@ impl JarDao {
         self.relayer_enabled
     }
 
+    /// The market data (1Click prices) this reader was given, if any.
+    pub fn market(&self) -> Option<&Arc<MarketData>> {
+        self.market.as_ref()
+    }
+
     async fn rpc(&self, method: &str, params: Value) -> Result<Value, AppError> {
         crate::json_rpc::call(&self.client, &self.rpc, method, params)
             .await

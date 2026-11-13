@@ -357,6 +357,16 @@ impl JarBuys {
         })
     }
 
+    /// Whether `owner` was quoted a deposit into `deposit_address` (in the last 24 hours):
+    /// Honey pays gas for several payments at once only into these.
+    pub async fn quoted_by(&self, deposit_address: &str, owner: &str) -> Result<bool, AppError> {
+        match self.owners.check(deposit_address, owner).await {
+            Ok(()) => Ok(true),
+            Err(AppError::NotFound) => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+
     /// Tells 1Click which transaction paid a deposit address, so it starts sooner.
     pub async fn deposit(&self, owner: &str, input: DepositRequest) -> Result<(), AppError> {
         if !safe(&input.deposit_address, 128) || !safe(&input.tx_hash, 128) {

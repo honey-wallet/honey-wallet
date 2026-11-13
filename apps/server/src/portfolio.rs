@@ -1,8 +1,8 @@
 //! What a wallet holds and what it did, read straight from public chain nodes and
 //! keyless explorers. Balances: the chain's coin, plus every token NEAR Intents (1Click)
 //! lists on that chain, matched by contract or mint (never by symbol) and priced by
-//! 1Click: ERC-20s on Ethereum, Base and Arbitrum by one Multicall3 `balanceOf` batch
-//! (Blockscout's token list when the node refuses it), SPL and Token-2022 accounts on
+//! 1Click: ERC-20s on Ethereum, Base, Arbitrum and Polygon by one Multicall3 `balanceOf`
+//! batch (Blockscout's token list when the node refuses it), SPL and Token-2022 accounts on
 //! Solana, and NEP-141s on NEAR (FastNEAR's keyless index). Anything 1Click doesn't list is
 //! unpriced and usually spam, so it's left out. Names come from CoinGecko's coin list
 //! when cached.
@@ -40,7 +40,8 @@ const MAX_EVM_TOKENS: usize = 200;
 const SOLANA_DECODED: usize = 12;
 const SOLANA_CONCURRENCY: usize = 4;
 
-/// One EVM network Honey reads: its node, its USDC contract and its explorer.
+/// One EVM network Honey reads: its node, its USDC contract and its explorer. Its own
+/// coin is ETH, except on Polygon (POL); see [`EvmNetwork::native`].
 #[derive(Clone, Debug)]
 pub struct EvmNetwork {
     pub chain: &'static str,
@@ -58,6 +59,16 @@ pub struct EvmNetwork {
     pub explorer_tx: &'static str,
 }
 
+impl EvmNetwork {
+    /// The coin that pays fees here, as (symbol, name): POL on Polygon PoS, else ETH.
+    pub fn native(&self) -> (&'static str, &'static str) {
+        match self.chain_id {
+            137 => ("POL", "Polygon"),
+            _ => ("ETH", "Ether"),
+        }
+    }
+}
+
 /// Where every read goes. Tests point these at a local server.
 #[derive(Clone, Debug)]
 pub struct Endpoints {
@@ -72,7 +83,7 @@ pub struct Endpoints {
 const SOLANA_USDC: &str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const SPL_TOKEN: &str = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 const SPL_TOKEN_2022: &str = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
-/// Multicall3, at the same address on Ethereum, Base and Arbitrum.
+/// Multicall3, at the same address on Ethereum, Base, Arbitrum and Polygon.
 const MULTICALL3: &str = "0xca11bde05977b3631167028862be2a173976ca11";
 
 fn env_or(name: &str, default: &str) -> String {
@@ -128,6 +139,23 @@ impl Endpoints {
                     )),
                     alchemy: Some("https://arb-mainnet.g.alchemy.com/v2".into()),
                     explorer_tx: "https://arbiscan.io/tx/",
+                },
+                EvmNetwork {
+                    chain: "Polygon",
+                    oneclick: "pol",
+                    chain_id: 137,
+                    rpc: env_or(
+                        "PORTFOLIO_POLYGON_RPC_URL",
+                        "https://polygon-bor-rpc.publicnode.com",
+                    ),
+                    // Circle's native USDC (not the bridged USDC.e).
+                    usdc: Some("0x3c499c542cef5e3811e1192ce70d8cc03d5c3359"),
+                    blockscout: Some(env_or(
+                        "PORTFOLIO_POLYGON_BLOCKSCOUT_URL",
+                        "https://polygon.blockscout.com",
+                    )),
+                    alchemy: Some("https://polygon-mainnet.g.alchemy.com/v2".into()),
+                    explorer_tx: "https://polygonscan.com/tx/",
                 },
             ],
             solana_rpc: env_or(
@@ -481,10 +509,10 @@ impl PortfolioService {
         portfolio
     }
 
-    /// The chain's ETH plus every ERC-20 1Click lists on it. The token balances come
-    /// from one Multicall3 batch of `balanceOf` over the listed contracts (so spam never
-    /// pushes a real token off a page); Blockscout's token list is the fallback, and USDC
-    /// alone when there's no list to match against.
+    /// The chain's coin (ETH, or POL on Polygon) plus every ERC-20 1Click lists on it. The
+    /// token balances come from one Multicall3 batch of `balanceOf` over the listed
+    /// contracts (so spam never pushes a real token off a page); Blockscout's token list is
+    /// the fallback, and USDC alone when there's no list to match against.
     async fn evm_balances(
         &self,
         network: &EvmNetwork,
@@ -496,11 +524,12 @@ impl PortfolioService {
         let (native, tokens) =
             tokio::join!(native, self.evm_tokens(network, address, listed, coins));
         let native = hex_units(native?.as_str()?, 18)?;
+        let (symbol, name) = network.native();
         let mut out = vec![Raw::new(
             network.chain,
             network.oneclick,
-            "ETH",
-            "Ether",
+            symbol,
+            name,
             native,
         )];
         out.extend(tokens);
@@ -514,15 +543,25 @@ impl PortfolioService {
         listed: Option<&[OneClickToken]>,
         coins: Option<&HashMap<String, CoinMarket>>,
     ) -> Vec<Raw> {
-        let entries: Vec<&OneClickToken> = listed
-            .into_iter()
-            .flatten()
-            .filter(|e| {
-                e.blockchain == network.oneclick
-                    && e.contract_address.as_deref().is_some_and(is_evm_address)
-            })
-            .take(MAX_EVM_TOKENS)
-            .collect();
+        let mut entries: Vec<&OneClickToken> = Vec::new();
+        for e in listed.into_iter().flatten().filter(|e| {
+            e.blockchain == network.oneclick
+                && !is_deprecated(e)
+                && e.contract_address.as_deref().is_some_and(is_evm_address)
+        }) {
+            // One read per contract, so a token is never counted twice.
+            let contract = e.contract_address.as_deref();
+            if entries.len() < MAX_EVM_TOKENS
+                && !entries.iter().any(|x| {
+                    x.contract_address
+                        .as_deref()
+                        .zip(contract)
+                        .is_some_and(|(a, b)| a.eq_ignore_ascii_case(b))
+                })
+            {
+                entries.push(e);
+            }
+        }
         if entries.is_empty() {
             return self.evm_usdc(network, address).await;
         }
@@ -1103,6 +1142,17 @@ fn listed_raw(
     })
 }
 
+/// 1Click keeps retired bridge assets listed as "USDC(DEPRECATED)" and the like, often on
+/// the same contract as the live entry (Polygon's USDC, USDT, WETH and POL). They're never
+/// matched: the live entry has the token's symbol, price and asset id.
+fn is_deprecated(entry: &OneClickToken) -> bool {
+    entry
+        .symbol
+        .trim_end()
+        .to_ascii_uppercase()
+        .ends_with("(DEPRECATED)")
+}
+
 fn is_evm_address(a: &str) -> bool {
     a.len() == 42 && a.starts_with("0x") && a[2..].chars().all(|c| c.is_ascii_hexdigit())
 }
@@ -1437,7 +1487,9 @@ fn parse_blockscout(
             hash,
             tx["from"]["hash"].as_str(),
             tx["to"]["hash"].as_str(),
-            value.filter(|v| *v > 0.0).map(|v| ("ETH".into(), v)),
+            value
+                .filter(|v| *v > 0.0)
+                .map(|v| (network.native().0.into(), v)),
             rfc3339(&tx["timestamp"]).unwrap_or(0),
             tx["status"].as_str().is_some_and(|s| s != "ok"),
         ));
@@ -1512,13 +1564,14 @@ fn parse_alchemy(
                 if amount.is_none() && category == "internal" {
                     continue;
                 }
-                amount.map(|a| ("ETH".to_string(), a))
+                amount.map(|a| (network.native().0.to_string(), a))
             }
             Some("erc20") => {
                 let contract = t["rawContract"]["address"].as_str();
                 let entry = contract.and_then(|c| {
                     listed?.iter().find(|e| {
                         e.blockchain == network.oneclick
+                            && !is_deprecated(e)
                             && e.contract_address
                                 .as_deref()
                                 .is_some_and(|a| a.eq_ignore_ascii_case(c))
@@ -1606,7 +1659,9 @@ fn parse_etherscan(
             hash,
             tx["from"].as_str(),
             tx["to"].as_str(),
-            value.filter(|v| *v > 0.0).map(|v| ("ETH".into(), v)),
+            value
+                .filter(|v| *v > 0.0)
+                .map(|v| (network.native().0.into(), v)),
             seconds(tx),
             tx["isError"].as_str() == Some("1"),
         ));
@@ -2302,6 +2357,30 @@ mod tests {
         let raws = solana_tokens(Some(&classic), None, None, None);
         assert_eq!(raws.len(), 1);
         assert_eq!((raws[0].symbol.as_str(), raws[0].amount), ("USDC", 3.0));
+    }
+
+    #[test]
+    fn polygon_blockscout_rows_move_pol_and_skip_retired_entries() {
+        let polygon = Endpoints::from_env()
+            .evm
+            .into_iter()
+            .find(|n| n.chain == "Polygon")
+            .unwrap();
+        let other = "0x2222222222222222222222222222222222222222";
+        let txs = json!({ "items": [{ "hash": "0xp", "from": { "hash": other },
+            "to": { "hash": ME }, "value": "1500000000000000000",
+            "timestamp": "2026-11-12T10:00:00Z", "status": "ok" }] });
+        let items = parse_blockscout(&polygon, ME, &txs, None);
+        assert_eq!(items[0].symbol.as_deref(), Some("POL"));
+        assert_eq!(items[0].amount, Some(1.5));
+        assert_eq!(items[0].explorer_url, "https://polygonscan.com/tx/0xp");
+
+        let retired = OneClickToken {
+            symbol: "USDC(DEPRECATED)".into(),
+            ..token("pol", "USDC", 1.0)
+        };
+        assert!(is_deprecated(&retired));
+        assert!(!is_deprecated(&token("pol", "USDC", 1.0)));
     }
 
     #[test]

@@ -11,10 +11,13 @@ import {
   jsonRpc,
   prepareEvmTransfer,
   prepareSolanaTransfer,
+  prepareSponsoredTransfer,
   type Rpc,
   SOLANA_MAINNET,
+  SPONSORED_CHAIN_IDS,
   signEvmTransaction,
   signSolanaTransfer,
+  signSponsoredSolanaTransfer,
   solanaAddressOfKey,
   toBaseUnits,
   USDC_NEAR,
@@ -23,33 +26,37 @@ import {
 } from '@honey-wallet/keyring';
 import { isAddress } from 'viem';
 import { confirmOwner } from '@/lib/auth';
+import { SPONSORED_FEE, sendSponsored, sponsorEvm } from '@/lib/evm-gas';
+import { covers, type FreeGasDeps, freeGas, refusedBeforeSigning } from '@/lib/gas';
 import {
   ftTransferTx,
   prepare,
+  prepareDelegate,
   viewFtBalance,
   viewFtDecimals,
   viewStorageMin,
   viewStorageRegistered,
 } from '@/lib/jar-dao-core';
-import type { Chain } from '@/lib/mock-wallet';
-import { signAndSendNearCall } from '@/lib/near-call';
+import { type Chain, EVM_CHAIN_IDS, NATIVE_COIN } from '@/lib/mock-wallet';
+import { signAndSendNearCall, signNearDelegate } from '@/lib/near-call';
 import { sendNear } from '@/lib/near-execution';
 import { TEST_MODE } from '@/lib/test-mode';
 import { privateKeyOf } from '@/lib/vault';
 import { type AddedWallet, wallets } from '@/lib/wallets';
 
 /**
- * Real sends from a wallet whose keys are on this device: ETH and USDC on Ethereum and
- * Base, SOL and USDC on Solana, and NEAR and USDC (NEP-141) on NEAR. Swaps also pass a
- * `token` (contract and decimals, from NEAR Intents' list) to pay any ERC-20 on
- * Ethereum or Base, classic SPL token on Solana, or NEP-141 token on NEAR; its decimals
- * are checked against the token itself before anything is signed. `prepareSend` reads the chain (nonce, fees,
+ * Real sends from a wallet whose keys are on this device: ETH and USDC on Ethereum,
+ * Base and Arbitrum, POL and USDC on Polygon (one EVM key for all four), SOL and USDC on
+ * Solana, and NEAR and USDC (NEP-141) on NEAR. Swaps also pass a `token` (contract and
+ * decimals, from NEAR Intents' list) to pay any ERC-20 on those EVM chains, classic SPL
+ * token on Solana, or NEP-141 token on NEAR; its decimals are checked against the token
+ * itself before anything is signed. `prepareSend` reads the chain (nonce, fees,
  * blockhash, balance) for the review; `execute` asks for Face ID / the device lock,
  * signs with the vault key, broadcasts and waits for confirmation.
  */
 
-const EVM_CHAIN_ID: Partial<Record<Chain, number>> = { Ethereum: 1, Base: 8453 };
-const DECIMALS: Record<string, number> = { ETH: 18, USDC: 6, SOL: 9, NEAR: 24 };
+const EVM_CHAIN_ID = EVM_CHAIN_IDS;
+const DECIMALS: Record<string, number> = { ETH: 18, POL: 18, USDC: 6, SOL: 9, NEAR: 24 };
 
 export type SendResult = { hash: string; explorerUrl: string; state: 'success' | 'pending' };
 
@@ -67,6 +74,8 @@ export type SendPlan = Readonly<{
   feeSymbol: string;
   /** Extra line for the review (e.g. a first USDC payment creates their account). */
   note?: string;
+  /** Honey pays the network fee (`fee` then reads "Free · paid by Honey"). */
+  sponsored?: boolean;
   execute: (isCurrent: () => boolean) => Promise<SendResult>;
 }>;
 
@@ -86,7 +95,7 @@ export function validRecipient(chain: Chain, to: string) {
 export function recipientChains(to: string): Chain[] {
   const t = to.trim();
   const out: Chain[] = [];
-  if (isAddress(t)) out.push('Ethereum', 'Base');
+  if (isAddress(t)) out.push('Ethereum', 'Base', 'Arbitrum', 'Polygon');
   if (isSolanaAddress(t)) out.push('Solana');
   if (isNearRecipient(t)) out.push('NEAR');
   return out;
@@ -108,6 +117,11 @@ export type SendDeps = {
   /** NEAR JSON-RPC for USDC (NEP-141) sends. */
   nearRpc: () => Rpc;
   sendNearCall: typeof signAndSendNearCall;
+  /** Whether Honey pays the gas of an EVM payment (Base, Arbitrum, Polygon), and sends it. */
+  sponsorEvm: typeof sponsorEvm;
+  sendSponsored: typeof sendSponsored;
+  /** Honey's free gas on Solana (fee payer) and NEAR (relayer). */
+  freeGas: FreeGasDeps;
 };
 
 const evmRpc = (chainId: number) => {
@@ -125,6 +139,9 @@ const defaults: SendDeps = {
   nearClient: createNearClient,
   nearRpc: () => createNearRpc('mainnet'),
   sendNearCall: signAndSendNearCall,
+  sponsorEvm,
+  sendSponsored,
+  freeGas,
 };
 
 /** Throws unless `wallet` is still the active, key-backed, real wallet. */
@@ -169,20 +186,71 @@ export async function prepareSend(
     if (!from) throw new Error('No EVM address');
     if (token && !isAddress(token.contract))
       throw new Error(`Sending ${symbol} isn’t supported yet`);
-    if (!token && symbol !== 'ETH' && symbol !== 'USDC')
+    // The chain's own coin (ETH, or POL on Polygon) and USDC by name; others by contract.
+    const coin = NATIVE_COIN[chain];
+    if (!token && symbol !== coin && symbol !== 'USDC')
+      throw new Error(`Sending ${symbol} isn’t supported yet`);
+    if (!token && symbol === 'USDC' && !EVM_USDC[chainId])
       throw new Error(`Sending ${symbol} isn’t supported yet`);
     const rpc = d.rpcFor(chain);
+    const tokenContract = token
+      ? (token.contract as `0x${string}`)
+      : symbol === 'USDC'
+        ? EVM_USDC[chainId]
+        : undefined;
+    // Honey pays the gas when it can (EIP-7702; no ETH or POL needed), else you do.
+    const sponsored = await sponsoredSend(rpc, d, {
+      chainId,
+      from,
+      to,
+      amount: units,
+      token: tokenContract,
+      decimals: token?.decimals,
+    });
+    if (sponsored) {
+      const { sponsorship } = sponsored;
+      return Object.freeze({
+        chain,
+        symbol,
+        from,
+        to,
+        amount,
+        fee: SPONSORED_FEE,
+        feeAmount: 0,
+        feeSymbol: coin,
+        sponsored: true,
+        execute: async (isCurrent) => {
+          assertWallet(wallet, isCurrent);
+          if (!(await d.confirm(`Send ${amount} ${symbol}`))) throw new Error('Send cancelled');
+          assertWallet(wallet, isCurrent);
+          const key = await d.keyOf(wallet.id, 'evm');
+          let hash: `0x${string}`;
+          try {
+            if (evmAddressOfKey(key).toLowerCase() !== from.toLowerCase())
+              throw new Error('Wallet key does not match');
+            hash = (await d.sendSponsored(key, sponsorship)).hash;
+          } finally {
+            key.fill(0);
+          }
+          const state = await waitForEvmReceipt(rpc, hash);
+          if (state === 'failure') throw new Error('The network rejected the transaction');
+          const explorer = EVM_NETWORKS.find((n) => n.chainId === chainId)?.explorer;
+          return { hash, explorerUrl: `${explorer}/tx/${hash}`, state };
+        },
+      });
+    }
     const plan = await prepareEvmTransfer(rpc, {
       chainId,
       from,
       to,
       amount: units,
-      token: token
-        ? (token.contract as `0x${string}`)
-        : symbol === 'USDC'
-          ? EVM_USDC[chainId]
-          : undefined,
+      token: tokenContract,
       decimals: token?.decimals,
+    }).catch((error: unknown) => {
+      // The shared transfer code names the fee coin ETH; Polygon pays fees in POL.
+      if (coin !== 'ETH' && error instanceof Error)
+        throw new Error(error.message.replace(/\bETH\b/g, coin));
+      throw error;
     });
     const fee = format(plan.feeEstimate, 18);
     return Object.freeze({
@@ -191,9 +259,9 @@ export async function prepareSend(
       from,
       to,
       amount,
-      fee: `${fee} ETH`,
+      fee: `${fee} ${coin}`,
       feeAmount: Number(fee),
-      feeSymbol: 'ETH',
+      feeSymbol: coin,
       execute: async (isCurrent) => {
         assertWallet(wallet, isCurrent);
         if (!(await d.confirm(`Send ${amount} ${symbol}`))) throw new Error('Send cancelled');
@@ -224,16 +292,103 @@ export async function prepareSend(
     if (token && !isSolanaAddress(token.contract))
       throw new Error(`Sending ${symbol} isn’t supported yet`);
     const rpc = d.rpcFor(chain);
-    const plan = await prepareSolanaTransfer(rpc, {
+    const transfer = {
       from,
       to,
       amount: units,
       token: token
         ? { mint: token.contract, decimals: token.decimals }
         : symbol === 'USDC'
-          ? 'USDC'
+          ? ('USDC' as const)
           : undefined,
-    });
+    };
+    /** You pay the fee: sign alone and broadcast. */
+    const payYourself = async (
+      plan: Awaited<ReturnType<typeof prepareSolanaTransfer>>,
+    ): Promise<SendResult> => {
+      const key = await d.keyOf(wallet.id, 'solana');
+      let signed: ReturnType<typeof signSolanaTransfer>;
+      try {
+        if (solanaAddressOfKey(key) !== from) throw new Error('Wallet key does not match');
+        signed = signSolanaTransfer(key, plan.message);
+      } finally {
+        key.fill(0);
+      }
+      await broadcastSolana(rpc, signed.wire);
+      const state = await waitForSolana(rpc, signed.signature);
+      if (state === 'failure') throw new Error('The network rejected the transaction');
+      return {
+        hash: signed.signature,
+        explorerUrl: `${SOLANA_MAINNET.explorer}/tx/${signed.signature}`,
+        state,
+      };
+    };
+
+    // Honey's fee payer, when it covers this payment (its fee, and the rent of their
+    // token account when it's new): you sign once, Honey co-signs and sends.
+    const free = await solanaFreeGas(rpc, d, transfer);
+    if (free) {
+      return Object.freeze({
+        chain,
+        symbol,
+        from,
+        to,
+        amount,
+        fee: SPONSORED_FEE,
+        feeAmount: 0,
+        feeSymbol: 'SOL',
+        sponsored: true,
+        note: free.createsRecipientAccount
+          ? `Honey also pays to open their ${symbol} account.`
+          : undefined,
+        execute: async (isCurrent) => {
+          assertWallet(wallet, isCurrent);
+          if (!(await d.confirm(`Send ${amount} ${symbol}`))) throw new Error('Send cancelled');
+          assertWallet(wallet, isCurrent);
+          // A fresh blockhash after the prompt: Honey refuses one about to expire.
+          const fresh = await prepareSolanaTransfer(rpc, {
+            ...transfer,
+            feePayer: free.sponsored?.feePayer,
+          });
+          const key = await d.keyOf(wallet.id, 'solana');
+          let wire: string;
+          try {
+            if (solanaAddressOfKey(key) !== from) throw new Error('Wallet key does not match');
+            wire = signSponsoredSolanaTransfer(key, fresh.message);
+          } finally {
+            key.fill(0);
+          }
+          let sent: Awaited<ReturnType<FreeGasDeps['solanaSponsor']>>;
+          try {
+            sent = await d.freeGas.solanaSponsor(wire);
+          } catch (error) {
+            if (!refusedBeforeSigning(error))
+              throw new Error(
+                'This may already have gone through. Check Activity before trying again.',
+              );
+            // Honey didn't sign it, so it can never land: you pay this one.
+            if (
+              !(await d.confirm(
+                `Honey isn’t covering gas right now — you pay this one. Send ${amount} ${symbol}`,
+              ))
+            )
+              throw new Error('Send cancelled');
+            assertWallet(wallet, isCurrent);
+            return payYourself(await prepareSolanaTransfer(rpc, transfer));
+          }
+          const state =
+            sent.state === 'pending' ? await waitForSolana(rpc, sent.signature) : sent.state;
+          if (state === 'failure') throw new Error('The network rejected the transaction');
+          return {
+            hash: sent.signature,
+            explorerUrl: `${SOLANA_MAINNET.explorer}/tx/${sent.signature}`,
+            state,
+          };
+        },
+      });
+    }
+
+    const plan = await prepareSolanaTransfer(rpc, transfer);
     const fee = format(plan.feeLamports, 9);
     return Object.freeze({
       chain,
@@ -251,22 +406,7 @@ export async function prepareSend(
         assertWallet(wallet, isCurrent);
         if (!(await d.confirm(`Send ${amount} ${symbol}`))) throw new Error('Send cancelled');
         assertWallet(wallet, isCurrent);
-        const key = await d.keyOf(wallet.id, 'solana');
-        let signed: ReturnType<typeof signSolanaTransfer>;
-        try {
-          if (solanaAddressOfKey(key) !== from) throw new Error('Wallet key does not match');
-          signed = signSolanaTransfer(key, plan.message);
-        } finally {
-          key.fill(0);
-        }
-        await broadcastSolana(rpc, signed.wire);
-        const state = await waitForSolana(rpc, signed.signature);
-        if (state === 'failure') throw new Error('The network rejected the transaction');
-        return {
-          hash: signed.signature,
-          explorerUrl: `${SOLANA_MAINNET.explorer}/tx/${signed.signature}`,
-          state,
-        };
+        return payYourself(plan);
       },
     });
   }
@@ -313,6 +453,52 @@ export async function prepareSend(
   }
   throw new Error(`Sending on ${chain} isn’t supported yet`);
 }
+
+/**
+ * Honey's offer to pay an EVM transfer's gas, after the checks a normal transfer gets
+ * (minus the fee): null when Honey won't, or anything about it fails, so the wallet
+ * pays its own gas (and `prepareEvmTransfer` reports any real problem).
+ */
+async function sponsoredSend(
+  rpc: Rpc,
+  d: SendDeps,
+  input: Parameters<typeof prepareSponsoredTransfer>[1],
+) {
+  if (!SPONSORED_CHAIN_IDS.includes(input.chainId)) return null;
+  const call = await prepareSponsoredTransfer(rpc, input).catch(() => null);
+  if (!call) return null;
+  const sponsorship = await d
+    .sponsorEvm({ chainId: input.chainId, account: input.from, calls: [call] })
+    .catch(() => null);
+  return sponsorship ? { sponsorship } : null;
+}
+
+/**
+ * The payment with Honey's Solana fee payer when Honey covers it (fee, and rent for a
+ * new token account within the person's allowance); null otherwise, or when anything
+ * about it fails, so the wallet pays its own fee.
+ */
+async function solanaFreeGas(
+  rpc: Rpc,
+  d: SendDeps,
+  transfer: Omit<Parameters<typeof prepareSolanaTransfer>[1], 'feePayer'>,
+) {
+  try {
+    const allowance = await d.freeGas.allowance();
+    const feePayer = allowance?.chains.find((c) => c.chain === 'solana')?.feePayer;
+    if (!allowance || !feePayer) return null;
+    const plan = await prepareSolanaTransfer(rpc, { ...transfer, feePayer });
+    const cost = plan.sponsored?.lamports ?? 0n;
+    return covers(allowance, 'solana', cost, 9, plan.createsRecipientAccount ? 1 : 0) ? plan : null;
+  } catch {
+    return null;
+  }
+}
+
+/** yoctoNEAR per gas Honey's server reserves a relay at (NEAR's minimum gas price). */
+const RELAY_GAS_PRICE = 100_000_000n;
+/** The most Honey puts down to register a receiver (server `MAX_STORAGE_DEPOSIT`). */
+const MAX_FREE_STORAGE = 25n * 10n ** 20n;
 
 /** The NEAR a sender needs for a token send: gas, plus the receiver's storage when unregistered. */
 const NEAR_GAS_RESERVE = 10n ** 21n; // 0.001 NEAR
@@ -366,13 +552,74 @@ async function prepareNearFt(
       : await viewStorageMin(rpc, contract);
   if (storage > MAX_STORAGE) throw new Error(`Sending ${symbol} on NEAR isn’t supported yet`);
   const nearNeeded = NEAR_GAS_RESERVE + storage;
-  if (account.available < nearNeeded)
-    throw new Error(
-      registered
-        ? 'You need a little NEAR (0.001) to pay the network fee'
-        : `You need about ${nearText(roundUp(nearNeeded))} NEAR: ${nearText(storage)} registers them for ${symbol}, plus the fee`,
-    );
+  const short = () =>
+    registered
+      ? 'You need a little NEAR (0.001) to pay the network fee'
+      : `You need about ${nearText(roundUp(nearNeeded))} NEAR: ${nearText(storage)} registers them for ${symbol}, plus the fee`;
   const tx = ftTransferTx(contract, to, units, registered ? null : storage);
+
+  // Honey's relayer pays the gas (and the registration) of token sends whenever free gas
+  // covers it, NEAR in the account or not: you sign once (a NEP-366 delegate action).
+  // The account must already be on chain (its key signs the delegate).
+  const cost = tx.actions.reduce((sum, a) => sum + a.gas * RELAY_GAS_PRICE + a.deposit, 0n);
+  const allowance =
+    account.exists && storage <= MAX_FREE_STORAGE
+      ? await d.freeGas.allowance().catch(() => null)
+      : null;
+  if (covers(allowance, 'near', cost, 24)) {
+    return Object.freeze({
+      chain: 'NEAR' as Chain,
+      symbol,
+      from,
+      to,
+      amount,
+      fee: SPONSORED_FEE,
+      feeAmount: 0,
+      feeSymbol: 'NEAR',
+      sponsored: true,
+      note: registered ? undefined : `Honey also pays to register their account for ${symbol}.`,
+      execute: async (isCurrent) => {
+        assertWallet(wallet, isCurrent);
+        if (!(await d.confirm(`Send ${amount} ${symbol} to ${to}`)))
+          throw new Error('Send cancelled');
+        assertWallet(wallet, isCurrent);
+        const delegate = await prepareDelegate(rpc, from, tx.receiverId, tx.actions);
+        const relayed = await signNearDelegate(wallet.id, delegate, d.keyOf)
+          .then((signed) => d.freeGas.nearRelay(signed))
+          .catch(() => null);
+        if (relayed)
+          return {
+            hash: relayed.txHash,
+            explorerUrl: `https://nearblocks.io/txns/${relayed.txHash}`,
+            state: 'success',
+          };
+        // Honey didn't pay (or didn't say). Pay it yourself with the delegate's own
+        // nonce: whichever lands first, the other can never land too.
+        if (
+          !(await d.confirm(
+            `Honey isn’t covering gas right now — you pay this one. Send ${amount} ${symbol} to ${to}`,
+          ))
+        )
+          throw new Error('Send cancelled');
+        assertWallet(wallet, isCurrent);
+        const fresh = await prepare(rpc, from, tx.receiverId, tx.actions);
+        if (fresh.nonce > delegate.nonce)
+          throw new Error(
+            'This may already have gone through. Check Activity before trying again.',
+          );
+        if ((await d.nearClient('mainnet', rpc).balance(from)).available < nearNeeded)
+          throw new Error(short());
+        const hash = await d.sendNearCall(
+          rpc,
+          wallet.id,
+          { ...fresh, nonce: delegate.nonce },
+          d.keyOf,
+        );
+        return { hash, explorerUrl: `https://nearblocks.io/txns/${hash}`, state: 'success' };
+      },
+    });
+  }
+  if (account.available < nearNeeded) throw new Error(short());
   return Object.freeze({
     chain: 'NEAR' as Chain,
     symbol,

@@ -276,8 +276,8 @@ function LiveTokens({
       <SheetHeader title={side === 'sell' ? 'Swap from' : 'Swap to'} />
       {side === 'sell' && !q && !chain && (
         <Text style={styles.note}>
-          You can sell tokens on Ethereum, Base, Solana and NEAR, and get any of {listed.length}{' '}
-          tokens on {chains.length} networks.
+          You can sell tokens on Ethereum, Base, Arbitrum, Polygon, Solana and NEAR, and get any of{' '}
+          {listed.length} tokens on {chains.length} networks.
         </Text>
       )}
       {yours.length > 0 && <SheetSection title="Your tokens · balance" />}

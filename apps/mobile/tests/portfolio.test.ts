@@ -29,13 +29,56 @@ it('sums tokens across chains and keeps per-chain send choices', () => {
     h('Base', 'USDC', 2, 2),
     h('Ethereum', 'USDC', 3, 3),
     h('Arbitrum', 'ETH', 1, 3000),
+    h('Polygon', 'POL', 10, 0.9),
+    h('Polygon', 'USDC', 4, 4),
+    // An ERC-20 the server matched in 1Click's list carries its contract.
+    {
+      ...h('Arbitrum', 'ARB', 20, 3),
+      contract: '0x912ce59144191c1204e64559fe8253a0e49e6548',
+      decimals: 18,
+      assetId: 'nep141:arb-0x912ce59144191c1204e64559fe8253a0e49e6548.omft.near',
+    },
+    // Optimism isn't read: never offered to Send.
+    h('Optimism', 'ETH', 1, 3000),
   ];
-  expect(toTokens(holdings)).toEqual([
-    { symbol: 'ETH', name: 'ETH', amount: 1, usd: 3000, change: 0 },
-    { symbol: 'USDC', name: 'USDC', amount: 5, usd: 5, change: 0 },
+  expect(toTokens(holdings).map((t) => [t.symbol, t.amount])).toEqual([
+    ['ETH', 2],
+    ['USDC', 9],
+    ['ARB', 20],
+    ['POL', 10],
   ]);
-  // Arbitrum isn't a Send network yet.
-  expect(toHoldings(holdings).map((x) => x.chain)).toEqual(['Base', 'Ethereum']);
+  expect(toHoldings(holdings).map((x) => `${x.symbol}@${x.chain}`)).toEqual([
+    'USDC@Base',
+    'USDC@Ethereum',
+    'ETH@Arbitrum',
+    'POL@Polygon',
+    'USDC@Polygon',
+    'ARB@Arbitrum',
+  ]);
+  expect(toHoldings(holdings).at(-1)?.token).toEqual({
+    contract: '0x912ce59144191c1204e64559fe8253a0e49e6548',
+    decimals: 18,
+  });
+});
+
+it('names the fee coin of a bare Polygon call POL', () => {
+  const [row] = toActivity(
+    [
+      {
+        chain: 'Polygon',
+        hash: '0xp',
+        direction: 'other',
+        symbol: null,
+        amount: null,
+        counterparty: null,
+        timestamp: Date.UTC(2026, 10, 2) / 1000,
+        failed: false,
+        explorerUrl: 'https://polygonscan.com/tx/0xp',
+      },
+    ],
+    new Date(Date.UTC(2026, 10, 9)),
+  );
+  expect(row).toMatchObject({ symbol: 'POL', url: 'https://polygonscan.com/tx/0xp' });
 });
 
 it('turns chain activity into rows that open the explorer', () => {

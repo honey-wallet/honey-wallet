@@ -465,6 +465,32 @@ impl Relayer {
         }
     }
 
+    /// A contract's view method, its JSON result (`null` for an empty result).
+    pub async fn view(&self, contract: &str, method: &str, args: Value) -> Result<Value, AppError> {
+        let result = self
+            .rpc(
+                "query",
+                json!({
+                    "request_type": "call_function", "finality": "final",
+                    "account_id": contract, "method_name": method,
+                    "args_base64": STANDARD.encode(args.to_string()),
+                }),
+            )
+            .await
+            .map_err(|_| AppError::Busy)?;
+        let bytes: Vec<u8> = result["result"]
+            .as_array()
+            .ok_or(AppError::Busy)?
+            .iter()
+            .map(|b| b.as_u64().and_then(|b| u8::try_from(b).ok()))
+            .collect::<Option<_>>()
+            .ok_or(AppError::Busy)?;
+        if bytes.is_empty() {
+            return Ok(Value::Null);
+        }
+        serde_json::from_slice(&bytes).map_err(|_| AppError::Busy)
+    }
+
     /// Signs and sends `amount` yoctoNEAR to `receiver`; the transaction hash once it
     /// executed. `Err(Ok(..))` when NEAR rejected it (nothing was sent), `Err(Err(..))`
     /// when the outcome is unknown (it may still land).

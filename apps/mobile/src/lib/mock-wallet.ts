@@ -42,18 +42,57 @@ const visible = TOKENS.filter((t) => !t.hidden);
 export const BALANCE = visible.reduce((sum, t) => sum + t.usd, 0);
 export const BALANCE_CHANGE = visible.reduce((sum, t) => sum + (t.usd * t.change) / 100, 0);
 
-export type Chain = 'Ethereum' | 'Base' | 'Solana' | 'NEAR' | 'Tron' | 'XRP Ledger';
+export type Chain =
+  | 'Ethereum'
+  | 'Base'
+  | 'Arbitrum'
+  | 'Polygon'
+  | 'Solana'
+  | 'NEAR'
+  | 'Tron'
+  | 'XRP Ledger';
 
-/** The chains Honey supports, each shown with its native token's logo. */
+/**
+ * The chains Honey supports, each shown with its network's logo. The first four fill
+ * the "All networks" grid (components/wallet/parts.tsx `NetworkGrid`).
+ */
 export const CHAINS: { name: Chain; symbol: string }[] = [
   { name: 'Ethereum', symbol: 'ETH' },
   { name: 'Base', symbol: 'BASE' },
   { name: 'Solana', symbol: 'SOL' },
   { name: 'NEAR', symbol: 'NEAR' },
+  { name: 'Arbitrum', symbol: 'ARB' },
+  { name: 'Polygon', symbol: 'POL' },
   // review: Tron and the XRP Ledger aren't supported for now (receive.ts ORDER).
   // { name: 'Tron', symbol: 'TRX' },
   // { name: 'XRP Ledger', symbol: 'XRP' },
 ];
+
+/**
+ * EVM chains Honey reads and sends on, by EIP-155 id. They share the wallet's one EVM
+ * address (same key); keep in step with apps/server/src/portfolio.rs `Endpoints`.
+ */
+export const EVM_CHAIN_IDS: Partial<Record<Chain, number>> = {
+  Ethereum: 1,
+  Base: 8453,
+  Arbitrum: 42161,
+  Polygon: 137,
+};
+
+/** Each chain's own coin, which pays its network fees. */
+export const NATIVE_COIN: Record<Chain, string> = {
+  Ethereum: 'ETH',
+  Base: 'ETH',
+  Arbitrum: 'ETH',
+  Polygon: 'POL',
+  Solana: 'SOL',
+  NEAR: 'NEAR',
+  Tron: 'TRX',
+  'XRP Ledger': 'XRP',
+};
+
+/** The coin that pays fees on `chain` (any name; networks Honey doesn't know pay in ETH). */
+export const nativeCoinOf = (chain: string) => NATIVE_COIN[chain as Chain] ?? 'ETH';
 
 export type MarketToken = {
   symbol: string;
@@ -479,14 +518,14 @@ export const TOKEN_INFO: Record<string, TokenInfo> = {
 const CHAIN_SYMBOLS: Record<string, string> = {
   Ethereum: 'ETH',
   Base: 'BASE',
+  Arbitrum: 'ARB',
+  Polygon: 'POL',
   Solana: 'SOL',
   NEAR: 'NEAR',
   Tron: 'TRX',
   'XRP Ledger': 'XRP',
   // Networks only swaps reach (NEAR Intents), for their badges.
-  Arbitrum: 'ARB',
   Optimism: 'OP',
-  Polygon: 'POL',
   'BNB Chain': 'BNB',
   Avalanche: 'AVAX',
   Gnosis: 'GNO',
@@ -494,7 +533,7 @@ const CHAIN_SYMBOLS: Record<string, string> = {
   Bitcoin: 'BTC',
 };
 
-const CHAIN_NAMES = new Set<string>(['Ethereum', 'Base', 'Solana', 'NEAR', 'Tron', 'XRP Ledger']);
+const CHAIN_NAMES = new Set<string>(Object.keys(NATIVE_COIN));
 /** Whether a network name is one the wallet itself knows (not just a swap destination). */
 export const isChain = (chain: string): chain is Chain => CHAIN_NAMES.has(chain);
 

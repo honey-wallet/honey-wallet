@@ -22,6 +22,7 @@
 use crate::{
     error::AppError,
     firebase_auth::FirebaseVerifier,
+    gas_allowance::{self, GasCharge, GasLimits, Reservation},
     identity::{Identity, unavailable},
     jar_buys::{BuyLeg, BuyQuote, BuyRequest, JarBuys},
     jar_dao::{DaoState, DepositCheck, INTENTS, JAR_ROLE, JarDao, USDC_NEAR, is_jar_dao},
@@ -144,6 +145,8 @@ struct StateData {
     buys: Option<Arc<JarBuys>>,
     relayer: Option<Arc<Relayer>>,
     limits: FeeLimits,
+    /// The shared free-gas ledger every relay and top-up is also charged to.
+    gas: GasLimits,
     firebase: Option<FirebaseVerifier>,
 }
 
@@ -177,6 +180,7 @@ pub fn router_with(
             buys,
             relayer,
             limits,
+            gas: GasLimits::from_env(),
             firebase,
         })
 }
@@ -541,6 +545,51 @@ async fn check_dao_code(
     Ok(())
 }
 
+/// Charges `yocto` of Honey's NEAR to the person's free gas (`gas_allowance`), priced
+/// with 1Click's NEAR price. None when the ledger says no (allowance or NEAR's daily
+/// total used up, or no price): the phone pays its own fees.
+async fn charge_near(
+    s: &StateData,
+    pool: &PgPool,
+    user: Uuid,
+    yocto: u128,
+    kind: &str,
+) -> Result<Option<GasCharge>, AppError> {
+    let market = s.dao.market().map(|m| m.as_ref());
+    let charged = match gas_allowance::usd_micros(market, "near", yocto).await {
+        Ok(usd) => {
+            let what = Reservation {
+                kind,
+                ..Reservation::default()
+            };
+            gas_allowance::reserve_with(pool, user, "near", usd, &what, &s.gas).await
+        }
+        Err(error) => Err(error),
+    };
+    match charged {
+        Ok(charge) => Ok(Some(charge)),
+        Err(AppError::GasNotCovered) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+/// Settles a NEAR charge at what the relayer really spent (`yocto`), or at what was
+/// reserved when there's no price now.
+async fn settle_near(
+    s: &StateData,
+    pool: &PgPool,
+    charge: &GasCharge,
+    yocto: u128,
+    hash: &str,
+) -> Result<(), AppError> {
+    let market = s.dao.market().map(|m| m.as_ref());
+    let actual = gas_allowance::usd_micros(market, "near", yocto)
+        .await
+        .unwrap_or(charge.usd_micros);
+    gas_allowance::settle(pool, charge, actual).await?;
+    gas_allowance::set_reference(pool, charge, hash).await
+}
+
 /// Whether the relayer can pay `amount` and stay at or above the floor.
 async fn above_floor(relayer: &Relayer, floor: u128, amount: u128) -> Result<bool, AppError> {
     let balance = relayer.balance(relayer.account()).await?;
@@ -645,6 +694,9 @@ async fn relay(
     if !above_floor(relayer, s.limits.relayer_floor, reserve).await? {
         return Ok(relayer_off());
     }
+    let Some(charge) = charge_near(&s, pool, user, reserve, "jar_dao_relay").await? else {
+        return Ok(relayer_off());
+    };
 
     let id = Uuid::new_v4();
     let mut tx = budget_lock(pool, "honey:jar_dao_relay").await?;
@@ -660,6 +712,8 @@ async fn relay(
     if yocto(&today)?.saturating_add(reserve) > s.limits.relay_daily
         || yocto(&mine)?.saturating_add(reserve) > s.limits.relay_user_daily
     {
+        drop(tx);
+        gas_allowance::release(pool, &charge).await?;
         return Ok(relayer_off());
     }
     let methods = delegate
@@ -699,6 +753,7 @@ async fn relay(
             .execute(pool)
             .await
             .map_err(unavailable)?;
+            settle_near(&s, pool, &charge, relayed.burnt, &relayed.hash).await?;
             if !relayed.succeeded {
                 return Err(AppError::Conflict(
                     "NEAR didn't run that. Try again in a moment.".into(),
@@ -717,6 +772,7 @@ async fn relay(
                 .execute(pool)
                 .await
                 .map_err(unavailable)?;
+            gas_allowance::release(pool, &charge).await?;
             Err(error)
         }
         // Unknown outcome (it may still land): its reservation stays counted.
@@ -854,6 +910,9 @@ async fn sponsor(
     if !above_floor(relayer, s.limits.relayer_floor, amount).await? {
         return Ok(sponsor_off());
     }
+    let Some(charge) = charge_near(&s, pool, user, amount, "jar_dao_sponsor").await? else {
+        return Ok(sponsor_off());
+    };
 
     let mut tx = budget_lock(pool, "honey:jar_dao_sponsor").await?;
     let (today, mine): (String, String) = sqlx::query_as(
@@ -870,6 +929,8 @@ async fn sponsor(
     if yocto(&today)?.saturating_add(amount) > s.limits.sponsor_daily
         || yocto(&mine)?.saturating_add(amount) > s.limits.sponsor_user
     {
+        drop(tx);
+        gas_allowance::release(pool, &charge).await?;
         return Ok(sponsor_off());
     }
     // Once per person and group (primary key) and once per account (unique index).
@@ -887,6 +948,7 @@ async fn sponsor(
     .rows_affected();
     tx.commit().await.map_err(unavailable)?;
     if claimed == 0 {
+        gas_allowance::release(pool, &charge).await?;
         return Err(AppError::Conflict(
             "Honey already paid your fees for this group".into(),
         ));
@@ -903,6 +965,8 @@ async fn sponsor(
             .execute(pool)
             .await
             .map_err(unavailable)?;
+            gas_allowance::settle(pool, &charge, charge.usd_micros).await?;
+            gas_allowance::set_reference(pool, &charge, &hash).await?;
             Ok(Json(SponsorResult {
                 status: "sent",
                 amount: amount.to_string(),
@@ -920,6 +984,7 @@ async fn sponsor(
             .execute(pool)
             .await
             .map_err(unavailable)?;
+            gas_allowance::release(pool, &charge).await?;
             Err(error)
         }
         // Unknown outcome (it may still land): the claim stays.

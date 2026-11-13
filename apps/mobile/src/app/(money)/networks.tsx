@@ -18,6 +18,7 @@ const NETWORKS = [
   { name: 'Ethereum', symbol: 'ETH' },
   { name: 'Base', symbol: 'BASE' },
   { name: 'Arbitrum', symbol: 'ARB' },
+  { name: 'Polygon', symbol: 'POL' },
 ];
 
 export default function NetworksSheet() {
@@ -38,7 +39,7 @@ export default function NetworksSheet() {
         second={
           // <Text style={styles.subtitle}>One Honey wallet holds addresses on each of these.</Text>
           <Text style={styles.subtitle}>
-            Solana, NEAR, Ethereum, Base and Arbitrum, all in one Honey wallet.
+            Solana, NEAR, Ethereum, Base, Arbitrum and Polygon, all in one Honey wallet.
           </Text>
         }
       />

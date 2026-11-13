@@ -46,11 +46,17 @@ it('lists every 1Click token on a Honey chain, with live numbers where loaded', 
       { symbol: 'ZEC', priceUsd: 40, chains: ['NEAR'] },
       { symbol: 'ETH', priceUsd: 2999, chains: ['Ethereum', 'Base'] },
       { symbol: 'ARB', priceUsd: 0.5, chains: ['Arbitrum'] },
+      { symbol: 'POL', priceUsd: 0.09, chains: ['Polygon'] },
+      { symbol: 'USDT0', priceUsd: 1, chains: ['Arbitrum', 'Optimism'] },
+      // Optimism isn't a Honey chain: dropped.
+      { symbol: 'OP', priceUsd: 0.4, chains: ['Optimism'] },
       { symbol: 'NEAR', priceUsd: 3.5, chains: ['Ethereum', 'NEAR'] },
     ],
     { ETH: m(-2, 3000) },
   );
-  expect(list.map((t) => t.symbol)).toEqual(['ETH', 'NEAR', 'ZEC']);
+  expect(list.map((t) => t.symbol)).toEqual(['ETH', 'NEAR', 'ARB', 'POL', 'USDT0', 'ZEC']);
+  expect(list.find((t) => t.symbol === 'POL')).toMatchObject({ chain: 'Polygon', price: 0.09 });
+  expect(list.find((t) => t.symbol === 'USDT0')).toMatchObject({ chain: 'Arbitrum' });
   expect(list[1]).toMatchObject({ chain: 'NEAR', name: 'NEAR' });
   expect(list[0]).toMatchObject({
     symbol: 'ETH',
@@ -61,7 +67,7 @@ it('lists every 1Click token on a Honey chain, with live numbers where loaded', 
     volume: 10,
     marketCap: 99,
   });
-  expect(list[2]).toMatchObject({
+  expect(list[5]).toMatchObject({
     symbol: 'ZEC',
     name: 'ZEC',
     chain: 'NEAR',
@@ -107,12 +113,12 @@ const ranked = [
     aliases: [],
   },
   { symbol: 'cNEAR', name: 'cNEAR', priceUsd: 3.5, rank: null, chains: ['NEAR'], aliases: [] },
-  { symbol: 'ARB', name: 'Arbitrum', priceUsd: 0.5, rank: 60, chains: ['Arbitrum'] },
+  { symbol: 'OP', name: 'Optimism', priceUsd: 0.5, rank: 60, chains: ['Optimism'] },
 ];
 
 it('keeps the server’s market-cap order, with coin names, logos and 24h numbers', () => {
   const list = liveMarketList(ranked, { BTC: m(9, 69050) });
-  // ARB is only on a chain Honey doesn't hold; BOME ranks by its real cap, not A-Z.
+  // OP is only on a chain Honey doesn't hold; BOME ranks by its real cap, not A-Z.
   expect(list.map((t) => t.symbol)).toEqual(['BTC', 'NEAR', 'BOME', 'cNEAR']);
   expect(list[0]).toMatchObject({
     name: 'Bitcoin',

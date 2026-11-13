@@ -41,6 +41,7 @@ export const EVM_USDC: Record<number, `0x${string}`> = {
   1: '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48',
   8453: '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913',
   42161: '0xaf88d065e77c8cc2239327c5edb3a432268e5831',
+  137: '0x3c499c542cef5e3811e1192ce70d8cc03d5c3359',
 };
 
 export type EvmTransferPlan = Readonly<{
@@ -181,7 +182,7 @@ export async function waitForEvmReceipt(
 export const SOLANA_USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 const SYSTEM_PROGRAM = '11111111111111111111111111111111';
 const TOKEN_PROGRAM = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
-const ATA_PROGRAM = 'ATokenGPvbdKxYTo14Q8T7JpjvYLzMGmhX7vdrSWPmDV';
+const ATA_PROGRAM = 'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL';
 /** Lamports per signature; one signer. */
 export const SOLANA_BASE_FEE = 5_000n;
 
@@ -248,23 +249,30 @@ const u64 = (v: bigint) => {
 type Ix = { program: string; accounts: string[]; data: Uint8Array };
 
 /**
- * A legacy message with one signer (the payer). `writable` lists every non-signer
- * account the instructions write; all others are read-only.
+ * A legacy message with one signer (the payer), or two when `feePayer` is given (Honey's
+ * fee payer first, then the payer). `writable` lists every non-signer account the
+ * instructions write; all others are read-only.
  */
 export function compileSolanaMessage(
   payer: string,
   writable: string[],
   instructions: Ix[],
   recentBlockhash: string,
+  feePayer?: string,
 ): Uint8Array {
+  const signers = feePayer && feePayer !== payer ? [feePayer, payer] : [payer];
   const all = [
-    ...new Set([payer, ...writable, ...instructions.flatMap((i) => [...i.accounts, i.program])]),
+    ...new Set([
+      ...signers,
+      ...writable,
+      ...instructions.flatMap((i) => [...i.accounts, i.program]),
+    ]),
   ];
-  const readonly = all.filter((a) => a !== payer && !writable.includes(a));
-  const keys = [payer, ...writable.filter((a) => a !== payer), ...readonly];
+  const readonly = all.filter((a) => !signers.includes(a) && !writable.includes(a));
+  const keys = [...signers, ...writable.filter((a) => !signers.includes(a)), ...readonly];
   const index = (a: string) => keys.indexOf(a);
   const parts: Uint8Array[] = [
-    Uint8Array.of(1, 0, readonly.length),
+    Uint8Array.of(signers.length, 0, readonly.length),
     shortVec(keys.length),
     ...keys.map(key32),
     key32(recentBlockhash),
@@ -284,9 +292,14 @@ export function compileSolanaMessage(
 
 export type SolanaTransferPlan = Readonly<{
   message: Uint8Array;
-  /** Network fee plus, for a first USDC payment, the recipient account's rent. */
+  /**
+   * What the sender pays: network fee plus, for a first USDC payment, the recipient
+   * account's rent. 0 when Honey's fee payer pays (`sponsored`).
+   */
   feeLamports: bigint;
   createsRecipientAccount: boolean;
+  /** Set when the message names Honey's fee payer: what it would pay. */
+  sponsored?: { feePayer: string; lamports: bigint };
 }>;
 
 /** An SPL token on the classic Token program: its mint and the decimals it must have. */
@@ -315,11 +328,28 @@ async function checkSplMint(rpc: Rpc, token: SplToken) {
     throw new Error('Token decimals don’t match');
 }
 
+/**
+ * A SOL, USDC or classic SPL token payment. With `feePayer` (Honey's fee payer, from
+ * the server), the message has two signers: the fee payer pays the fee and opens the
+ * recipient's token account; the sender signs only the payment.
+ */
 export async function prepareSolanaTransfer(
   rpc: Rpc,
-  input: { from: string; to: string; amount: bigint; token?: 'USDC' | SplToken },
+  input: {
+    from: string;
+    to: string;
+    amount: bigint;
+    token?: 'USDC' | SplToken;
+    feePayer?: string;
+  },
 ): Promise<SolanaTransferPlan> {
-  const { from, to, amount } = input;
+  const { from, to, amount, feePayer } = input;
+  if (feePayer !== undefined) {
+    key32(feePayer);
+    if (feePayer === from || feePayer === to) throw new Error('Invalid fee payer');
+  }
+  /** Both signatures when Honey pays. */
+  const networkFee = feePayer ? 2n * SOLANA_BASE_FEE : SOLANA_BASE_FEE;
   const token: SplToken | undefined =
     input.token === 'USDC' ? { mint: SOLANA_USDC_MINT, decimals: 6 } : input.token;
   key32(from);
@@ -336,7 +366,9 @@ export async function prepareSolanaTransfer(
   if (!recent) throw new Error('No recent blockhash');
   const lamports = BigInt(balance?.value ?? 0);
   if (!token) {
-    if (lamports < amount + SOLANA_BASE_FEE) throw new Error('Not enough SOL for amount + fee');
+    const fee = feePayer ? 0n : SOLANA_BASE_FEE;
+    if (lamports < amount + fee)
+      throw new Error(feePayer ? 'Not enough SOL' : 'Not enough SOL for amount + fee');
     const message = compileSolanaMessage(
       from,
       [to],
@@ -348,8 +380,14 @@ export async function prepareSolanaTransfer(
         },
       ],
       recent,
+      feePayer,
     );
-    return Object.freeze({ message, feeLamports: SOLANA_BASE_FEE, createsRecipientAccount: false });
+    return Object.freeze({
+      message,
+      feeLamports: fee,
+      createsRecipientAccount: false,
+      sponsored: feePayer ? { feePayer, lamports: networkFee } : undefined,
+    });
   }
   const { mint, decimals } = token;
   key32(mint);
@@ -373,16 +411,18 @@ export async function prepareSolanaTransfer(
   if (BigInt(sourceBalance?.value?.amount ?? '0') < amount)
     throw new Error(mint === SOLANA_USDC_MINT ? 'Not enough USDC' : 'Not enough tokens');
   const creates = !destinationInfo?.value;
-  const feeLamports = SOLANA_BASE_FEE + (creates ? BigInt(Number(rent) || 0) : 0n);
+  const cost = networkFee + (creates ? BigInt(Number(rent) || 0) : 0n);
+  const feeLamports = feePayer ? 0n : cost;
   if (lamports < feeLamports) throw new Error('Not enough SOL to pay the network fee');
   const message = compileSolanaMessage(
     from,
     [source, destination],
     [
-      // Create the recipient's token account if it doesn't exist (no-op if it does).
+      // Create the recipient's token account if it doesn't exist (no-op if it does),
+      // funded by whoever pays the fee.
       {
         program: ATA_PROGRAM,
-        accounts: [from, destination, to, mint, SYSTEM_PROGRAM, TOKEN_PROGRAM],
+        accounts: [feePayer ?? from, destination, to, mint, SYSTEM_PROGRAM, TOKEN_PROGRAM],
         data: Uint8Array.of(1),
       },
       // TransferChecked: amount and decimals are checked against the mint.
@@ -393,8 +433,14 @@ export async function prepareSolanaTransfer(
       },
     ],
     recent,
+    feePayer,
   );
-  return Object.freeze({ message, feeLamports, createsRecipientAccount: creates });
+  return Object.freeze({
+    message,
+    feeLamports,
+    createsRecipientAccount: creates,
+    sponsored: feePayer ? { feePayer, lamports: cost } : undefined,
+  });
 }
 
 /** Signs a one-signer message: the wire transaction and its id (the signature). */
@@ -404,6 +450,16 @@ export function signSolanaTransfer(key: Uint8Array, message: Uint8Array) {
     signature: base58.encode(signature),
     wire: base64.encode(concatBytes(shortVec(1), signature, message)),
   };
+}
+
+/**
+ * Signs a two-signer message as its second signer (the sender), leaving the first
+ * signature (Honey's fee payer) empty for the server to fill: base64 wire bytes.
+ */
+export function signSponsoredSolanaTransfer(key: Uint8Array, message: Uint8Array) {
+  if (message[0] !== 2) throw new Error('Not a fee-payer transaction');
+  const signature = ed25519.sign(message, key);
+  return base64.encode(concatBytes(shortVec(2), new Uint8Array(64), signature, message));
 }
 
 export async function broadcastSolana(rpc: Rpc, wire: string): Promise<string> {

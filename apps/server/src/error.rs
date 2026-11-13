@@ -22,6 +22,10 @@ pub enum AppError {
     Unauthorized,
     #[error("too many requests, try again shortly")]
     TooManyRequests,
+    /// Honey's free gas doesn't cover this transaction (allowance used up, a chain's
+    /// daily total reached, no price, or the relayer is low): the app pays its own fee.
+    #[error("Honey isn't covering gas right now — you pay this one")]
+    GasNotCovered,
     /// Temporarily out of room (e.g. the pairing mailbox is full); retry later.
     #[error("server busy, try again shortly")]
     Busy,
@@ -59,6 +63,7 @@ impl IntoResponse for AppError {
             Self::Forbidden => (StatusCode::FORBIDDEN, "forbidden"),
             Self::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized"),
             Self::TooManyRequests => (StatusCode::TOO_MANY_REQUESTS, "too_many_requests"),
+            Self::GasNotCovered => (StatusCode::PAYMENT_REQUIRED, "gas_not_covered"),
             Self::Busy => (StatusCode::SERVICE_UNAVAILABLE, "busy"),
             Self::PayloadTooLarge => (StatusCode::PAYLOAD_TOO_LARGE, "payload_too_large"),
             Self::Timeout => (StatusCode::GATEWAY_TIMEOUT, "timeout"),

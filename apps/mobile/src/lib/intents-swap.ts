@@ -39,7 +39,7 @@ import {
   sameAddress,
 } from '@/lib/intents-quote';
 import { viewStorageRegistered } from '@/lib/jar-dao-core';
-import type { Chain } from '@/lib/mock-wallet';
+import { type Chain, EVM_CHAIN_IDS, NATIVE_COIN } from '@/lib/mock-wallet';
 import { prepareSend, type SendPlan, validRecipient } from '@/lib/send';
 import { createStore } from '@/lib/store';
 import type { TokenRef } from '@/lib/swap';
@@ -101,10 +101,12 @@ export const chainName = (blockchain: string) =>
 const blockchainOf = (chain: string) =>
   Object.keys(BLOCKCHAINS).find((code) => BLOCKCHAINS[code] === chain) ?? chain.toLowerCase();
 
-/** Chains this wallet can pay from: lib/send.ts signs on these four. */
+/** Chains this wallet can pay from: lib/send.ts signs on these. */
 const PAYABLE: Record<string, Chain> = {
   eth: 'Ethereum',
   base: 'Base',
+  arb: 'Arbitrum',
+  pol: 'Polygon',
   sol: 'Solana',
   near: 'NEAR',
 };
@@ -170,10 +172,10 @@ export const FALLBACK_SWAP_TOKENS: readonly TokenRef[] = [
 ];
 
 /** Decimals lib/send.ts pays a chain's own coin with; 1Click's entry must agree. */
-const NATIVE_DECIMALS: Record<string, number> = { ETH: 18, SOL: 9 };
+const NATIVE_DECIMALS: Record<string, number> = { ETH: 18, POL: 18, SOL: 9 };
 /** At most this many decimals are typed (lib/send.ts shows amounts to 8). */
 export const MAX_INPUT_DECIMALS = 8;
-const EVM_CHAIN_ID: Partial<Record<Chain, number>> = { Ethereum: 1, Base: 8453 };
+const EVM_CHAIN_ID = EVM_CHAIN_IDS;
 
 /** Slippage every swap asks for: 1%. */
 export const SWAP_SLIPPAGE_BPS = 100;
@@ -201,14 +203,14 @@ export const tokenRef = (t: OneClickToken): TokenRef => ({
 });
 
 /** Where a symbol named without a network is looked for first: the networks this wallet pays from. */
-const HOME_BLOCKCHAINS = ['eth', 'base', 'sol', 'near'];
+const HOME_BLOCKCHAINS = ['eth', 'base', 'sol', 'near', 'arb', 'pol'];
 
 /**
  * The swap token for a symbol named without an asset (a token page's Buy): 1Click's entry
- * with that symbol on `chain` when given and listed, else on Ethereum, Base, Solana or
- * NEAR (in that order), else on any network. Native NEAR is bought as wNEAR on NEAR, the
- * way 1Click trades it. Tokens the app names itself (ETH, SOL, USDC) keep the plain ref
- * the pickers use. Null when 1Click doesn't list the symbol.
+ * with that symbol on `chain` when given and listed, else on Ethereum, Base, Solana,
+ * NEAR, Arbitrum or Polygon (in that order), else on any network. Native NEAR is bought
+ * as wNEAR on NEAR, the way 1Click trades it. Tokens the app names itself (ETH, POL, SOL,
+ * USDC) keep the plain ref the pickers use. Null when 1Click doesn't list the symbol.
  */
 export function swapRefForSymbol(
   tokens: OneClickToken[],
@@ -232,9 +234,9 @@ export function swapRefForSymbol(
 }
 
 /**
- * Whether this wallet can pay `t` with lib/send.ts: the chain's own coin on Ethereum,
- * Base and Solana, any ERC-20 on Ethereum and Base, any SPL token on Solana (classic
- * Token program, checked when paying), and any NEP-141 token on NEAR. Native NEAR isn't
+ * Whether this wallet can pay `t` with lib/send.ts: the chain's own coin (ETH, POL on
+ * Polygon, SOL), any ERC-20 on Ethereum, Base, Arbitrum and Polygon, any SPL token on
+ * Solana (classic Token program, checked when paying), and any NEP-141 token on NEAR. Native NEAR isn't
  * listed by 1Click (it trades wNEAR, which a plain NEAR transfer doesn't pay).
  */
 export function canSell(t: OneClickToken) {
@@ -243,7 +245,7 @@ export function canSell(t: OneClickToken) {
   if (t.blockchain === 'near')
     return !!contract && isNearAccountId(contract) && t.assetId === `nep141:${contract}`;
   if (t.blockchain === 'sol') return contract ? isSolanaAddress(contract) : t.symbol === 'SOL';
-  return contract ? isAddress(contract) : t.symbol === 'ETH';
+  return contract ? isAddress(contract) : t.symbol === NATIVE_COIN[PAYABLE[t.blockchain]];
 }
 
 /** Native NEAR: 1Click trades wNEAR, which a plain NEAR transfer doesn't pay. */
@@ -293,7 +295,14 @@ export type OneClickToken = {
 
 const text = (v: unknown): v is string => typeof v === 'string' && v.length > 0 && v.length <= 256;
 
-/** Well-formed entries of 1Click's `/v0/tokens` body; anything else is dropped. */
+/**
+ * 1Click keeps retired bridge assets listed as "USDC(DEPRECATED)" and the like, often on
+ * the same contract as the live entry (Polygon's USDC, USDT, WETH and POL), which would
+ * make a token's contract match twice. They're dropped: the live entry trades the token.
+ */
+const isDeprecated = (symbol: string) => /\(deprecated\)\s*$/i.test(symbol);
+
+/** Well-formed, live entries of 1Click's `/v0/tokens` body; anything else is dropped. */
 export function parseOneClickTokens(body: unknown): OneClickToken[] {
   if (!Array.isArray(body)) return [];
   const out: OneClickToken[] = [];
@@ -307,7 +316,8 @@ export function parseOneClickTokens(body: unknown): OneClickToken[] {
       typeof r.decimals !== 'number' ||
       !Number.isInteger(r.decimals) ||
       r.decimals < 0 ||
-      r.decimals > 38
+      r.decimals > 38 ||
+      isDeprecated(r.symbol)
     )
       continue;
     out.push({

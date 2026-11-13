@@ -2,6 +2,8 @@ pub mod aave;
 pub mod account_identity;
 pub mod capabilities;
 pub mod confidential_intents;
+pub mod gas;
+pub mod gas_evm;
 pub mod health;
 pub mod identity;
 pub mod jar_buys;

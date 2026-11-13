@@ -49,10 +49,12 @@ tower-http.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
+# Signs Honey's EVM relayer transactions (EIP-7702 gas sponsorship); already in the
+# tree through alloy-consensus's k256 feature.
+k256 = { version = "0.13.4", features = ["ecdsa"] }
 
 [dev-dependencies]
 tower.workspace = true
-k256 = { version = "0.13.4", features = ["ecdsa"] }
 tokio-tungstenite = "0.29"
 
 [lints]

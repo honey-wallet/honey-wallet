@@ -197,7 +197,7 @@ describe('every NEAR Intents token', () => {
   ]);
   const byId = (id: string) => MORE.find((t) => t.assetId === id) as (typeof MORE)[number];
 
-  it('sells any token on the four networks this wallet pays from, buys any token', () => {
+  it('sells any token on the networks this wallet pays from, buys any token', () => {
     expect(canSell(byId('nep141:eth-0xdac17f958d2ee523a2206206994597c13d831ec7.omft.near'))).toBe(
       true,
     );
@@ -206,7 +206,8 @@ describe('every NEAR Intents token', () => {
     );
     expect(canSell(byId('nep141:wrap.near'))).toBe(true);
     expect(canSell(byId('nep141:btc.omft.near'))).toBe(false);
-    expect(canSell(byId('nep141:arb.omft.near'))).toBe(false);
+    // Arbitrum pays with the same EVM key: its ETH is sellable.
+    expect(canSell(byId('nep141:arb.omft.near'))).toBe(true);
     const btc = tokenRef(byId('nep141:btc.omft.near'));
     expect(btc).toEqual({ symbol: 'BTC', chain: 'Bitcoin', assetId: 'nep141:btc.omft.near' });
     expect(canSellRef(btc, MORE)).toBe(false);
@@ -237,6 +238,115 @@ describe('every NEAR Intents token', () => {
     expect(() =>
       assetFor(MORE, { symbol: 'BTC', chain: 'Arbitrum', assetId: 'nep141:btc.omft.near' }),
     ).toThrow('isn’t available');
+  });
+});
+
+// Arbitrum and Polygon as 1Click's live list has them (13 Nov 2026): Polygon keeps retired
+// bridge entries ("…(DEPRECATED)", nep245) beside the live ones, some on the same contract.
+const EVM_L2 = parseOneClickTokens([
+  { assetId: 'nep141:arb.omft.near', decimals: 18, blockchain: 'arb', symbol: 'ETH', price: 2000 },
+  {
+    assetId: 'nep141:arb-0xaf88d065e77c8cc2239327c5edb3a432268e5831.omft.near',
+    decimals: 6,
+    blockchain: 'arb',
+    symbol: 'USDC',
+    price: 1,
+    contractAddress: '0xaf88d065e77c8cc2239327c5edb3a432268e5831',
+  },
+  {
+    assetId: 'nep141:arb-0x912ce59144191c1204e64559fe8253a0e49e6548.omft.near',
+    decimals: 18,
+    blockchain: 'arb',
+    symbol: 'ARB',
+    price: 0.15,
+    contractAddress: '0x912ce59144191c1204e64559fe8253a0e49e6548',
+  },
+  {
+    assetId: 'nep141:arb-0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9.omft.near',
+    decimals: 6,
+    blockchain: 'arb',
+    symbol: 'USDT0',
+    price: 1,
+    contractAddress: '0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9',
+  },
+  {
+    assetId: 'nep245:v2_1.omni.hot.tg:137_11111111111111111111',
+    decimals: 18,
+    blockchain: 'pol',
+    symbol: 'POL(DEPRECATED)',
+    price: 0.09,
+  },
+  { assetId: 'nep141:pol.omdep.near', decimals: 18, blockchain: 'pol', symbol: 'POL', price: 0.09 },
+  {
+    assetId: 'nep245:v2_1.omni.hot.tg:137_qiStmoQJDQPTebaPjgx5VBxZv6L',
+    decimals: 6,
+    blockchain: 'pol',
+    symbol: 'USDC(DEPRECATED)',
+    price: 1,
+    contractAddress: '0x3c499c542cef5e3811e1192ce70d8cc03d5c3359',
+  },
+  {
+    assetId: 'nep141:pol-0x3c499c542cef5e3811e1192ce70d8cc03d5c3359.omdep.near',
+    decimals: 6,
+    blockchain: 'pol',
+    symbol: 'USDC',
+    price: 1,
+    contractAddress: '0x3c499c542cef5e3811e1192ce70d8cc03d5c3359',
+  },
+  {
+    assetId: 'nep141:pol-0xc2132d05d31c914a87c6611c10748aeb04b58e8f.omdep.near',
+    decimals: 6,
+    blockchain: 'pol',
+    symbol: 'USDT',
+    price: 1,
+    contractAddress: '0xc2132d05d31c914a87c6611c10748aeb04b58e8f',
+  },
+]);
+
+describe('Arbitrum and Polygon', () => {
+  const ids = (refs: { symbol: string; chain: string }[]) =>
+    refs.map((r) => assetFor(EVM_L2, r).assetId);
+
+  it('drops 1Click’s retired entries so each contract matches once', () => {
+    expect(EVM_L2.some((t) => /DEPRECATED/.test(t.symbol))).toBe(false);
+    expect(EVM_L2.filter((t) => t.blockchain === 'pol')).toHaveLength(3);
+  });
+
+  it('maps ETH, POL and USDC by name on their own networks', () => {
+    expect(
+      ids([
+        { symbol: 'ETH', chain: 'Arbitrum' },
+        { symbol: 'USDC', chain: 'Arbitrum' },
+        { symbol: 'POL', chain: 'Polygon' },
+        { symbol: 'USDC', chain: 'Polygon' },
+      ]),
+    ).toEqual([
+      'nep141:arb.omft.near',
+      'nep141:arb-0xaf88d065e77c8cc2239327c5edb3a432268e5831.omft.near',
+      'nep141:pol.omdep.near',
+      'nep141:pol-0x3c499c542cef5e3811e1192ce70d8cc03d5c3359.omdep.near',
+    ]);
+    // Polygon's coin is POL: there is no native ETH there.
+    expect(() => assetFor(EVM_L2, { symbol: 'ETH', chain: 'Polygon' })).toThrow('isn’t available');
+  });
+
+  it('sells the coin and any ERC-20 on both, and finds ARB and USDT0 by symbol', () => {
+    for (const t of EVM_L2) expect(canSell(t)).toBe(true);
+    expect(canSellRef({ symbol: 'POL', chain: 'Polygon' })).toBe(true);
+    expect(swapRefForSymbol(EVM_L2, 'ARB')).toEqual({
+      symbol: 'ARB',
+      chain: 'Arbitrum',
+      assetId: 'nep141:arb-0x912ce59144191c1204e64559fe8253a0e49e6548.omft.near',
+    });
+    expect(swapRefForSymbol(EVM_L2, 'POL')).toEqual({ symbol: 'POL', chain: 'Polygon' });
+    expect(swapRefForSymbol(EVM_L2, 'USDT0')?.chain).toBe('Arbitrum');
+    expect(
+      unsupportedReason(
+        { symbol: 'POL', chain: 'Polygon' },
+        { symbol: 'USDC', chain: 'Arbitrum' },
+        EVM_L2,
+      ),
+    ).toBeNull();
   });
 });
 
@@ -541,6 +651,34 @@ describe('quote → pay', () => {
     });
   });
 
+  it('pays POL on Polygon from the same EVM address, refunded there', async () => {
+    const POL = 'nep141:pol.omdep.near';
+    const prepare = vi.fn(async () =>
+      plan({ chain: 'Polygon', symbol: 'POL', amount: '3', fee: '0.001 POL', feeSymbol: 'POL' }),
+    );
+    await prepareSwapPayment(
+      swap({
+        sell: { symbol: 'POL', chain: 'Polygon' },
+        originAsset: POL,
+        amountIn: '3000000000000000000',
+      }),
+      {
+        fetcher: oneClick(
+          { originAsset: POL, amount: '3000000000000000000' },
+          { amountIn: '3000000000000000000' },
+        ),
+        prepare,
+        now: () => NOW,
+      },
+    );
+    expect(prepare).toHaveBeenCalledWith(expect.objectContaining({ id: 'seed-0' }), {
+      chain: 'Polygon',
+      symbol: 'POL',
+      to: DEPOSIT,
+      amount: '3',
+    });
+  });
+
   it('won’t start a swap to NEAR USDC an account can’t receive', async () => {
     const ask = vi.fn();
     await expect(
@@ -676,7 +814,9 @@ describe('payout wording', () => {
     expect(shownInWallet('Base')).toBe(true);
     expect(shownInWallet('Solana')).toBe(true);
     expect(shownInWallet('BNB Chain')).toBe(false);
-    expect(shownInWallet('Polygon')).toBe(false);
+    expect(shownInWallet('Arbitrum')).toBe(true);
+    expect(shownInWallet('Polygon')).toBe(true);
+    expect(shownInWallet('Optimism')).toBe(false);
   });
 
   it('warns about exchange memos on chains that use them', () => {

@@ -6,7 +6,7 @@ import type {
 } from '@honey-wallet/api-client';
 import { useEffect } from 'react';
 import { api } from '@/lib/api';
-import type { Activity, Chain, Token } from '@/lib/mock-wallet';
+import { type Activity, type Chain, nativeCoinOf, type Token } from '@/lib/mock-wallet';
 import { createStore } from '@/lib/store';
 import type { AddedWallet } from '@/lib/wallets';
 
@@ -130,11 +130,13 @@ export function toTokens(holdings: PortfolioHolding[]): Token[] {
   return [...bySymbol.values()].sort((a, b) => b.usd - a.usd || b.amount - a.amount);
 }
 
-const CHAINS: Chain[] = ['Ethereum', 'Base', 'Solana', 'NEAR'];
+const CHAINS: Chain[] = ['Ethereum', 'Base', 'Arbitrum', 'Polygon', 'Solana', 'NEAR'];
 /** What lib/send pays by name on each network; anything else needs its contract. */
 const BY_NAME: Partial<Record<Chain, string[]>> = {
   Ethereum: ['ETH', 'USDC'],
   Base: ['ETH', 'USDC'],
+  Arbitrum: ['ETH', 'USDC'],
+  Polygon: ['POL', 'USDC'],
   Solana: ['SOL', 'USDC'],
   NEAR: ['NEAR', 'USDC'],
 };
@@ -182,7 +184,7 @@ export const formatAmount = (n: number) =>
   n >= 1 ? n.toLocaleString('en-US', { maximumFractionDigits: 4 }) : n.toPrecision(3);
 
 /** Coins every chain here pays fees in; never treated as spam. */
-const NATIVE = new Set(['ETH', 'SOL', 'NEAR', 'BTC', 'USDC', 'USDT']);
+const NATIVE = new Set(['ETH', 'POL', 'SOL', 'NEAR', 'BTC', 'USDC', 'USDT']);
 const SPAM_TEXT =
   /https?:|www\.|\.(com|io|xyz|org|net|app|gift|site|top)\b|claim|visit|reward|airdrop|voucher|bonus/i;
 
@@ -231,8 +233,7 @@ export function toActivity(items: ChainActivityItem[], now = new Date()): Activi
     return {
       id: `${item.chain}:${item.hash}`,
       kind,
-      symbol:
-        item.symbol ?? (item.chain === 'NEAR' ? 'NEAR' : item.chain === 'Solana' ? 'SOL' : 'ETH'),
+      symbol: item.symbol ?? nativeCoinOf(item.chain),
       detail: item.failed ? `${detail} (failed)` : `${detail} · ${item.chain}`,
       month,
       date: dayLabel(date),

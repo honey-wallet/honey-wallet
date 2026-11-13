@@ -19,6 +19,7 @@ import {
   type PortfolioHolding,
 } from '@honey-wallet/api-client';
 import {
+  erc20TransferCall,
   evmAddressOfKey,
   evmNetwork,
   isNearAccountId,
@@ -39,6 +40,7 @@ import { api } from '@/lib/api';
 import { confirmOwner } from '@/lib/auth';
 import { backendSessionToken } from '@/lib/backend-session';
 import { prepareEvmSend } from '@/lib/dapp-sign';
+import { sendSponsored, sponsorEvm } from '@/lib/evm-gas';
 import {
   atomic,
   quoteChanged as changed,
@@ -210,6 +212,9 @@ export type JarBuyDeps = {
   confirm: (reason: string) => Promise<boolean>;
   /** NEAR Intents' token list with its prices, read from 1Click itself (not Honey). */
   tokens: (fetcher: typeof fetch) => Promise<PricedToken[]>;
+  /** Honey paying the Base legs' gas in one batch (EIP-7702), when it will. */
+  sponsorEvm: typeof sponsorEvm;
+  sendSponsored: typeof sendSponsored;
 };
 
 /** A 1Click token's id, decimals and USD price (null when 1Click has none). */
@@ -232,6 +237,8 @@ const defaults: JarBuyDeps = {
   confirm: (reason) => confirmOwner(reason, true),
   // Loaded on demand, like the rest: Swap's module keeps the cached list.
   tokens: async (fetcher) => (await import('@/lib/intents-swap')).fetchSwapTokens(fetcher),
+  sponsorEvm,
+  sendSponsored,
 };
 
 /** Routes with money on them that can't be paid in full: any one stops the whole buy. */
@@ -441,8 +448,9 @@ export async function verifyWithOneClick(
 
 /**
  * Pays every leg: one USDC transfer to its deposit address on the network it's paid
- * from, signed here after you confirm once. Base legs are signed directly, each with
- * the next nonce; legs paid on Ethereum, Solana or NEAR go through lib/send.ts (its fee
+ * from, signed here after you confirm once. Base legs go out in one batch Honey pays the
+ * gas of when it will (EIP-7702, all legs sharing its transaction), else each is signed
+ * directly with the next nonce; legs paid on Ethereum, Solana or NEAR go through lib/send.ts (its fee
  * and balance checks, and the token's own transfer). Returns each leg with its
  * transaction hash; a leg that fails to send stops the rest, and already-sent legs
  * still complete or refund on their own.
@@ -473,16 +481,36 @@ export async function payJarBuy(
   const stillActive = () => wallets.get().activeId === wallet.id;
   try {
     let nonce = 0;
+    // Honey pays the Base legs' gas in one batch when it will: one transaction for all.
+    let sponsoredHash: Hex | null = null;
     if (key && client) {
       if (evmAddressOfKey(key).toLowerCase() !== from.toLowerCase())
         throw new Error('Wallet key does not match.');
-      nonce = await client.getTransactionCount({ address: from, blockTag: 'pending' });
+      const baseLegs = out.filter((l) => (l.origin ?? 'Base') === 'Base');
+      const sponsorship =
+        baseLegs.length <= 6 && baseLegs.every((l) => isAddress(l.depositAddress))
+          ? await d.sponsorEvm({
+              chainId: BASE_CHAIN_ID,
+              account: from,
+              calls: baseLegs.map((l) =>
+                erc20TransferCall(USDC_BASE, l.depositAddress as Hex, BigInt(l.amountIn)),
+              ),
+            })
+          : null;
+      if (sponsorship) {
+        for (const l of baseLegs) checkDeadline(l.deadline);
+        sponsoredHash = (await d.sendSponsored(key, sponsorship)).hash;
+      } else {
+        nonce = await client.getTransactionCount({ address: from, blockTag: 'pending' });
+      }
     }
     for (const leg of out) {
       // The confirm prompt may have sat open; never pay into an expiring quote.
       checkDeadline(leg.deadline);
       const origin = leg.origin ?? 'Base';
-      if (origin === 'Base') {
+      if (origin === 'Base' && sponsoredHash) {
+        leg.txHash = sponsoredHash;
+      } else if (origin === 'Base') {
         if (!key || !client) throw new Error('Base is not available.');
         const data = encodeFunctionData({
           abi: erc20Abi,

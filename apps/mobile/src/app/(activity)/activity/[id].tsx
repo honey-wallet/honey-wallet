@@ -16,7 +16,14 @@ import { tap } from '@/lib/haptics';
 import { type IntentsSwap, unitsText, useIntentsSwaps } from '@/lib/intents-swap';
 import type { BuyLeg } from '@/lib/jar-buy';
 import { LOADS } from '@/lib/loads';
-import { ACTIVITY, ACTIVITY_DETAILS, type Chain, chainSymbol, formatUsd } from '@/lib/mock-wallet';
+import {
+  ACTIVITY,
+  ACTIVITY_DETAILS,
+  type Chain,
+  chainSymbol,
+  formatUsd,
+  nativeCoinOf,
+} from '@/lib/mock-wallet';
 import { formatAmount, portfolios } from '@/lib/portfolio';
 import { type ThesisJar, useThesisJars } from '@/lib/thesis';
 import { showToast } from '@/lib/toast';
@@ -34,6 +41,8 @@ const TITLE = {
 const EXPLORER: Record<Chain, { name: string; tx: (hash: string) => string }> = {
   Ethereum: { name: 'Etherscan', tx: (h) => `https://etherscan.io/tx/${h}` },
   Base: { name: 'Basescan', tx: (h) => `https://basescan.org/tx/${h}` },
+  Arbitrum: { name: 'Arbiscan', tx: (h) => `https://arbiscan.io/tx/${h}` },
+  Polygon: { name: 'Polygonscan', tx: (h) => `https://polygonscan.com/tx/${h}` },
   Solana: { name: 'Solscan', tx: (h) => `https://solscan.io/tx/${h}` },
   NEAR: { name: 'NearBlocks', tx: (h) => `https://nearblocks.io/txns/${h}` },
   Tron: { name: 'Tronscan', tx: (h) => `https://tronscan.org/#/transaction/${h}` },
@@ -45,13 +54,13 @@ const EXPLORER_NAME: Record<string, string> = {
   Ethereum: 'Etherscan',
   Base: 'Basescan',
   Arbitrum: 'Arbiscan',
+  Polygon: 'Polygonscan',
   Solana: 'Solscan',
   NEAR: 'NearBlocks',
 };
-const EXPLORER_TX: Record<string, (hash: string) => string> = {
-  ...Object.fromEntries(Object.entries(EXPLORER).map(([chain, e]) => [chain, e.tx])),
-  Arbitrum: (h) => `https://arbiscan.io/tx/${h}`,
-};
+const EXPLORER_TX: Record<string, (hash: string) => string> = Object.fromEntries(
+  Object.entries(EXPLORER).map(([chain, e]) => [chain, e.tx]),
+);
 /** Where NEAR Intents shows a swap, by its deposit address. */
 const intentsUrl = (depositAddress: string) =>
   `https://explorer.near-intents.org/transactions/${depositAddress}`;
@@ -305,7 +314,7 @@ const DIRECTION_TITLE = { sent: 'Sent', received: 'Received', other: 'Transactio
 /** An on-chain transaction from the portfolio read. */
 function ChainDetail({ item }: { item: ChainActivityItem }) {
   const styles = useStyles();
-  const coin = item.chain === 'NEAR' ? 'NEAR' : item.chain === 'Solana' ? 'SOL' : 'ETH';
+  const coin = nativeCoinOf(item.chain);
   const symbol = item.symbol ?? coin;
   const moved = item.amount != null && item.symbol;
   return (

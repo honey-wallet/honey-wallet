@@ -56,6 +56,12 @@ import type {
   ApiErrorBody,
   Capabilities,
   ChartRangeId,
+  EvmSponsorPlan,
+  EvmSponsorPrepareRequest,
+  EvmSponsorStatus,
+  EvmSponsorSubmitRequest,
+  EvmSponsorSubmitted,
+  GasAllowance,
   Health,
   HyperliquidPerpsAccountState,
   JarBuyQuote,
@@ -69,6 +75,8 @@ import type {
   JarDaoSponsorResult,
   JarDaoState,
   MorphoIntent,
+  NearGasRelayRequest,
+  NearGasRelayResult,
   NewPool,
   PairChannel,
   PairMessage,
@@ -99,6 +107,8 @@ import type {
   SocialPublishJarRequest,
   SocialTradeRequest,
   SocialTradeResult,
+  SolanaSponsorRequest,
+  SolanaSponsorResult,
   StartThesis,
   StealthJarBoxAccess,
   StealthJarBoxRequest,
@@ -390,6 +400,62 @@ export function createApiClient({ baseUrl, fetch: fetchImpl = fetch }: ApiClient
         throw error;
       }
     },
+    /** The signed-in person's free gas, and which chains Honey pays fees on now. */
+    gasAllowance: (token: string, init?: RequestInit) =>
+      request<GasAllowance>('/api/v1/gas/allowance', authorized(token, init)),
+    /**
+     * Asks Honey to co-sign and send a Solana payment it pays the fee for. Throws
+     * `ApiError` when Honey refused before signing (402 `gas_not_covered`, 4xx): the
+     * transaction can never land, so the app may pay its own fee instead.
+     */
+    solanaSponsor: (token: string, input: SolanaSponsorRequest, init?: RequestInit) =>
+      request<SolanaSponsorResult>(
+        '/api/v1/gas/solana/sponsor',
+        authorizedJson(token, { transaction: input.transaction }, init),
+      ),
+    /** Asks Honey's NEAR relayer to pay the gas of a token send or Intents deposit. */
+    nearGasRelay: (token: string, input: NearGasRelayRequest, init?: RequestInit) =>
+      request<NearGasRelayResult>(
+        '/api/v1/gas/near/relay',
+        authorizedJson(token, { signedDelegate: input.signedDelegate }, init),
+      ),
+    /**
+     * What the wallet signs for Honey to pay its gas on Base, Arbitrum or Polygon.
+     * `ApiError` 402 `gas_not_covered` when Honey won't: pay your own gas.
+     */
+    evmSponsorPrepare: (token: string, input: EvmSponsorPrepareRequest, init?: RequestInit) =>
+      request<EvmSponsorPlan>(
+        '/api/v1/gas/evm/prepare',
+        authorizedJson(
+          token,
+          { chainId: input.chainId, account: input.account, calls: input.calls },
+          init,
+        ),
+      ),
+    /** Hands Honey's relayer the signed batch (and first-time 7702 authorization). */
+    evmSponsorSubmit: (token: string, input: EvmSponsorSubmitRequest, init?: RequestInit) =>
+      request<EvmSponsorSubmitted>(
+        '/api/v1/gas/evm/submit',
+        authorizedJson(
+          token,
+          {
+            chainId: input.chainId,
+            account: input.account,
+            calls: input.calls,
+            nonce: input.nonce,
+            deadline: input.deadline,
+            signature: input.signature,
+            authorization: input.authorization,
+          },
+          init,
+        ),
+      ),
+    /** A sponsored transaction's outcome. */
+    evmSponsorStatus: (token: string, id: string, init?: RequestInit) =>
+      request<EvmSponsorStatus>(
+        `/api/v1/gas/evm/sponsorships/${encodeURIComponent(id)}`,
+        authorized(token, init),
+      ),
     /** Registers this phone's Expo push token for the signed-in person. */
     registerPushToken: (token: string, input: PushTokenRequest, init?: RequestInit) =>
       request<PushTokenResult>(

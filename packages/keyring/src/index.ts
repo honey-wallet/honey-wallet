@@ -191,6 +191,7 @@ function concat(a: Uint8Array, b: Uint8Array) {
 }
 
 export * from './backup';
+export * from './evm-sponsor';
 export * from './local-vault';
 export * from './near';
 export * from './networks';

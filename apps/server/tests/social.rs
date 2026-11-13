@@ -140,6 +140,30 @@ async fn one_click(list: &[(&str, f64)], swaps: Swaps) -> (Arc<MarketData>, Stri
     (market, base)
 }
 
+/// A 1Click double listing only wNEAR at $0.10, so relays and top-ups can be priced
+/// for the free-gas ledger (`gas_allowance`) without nearing its $1 limits.
+async fn near_market() -> Arc<MarketData> {
+    let body = json!([{ "assetId": "nep141:wrap.near", "blockchain": "near", "symbol": "wNEAR",
+                        "decimals": 24, "price": 0.1, "contractAddress": "wrap.near" }])
+    .to_string();
+    let app = Router::new().route(
+        "/tokens",
+        get(move || {
+            let body = body.clone();
+            async move { ([("content-type", "application/json")], body) }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    Arc::new(MarketData::with_bases(
+        reqwest::Client::new(),
+        base.clone(),
+        base.clone(),
+        base,
+    ))
+}
+
 /// A 1Click status record: USDC on Base for BTC, refunds to `refund_to`.
 fn swap_record(status: &str, refund_to: &str) -> Value {
     json!({
@@ -1563,7 +1587,11 @@ async fn group_jars_invite_create_pay_buy_publish_leave_and_cash_out() {
     .await;
     let chain: SharedChain = Arc::default();
     let rpc = near_rpc(chain.clone()).await;
-    let dao_reader = Arc::new(honey_server::jar_dao::JarDao::new(rpc.clone(), false).unwrap());
+    let dao_reader = Arc::new(
+        honey_server::jar_dao::JarDao::new(rpc.clone(), false)
+            .unwrap()
+            .with_market(Some(near_market().await)),
+    );
     let app = routes::social::router_with(
         Some(identity.clone()),
         Some(market),
@@ -2375,7 +2403,11 @@ async fn group_jar_gas_relay_pays_only_for_a_members_own_group_calls() {
     let eve = bearer(&identity, 43).await;
     let chain: SharedChain = Arc::default();
     let rpc = near_rpc(chain.clone()).await;
-    let reader = Arc::new(honey_server::jar_dao::JarDao::new(rpc.clone(), false).unwrap());
+    let reader = Arc::new(
+        honey_server::jar_dao::JarDao::new(rpc.clone(), false)
+            .unwrap()
+            .with_market(Some(near_market().await)),
+    );
     let app =
         routes::social::router_with(Some(identity.clone()), None, String::new(), Some(reader));
     for (token, handle, name) in [
@@ -2486,8 +2518,16 @@ async fn group_jar_gas_relay_pays_only_for_a_members_own_group_calls() {
             .unwrap()
             .with_poll(std::time::Duration::from_millis(5)),
     );
-    let switched_on = Arc::new(honey_server::jar_dao::JarDao::new(rpc.clone(), true).unwrap());
-    let switched_off = Arc::new(honey_server::jar_dao::JarDao::new(rpc.clone(), false).unwrap());
+    let switched_on = Arc::new(
+        honey_server::jar_dao::JarDao::new(rpc.clone(), true)
+            .unwrap()
+            .with_market(Some(near_market().await)),
+    );
+    let switched_off = Arc::new(
+        honey_server::jar_dao::JarDao::new(rpc.clone(), false)
+            .unwrap()
+            .with_market(Some(near_market().await)),
+    );
     let on = routes::jar_dao::router(
         Some(identity.clone()),
         switched_on.clone(),
@@ -2564,6 +2604,16 @@ async fn group_jar_gas_relay_pays_only_for_a_members_own_group_calls() {
             .await
             .unwrap();
     assert_eq!(cost, BURNT);
+    // And it's charged to Alice's free gas, settled at what it burnt: 0.001 NEAR at
+    // $0.10 is $0.0001.
+    let (state, usd): (String, i64) = sqlx::query_as(
+        "SELECT state, usd_micros FROM gas_charges WHERE chain = 'near' AND reference = $1",
+    )
+    .bind(&hash)
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!((state.as_str(), usd), ("settled", 100));
     // M1: only a member of the group whose jar it is may ask for a buy quote.
     let quote = json!({ "dao": dao, "slippageBps": 100,
                         "legs": [{ "destinationAsset": "nep141:x", "amount": "1" }] });
@@ -2937,7 +2987,11 @@ async fn fee_budgets_floor_and_verified_identity_bound_what_honey_pays() {
     let carol = bearer(&identity, 63).await;
     let chain: SharedChain = Arc::default();
     let rpc = near_rpc(chain.clone()).await;
-    let reader = Arc::new(honey_server::jar_dao::JarDao::new(rpc.clone(), true).unwrap());
+    let reader = Arc::new(
+        honey_server::jar_dao::JarDao::new(rpc.clone(), true)
+            .unwrap()
+            .with_market(Some(near_market().await)),
+    );
     let app = routes::social::router_with(
         Some(identity.clone()),
         None,
@@ -3072,13 +3126,13 @@ async fn fee_budgets_floor_and_verified_identity_bound_what_honey_pays() {
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
     assert_eq!(body["error"]["code"], "sponsor_off");
     fresh_minute().await;
-    // With room in the budget, the relayer's floor (1 NEAR) still holds: 1.01 NEAR
+    // With room in the budget, the relayer's floor (0.2 NEAR) still holds: 0.21 NEAR
     // can't pay 0.03 NEAR. The link is remembered: no token needed now.
     let roomy = FeeLimits {
         require_verified_identity: true,
         ..FeeLimits::default()
     };
-    relayer_balance(&(NEAR + NEAR / 100).to_string());
+    relayer_balance(&(NEAR / 5 + NEAR / 100).to_string());
     let (status, _) =
         post_with_account(&honey(roomy.clone()), sponsor, &carol, None, ask(&c)).await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "below the floor");

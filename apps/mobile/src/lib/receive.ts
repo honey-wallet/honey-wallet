@@ -4,7 +4,7 @@ import { type AddedWallet, canReceive } from '@/lib/wallets';
 /** One address to receive on, and what can be sent to it. */
 export type ReceiveAddress = {
   family: ChainFamily;
-  /** Where it works, e.g. "Solana" or "Ethereum, Base and Arbitrum". */
+  /** Where it works, e.g. "Solana" or "Ethereum, Base, Arbitrum and Polygon". */
   name: string;
   /** Short form for list rows. */
   title: string;
@@ -16,7 +16,11 @@ export type ReceiveAddress = {
 };
 
 const FAMILIES: Record<ChainFamily, Omit<ReceiveAddress, 'family' | 'address' | 'uri'>> = {
-  evm: { title: 'Ethereum & Base', name: 'Ethereum, Base and Arbitrum', symbol: 'ETH' },
+  evm: {
+    title: 'Ethereum & Base',
+    name: 'Ethereum, Base, Arbitrum and Polygon',
+    symbol: 'ETH',
+  },
   solana: { title: 'Solana', name: 'Solana', symbol: 'SOL' },
   near: { title: 'NEAR', name: 'NEAR Mainnet', symbol: 'NEAR' },
   tron: { title: 'Tron', name: 'Tron', symbol: 'TRX' },
@@ -29,11 +33,12 @@ const ORDER: ChainFamily[] = ['evm', 'solana', 'near'];
 
 /**
  * EVM networks shown beside the one EVM address, as logos: only the ones whose balances
- * Honey reads (apps/server/src/portfolio.rs `Endpoints`: Ethereum, Base, Arbitrum).
+ * Honey reads (apps/server/src/portfolio.rs `Endpoints`: Ethereum, Base, Arbitrum,
+ * Polygon).
  * The address works on any EVM chain, but money sent on one Honey doesn't read would be
  * invisible here, so Receive doesn't invite it. Add a logo when its balances are read.
  */
-export const EVM_LOGOS = ['ETH', 'BASE', 'ARB'];
+export const EVM_LOGOS = ['ETH', 'BASE', 'ARB', 'POL'];
 
 // EIP-681 and Solana Pay prefixes; NEAR, Tron and XRP wallets scan the bare address.
 const uriFor = (family: ChainFamily, address: string) =>

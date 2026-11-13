@@ -3,6 +3,7 @@ import { utf8ToBytes } from '@noble/hashes/utils.js';
 import { base58, base64 } from '@scure/base';
 import { decodeFunctionData, erc20Abi, parseTransaction } from 'viem';
 import { describe, expect, it } from 'vitest';
+import sponsoredFixture from './fixtures/solana-sponsored.json';
 import { signEvmTransaction } from './sign';
 import {
   associatedTokenAddress,
@@ -14,6 +15,7 @@ import {
   type Rpc,
   SOLANA_USDC_MINT,
   signSolanaTransfer,
+  signSponsoredSolanaTransfer,
   toBaseUnits,
   waitForEvmReceipt,
   waitForSolana,
@@ -313,5 +315,69 @@ describe('Solana', () => {
     expect(await waitForSolana(ok, 'sig', { intervalMs: 1 })).toBe('success');
     const bad = fake({ getSignatureStatuses: { value: [{ err: { x: 1 } }] } });
     expect(await waitForSolana(bad, 'sig', { intervalMs: 1 })).toBe('failure');
+  });
+});
+
+describe('Solana associated token accounts and Honey as fee payer', () => {
+  it('derives the same token accounts as mainnet (Associated Token program id)', () => {
+    // USDC accounts read from a mainnet transaction, with their owners.
+    expect(
+      associatedTokenAddress('AZeKwnSThZGpaJdVUmr6oJVrpxmDb7idy1KjgoTNUMBp', SOLANA_USDC_MINT),
+    ).toBe('59L1af8F7Jwv1tuvCeHzA4TgcGvXFFwRpStRZZFfkzGK');
+    expect(
+      associatedTokenAddress('dT7msdRnKFa2mTtH86WFYfaVTSPuB9ZZGGWcuBE3KX2', SOLANA_USDC_MINT),
+    ).toBe('HwxhJyQzscEyMnj5RskmRRKYiWdcM5SDSXMajzNSjRyw');
+  });
+
+  const user = new Uint8Array(32).fill(3);
+  const { feePayer, user: from, to } = sponsoredFixture;
+  const answers = (lamports: number): Record<string, unknown> => ({
+    getLatestBlockhash: { value: { blockhash: base58.encode(new Uint8Array(32).fill(9)) } },
+    getBalance: { value: lamports },
+    getTokenAccountBalance: { value: { amount: '5000000' } },
+    getAccountInfo: { value: null },
+    getMinimumBalanceForRentExemption: 2_039_280,
+  });
+  const keysOf = (m: Uint8Array) =>
+    Array.from({ length: m[3] ?? 0 }, (_, i) => base58.encode(m.slice(4 + i * 32, 36 + i * 32)));
+
+  it('lets a wallet with no SOL send USDC: Honey pays the fee and opens their account', async () => {
+    const plan = await prepareSolanaTransfer(fake(answers(0)), {
+      from,
+      to,
+      amount: 1_000_000n,
+      token: 'USDC',
+      feePayer,
+    });
+    expect(plan.feeLamports).toBe(0n);
+    expect(plan.sponsored).toEqual({ feePayer, lamports: 10_000n + 2_039_280n });
+    // Two signers, both writable: Honey's fee payer, then the sender.
+    expect([...plan.message.slice(0, 2)]).toEqual([2, 0]);
+    expect(keysOf(plan.message).slice(0, 2)).toEqual([feePayer, from]);
+    // The account creation is funded by the fee payer (account 0).
+    const wire = signSponsoredSolanaTransfer(user, plan.message);
+    expect(wire).toBe(sponsoredFixture.usdcWireBase64);
+    const bytes = base64.decode(wire);
+    expect(bytes[0]).toBe(2);
+    expect(bytes.slice(1, 65)).toEqual(new Uint8Array(64));
+    expect(ed25519.verify(bytes.slice(65, 129), plan.message, ed25519.getPublicKey(user))).toBe(
+      true,
+    );
+  });
+
+  it('builds SOL sends without a fee for the sender, and refuses odd fee payers', async () => {
+    const plan = await prepareSolanaTransfer(fake(answers(1_000_000)), {
+      from,
+      to,
+      amount: 1_000_000n,
+      feePayer,
+    });
+    expect(plan.feeLamports).toBe(0n);
+    expect(signSponsoredSolanaTransfer(user, plan.message)).toBe(sponsoredFixture.solWireBase64);
+    await expect(
+      prepareSolanaTransfer(fake(answers(1_000_000)), { from, to, amount: 1n, feePayer: from }),
+    ).rejects.toThrow('fee payer');
+    const own = await prepareSolanaTransfer(fake(answers(1_000_000)), { from, to, amount: 1n });
+    expect(() => signSponsoredSolanaTransfer(user, own.message)).toThrow();
   });
 });

@@ -30,13 +30,13 @@ const wallet = {
 const TO = '0x2222222222222222222222222222222222222222';
 const HASH = `0x${'a'.repeat(64)}`;
 
-function evmRpc(sent: string[]) {
+function evmRpc(sent: string[], chainId = '0x2105', balance = 10n ** 18n) {
   const answers: Record<string, unknown> = {
-    eth_chainId: '0x2105',
+    eth_chainId: chainId,
     eth_getTransactionCount: '0x3',
     eth_getBlockByNumber: { baseFeePerGas: '0x3b9aca00' },
     eth_maxPriorityFeePerGas: '0x5f5e100',
-    eth_getBalance: `0x${(10n ** 18n).toString(16)}`,
+    eth_getBalance: `0x${balance.toString(16)}`,
     eth_estimateGas: '0xc350',
     eth_call: `0x${9_000_000n.toString(16).padStart(64, '0')}`,
     eth_getTransactionReceipt: { status: '0x1' },
@@ -58,7 +58,7 @@ beforeEach(() => {
 });
 
 it('recognises recipients per chain', () => {
-  expect(recipientChains(TO)).toEqual(['Ethereum', 'Base']);
+  expect(recipientChains(TO)).toEqual(['Ethereum', 'Base', 'Arbitrum', 'Polygon']);
   expect(recipientChains(sol)).toEqual(['Solana']);
   expect(recipientChains('alice.near')).toEqual(['NEAR']);
   expect(recipientChains('alice')).toEqual([]);
@@ -85,6 +85,79 @@ it('sends USDC on Base: reviews the fee, signs after confirmation, broadcasts, w
   expect(tx).toMatchObject({ chainId: 8453, nonce: 3 });
   const call = decodeFunctionData({ abi: erc20Abi, data: tx.data as `0x${string}` });
   expect(call.args).toEqual([TO, 2_500_000n]);
+});
+
+it('sends USDC on Arbitrum with the same EVM key, to Circle’s contract there', async () => {
+  const sent: string[] = [];
+  const plan = await prepareSend(
+    wallet,
+    { chain: 'Arbitrum', symbol: 'USDC', to: TO, amount: '1' },
+    { rpcFor: () => evmRpc(sent, '0xa4b1'), keyOf: keyOf as never, confirm: async () => true },
+  );
+  expect(plan).toMatchObject({ from: evm, feeSymbol: 'ETH' });
+  const result = await plan.execute(() => true);
+  expect(result.explorerUrl).toBe(`https://arbiscan.io/tx/${HASH}`);
+  const tx = parseTransaction(sent[0] as `0x${string}`);
+  expect(tx).toMatchObject({ chainId: 42161, to: '0xaf88d065e77c8cc2239327c5edb3a432268e5831' });
+  const call = decodeFunctionData({ abi: erc20Abi, data: tx.data as `0x${string}` });
+  expect(call.args).toEqual([TO, 1_000_000n]);
+});
+
+it('sends POL on Polygon, paying the fee in POL', async () => {
+  const sent: string[] = [];
+  const plan = await prepareSend(
+    wallet,
+    { chain: 'Polygon', symbol: 'POL', to: TO, amount: '0.5' },
+    { rpcFor: () => evmRpc(sent, '0x89'), keyOf: keyOf as never, confirm: async () => true },
+  );
+  expect(plan).toMatchObject({ amount: '0.5', feeSymbol: 'POL' });
+  expect(plan.fee).toMatch(/ POL$/);
+  const result = await plan.execute(() => true);
+  expect(result.explorerUrl).toBe(`https://polygonscan.com/tx/${HASH}`);
+  const tx = parseTransaction(sent[0] as `0x${string}`);
+  expect(tx).toMatchObject({ chainId: 137, to: TO, value: 5n * 10n ** 17n });
+  // Polygon has no native ETH to send, and its USDC is Circle's native token.
+  await expect(
+    prepareSend(
+      wallet,
+      { chain: 'Polygon', symbol: 'ETH', to: TO, amount: '1' },
+      {
+        rpcFor: () => evmRpc([], '0x89'),
+      },
+    ),
+  ).rejects.toThrow('Sending ETH isn’t supported yet');
+  const usdc: string[] = [];
+  const usdcPlan = await prepareSend(
+    wallet,
+    { chain: 'Polygon', symbol: 'USDC', to: TO, amount: '2' },
+    { rpcFor: () => evmRpc(usdc, '0x89'), keyOf: keyOf as never, confirm: async () => true },
+  );
+  await usdcPlan.execute(() => true);
+  expect(parseTransaction(usdc[0] as `0x${string}`).to).toBe(
+    '0x3c499c542cef5e3811e1192ce70d8cc03d5c3359',
+  );
+});
+
+it('names POL, not ETH, when a Polygon wallet can’t cover the fee', async () => {
+  await expect(
+    prepareSend(
+      wallet,
+      { chain: 'Polygon', symbol: 'POL', to: TO, amount: '1' },
+      {
+        rpcFor: () => evmRpc([], '0x89', 10n ** 15n),
+      },
+    ),
+  ).rejects.toThrow('Not enough POL for amount + fee');
+  // A node on another network is refused before anything is built.
+  await expect(
+    prepareSend(
+      wallet,
+      { chain: 'Polygon', symbol: 'POL', to: TO, amount: '0.1' },
+      {
+        rpcFor: () => evmRpc([], '0xa4b1'),
+      },
+    ),
+  ).rejects.toThrow('wrong network');
 });
 
 it('signs nothing when the owner cancels or the wallet changed', async () => {

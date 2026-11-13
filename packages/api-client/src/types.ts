@@ -888,6 +888,149 @@ export interface JarDaoRelayResult {
   relayer: string;
 }
 
+/**
+ * `GET /api/v1/gas/allowance`: the signed-in person's free gas. Honey pays network fees
+ * up to `limitUsdMicros` per rolling `windowDays` across all chains (1 USD = 1,000,000
+ * micros), within each chain's daily total across everyone.
+ */
+export interface GasAllowance {
+  limitUsdMicros: number;
+  remainingUsdMicros: number;
+  windowDays: number;
+  chains: GasChain[];
+}
+
+/** One chain Honey can pay fees on. */
+export interface GasChain {
+  /** `solana`, `near` (EVM chains may follow). */
+  chain: string;
+  /** Whether Honey pays fees on this chain right now. */
+  on: boolean;
+  /** Room left today in the chain's total across everyone. */
+  remainingTodayUsdMicros: number;
+  /** Solana: the fee payer to name in transactions. */
+  feePayer: string | null;
+  /** USD per native coin (1Click), to tell whether a fee fits. */
+  nativeUsd: number | null;
+  /** New token accounts (Solana) whose rent Honey still pays this person. */
+  newAccountsLeft: number;
+}
+
+/**
+ * `POST /api/v1/gas/solana/sponsor`: a payment the user signed with Honey's fee payer
+ * (`GasChain.feePayer`) as fee payer, base64 wire bytes with an empty first signature.
+ * 402 `gas_not_covered` (or any 4xx): Honey didn't sign it, so it can never land; the
+ * app pays its own fee instead.
+ */
+export interface SolanaSponsorRequest {
+  transaction: string;
+}
+
+export interface SolanaSponsorResult {
+  /** Transaction id (the fee payer's signature, base58). */
+  signature: string;
+  /** `pending`: sent, look it up by signature. */
+  state: 'success' | 'failure' | 'pending';
+  /** Lamports Honey spent (fee and any rent), when known. */
+  lamports: number | null;
+}
+
+/**
+ * `POST /api/v1/gas/near/relay`: Honey's NEAR relayer pays the gas of a token send or
+ * NEAR Intents deposit (NEP-366 delegate action). Never native NEAR moves.
+ */
+export interface NearGasRelayRequest {
+  /** Borsh `SignedDelegateAction`, base64. */
+  signedDelegate: string;
+}
+
+export interface NearGasRelayResult {
+  /** The relayer's transaction (base58). */
+  txHash: string;
+  /** The relayer account that signed it. */
+  relayer: string;
+}
+
+/** One call a sponsored EVM batch makes: wei and data as text. */
+export interface EvmSponsorCall {
+  to: string;
+  /** Wei, decimal. */
+  value: string;
+  /** 0x hex ("0x" for a plain transfer). */
+  data: string;
+}
+
+/**
+ * `POST /api/v1/gas/evm/prepare`: whether Honey pays the gas of these calls on Base,
+ * Arbitrum or Polygon (EIP-7702 through Calibur v1.1.0). 402 `gas_not_covered` when it
+ * won't: the app pays its own gas.
+ */
+export interface EvmSponsorPrepareRequest {
+  chainId: number;
+  account: string;
+  calls: EvmSponsorCall[];
+}
+
+/** What the wallet signs (EIP-712 `SignedBatchedCall` under Calibur's domain). */
+export interface EvmSponsorPlan {
+  chainId: number;
+  account: string;
+  /** The 7702 delegate: Calibur v1.1.0. */
+  delegate: string;
+  /** Honey's relayer: the batch's executor. */
+  executor: string;
+  /** Calibur nonce, decimal. */
+  nonce: string;
+  /** Unix seconds. */
+  deadline: number;
+  /** EIP-712 salt (0x, 32 bytes). */
+  salt: string;
+  /** First time on this chain: the account nonce to sign the 7702 authorization with. */
+  authorizationNonce: number | null;
+  /** About what Honey pays, in USD micros. */
+  feeUsdMicros: number;
+}
+
+/** The wallet's signed EIP-7702 authorization for `delegate`. */
+export interface EvmSponsorAuthorization {
+  chainId: number;
+  address: string;
+  nonce: number;
+  yParity: number;
+  r: string;
+  s: string;
+}
+
+/** `POST /api/v1/gas/evm/submit`: the signed batch, exactly as prepared. */
+export interface EvmSponsorSubmitRequest {
+  chainId: number;
+  account: string;
+  calls: EvmSponsorCall[];
+  nonce: string;
+  deadline: number;
+  /** 65 bytes, 0x hex. */
+  signature: string;
+  authorization: EvmSponsorAuthorization | null;
+}
+
+export interface EvmSponsorSubmitted {
+  id: string;
+  chainId: number;
+  /** The relayer's transaction. */
+  txHash: string;
+  relayer: string;
+  reservedUsdMicros: number;
+}
+
+/** `GET /api/v1/gas/evm/sponsorships/{id}`. */
+export interface EvmSponsorStatus {
+  id: string;
+  chainId: number;
+  txHash: string;
+  status: 'pending' | 'success' | 'reverted' | 'dropped';
+  costUsdMicros: number | null;
+}
+
 /** `POST /api/v1/push/tokens`: this phone's Expo push token, for the signed-in person. */
 export interface PushTokenRequest {
   token: string;
@@ -989,6 +1132,7 @@ export interface PortfolioAddresses {
 
 /** One balance on one chain. Mirrors `portfolio::Holding`. */
 export interface PortfolioHolding {
+  /** Ethereum, Base, Arbitrum, Polygon, Solana or NEAR. Polygon's own coin is POL. */
   chain: string;
   symbol: string;
   name: string;

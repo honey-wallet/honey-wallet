@@ -16,8 +16,9 @@ import { api } from '@/lib/api';
 import { lockNow } from '@/lib/app-lock';
 import { applyLatestUpdate, buildInfo } from '@/lib/build-info';
 import { expandView, inPopup } from '@/lib/dapp';
+import { useGasAllowance } from '@/lib/gas';
 import { tap } from '@/lib/haptics';
-import { shortAddress } from '@/lib/mock-wallet';
+import { formatUsd, shortAddress } from '@/lib/mock-wallet';
 import { isWeb } from '@/lib/platform';
 import { setProfile, useProfile } from '@/lib/profile';
 import { JAR_VISIBILITY, updateSettings, useSettings } from '@/lib/settings';
@@ -38,6 +39,8 @@ export default function SettingsScreen() {
   const c = useTheme();
   const profile = useProfile();
   const settings = useSettings();
+  // Honey's free gas, shown only while it pays fees somewhere.
+  const freeGas = useGasAllowance();
   // Out for now, with the other-wallets list below:
   // const [showWallets, setShowWallets] = useState(false);
   // Null while the server is being checked; a bar stands in for the status.
@@ -169,6 +172,14 @@ export default function SettingsScreen() {
           onPress={open('/wallet-sign-in')}
           accessory="chevron"
         />
+        {freeGas?.chains.some((chain) => chain.on) ? (
+          <SheetRow
+            icon="gas"
+            title="Free gas left"
+            subtitle={`Honey pays your network fees, up to ${formatUsd(freeGas.limitUsdMicros / 1e6)} every ${freeGas.windowDays} days`}
+            value={formatUsd(freeGas.remainingUsdMicros / 1e6)}
+          />
+        ) : null}
         {isWeb ? (
           <SheetRow
             icon="qr"

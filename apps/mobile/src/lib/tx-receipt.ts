@@ -7,6 +7,8 @@ const BASE58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
 const EXPLORERS: Record<Chain, { name: string; tx: (hash: string) => string }> = {
   Ethereum: { name: 'Etherscan', tx: (h) => `https://etherscan.io/tx/${h}` },
   Base: { name: 'Basescan', tx: (h) => `https://basescan.org/tx/${h}` },
+  Arbitrum: { name: 'Arbiscan', tx: (h) => `https://arbiscan.io/tx/${h}` },
+  Polygon: { name: 'Polygonscan', tx: (h) => `https://polygonscan.com/tx/${h}` },
   Solana: { name: 'Solscan', tx: (h) => `https://solscan.io/tx/${h}` },
   NEAR: { name: 'NearBlocks', tx: (h) => `https://nearblocks.io/txns/${h}` },
   Tron: { name: 'Tronscan', tx: (h) => `https://tronscan.org/#/transaction/${h}` },
