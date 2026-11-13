@@ -30,6 +30,7 @@ import {
   prepareSwapPayment,
   quoteSwap,
   type IntentsSwap as Swap,
+  SwapTooSmall,
   sameToken,
   shownInWallet,
   swapAssetOf,
@@ -174,7 +175,9 @@ function IntentsSwapForm() {
   // A quote belongs to exactly the pair and amount it was asked for.
   const quoteKey = `${sellKey}>${buy.symbol}-${buy.chain}-${buy.assetId ?? ''}:${amount}>${recipient}`;
   const [quote, setQuote] = useState<{ key: string; swap: Swap } | null>(null);
-  const [error, setError] = useState<{ key: string; text: string } | null>(null);
+  const [error, setError] = useState<{ key: string; text: string; tooSmall?: boolean } | null>(
+    null,
+  );
   const [quoting, setQuoting] = useState(false);
   const flight = useRef(0);
   const asked = quote?.key === quoteKey ? quote.swap : null;
@@ -184,6 +187,8 @@ function IntentsSwapForm() {
   const reason = unsupportedReason(sell, buy, tokens);
   const shownError =
     error?.key === quoteKey ? error.text : asked && !current ? 'Quote expired.' : null;
+  // Asking again for the same amount would only repeat "too small": a new amount clears it.
+  const tooSmall = error?.key === quoteKey && !!error.tooSmall;
 
   const getQuote = async () => {
     tap();
@@ -200,7 +205,12 @@ function IntentsSwapForm() {
       });
       if (id === flight.current) setQuote({ key, swap });
     } catch (e) {
-      if (id === flight.current) setError({ key, text: message(e, 'Couldn’t get a quote.') });
+      if (id === flight.current)
+        setError({
+          key,
+          text: message(e, 'Couldn’t get a quote.'),
+          tooSmall: e instanceof SwapTooSmall,
+        });
     } finally {
       if (id === flight.current) setQuoting(false);
     }
@@ -264,24 +274,26 @@ function IntentsSwapForm() {
             ? { label: 'Enter an amount', onPress: () => undefined, disabled: true }
             : tooMuch
               ? { label: `Not enough ${sell.symbol}`, onPress: () => undefined, disabled: true }
-              : askAddress && !recipient
-                ? {
-                    label: `Enter a ${buy.chain} address`,
-                    onPress: () => undefined,
-                    disabled: true,
-                  }
-                : quoting
-                  ? { label: 'Getting quote…', onPress: () => undefined, disabled: true }
-                  : current
-                    ? {
-                        label: 'Review swap',
-                        onPress: () => {
-                          tap();
-                          setTray({ kind: 'review', swap: current });
-                        },
-                        disabled: false,
-                      }
-                    : { label: 'Get quote', onPress: () => void getQuote(), disabled: false };
+              : tooSmall
+                ? { label: 'Enter a larger amount', onPress: () => undefined, disabled: true }
+                : askAddress && !recipient
+                  ? {
+                      label: `Enter a ${buy.chain} address`,
+                      onPress: () => undefined,
+                      disabled: true,
+                    }
+                  : quoting
+                    ? { label: 'Getting quote…', onPress: () => undefined, disabled: true }
+                    : current
+                      ? {
+                          label: 'Review swap',
+                          onPress: () => {
+                            tap();
+                            setTray({ kind: 'review', swap: current });
+                          },
+                          disabled: false,
+                        }
+                      : { label: 'Get quote', onPress: () => void getQuote(), disabled: false };
 
   return (
     <View style={styles.flex}>

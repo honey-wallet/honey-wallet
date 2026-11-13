@@ -24,6 +24,7 @@ import { ActionFooter } from '@/components/sheets/ActionFooter';
 import { PushedScreen, TokenIcon } from '@/components/wallet/parts';
 import { SHOW_DEMO_LABELS } from '@/lib/demo-money-copy';
 import { LOADS } from '@/lib/loads';
+import { useHoldingsChart } from '@/lib/market';
 import {
   BALANCE,
   BALANCE_CHANGE,
@@ -108,10 +109,13 @@ export default function PortfolioScreen() {
   // A wallet that's never had money in it: nothing to chart, return or split yet.
   const view = useWalletView();
   const { empty } = view;
-  // A real wallet: its allocation from live balances, and today's move from live 24h
-  // prices. There's no balance history or cost basis source yet, so it gets no chart, no
-  // ranges and no returns rather than a flat line and $0.00 (as Share portfolio does).
+  // A real wallet: its allocation from live balances, and its chart is what it holds now
+  // priced along each token's chart (portfolio-history.ts), said so under the chart. There's
+  // no cost basis, so Performance is each holding's move over the range, not returns.
   const live = 'live' in view;
+  const holdingsChart = useHoldingsChart(live ? view.tokens : [], range, live && !empty);
+  const history = live ? holdingsChart.history : null;
+  const chartLoading = loading || (live && holdingsChart.loading);
   const shares = empty
     ? []
     : live
@@ -120,8 +124,9 @@ export default function PortfolioScreen() {
   const sharesTotal = shares.reduce((s, x) => s + x.value, 0) || 1;
 
   const todayPct = (BALANCE_CHANGE / (BALANCE - BALANCE_CHANGE)) * 100;
+  // Without a history (loading, or no token has a chart) a real wallet shows today's move.
   const data = live
-    ? [view.usd - view.change, view.usd]
+    ? (history?.values ?? [view.usd - view.change, view.usd])
     : series('portfolio', range, BALANCE, range === '1D' ? todayPct : undefined);
   const value = empty ? 0 : scrub === null ? (live ? view.usd : BALANCE) : data[scrub];
   const delta = empty ? 0 : value - data[0];
@@ -218,7 +223,7 @@ export default function PortfolioScreen() {
               </Text>
             )}
             <TextSwap
-              text={scrub !== null ? '' : live ? RANGE_LABEL['1D'] : RANGE_LABEL[range]}
+              text={scrub !== null ? '' : live && !history ? RANGE_LABEL['1D'] : RANGE_LABEL[range]}
               style={styles.changeLabel}
             />
           </View>
@@ -230,14 +235,19 @@ export default function PortfolioScreen() {
         </View>
       )}
 
-      {/* A real wallet has no balance history source yet: no chart and no ranges, rather
-          than a flat line (hide empty sections). */}
-      {live ? null : (
+      {/* A real wallet with nothing in it has no history at all: no chart and no ranges. */}
+      {live && empty ? null : (
         <>
           <View style={styles.chart}>
-            <SkeletonReveal loading={loading} skeleton={<SkeletonChart height={CHART_HEIGHT} />}>
+            <SkeletonReveal
+              loading={chartLoading}
+              skeleton={<SkeletonChart height={CHART_HEIGHT} />}
+            >
               {empty ? (
                 <ChartEmpty height={CHART_HEIGHT} text="Your balance over time shows up here" />
+              ) : live && !history ? (
+                // No token has a chart for this range: never a line drawn in.
+                <ChartEmpty height={CHART_HEIGHT} />
               ) : (
                 <PriceChart data={data} width={width} height={CHART_HEIGHT} onScrub={setScrub} />
               )}
@@ -246,11 +256,48 @@ export default function PortfolioScreen() {
           <View style={styles.ranges}>
             <SegmentedTabs bare options={RANGES} value={range} onChange={setRange} />
           </View>
+          {live && history ? (
+            <View style={[styles.gutter, styles.caption]}>
+              <Text style={styles.sampleNoticeText}>Based on what you hold now</Text>
+            </View>
+          ) : null}
         </>
       )}
 
-      {/* Returns need a cost basis, which only the sample data has: a real wallet showed
-          "$0.00" for every return. */}
+      {/* A real wallet: each holding's move over the range (amount × price change). There's
+          no cost basis, so no realized or unrealized returns. */}
+      {live &&
+      !empty &&
+      (chartLoading ? holdingsChart.charted.length : (history?.changes.length ?? 0)) > 0 ? (
+        <View style={[styles.section, styles.gutter]}>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.heading}>Performance</Text>
+            <TextSoftSwap text={sentenceCase(RANGE_LABEL[range])} style={styles.heading} />
+          </View>
+          <Animated.View layout={RESIZE} style={[styles.perfCard, styles.perfList]}>
+            {(chartLoading
+              ? holdingsChart.charted.map((symbol) => ({ symbol, usd: 0 }))
+              : (history?.changes ?? [])
+            ).map((x) => (
+              <Animated.View
+                key={x.symbol}
+                entering={FadeIn.duration(DURATION.fast)}
+                exiting={FadeOut.duration(DURATION.quick)}
+                layout={RESIZE}
+                style={styles.legendRow}
+              >
+                <TokenIcon symbol={x.symbol} size={16} />
+                <View style={styles.flex}>
+                  <Text style={styles.legendLabel}>{x.symbol}</Text>
+                </View>
+                <Signed value={x.usd} loading={chartLoading} />
+              </Animated.View>
+            ))}
+          </Animated.View>
+        </View>
+      ) : null}
+
+      {/* Returns need a cost basis, which only the sample data has. */}
       {live ? null : (
         <View style={[styles.section, styles.gutter]}>
           <View style={styles.sectionHeader}>
@@ -343,6 +390,9 @@ export default function PortfolioScreen() {
   );
 }
 
+/** "past week" → "Past week", for a heading. */
+const sentenceCase = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
+
 /** A dollar amount with its up/down triangle; `strong` for the total. */
 function Signed({
   value,
@@ -384,6 +434,10 @@ const useStyles = makeStyles((c) => ({
     paddingVertical: 9,
     ...radius(12),
     backgroundColor: c.card,
+  },
+  // The quiet line under a real wallet's chart.
+  caption: {
+    marginTop: 10,
   },
   sampleNoticeText: {
     color: c.textSecondary,
@@ -456,6 +510,9 @@ const useStyles = makeStyles((c) => ({
     marginBottom: 4,
     color: c.textSecondary,
     fontSize: 14,
+  },
+  perfList: {
+    gap: 10,
   },
   perfRow: {
     flexDirection: 'row',

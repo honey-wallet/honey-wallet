@@ -8,7 +8,6 @@ import { PillButton } from '@/components/onboarding/PillButton';
 import { Description } from '@/components/sheets/Description';
 import { Copyable } from '@/components/sheets/Details';
 import { closeSheet, SHEET, SheetScreen, StatRow } from '@/components/sheets/Sheet';
-import { SuccessPage } from '@/components/sheets/SuccessPage';
 import {
   approveBackendSignIn,
   approveWalletLink,
@@ -23,8 +22,9 @@ import {
   walletLinks,
 } from '@/lib/backend-session';
 import { offerHandle } from '@/lib/handle-offer';
-import { tap } from '@/lib/haptics';
+import { success, tap } from '@/lib/haptics';
 import { useProfile } from '@/lib/profile';
+import { showToast } from '@/lib/toast';
 import { loadAccounts, type VaultAccount } from '@/lib/vault';
 import { useWalletRequired } from '@/lib/wallet-gate';
 import { isFixtureWallet, isMainWallet, useActiveWallet } from '@/lib/wallets';
@@ -77,10 +77,21 @@ function WalletSignInSheet() {
     },
     [],
   );
-  const page = state.profile ? (signedOutAtOpen.current ? 'done' : 'session') : 'review';
+  // Signing in is a step, not a destination: once it works the sheet just closes, back to
+  // where you were, with a quiet toast (no "Signed in" page with Share and Done).
+  const justSignedIn = !!state.profile && signedOutAtOpen.current;
+  useEffect(() => {
+    if (!justSignedIn) return;
+    success();
+    showToast('Signed in');
+    closeSheet();
+    void offerHandle();
+  }, [justSignedIn]);
+  if (justSignedIn) return null;
+  const page = state.profile ? 'session' : 'review';
   return (
     <ContentSwap id={page} index={page === 'review' ? 0 : 1}>
-      {page === 'review' ? <Review /> : page === 'done' ? <Done /> : <Session />}
+      {page === 'review' ? <Review /> : <Session />}
     </ContentSwap>
   );
 }
@@ -213,35 +224,6 @@ function Review() {
           <Text style={styles.link}>Forget saved session</Text>
         </Pressable>
       ) : null}
-    </SheetScreen>
-  );
-}
-
-function Done() {
-  const state = backendSession.useValue();
-  const profile = state.profile;
-  return (
-    <SheetScreen>
-      <SuccessPage
-        compact
-        title="Signed in"
-        rows={
-          profile
-            ? [
-                {
-                  label: 'Wallet',
-                  value: <Copyable value={profile.wallet.address} toast="Address copied" />,
-                },
-                { label: 'Network', value: networkName(profile.wallet.chainId) },
-              ]
-            : []
-        }
-        onDone={() => {
-          tap();
-          closeSheet();
-          void offerHandle();
-        }}
-      />
     </SheetScreen>
   );
 }

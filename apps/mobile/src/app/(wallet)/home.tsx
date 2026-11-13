@@ -56,6 +56,7 @@ import {
 import { TAB_BAR_HEIGHT } from '@/components/wallet/TabBar';
 import { TabScreen } from '@/components/wallet/TabScreen';
 import { WalletHeader } from '@/components/wallet/WalletHeader';
+import { openBuy } from '@/lib/buy';
 import { SHOW_DEMO_LABELS } from '@/lib/demo-money-copy';
 import { tap } from '@/lib/haptics';
 import { LOADS } from '@/lib/loads';
@@ -219,7 +220,9 @@ function HomeScreen() {
 
   const open = (href: Href) => {
     tap();
-    router.push(href);
+    // Buy goes straight to Swap, paying with what you hold, while cash is coming soon.
+    if (href === '/buy') openBuy('holdings' in view ? (view.holdings ?? []) : []);
+    else router.push(href);
   };
   // A watched wallet can receive and be looked at, but not send or sell.
   const watchBlocked = (label: string) =>

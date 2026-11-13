@@ -1,37 +1,8 @@
 import { useEffect } from 'react';
-import { AppState } from 'react-native';
-import { appLock } from '@/lib/app-lock';
-import {
-  backendVisibility,
-  backendWalletChanged,
-  clearBackendSession,
-  refreshResumeAvailability,
-  suspendBackendSession,
-} from '@/lib/backend-session';
-import { wallets } from '@/lib/wallets';
+import { startBackendLifecycle } from '@/lib/backend-lifecycle';
 
+/** Keeps the backend session in step with the app (lib/backend-lifecycle). */
 export function BackendSessionLifecycle() {
-  useEffect(() => {
-    backendVisibility(AppState.currentState);
-    void refreshResumeAvailability();
-    let activeId = wallets.get().activeId;
-    const removeWallet = wallets.subscribe(() => {
-      if (activeId !== wallets.get().activeId) {
-        activeId = wallets.get().activeId;
-        backendWalletChanged();
-      }
-    });
-    const removeLock = appLock.subscribe(() => {
-      if (appLock.get().enabled && !appLock.get().unlocked) suspendBackendSession();
-      else if (appLock.get().unlocked) void refreshResumeAvailability();
-    });
-    const visibility = AppState.addEventListener('change', backendVisibility);
-    return () => {
-      removeWallet();
-      removeLock();
-      visibility.remove();
-      clearBackendSession();
-    };
-  }, []);
+  useEffect(() => startBackendLifecycle(), []);
   return null;
 }

@@ -1,8 +1,10 @@
 /**
  * Real jar buys through NEAR Intents. The server fetches live quotes, each with a
- * one-time deposit address; this device signs one USDC transfer per leg and sends it.
- * The USDC comes from whichever network holds enough of it (Base, Solana, NEAR or
- * Ethereum: the largest balance that covers the buy, else legs split across them).
+ * one-time deposit address; this device signs one transfer per leg and sends it.
+ * By default the buy is paid in USDC from whichever network holds enough of it (Base,
+ * Arbitrum, Polygon, Solana, NEAR or Ethereum: the largest balance that covers the buy,
+ * else legs split across them). Any other token the wallet holds and can sell (ETH, SOL,
+ * POL, an ERC-20…) can pay instead, from that one holding (lib/pay-with).
  * Funds go straight from the wallet to NEAR Intents, never to Honey's server, and a
  * swap that can't fill refunds to the same wallet, on the network it was paid from.
  *
@@ -24,18 +26,11 @@ import {
   evmNetwork,
   isNearAccountId,
   isSolanaAddress,
+  nativeTransferCall,
   signEvmTransaction,
   toBaseUnits,
 } from '@honey-wallet/keyring';
-import {
-  createPublicClient,
-  encodeFunctionData,
-  erc20Abi,
-  formatUnits,
-  type Hex,
-  http,
-  isAddress,
-} from 'viem';
+import { createPublicClient, formatUnits, type Hex, http, isAddress, toHex } from 'viem';
 import { api } from '@/lib/api';
 import { confirmOwner } from '@/lib/auth';
 import { backendSessionToken } from '@/lib/backend-session';
@@ -54,8 +49,11 @@ import {
   recipientOn,
   sameAddress,
 } from '@/lib/intents-quote';
+import type { OneClickToken } from '@/lib/intents-swap';
 import type { Route } from '@/lib/jar-routes';
+import { gasReserve, holdingOf, isUsdc, PAY_BUFFER_BPS } from '@/lib/pay-with';
 import type { prepareSend } from '@/lib/send';
+import type { TokenRef } from '@/lib/swap';
 import { TEST_MODE } from '@/lib/test-mode';
 import { privateKeyOf } from '@/lib/vault';
 import { type AddedWallet, wallets } from '@/lib/wallets';
@@ -67,20 +65,40 @@ export const USDC_BASE_ASSET = 'nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bd
 const USDC_DECIMALS = 6;
 
 /** Networks a jar can be paid from: the ones lib/send.ts pays USDC on. */
-export type PayChain = 'Base' | 'Ethereum' | 'Solana' | 'NEAR';
+export type PayChain = 'Base' | 'Arbitrum' | 'Polygon' | 'Ethereum' | 'Solana' | 'NEAR';
 /**
  * NEAR Intents' asset for the USDC lib/send.ts pays on each network (its canonical
- * contract: Circle's USDC on Ethereum and Base, the Solana mint, NEAR's native USDC).
+ * contract: Circle's native USDC on Ethereum, Base, Arbitrum and Polygon, the Solana mint,
+ * NEAR's native USDC).
  */
 export const USDC_ORIGINS: Record<PayChain, string> = {
   Base: USDC_BASE_ASSET,
+  Arbitrum: 'nep141:arb-0xaf88d065e77c8cc2239327c5edb3a432268e5831.omft.near',
+  Polygon: 'nep141:pol-0x3c499c542cef5e3811e1192ce70d8cc03d5c3359.omdep.near',
   Ethereum: 'nep141:eth-0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48.omft.near',
   Solana: 'nep141:sol-5ce3bf3a31af18be40ba30f721101b4341690186.omft.near',
   NEAR: 'nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1',
 };
 /** Tie-break when two networks hold the same: cheapest to pay from first. */
-export const PAY_CHAINS: readonly PayChain[] = ['Base', 'Solana', 'NEAR', 'Ethereum'];
-const isPayChain = (c: string): c is PayChain => (PAY_CHAINS as readonly string[]).includes(c);
+export const PAY_CHAINS: readonly PayChain[] = [
+  'Base',
+  'Arbitrum',
+  'Polygon',
+  'Solana',
+  'NEAR',
+  'Ethereum',
+];
+export const isPayChain = (c: string): c is PayChain =>
+  (PAY_CHAINS as readonly string[]).includes(c);
+
+/** A token other than USDC that pays a leg (NEAR Intents' entry for it). */
+export type PayToken = {
+  symbol: string;
+  assetId: string;
+  decimals: number;
+  /** ERC-20 address, SPL mint or NEP-141 account; null for the chain's own coin. */
+  contract: string | null;
+};
 
 export { checkDeadline, MAX_SLIPPAGE_BPS };
 /**
@@ -106,8 +124,10 @@ export type BuyLeg = {
   deadline: string;
   txHash?: string;
   status: JarBuyState | 'NOT_SENT';
-  /** The network whose USDC paid this leg; Base when absent (older jars, group shares). */
+  /** The network that paid this leg; Base when absent (older jars, group shares). */
   origin?: PayChain;
+  /** The token that paid this leg when it wasn't USDC; `amountIn` is then in its units. */
+  pay?: PayToken;
   /** Atomic units of the token the quote expected to deliver. */
   quotedOut?: string;
   /** Atomic units NEAR Intents actually delivered (1Click `swapDetails.amountOut`). */
@@ -119,10 +139,12 @@ export type BuyLeg = {
 export type AskedLeg = {
   symbol: string;
   chain: string;
-  /** Integer micro-USDC. */
+  /** Integer micro-USDC: the leg's dollars. */
   micro: bigint;
   assetId: string;
   recipient: string;
+  /** Atomic units of the paying token, when it isn't USDC (else `micro`). */
+  amountIn?: bigint;
 };
 
 /** Dollars to integer micro-USDC. Every sum happens on these, never on floats. */
@@ -205,6 +227,8 @@ export function planOrigins(
 export type JarBuyDeps = {
   /** USDC per payable network for this wallet, in micro-USDC; null when unreadable. */
   balances: (wallet: AddedWallet) => Promise<Partial<Record<PayChain, bigint>> | null>;
+  /** How much of one token this wallet holds (its own units); null when unreadable. */
+  held: (wallet: AddedWallet, ref: TokenRef) => Promise<number | null>;
   quote: typeof api.jarBuyQuote;
   status: typeof api.jarBuyStatus;
   token: () => string | null;
@@ -218,8 +242,13 @@ export type JarBuyDeps = {
   sendSponsored: typeof sendSponsored;
 };
 
-/** A 1Click token's id, decimals and USD price (null when 1Click has none). */
-export type PricedToken = { assetId: string; decimals: number; price: number | null };
+/**
+ * A 1Click token's id, decimals and USD price (null when 1Click has none); the rest of its
+ * entry (lib/intents-swap `OneClickToken`) when the list has it, to pay with it.
+ */
+export type PricedToken = { assetId: string; decimals: number; price: number | null } & Partial<
+  Pick<OneClickToken, 'symbol' | 'blockchain' | 'contractAddress'>
+>;
 
 const defaults: JarBuyDeps = {
   balances: async (wallet) => {
@@ -228,6 +257,12 @@ const defaults: JarBuyDeps = {
     const addresses = addressesOf(wallet);
     const portfolio = addresses ? await refreshBalances(addresses, true) : undefined;
     return portfolio ? usdcByChain(portfolio.holdings) : null;
+  },
+  held: async (wallet, ref) => {
+    const { addressesOf, refreshBalances } = await import('@/lib/portfolio');
+    const addresses = addressesOf(wallet);
+    const portfolio = addresses ? await refreshBalances(addresses, true) : undefined;
+    return portfolio ? (holdingOf(portfolio.holdings, ref)?.amount ?? 0) : null;
   },
   quote: (...args) => api.jarBuyQuote(...args),
   status: (...args) => api.jarBuyStatus(...args),
@@ -248,11 +283,15 @@ export const unpayable = (routes: Route[]) =>
     (r) => r.usd > 0 && (r.status !== 'ok' || !r.legs.length || r.legs.some((l) => !l.assetId)),
   );
 
-/** Live quotes for every routed leg, each paid from a network holding the USDC. Nothing is signed yet. */
+/**
+ * Live quotes for every routed leg, each paid from a network holding the USDC, or all from
+ * `payWith` when it's another token. Nothing is signed yet.
+ */
 export async function quoteJarBuy(
   routes: Route[],
   slippage: number,
   deps: Partial<JarBuyDeps> = {},
+  payWith: TokenRef | null = null,
 ) {
   const d = { ...defaults, ...deps };
   const wallet = payer();
@@ -295,6 +334,8 @@ export async function quoteJarBuy(
   if (!legs.length) throw new Error('No live routes yet. Try again in a moment.');
   const total = legs.reduce((s, l) => s + l.micro, 0n);
   if (total > toMicro(MAX_BUY_USD)) throw new Error(`Buys are capped at $${MAX_BUY_USD}.`);
+  if (payWith && !isUsdc(payWith))
+    return quoteWithToken(d, { addresses, token, legs, total, slippageBps, payWith, wallet });
   // Paid from whichever network holds the USDC (the wallet's live balances).
   const balances = await d.balances(wallet).catch(() => null);
   if (!balances) throw new Error('Couldn’t check your USDC. Try again in a moment.');
@@ -353,6 +394,151 @@ export async function quoteJarBuy(
   return { quote: quotes[0] as JarBuyQuote, quotes, legs: out };
 }
 
+const notPayable = (ref: TokenRef) =>
+  new Error(
+    ref.symbol === 'NEAR' && ref.chain === 'NEAR'
+      ? 'NEAR can’t pay yet. Pick another token.'
+      : `${ref.symbol} on ${ref.chain} can’t pay for a jar yet. Pick another token.`,
+  );
+
+/** 1Click's price as an integer, 10^12 per dollar, for exact sums. */
+const PRICE_SCALE = 10n ** 12n;
+
+/**
+ * Atomic units of a token worth `micro` dollars at 1Click's `price`, plus `bufferBps`,
+ * rounded up: what a leg pays when a token other than USDC pays it.
+ */
+export function tokenUnitsFor(micro: bigint, decimals: number, price: number, bufferBps: number) {
+  const scaled = BigInt(Math.round(price * Number(PRICE_SCALE)));
+  if (!(price > 0) || scaled <= 0n || bufferBps < 0) throw new Error('No price');
+  const num = micro * BigInt(10_000 + bufferBps) * 10n ** BigInt(decimals) * PRICE_SCALE;
+  // Up to whole steps of 8 decimal places: lib/send.ts states amounts to 8 places.
+  const step = decimals > 8 ? 10n ** BigInt(decimals - 8) : 1n;
+  const den = 10_000n * scaled * 10n ** BigInt(USDC_DECIMALS) * step;
+  return ((num + den - 1n) / den) * step;
+}
+
+/** Dollars that `units` of a token are worth at `price`. */
+const unitsUsd = (units: bigint, decimals: number, price: number) =>
+  (Number(units) / 10 ** decimals) * price;
+
+/** A balance (decimal number) as atomic units, rounded down at 8 places: never more than held. */
+function floorUnits(amount: number, decimals: number) {
+  if (!(amount > 0)) return 0n;
+  const places = Math.min(decimals, 8);
+  const f = 10 ** places;
+  return toBaseUnits((Math.floor(amount * f) / f).toFixed(places), decimals);
+}
+
+/**
+ * The whole buy paid with one token that isn't USDC: each leg sized from 1Click's price
+ * (plus a buffer no larger than the slippage allowed), one quote from that token's
+ * network, then the same checks as USDC (assets, amounts, payout and refund addresses,
+ * slippage, deadline, cap), each deposit address confirmed with 1Click directly. Never
+ * split across networks: the one holding must cover it, less any gas kept back.
+ */
+async function quoteWithToken(
+  d: JarBuyDeps,
+  input: {
+    wallet: AddedWallet;
+    addresses: NonNullable<AddedWallet['addresses']>;
+    token: string;
+    legs: AskedLeg[];
+    total: bigint;
+    slippageBps: number;
+    payWith: TokenRef;
+  },
+) {
+  const { wallet, addresses, token, legs, total, slippageBps, payWith } = input;
+  const chain = payWith.chain;
+  if (!isPayChain(chain)) throw notPayable(payWith);
+  const list = await d.tokens(d.fetcher).catch(() => null);
+  if (!list?.length)
+    throw new Error('Couldn’t price this buy right now. Try again. Nothing was paid.');
+  // Loaded on demand, like the list: Swap's module holds what can be paid (`canSell`).
+  const { canSell, swapAssetOf } = await import('@/lib/intents-swap');
+  const entries: OneClickToken[] = list.flatMap((t) =>
+    t.symbol && t.blockchain
+      ? [
+          {
+            ...t,
+            symbol: t.symbol,
+            blockchain: t.blockchain,
+            contractAddress: t.contractAddress ?? null,
+          },
+        ]
+      : [],
+  );
+  const asset = swapAssetOf(entries, payWith);
+  if (!asset || !canSell(asset)) throw notPayable(payWith);
+  const { price, decimals, symbol } = asset;
+  if (!price) throw new Error(`Couldn’t price ${symbol} right now. Try again. Nothing was paid.`);
+  const bufferBps = Math.min(PAY_BUFFER_BPS, slippageBps);
+  const asked = legs.map((l) => ({
+    ...l,
+    amountIn: tokenUnitsFor(l.micro, decimals, price, bufferBps),
+  }));
+  const need = asked.reduce((s, l) => s + l.amountIn, 0n);
+  const usdIn = unitsUsd(need, decimals, price);
+  if (usdIn > MAX_BUY_USD) throw new Error(`Buys are capped at $${MAX_BUY_USD}.`);
+  const held = await d.held(wallet, payWith).catch(() => null);
+  if (held === null) throw new Error(`Couldn’t check your ${symbol}. Try again in a moment.`);
+  // Where Honey doesn't pay the gas (Ethereum), some of the chain's coin stays for it.
+  const kept = floorUnits(gasReserve(payWith), decimals);
+  const heldUnits = floorUnits(held, decimals);
+  const free = heldUnits > kept ? heldUnits - kept : 0n;
+  if (free < need)
+    throw new Error(
+      `Not enough ${symbol}. You have $${unitsUsd(free, decimals, price).toFixed(2)} in ${symbol}; this buy needs $${usdIn.toFixed(2)}. Nothing was paid.`,
+    );
+  const refundTo = recipientOn(chain, addresses);
+  if (!refundTo) throw new Error(`This wallet has no ${chain} address.`);
+  const quote = await d.quote(token, {
+    originAsset: asset.assetId,
+    refundTo,
+    slippageBps,
+    legs: asked.map((l) => ({
+      destinationAsset: l.assetId,
+      amount: l.amountIn.toString(),
+      recipient: l.recipient,
+    })),
+  });
+  checkQuote(quote, asked, { refundTo, slippageBps, origin: chain, originAsset: asset.assetId });
+  // The cap holds for what's paid, at 1Click's price, as the server counts it.
+  const capUsd = Math.min(MAX_BUY_USD, quote.capUsd);
+  if (!(capUsd > 0) || total > toMicro(capUsd) || usdIn > capUsd)
+    throw new Error(`Buys are capped at $${capUsd > 0 ? capUsd.toFixed(0) : 0} for now.`);
+  // Don't take the server's word for where a deposit address pays out: ask 1Click.
+  await Promise.all(
+    quote.legs.map((q) => verifyWithOneClick(q, refundTo, d.fetcher, chain, asset.assetId)),
+  );
+  const pay: PayToken = {
+    symbol,
+    assetId: asset.assetId,
+    decimals,
+    contract: asset.contractAddress,
+  };
+  const out: BuyLeg[] = asked.map((l, i) => {
+    const q = quote.legs[i] as JarBuyLeg;
+    return {
+      symbol: l.symbol,
+      chain: l.chain,
+      usd: fromMicro(l.micro),
+      destinationAsset: l.assetId,
+      depositAddress: q.depositAddress,
+      amountIn: q.amountIn,
+      minAmountOut: q.minAmountOut,
+      quotedOut: q.amountOut,
+      deadline: q.deadline,
+      status: 'NOT_SENT',
+      ...(chain === 'Base' ? {} : { origin: chain }),
+      pay,
+    };
+  });
+  checkValueKept(out, list, { decimals, price });
+  return { quote, quotes: [quote], legs: out };
+}
+
 /**
  * Swap's floor (lib/intents-quote `MIN_VALUE_KEPT`) for every leg of a jar buy: what the
  * leg is guaranteed to deliver, at 1Click's own price, must be worth at least half the
@@ -361,6 +547,8 @@ export async function quoteJarBuy(
 export function checkValueKept(
   legs: Pick<BuyLeg, 'symbol' | 'destinationAsset' | 'amountIn' | 'minAmountOut'>[],
   tokens: PricedToken[],
+  /** The paying token's decimals and price, when it isn't USDC. */
+  paidIn?: { decimals: number; price: number },
 ) {
   for (const l of legs) {
     const token = tokens.find((t) => t.assetId === l.destinationAsset);
@@ -369,7 +557,8 @@ export function checkValueKept(
     if (!token?.price || paid === null || min === null)
       throw new Error(`Couldn’t price ${l.symbol} right now. Try again. Nothing was paid.`);
     const kept = (Number(min) / 10 ** token.decimals) * token.price;
-    if (kept < fromMicro(paid) * MIN_VALUE_KEPT)
+    const paidUsd = paidIn ? unitsUsd(paid, paidIn.decimals, paidIn.price) : fromMicro(paid);
+    if (kept < paidUsd * MIN_VALUE_KEPT)
       throw new Error(
         `Fees would take more than half of the ${l.symbol} swap. Buy more or pick another token. Nothing was paid.`,
       );
@@ -383,12 +572,19 @@ export function checkValueKept(
  */
 export function checkQuote(
   quote: JarBuyQuote,
-  legs: Pick<AskedLeg, 'micro' | 'assetId' | 'recipient'>[],
-  opts: { refundTo: string; slippageBps: number; now?: number; origin?: PayChain },
+  legs: Pick<AskedLeg, 'micro' | 'assetId' | 'recipient' | 'amountIn'>[],
+  opts: {
+    refundTo: string;
+    slippageBps: number;
+    now?: number;
+    origin?: PayChain;
+    /** The token paid with, when it isn't the network's USDC. */
+    originAsset?: string;
+  },
 ): void {
   const origin = opts.origin ?? 'Base';
-  if (quote.originAsset !== USDC_ORIGINS[origin] || quote.legs.length !== legs.length)
-    throw changed();
+  const originAsset = opts.originAsset ?? USDC_ORIGINS[origin];
+  if (quote.originAsset !== originAsset || quote.legs.length !== legs.length) throw changed();
   if (opts.slippageBps < 1 || opts.slippageBps > MAX_SLIPPAGE_BPS) throw changed();
   let total = 0n;
   quote.legs.forEach((q, i) => {
@@ -396,7 +592,7 @@ export function checkQuote(
     if (
       !asked ||
       q.destinationAsset !== asked.assetId ||
-      q.amountIn !== asked.micro.toString() ||
+      q.amountIn !== (asked.amountIn ?? asked.micro).toString() ||
       !depositValid(origin, q.depositAddress) ||
       q.depositMemo ||
       !sameAddress(q.recipient, asked.recipient) ||
@@ -417,7 +613,7 @@ export function checkQuote(
 const depositValid = (origin: PayChain, a: unknown) =>
   typeof a === 'string' &&
   a.trim() === a &&
-  (origin === 'Base' || origin === 'Ethereum'
+  (origin === 'Base' || origin === 'Arbitrum' || origin === 'Polygon' || origin === 'Ethereum'
     ? isAddress(a)
     : origin === 'Solana'
       ? isSolanaAddress(a)
@@ -433,6 +629,8 @@ export async function verifyWithOneClick(
   refundTo: string,
   fetcher: typeof fetch = fetch,
   origin: PayChain = 'Base',
+  /** The token paid with, when it isn't the network's USDC. */
+  originAsset: string = USDC_ORIGINS[origin],
 ) {
   const record = await fetchOneClickStatus(leg.depositAddress, fetcher);
   if (!record) throw new Error("Couldn't confirm the swap with NEAR Intents. Try again.");
@@ -440,7 +638,7 @@ export async function verifyWithOneClick(
     depositAddress: leg.depositAddress,
     recipient: leg.recipient,
     refundTo,
-    originAsset: USDC_ORIGINS[origin],
+    originAsset,
     destinationAsset: leg.destinationAsset,
     amountIn: leg.amountIn,
   });
@@ -448,13 +646,31 @@ export async function verifyWithOneClick(
 }
 
 /**
- * Pays every leg: one USDC transfer to its deposit address on the network it's paid
- * from, signed here after you confirm once. Base legs go out in one batch Honey pays the
- * gas of when it will (EIP-7702, all legs sharing its transaction), else each is signed
- * directly with the next nonce; legs paid on Ethereum, Solana or NEAR go through lib/send.ts (its fee
- * and balance checks, and the token's own transfer). Returns each leg with its
- * transaction hash; a leg that fails to send stops the rest, and already-sent legs
- * still complete or refund on their own.
+ * One Base leg's deposit as a call: a `transfer` of USDC or the paying token, or a plain
+ * transfer of ETH when that pays.
+ */
+function baseDeposit(leg: BuyLeg) {
+  const to = leg.depositAddress;
+  const amount = BigInt(leg.amountIn);
+  const contract = leg.pay ? leg.pay.contract : USDC_BASE;
+  if (!isAddress(to) || (contract !== null && !isAddress(contract))) throw changed();
+  return contract === null
+    ? nativeTransferCall(to, amount)
+    : erc20TransferCall(contract, to, amount);
+}
+
+/** A leg's dollars: its USDC, or what it was quoted for when another token pays it. */
+const legMicro = (l: BuyLeg) => (l.pay ? toMicro(l.usd) : BigInt(l.amountIn));
+
+/**
+ * Pays every leg: one transfer (USDC, or the token picked to pay with) to its deposit
+ * address on the network it's paid from, signed here after you confirm once. Base legs
+ * go out in one batch Honey pays the gas of when it will (EIP-7702, all legs sharing its
+ * transaction), else each is signed directly with the next nonce; legs paid on any other
+ * network go through lib/send.ts (its fee and balance checks, Honey's free gas where it
+ * pays, and the token's own transfer). Returns each leg with its transaction hash; a leg
+ * that fails to send stops the rest, and already-sent legs still complete or refund on
+ * their own.
  */
 export async function payJarBuy(
   legs: BuyLeg[],
@@ -466,7 +682,7 @@ export async function payJarBuy(
   const d = { ...defaults, ...deps };
   const wallet = payer();
   const from = wallet.addresses.evm as Hex;
-  const total = legs.reduce((s, l) => s + BigInt(l.amountIn), 0n);
+  const total = legs.reduce((s, l) => s + legMicro(l), 0n);
   if (total > toMicro(MAX_BUY_USD)) throw new Error(`Buys are capped at $${MAX_BUY_USD}.`);
   for (const l of legs) checkDeadline(l.deadline);
   if (
@@ -493,9 +709,7 @@ export async function payJarBuy(
           ? await d.sponsorEvm({
               chainId: BASE_CHAIN_ID,
               account: from,
-              calls: baseLegs.map((l) =>
-                erc20TransferCall(USDC_BASE, l.depositAddress as Hex, BigInt(l.amountIn)),
-              ),
+              calls: baseLegs.map(baseDeposit),
             })
           : null;
       if (sponsorship) {
@@ -515,13 +729,9 @@ export async function payJarBuy(
         leg.txHash = sponsoredHash;
       } else if (origin === 'Base') {
         if (!key || !client) throw new Error('Base is not available.');
-        const data = encodeFunctionData({
-          abi: erc20Abi,
-          functionName: 'transfer',
-          args: [leg.depositAddress as Hex, BigInt(leg.amountIn)],
-        });
+        const call = baseDeposit(leg);
         const prepared = await prepareEvmSend(
-          { from, to: USDC_BASE, value: '0x0', data },
+          { from, to: call.to, value: toHex(call.value), data: call.data },
           BASE_CHAIN_ID,
         );
         // Each Base leg takes the next nonce, so legs never replace one another.
@@ -529,25 +739,30 @@ export async function payJarBuy(
         leg.txHash = await client.sendRawTransaction({ serializedTransaction: signed });
       } else {
         // You confirmed the whole buy above; lib/send.ts doesn't ask again per leg.
+        const symbol = leg.pay?.symbol ?? 'USDC';
+        const decimals = leg.pay?.decimals ?? USDC_DECIMALS;
+        const contract = leg.pay?.contract;
         const plan = await d.prepare(
           wallet,
           {
             chain: origin,
-            symbol: 'USDC',
+            symbol,
             to: leg.depositAddress,
-            amount: formatUnits(BigInt(leg.amountIn), USDC_DECIMALS),
+            amount: formatUnits(BigInt(leg.amountIn), decimals),
+            ...(contract ? { token: { contract, decimals } } : {}),
           },
           { confirm: async () => true },
         );
         let paid: bigint | null = null;
         try {
-          paid = toBaseUnits(plan.amount, USDC_DECIMALS);
+          paid = toBaseUnits(plan.amount, decimals);
         } catch {
           paid = null;
         }
         if (
           plan.to !== leg.depositAddress ||
           plan.chain !== origin ||
+          plan.symbol !== symbol ||
           paid !== BigInt(leg.amountIn)
         )
           throw changed();

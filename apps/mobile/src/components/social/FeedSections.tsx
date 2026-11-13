@@ -1,7 +1,7 @@
 import type { SocialFeedScope } from '@honey-wallet/api-client';
 import { router } from 'expo-router';
 import { type ReactNode, useEffect, useMemo, useState } from 'react';
-import { ScrollView, Text, View } from 'react-native';
+import { ScrollView, Text, useWindowDimensions, View } from 'react-native';
 import Animated, { FadeIn, FadeOut, useReducedMotion } from 'react-native-reanimated';
 import { Icon } from '@/components/Icon';
 import { JarCarousel } from '@/components/jars/JarParts';
@@ -113,6 +113,7 @@ export function FeedList({ scope }: { scope: SocialFeedScope }) {
 
 function FeedBody({ scope }: { scope: SocialFeedScope }) {
   const styles = useStyles();
+  const { height } = useWindowDimensions();
   const { signedIn } = useSocialMe();
   const feed = useSocial().feeds[scope];
   if (feed.error && !feed.items.length)
@@ -152,13 +153,22 @@ function FeedBody({ scope }: { scope: SocialFeedScope }) {
   if (scope === 'following') return <FollowingEmpty signedIn={signedIn} />;
   // Signed out there are no jars to open yet: no button until the tab bar's Sign in.
   return (
-    <MascotEmpty
-      title="The hive is quiet"
-      hint={signedIn ? 'Make a jar public to show it here.' : 'Jars people share show up here.'}
-      action={
-        signedIn ? { label: 'Open Jars', onPress: () => router.navigate('/jars') } : undefined
-      }
-    />
+    // Centred in the space under the tabs, in plain words (2026-11-13).
+    <View style={[styles.emptyFill, { minHeight: height * 0.6 }]}>
+      <MascotEmpty
+        title="No posts yet"
+        hint={
+          signedIn
+            ? 'Share a jar and it shows up here for everyone.'
+            : 'When people share their jars, you’ll see them here.'
+        }
+        action={
+          signedIn
+            ? { label: 'Create a jar', onPress: () => router.push('/jar-create') }
+            : undefined
+        }
+      />
+    </View>
   );
 }
 
@@ -459,7 +469,18 @@ export function BoardView({
               }}
             />
           ) : (
-            <BoardNote text="No one’s ranked yet." retry={() => void loadBoard(window)} />
+            // Empty isn't an error: say how a jar gets here and offer the way in.
+            <EmptyState
+              icon="trendUp"
+              title="No one’s ranked yet"
+              hint="Shared jars are ranked here by how much they grow. Share yours to be first."
+              action={{
+                label: 'Create a jar',
+                onPress: () => {
+                  if (requireWallet('create a jar', '/jar-create')) router.push('/jar-create');
+                },
+              }}
+            />
           )}
         </Animated.View>
       )}
@@ -512,6 +533,7 @@ export function openCompose(params: { symbol?: string; chain?: string; jar?: str
 const useStyles = makeStyles((c) => ({
   // The first post's own top padding is the gap under the tabs; no extra on top.
   list: { paddingTop: 0 },
+  emptyFill: { justifyContent: 'center' },
   board: { flex: 1, gap: 12 },
   boardHead: { gap: 12 },
   rows: { gap: 6 },

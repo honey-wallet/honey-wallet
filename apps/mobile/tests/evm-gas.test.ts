@@ -400,9 +400,33 @@ describe('prepareSend with Honey paying gas', () => {
               eth_call: `0x${9_000_000n.toString(16).padStart(64, '0')}`,
             })[method],
           sponsorEvm: async () => null,
+          signedIn: async () => true,
         },
       ),
     ).rejects.toThrow('Not enough ETH');
+  });
+
+  it('says to sign in, not "not enough ETH", when signed out on a free-gas network', async () => {
+    await expect(
+      prepareSend(
+        wallet,
+        { chain: 'Base', symbol: 'USDC', to: TO, amount: '2.5' },
+        {
+          rpcFor: () => async (method: string) =>
+            ({
+              eth_chainId: '0x2105',
+              eth_getTransactionCount: '0x3',
+              eth_getBlockByNumber: { baseFeePerGas: '0x3b9aca00' },
+              eth_maxPriorityFeePerGas: '0x5f5e100',
+              eth_getBalance: '0x0',
+              eth_estimateGas: '0xc350',
+              eth_call: `0x${9_000_000n.toString(16).padStart(64, '0')}`,
+            })[method],
+          sponsorEvm: async () => null,
+          signedIn: async () => false,
+        },
+      ),
+    ).rejects.toThrow('Sign in to Honey to send on Base');
   });
 
   it('won’t pay its own fee while a free-gas batch from this wallet may still land', async () => {

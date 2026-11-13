@@ -28,7 +28,9 @@ import {
   swapTokenList,
   tokenRef,
 } from '@/lib/intents-swap';
-import { CHAINS, formatBalance, formatPrice, tokenName } from '@/lib/mock-wallet';
+import { PAY_CHAINS } from '@/lib/jar-buy';
+import { CHAINS, formatBalance, formatPrice, formatUsd, tokenName } from '@/lib/mock-wallet';
+import { isUsdc, jarPayWith } from '@/lib/pay-with';
 import { pickToken, type TokenRef, useSwap } from '@/lib/swap';
 import { useWalletView } from '@/lib/wallet-view';
 import { makeStyles, useTheme } from '@/theme';
@@ -37,18 +39,26 @@ import { makeStyles, useTheme } from '@/theme';
 export default function TokenPickerSheet() {
   const styles = useStyles();
   const c = useTheme();
-  const { side = 'sell', live } = useLocalSearchParams<{ side?: 'sell' | 'buy'; live?: string }>();
+  const {
+    side = 'sell',
+    live,
+    for: target,
+  } = useLocalSearchParams<{ side?: 'sell' | 'buy'; live?: string; for?: string }>();
   const { network } = useSwap();
   const [query, setQuery] = useState('');
+  // A jar's "Pay with" (JarAmount): what you hold and can pay with; USDC means any network.
+  const jar = target === 'jar';
 
   const choose = (token: TokenRef) => {
     tap();
-    pickToken(side, token);
+    if (jar) jarPayWith.set(isUsdc(token) ? null : token);
+    else pickToken(side, token);
     closeSheet();
   };
 
   // Real swaps list every token NEAR Intents trades (to sell: the ones this wallet can pay).
-  if (live === '1') return <LiveTokens side={side} onChoose={choose} />;
+  if (live === '1' || jar)
+    return <LiveTokens side={jar ? 'sell' : side} jar={jar} onChoose={choose} />;
 
   const search = (
     <SearchField
@@ -109,16 +119,25 @@ const chainOrder = (blockchain: string) => {
  */
 function LiveTokens({
   side,
+  jar = false,
   onChoose,
 }: {
   side: 'sell' | 'buy';
+  /** Paying for a jar: only what you hold and can pay with, USDC as one row. */
+  jar?: boolean;
   onChoose: (token: TokenRef) => void;
 }) {
   const styles = useStyles();
   const c = useTheme();
   const view = useWalletView();
   const holdings = 'holdings' in view ? (view.holdings ?? []) : [];
-  const picked = useSwap()[side];
+  const swapPick = useSwap()[side];
+  const jarPick = jarPayWith.useValue();
+  const picked: TokenRef | null = jar ? jarPick : swapPick;
+  // A jar's USDC is paid from whichever networks hold it (lib/jar-buy), so it's one row.
+  const usdcHeld = holdings
+    .filter((h) => h.symbol === 'USDC' && (PAY_CHAINS as readonly string[]).includes(h.chain))
+    .reduce((s, h) => s + h.usd, 0);
   const { tokens, failed } = swapTokenList.useValue();
   const [query, setQuery] = useState('');
   const [chain, setChain] = useState<string | null>(null);
@@ -134,6 +153,7 @@ function LiveTokens({
     );
   const listed = (tokens ?? [])
     .filter((t) => side === 'buy' || canSell(t))
+    .filter((t) => !jar || (t.symbol !== 'USDC' && (heldOf(t)?.amount ?? 0) > 0))
     .sort(
       (a, b) =>
         chainOrder(a.blockchain) - chainOrder(b.blockchain) ||
@@ -198,11 +218,24 @@ function LiveTokens({
               : undefined
         }
         accessory="check"
-        selected={sameToken(picked, ref)}
+        selected={!!picked && sameToken(picked, ref)}
         onPress={() => onChoose(ref)}
       />
     );
   };
+  const usdcRow =
+    jar && usdcHeld > 0 && !chain && (!q || 'usdc'.includes(q) || 'usd coin'.includes(q)) ? (
+      <SheetRow
+        key="usdc"
+        leading={<TokenIcon symbol="USDC" size={36} ring={c.sheet} />}
+        title="USDC"
+        subtitle="Any network"
+        value={formatUsd(usdcHeld)}
+        accessory="check"
+        selected={!picked}
+        onPress={() => onChoose({ symbol: 'USDC', chain: 'Base' })}
+      />
+    ) : null;
 
   const sticky = (
     <>
@@ -247,8 +280,10 @@ function LiveTokens({
   if (!tokens)
     return (
       <SheetScreen scroll>
-        <SheetHeader title={side === 'sell' ? 'Swap from' : 'Swap to'} />
-        {failed ? (
+        <SheetHeader title={jar ? 'Pay with' : side === 'sell' ? 'Swap from' : 'Swap to'} />
+        {failed && jar ? (
+          usdcRow
+        ) : failed ? (
           <>
             <Text style={styles.note}>
               Couldn’t reach NEAR Intents for the full list. These always work:
@@ -260,7 +295,7 @@ function LiveTokens({
                 title={`${t.symbol} on ${t.chain}`}
                 subtitle={tokenName(t.symbol)}
                 accessory="check"
-                selected={sameToken(picked, t)}
+                selected={!!picked && sameToken(picked, t)}
                 onPress={() => onChoose(t)}
               />
             ))}
@@ -273,14 +308,15 @@ function LiveTokens({
 
   return (
     <SheetScreen scroll sticky={sticky}>
-      <SheetHeader title={side === 'sell' ? 'Swap from' : 'Swap to'} />
-      {side === 'sell' && !q && !chain && (
+      <SheetHeader title={jar ? 'Pay with' : side === 'sell' ? 'Swap from' : 'Swap to'} />
+      {side === 'sell' && !jar && !q && !chain && (
         <Text style={styles.note}>
           You can sell tokens on Ethereum, Base, Arbitrum, Polygon, Solana and NEAR, and get any of{' '}
           {listed.length} tokens on {chains.length} networks.
         </Text>
       )}
-      {yours.length > 0 && <SheetSection title="Your tokens · balance" />}
+      {(yours.length > 0 || usdcRow) && <SheetSection title="Your tokens · balance" />}
+      {usdcRow}
       {yours.map(ownRow)}
       {q ? (
         <>
@@ -322,7 +358,14 @@ function LiveTokens({
           )}
         </ChainGroup>
       ))}
-      {shown.length === 0 && (
+      {jar && !usdcRow && yours.length === 0 && !q && (
+        <EmptyState
+          icon="wallet"
+          title="Nothing to pay with"
+          hint="Add money to this wallet first."
+        />
+      )}
+      {shown.length === 0 && (jar ? !!q && !usdcRow : true) && (
         <EmptyState
           icon="search"
           title="No tokens found"

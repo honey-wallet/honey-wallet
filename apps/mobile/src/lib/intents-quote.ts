@@ -42,14 +42,19 @@ export function checkDeadline(deadline: string, now = Date.now()) {
     throw new Error('The quote expired. Review again.');
 }
 
-/** The minimum payout is positive, at most the quoted amount, and within the slippage asked for. */
+/**
+ * The minimum payout is positive, at most the quoted amount, and within the slippage asked
+ * for. 1Click rounds that floor down to whole atomic units (amountOut 4698 at 1% gives
+ * minAmountOut 4651, not 4651.02), so the bound is floor(out × (1 − slippage)), exactly
+ * as the server checks it; requiring the unrounded product refused almost every quote.
+ */
 export function minWithinSlippage(out: bigint | null, min: bigint | null, slippageBps: number) {
   return (
     out !== null &&
     min !== null &&
     min > 0n &&
     min <= out &&
-    min * 10_000n >= out * BigInt(10_000 - slippageBps)
+    min >= (out * BigInt(10_000 - slippageBps)) / 10_000n
   );
 }
 

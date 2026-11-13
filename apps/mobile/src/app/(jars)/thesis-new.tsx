@@ -35,6 +35,7 @@ import { useBasketChart, useTokenChart } from '@/lib/market';
 import { formatUsd } from '@/lib/mock-wallet';
 import { memberName, propose, useActiveMultisig } from '@/lib/multisig';
 import { SHEET_EXIT } from '@/lib/navigation';
+import { jarPayWith } from '@/lib/pay-with';
 import { useProfile } from '@/lib/profile';
 import { JAR_VISIBILITY, settings, useSettings } from '@/lib/settings';
 import { COPY_FEES } from '@/lib/surface';
@@ -137,6 +138,8 @@ export default function NewThesisSheet() {
     return draft;
   });
   const [step, setStep] = useState<Step>(fromChat && openAt ? openAt : 'idea');
+  // Every new jar starts paying with USDC; "Pay with" on How much? changes it.
+  useEffect(() => jarPayWith.set(null), []);
   const [text, setText] = useState(idea ?? fromChat?.thesis ?? '');
   // Ideas are written in the chat: opened bare (no strategy to review), go there instead;
   // your own jar without its picks (a reload lost them) goes back to picking.
@@ -376,7 +379,7 @@ export default function NewThesisSheet() {
       let sent: BuyLeg[] = [];
       let legCount = 0;
       try {
-        const quoted = await quoteJarBuy(routes, maxSlip / 100);
+        const quoted = await quoteJarBuy(routes, maxSlip / 100, {}, jarPayWith.get());
         legCount = quoted.legs.length;
         buy = await payJarBuy(quoted.legs, (legs) => {
           sent = legs.filter((l) => l.txHash);
@@ -571,6 +574,7 @@ export default function NewThesisSheet() {
                 : undefined
           }
           cta="Continue"
+          payWith
           onDone={(amount) => {
             tap();
             // A token stepped down to 0% is left out of the jar.
