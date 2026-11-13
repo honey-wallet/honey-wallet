@@ -1,3 +1,4 @@
+import type { ChainActivityItem } from '@honey-wallet/api-client';
 import * as Clipboard from 'expo-clipboard';
 import { router, useLocalSearchParams } from 'expo-router';
 import type { ReactNode } from 'react';
@@ -10,9 +11,14 @@ import { PillButton } from '@/components/onboarding/PillButton';
 import { Copyable, DetailGroup, ExplorerLink, StatusPill } from '@/components/sheets/Details';
 import { closeSheet, SheetScreen, StatRow } from '@/components/sheets/Sheet';
 import { EmptyState, TokenIcon } from '@/components/wallet/parts';
+import { swapState } from '@/lib/activity-feed';
 import { tap } from '@/lib/haptics';
+import { type IntentsSwap, unitsText, useIntentsSwaps } from '@/lib/intents-swap';
+import type { BuyLeg } from '@/lib/jar-buy';
 import { LOADS } from '@/lib/loads';
 import { ACTIVITY, ACTIVITY_DETAILS, type Chain, chainSymbol, formatUsd } from '@/lib/mock-wallet';
+import { formatAmount, portfolios } from '@/lib/portfolio';
+import { type ThesisJar, useThesisJars } from '@/lib/thesis';
 import { showToast } from '@/lib/toast';
 import { makeStyles } from '@/theme';
 
@@ -34,29 +40,339 @@ const EXPLORER: Record<Chain, { name: string; tx: (hash: string) => string }> = 
   'XRP Ledger': { name: 'XRPScan', tx: (h) => `https://xrpscan.com/tx/${h}` },
 };
 
+/** Explorer names for the networks the wallet reads (and swaps reach). */
+const EXPLORER_NAME: Record<string, string> = {
+  Ethereum: 'Etherscan',
+  Base: 'Basescan',
+  Arbitrum: 'Arbiscan',
+  Solana: 'Solscan',
+  NEAR: 'NearBlocks',
+};
+const EXPLORER_TX: Record<string, (hash: string) => string> = {
+  ...Object.fromEntries(Object.entries(EXPLORER).map(([chain, e]) => [chain, e.tx])),
+  Arbitrum: (h) => `https://arbiscan.io/tx/${h}`,
+};
+/** Where NEAR Intents shows a swap, by its deposit address. */
+const intentsUrl = (depositAddress: string) =>
+  `https://explorer.near-intents.org/transactions/${depositAddress}`;
+
 /**
- * A transaction, laid out like a proposal: what happened and its status up top, who and
- * where in one block, then the transaction itself (hash, cost, time) in another.
+ * Activity's detail sheet. A real wallet's rows: a swap or a jar buy made here (its NEAR
+ * Intents status, kept current by lib/in-flight while it moves), or an on-chain
+ * transaction from the portfolio read. Sample wallets keep the fixture below.
  */
 export default function ActivitySheet() {
   const { id = '' } = useLocalSearchParams<{ id: string }>();
+  const swaps = useIntentsSwaps();
+  const jars = useThesisJars();
+  const read = portfolios.useValue();
+  if (id.startsWith('swap:')) {
+    const swap = swaps[id.slice('swap:'.length)];
+    return swap ? <SwapDetail swap={swap} /> : <NotFound />;
+  }
+  if (id.startsWith('jarbuy:')) {
+    const jar = jars.find((j) => j.id === id.slice('jarbuy:'.length));
+    return jar?.buy?.length ? <JarBuyDetail jar={jar} legs={jar.buy} /> : <NotFound />;
+  }
+  const item = Object.values(read)
+    .flatMap((entry) => entry.activity ?? [])
+    .find((i) => `${i.chain}:${i.hash}` === id);
+  if (item) return <ChainDetail item={item} />;
+  return <FixtureDetail id={id} />;
+}
+
+function NotFound() {
+  return (
+    <SheetScreen title="Transaction">
+      <EmptyState
+        icon="history"
+        title="Transaction not found"
+        hint="It may still be confirming, or it was hidden as spam."
+        action={{ label: 'Back to Activity', onPress: () => router.back() }}
+      />
+    </SheetScreen>
+  );
+}
+
+/** Share copies the hash (the browser has no share sheet), then Done. */
+function Footer({ copy, toast }: { copy?: string; toast: string }) {
+  const styles = useStyles();
+  return (
+    <View style={styles.actions}>
+      {copy ? (
+        <PillButton
+          label="Share"
+          variant="secondary"
+          onPress={() => {
+            tap();
+            void Clipboard.setStringAsync(copy).then(() => showToast(toast));
+          }}
+          style={styles.flex}
+        />
+      ) : null}
+      <PillButton label="Done" onPress={() => closeSheet()} style={styles.flex} />
+    </View>
+  );
+}
+
+/** A hash you can copy, with its explorer link when the network has one. */
+function TxValue({ hash, chain, url }: { hash: string; chain: string; url?: string }) {
+  const styles = useStyles();
+  const link = url ?? EXPLORER_TX[chain]?.(hash);
+  return (
+    <View style={styles.inline}>
+      <Copyable value={hash} toast="Transaction ID copied" />
+      {link ? <ExplorerLink name={EXPLORER_NAME[chain] ?? 'explorer'} url={link} /> : null}
+    </View>
+  );
+}
+
+const when = (ms: number) =>
+  new Date(ms).toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+
+const amountOf = (atomic: string | null | undefined, decimals: number) => {
+  if (!atomic) return null;
+  try {
+    return formatAmount(Number(unitsText(atomic, decimals)));
+  } catch {
+    return null;
+  }
+};
+
+/** A swap made in this app: what went in, what came out, and NEAR Intents' status. */
+function SwapDetail({ swap: s }: { swap: IntentsSwap }) {
+  const styles = useStyles();
+  const state = swapState(s.status);
+  const done = s.status === 'SUCCESS';
+  const sold = amountOf(s.amountIn, s.sellDecimals) ?? '';
+  const got = amountOf(s.amountOut, s.buyDecimals) ?? '';
+  const minimum = amountOf(s.minAmountOut, s.buyDecimals);
+  const refunded = amountOf(s.refundedAmount, s.sellDecimals);
+  const delivered = s.destinationTxHashes?.[0];
+  return (
+    <SheetScreen
+      title={done ? 'Swapped' : state.tone === 'waiting' ? 'Swapping' : 'Swap'}
+      footer={<Footer copy={s.txHash ?? s.depositAddress} toast="Transaction ID copied" />}
+    >
+      <View style={styles.summary}>
+        <TokenIcon symbol={s.buy.symbol} chain={s.buy.chain} size={40} />
+        <TextsReveal
+          id={s.depositAddress}
+          align="center"
+          first={
+            <Text style={styles.amount}>
+              {sold} {s.sell.symbol} → {got} {s.buy.symbol}
+            </Text>
+          }
+          second={s.usdIn ? <Text style={styles.usd}>{formatUsd(s.usdIn)}</Text> : undefined}
+        />
+        <StatusPill
+          tone={state.tone}
+          icon={
+            state.tone === 'done' ? 'checkCircle' : state.tone === 'failed' ? 'warning' : 'clock'
+          }
+          text={state.text}
+        />
+      </View>
+
+      <DetailGroup>
+        <StatRow label="You paid" value={`${sold} ${s.sell.symbol} on ${s.sell.chain}`} />
+        <StatRow
+          label={done ? 'You got' : 'You get'}
+          value={`${done ? '' : '~'}${got} ${s.buy.symbol} on ${s.buy.chain}`}
+        />
+        {!done && minimum ? (
+          <StatRow label="At least" value={`${minimum} ${s.buy.symbol}`} />
+        ) : null}
+        {refunded ? <StatRow label="Refunded" value={`${refunded} ${s.sell.symbol}`} /> : null}
+        {s.externalRecipient ? (
+          <StatRow label="To" value={<Copyable value={s.recipient} toast="Address copied" />} />
+        ) : null}
+      </DetailGroup>
+
+      <DetailGroup title="NEAR Intents">
+        <StatRow
+          label="Deposit address"
+          value={
+            <View style={styles.inline}>
+              <Copyable value={s.depositAddress} toast="Address copied" />
+              <ExplorerLink name="NEAR Intents" url={intentsUrl(s.depositAddress)} />
+            </View>
+          }
+        />
+        {s.txHash ? (
+          <StatRow
+            label="Deposit"
+            value={<TxValue hash={s.txHash} chain={s.sell.chain} url={s.explorerUrl} />}
+          />
+        ) : null}
+        {delivered ? (
+          <StatRow label="Delivery" value={<TxValue hash={delivered} chain={s.buy.chain} />} />
+        ) : null}
+        {s.sentAt ? <StatRow label="Sent" value={when(s.sentAt)} /> : null}
+      </DetailGroup>
+    </SheetScreen>
+  );
+}
+
+/** A jar bought from this phone: each token's NEAR Intents swap and its status. */
+function JarBuyDetail({ jar, legs }: { jar: ThesisJar; legs: BuyLeg[] }) {
+  const styles = useStyles();
+  const paid = legs.filter((l) => l.txHash);
+  const usd = paid.reduce((sum, l) => sum + l.usd, 0);
+  const states = paid.map((l) => swapState(l.status));
+  const bought = paid.filter((l) => l.status === 'SUCCESS').length;
+  const overall = states.some((x) => x.tone === 'waiting')
+    ? { tone: 'waiting' as const, text: 'Buying' }
+    : bought === paid.length
+      ? { tone: 'done' as const, text: 'Complete' }
+      : bought === 0
+        ? { tone: 'failed' as const, text: 'Refunded' }
+        : { tone: 'failed' as const, text: `${bought} of ${paid.length} bought` };
+  return (
+    <SheetScreen
+      title="Jar buy"
+      footer={
+        <View style={styles.actions}>
+          <PillButton
+            label="Open jar"
+            variant="secondary"
+            onPress={() => {
+              tap();
+              router.push({ pathname: '/jar/[id]', params: { id: jar.id } });
+            }}
+            style={styles.flex}
+          />
+          <PillButton label="Done" onPress={() => closeSheet()} style={styles.flex} />
+        </View>
+      }
+    >
+      <View style={styles.summary}>
+        <TokenIcon symbol={paid[0]?.symbol ?? 'USDC'} size={40} />
+        <TextsReveal
+          id={jar.id}
+          align="center"
+          first={<Text style={styles.amount}>{formatUsd(usd)}</Text>}
+          second={<Text style={styles.usd}>{jar.name}</Text>}
+        />
+        <StatusPill
+          tone={overall.tone}
+          icon={
+            overall.tone === 'done'
+              ? 'checkCircle'
+              : overall.tone === 'failed'
+                ? 'warning'
+                : 'clock'
+          }
+          text={overall.text}
+        />
+      </View>
+
+      <DetailGroup title="Tokens">
+        {paid.map((l, i) => (
+          <StatRow
+            key={l.depositAddress}
+            label={`${l.symbol} on ${l.chain}`}
+            value={`${formatUsd(l.usd)} · ${states[i]?.text ?? ''}`}
+          />
+        ))}
+      </DetailGroup>
+
+      <DetailGroup title="Payments">
+        {paid.map((l) =>
+          l.txHash ? (
+            <StatRow
+              key={l.depositAddress}
+              label={l.symbol}
+              value={<TxValue hash={l.txHash} chain={l.origin ?? 'Base'} />}
+            />
+          ) : null,
+        )}
+        <StatRow label="Bought" value={when(jar.createdAt)} />
+      </DetailGroup>
+    </SheetScreen>
+  );
+}
+
+const DIRECTION_TITLE = { sent: 'Sent', received: 'Received', other: 'Transaction' };
+
+/** An on-chain transaction from the portfolio read. */
+function ChainDetail({ item }: { item: ChainActivityItem }) {
+  const styles = useStyles();
+  const coin = item.chain === 'NEAR' ? 'NEAR' : item.chain === 'Solana' ? 'SOL' : 'ETH';
+  const symbol = item.symbol ?? coin;
+  const moved = item.amount != null && item.symbol;
+  return (
+    <SheetScreen
+      title={DIRECTION_TITLE[item.direction]}
+      footer={<Footer copy={item.hash} toast="Hash copied" />}
+    >
+      <View style={styles.summary}>
+        <TokenIcon symbol={symbol} size={40} />
+        <TextsReveal
+          id={item.hash}
+          align="center"
+          first={
+            <Text style={styles.amount}>
+              {moved
+                ? `${formatAmount(item.amount ?? 0)} ${item.symbol}`
+                : `${item.chain} transaction`}
+            </Text>
+          }
+        />
+        <StatusPill
+          tone={item.failed ? 'failed' : 'done'}
+          icon={item.failed ? 'warning' : 'checkCircle'}
+          text={item.failed ? 'Failed' : 'Confirmed'}
+        />
+      </View>
+
+      <DetailGroup>
+        {item.counterparty ? (
+          <StatRow
+            label={item.direction === 'received' ? 'From' : 'To'}
+            value={<Copyable value={item.counterparty} toast="Address copied" />}
+          />
+        ) : null}
+        <StatRow
+          label="Chain"
+          value={
+            <View style={styles.inline}>
+              <TokenIcon symbol={chainSymbol(item.chain)} size={18} />
+              <Text style={styles.value}>{item.chain}</Text>
+            </View>
+          }
+        />
+      </DetailGroup>
+
+      <DetailGroup title="Transaction">
+        <StatRow
+          label="Transaction hash"
+          value={<TxValue hash={item.hash} chain={item.chain} url={item.explorerUrl} />}
+        />
+        {item.timestamp ? <StatRow label="Date" value={when(item.timestamp * 1000)} /> : null}
+      </DetailGroup>
+    </SheetScreen>
+  );
+}
+
+/**
+ * A sample transaction, laid out like a proposal: what happened and its status up top,
+ * who and where in one block, then the transaction itself (hash, cost, time) in another.
+ */
+function FixtureDetail({ id }: { id: string }) {
   const styles = useStyles();
   const activity = ACTIVITY.find((a) => a.id === id);
   const detail = ACTIVITY_DETAILS[id];
   // The list has what happened; the receipt (hash, cost, time) is looked up on the chain.
   const loading = useFirstLoad(LOADS.tx(id));
-  if (!activity || !detail) {
-    return (
-      <SheetScreen title="Transaction">
-        <EmptyState
-          icon="history"
-          title="Transaction not found"
-          hint="It may still be confirming, or it was hidden as spam."
-          action={{ label: 'Back to Activity', onPress: () => router.back() }}
-        />
-      </SheetScreen>
-    );
-  }
+  if (!activity || !detail) return <NotFound />;
   const explorer = EXPLORER[detail.chain];
   const link = explorer.tx(detail.hash);
   // Share copies the transaction hash (review): it's what people pass on, and the

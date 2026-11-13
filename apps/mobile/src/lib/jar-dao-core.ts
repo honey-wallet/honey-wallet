@@ -18,6 +18,7 @@ import {
   checkThreshold,
   createDaoCall,
   DAO_CREATE_DEPOSIT,
+  type DelegateAction,
   type DepositFact,
   daoAccountId,
   decodeRecord,
@@ -76,6 +77,89 @@ export async function prepare(
     blockHash: access.block_hash,
     actions,
   };
+}
+
+// ---------- Gas paid by Honey (NEP-366) ----------
+
+/** How long a signed delegate stays valid: ~2 minutes of blocks (the server allows 600). */
+export const DELEGATE_TTL_BLOCKS = 120n;
+/** Gas price assumed when checking whether an account can pay (yoctoNEAR per gas, 20% over NEAR's floor). */
+const GAS_PRICE = 120_000_000n;
+/** NEAR's storage price: 1e19 yoctoNEAR per byte. */
+const STORAGE_PRICE = 10n ** 19n;
+
+/**
+ * The same calls as a NEP-366 delegate action from the member's implicit account,
+ * for Honey's relayer to wrap and pay for: next access-key nonce, valid for
+ * `DELEGATE_TTL_BLOCKS` past the latest final block.
+ */
+export async function prepareDelegate(
+  rpc: Rpc,
+  senderId: string,
+  receiverId: string,
+  actions: FunctionCall[],
+): Promise<DelegateAction> {
+  const access = (await rpc('query', {
+    request_type: 'view_access_key',
+    account_id: senderId,
+    public_key: nearPublicKey(senderId),
+    finality: 'final',
+  })) as { nonce?: number | string; block_height?: number | string; permission?: unknown };
+  if (access.permission !== 'FullAccess')
+    throw new Error('This needs a full access key on this device');
+  if (access.nonce === undefined || access.block_height === undefined)
+    throw new Error('Invalid NEAR access key response');
+  return {
+    senderId,
+    receiverId,
+    actions,
+    nonce: BigInt(access.nonce) + 1n,
+    maxBlockHeight: BigInt(access.block_height) + DELEGATE_TTL_BLOCKS,
+  };
+}
+
+/**
+ * Whether the account can't cover these calls itself: its NEAR beyond storage is
+ * less than their gas (at a cautious price) plus deposits. An account not on chain
+ * yet has no key to sign with either, so it's never relayed (false).
+ */
+export async function lacksGas(rpc: Rpc, account: string, actions: FunctionCall[]) {
+  let view: { amount?: string; storage_usage?: number | string };
+  try {
+    view = (await rpc('query', {
+      request_type: 'view_account',
+      account_id: account,
+      finality: 'final',
+    })) as typeof view;
+  } catch {
+    return false;
+  }
+  if (typeof view.amount !== 'string' || view.storage_usage === undefined) return false;
+  const free = BigInt(view.amount) - BigInt(view.storage_usage) * STORAGE_PRICE;
+  const need = actions.reduce((sum, a) => sum + a.gas * GAS_PRICE + a.deposit, 0n);
+  return free < need;
+}
+
+/**
+ * Sends a group jar's call with Honey paying the gas when the member can't: builds
+ * the delegate, has the device sign it (`sign`, which asks the owner first) and hands
+ * it to the relayer (`relay`). The transaction hash, or null to pay your own gas
+ * (the account holds enough, or Honey isn't paying right now).
+ */
+export async function sendViaRelayer(
+  deps: {
+    rpc: Rpc;
+    signerId: string;
+    sign: (d: DelegateAction) => Promise<string>;
+    relay: (signedDelegate: string) => Promise<{ txHash: string } | null>;
+  },
+  receiverId: string,
+  actions: FunctionCall[],
+): Promise<string | null> {
+  if (!(await lacksGas(deps.rpc, deps.signerId, actions))) return null;
+  const delegate = await prepareDelegate(deps.rpc, deps.signerId, receiverId, actions);
+  const result = await deps.relay(await deps.sign(delegate));
+  return result?.txHash ?? null;
 }
 
 // ---------- Calls the app makes ----------

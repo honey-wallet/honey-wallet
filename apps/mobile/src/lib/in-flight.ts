@@ -8,6 +8,7 @@ import {
   useIntentsSwaps,
 } from '@/lib/intents-swap';
 import { type BuyLeg, refreshJarBuy } from '@/lib/jar-buy';
+import { refreshJarValues } from '@/lib/jar-holdings';
 import { type ThesisJar, thesisJars, updateJarBuy, useThesisJars } from '@/lib/thesis';
 import { showErrorToast, showToast } from '@/lib/toast';
 
@@ -18,6 +19,8 @@ import { showErrorToast, showToast } from '@/lib/toast';
  */
 
 const POLL_MS = 10_000;
+/** Real jars' values (and their daily marks) are refreshed this often in the background. */
+const VALUE_MS = 5 * 60_000;
 /** A jar buy's legs are NEAR Intents swaps; these are done one way or another. */
 const LEG_FINAL = new Set(['SUCCESS', 'REFUNDED', 'FAILED', 'NOT_SENT']);
 
@@ -71,11 +74,16 @@ async function tick() {
   busy = true;
   try {
     await refreshSwaps().catch(() => {});
+    let landed = false;
     for (const jar of thesisJars.get()) {
       if (!jar.mine || !legsMoving(jar.buy)) continue;
       const legs = await refreshJarBuy(jar.buy ?? []).catch(() => null);
-      if (legs) updateJarBuy(jar.id, legs);
+      if (!legs) continue;
+      landed ||= legs.some((l, i) => l.status === 'SUCCESS' && jar.buy?.[i]?.status !== 'SUCCESS');
+      updateJarBuy(jar.id, legs);
     }
+    // A token arrived: the jar is now worth what it holds, not what it cost.
+    if (landed) await refreshJarValues().catch(() => {});
   } finally {
     busy = false;
   }
@@ -133,9 +141,12 @@ export function useInFlightWatcher() {
       syncPolling();
     });
     syncPolling();
+    void refreshJarValues().catch(() => {});
+    const values = setInterval(() => void refreshJarValues().catch(() => {}), VALUE_MS);
     return () => {
       offSwaps();
       offJars();
+      clearInterval(values);
       if (polling) clearInterval(polling);
       polling = null;
     };

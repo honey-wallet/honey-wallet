@@ -131,13 +131,49 @@ export function toTokens(holdings: PortfolioHolding[]): Token[] {
 }
 
 const CHAINS: Chain[] = ['Ethereum', 'Base', 'Solana', 'NEAR'];
+/** What lib/send pays by name on each network; anything else needs its contract. */
+const BY_NAME: Partial<Record<Chain, string[]>> = {
+  Ethereum: ['ETH', 'USDC'],
+  Base: ['ETH', 'USDC'],
+  Solana: ['SOL', 'USDC'],
+  NEAR: ['NEAR', 'USDC'],
+};
 
-/** Holdings as send choices: one per token per network, the shape of HOLDINGS. */
-export function toHoldings(holdings: PortfolioHolding[]) {
+/**
+ * Holdings as send choices: one per token per network, the shape of HOLDINGS. A token
+ * beyond the network's coin and USDC (an ERC-20, SPL or NEP-141 token) carries its
+ * contract and decimals, so Send can pay it; one without (a Token-2022 mint) is left
+ * out, since nothing here can pay it. `assetId` lets Swap match its token exactly.
+ */
+export function toHoldings(holdings: PortfolioHolding[]): SendHolding[] {
   return holdings
     .filter((h) => (CHAINS as string[]).includes(h.chain) && h.amount > 0)
-    .map((h) => ({ symbol: h.symbol, chain: h.chain as Chain, amount: h.amount, usd: h.usd }));
+    .filter(
+      (h) => (h.contract && h.decimals != null) || BY_NAME[h.chain as Chain]?.includes(h.symbol),
+    )
+    .map((h) => ({
+      symbol: h.symbol,
+      chain: h.chain as Chain,
+      amount: h.amount,
+      usd: h.usd,
+      ...(h.assetId ? { assetId: h.assetId } : {}),
+      token:
+        h.contract && h.decimals != null
+          ? { contract: h.contract, decimals: h.decimals }
+          : undefined,
+    }));
 }
+
+export type SendHolding = {
+  symbol: string;
+  chain: Chain;
+  amount: number;
+  usd: number;
+  /** NEAR Intents' asset id, when the server matched the token in its list. */
+  assetId?: string;
+  /** A token paid by contract (lib/send's SendToken); none for a chain's coin or USDC. */
+  token?: { contract: string; decimals: number };
+};
 
 const short = (value: string) =>
   value.length > 14 ? `${value.slice(0, 6)}…${value.slice(-4)}` : value;
@@ -166,14 +202,22 @@ export function isLikelySpam(item: ChainActivityItem, known?: ReadonlySet<string
   return !!known && known.size > 0 && !known.has(symbol);
 }
 
+/** Activity's month heading for a date ("November", or "November 2025" in another year). */
+export const monthLabel = (date: Date, now = new Date()) =>
+  date.toLocaleString('en-US', {
+    month: 'long',
+    ...(date.getFullYear() === now.getFullYear() ? {} : { year: 'numeric' }),
+  });
+
+/** A row's date ("Nov 2"). */
+export const dayLabel = (date: Date) =>
+  date.toLocaleString('en-US', { month: 'short', day: 'numeric' });
+
 /** On-chain items as Activity rows, grouped by month in the list. */
 export function toActivity(items: ChainActivityItem[], now = new Date()): Activity[] {
   return items.map((item) => {
     const date = new Date(item.timestamp * 1000);
-    const month = date.toLocaleString('en-US', {
-      month: 'long',
-      ...(date.getFullYear() === now.getFullYear() ? {} : { year: 'numeric' }),
-    });
+    const month = monthLabel(date, now);
     const kind: Activity['kind'] =
       item.direction === 'sent' ? 'sent' : item.direction === 'received' ? 'received' : 'other';
     const amount =
@@ -191,7 +235,7 @@ export function toActivity(items: ChainActivityItem[], now = new Date()): Activi
         item.symbol ?? (item.chain === 'NEAR' ? 'NEAR' : item.chain === 'Solana' ? 'SOL' : 'ETH'),
       detail: item.failed ? `${detail} (failed)` : `${detail} · ${item.chain}`,
       month,
-      date: date.toLocaleString('en-US', { month: 'short', day: 'numeric' }),
+      date: dayLabel(date),
       url: item.explorerUrl,
     };
   });

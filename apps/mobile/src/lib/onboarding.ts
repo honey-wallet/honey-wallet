@@ -9,7 +9,7 @@ import { persistence } from '@/lib/persistence';
 import { isWeb } from '@/lib/platform';
 import { setProfile } from '@/lib/profile';
 import { createStore } from '@/lib/store';
-import { EXTENSION, EXTENSION_OFFERED, LANDING } from '@/lib/surface';
+import { EXTENSION, EXTENSION_OFFERED, LANDING, SETUP_REWARD } from '@/lib/surface';
 import { showToast } from '@/lib/toast';
 import { eraseVault } from '@/lib/vault';
 import { wallets } from '@/lib/wallets';
@@ -197,8 +197,11 @@ export function completeStep(step: SetupStep) {
   if (state.done.includes(step)) return;
   const done = [...state.done, step];
   const finished = doneCount({ method: state.method, done }) === setupSteps(state.method).length;
-  onboarding.set({ ...state, done, credit: finished ? SETUP_REWARD_USD : state.credit });
-  if (finished) showToast(`$${SETUP_REWARD_USD} fee credit unlocked`);
+  // The credit is test mode's only (lib/surface SETUP_REWARD): nothing spends it yet.
+  const credit = finished && SETUP_REWARD ? SETUP_REWARD_USD : state.credit;
+  onboarding.set({ ...state, done, credit });
+  if (finished)
+    showToast(SETUP_REWARD ? `$${SETUP_REWARD_USD} fee credit unlocked` : 'Setup finished');
 }
 
 /**

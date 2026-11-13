@@ -1,12 +1,20 @@
 //! What a wallet holds and what it did, read straight from public chain nodes and
-//! keyless explorers: native ETH/USDC on Ethereum, Base and Arbitrum, SOL and USDC on
-//! Solana, and NEAR and USDC (NEP-141) on NEAR. Prices come from the 1Click token list
-//! (`market_data`). Answers are cached briefly per address so the free endpoints stay
-//! well under their limits.
+//! keyless explorers. Balances: the chain's coin, plus every token NEAR Intents (1Click)
+//! lists on that chain, matched by contract or mint (never by symbol) and priced by
+//! 1Click: ERC-20s on Ethereum, Base and Arbitrum by one Multicall3 `balanceOf` batch
+//! (Blockscout's token list when the node refuses it), SPL and Token-2022 accounts on
+//! Solana, and NEP-141s on NEAR (FastNEAR's keyless index). Anything 1Click doesn't list is
+//! unpriced and usually spam, so it's left out. Names come from CoinGecko's coin list
+//! when cached.
+//!
+//! Activity: Blockscout per EVM chain (Etherscan's v2 API when a key is set and
+//! Blockscout doesn't answer), NearBlocks for NEAR, and Solana's node, whose newest
+//! transactions are decoded for amounts. Answers are cached per chain and address so the
+//! free endpoints stay well under their limits.
 //!
 //! Read-only and public: addresses are public data and nothing here needs a key.
 
-use crate::market_data::{MarketData, OneClickToken};
+use crate::market_data::{CoinMarket, MarketData, OneClickToken, normalize_symbol};
 use futures_util::future::join_all;
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -19,8 +27,17 @@ use tokio::sync::RwLock;
 
 const BALANCES_TTL: Duration = Duration::from_secs(20);
 const ACTIVITY_TTL: Duration = Duration::from_secs(60);
+/// NearBlocks' keyless tier allows only a few calls a minute: NEAR history is kept longer.
+const NEAR_ACTIVITY_TTL: Duration = Duration::from_secs(180);
+/// A chain that didn't answer isn't asked again for this long.
+const FAILED_TTL: Duration = Duration::from_secs(20);
 const MAX_ENTRIES: usize = 5_000;
 const ACTIVITY_LIMIT: usize = 50;
+/// Token contracts read per EVM chain in one Multicall3 batch.
+const MAX_EVM_TOKENS: usize = 200;
+/// Solana transactions decoded per read (the newest), and how many at once.
+const SOLANA_DECODED: usize = 12;
+const SOLANA_CONCURRENCY: usize = 4;
 
 /// One EVM network Honey reads: its node, its USDC contract and its explorer.
 #[derive(Clone, Debug)]
@@ -29,6 +46,8 @@ pub struct EvmNetwork {
     /// 1Click blockchain id, for prices.
     pub oneclick: &'static str,
     pub rpc: String,
+    /// EIP-155 chain id (Etherscan's v2 API is keyed by it).
+    pub chain_id: u64,
     pub usdc: Option<&'static str>,
     /// Blockscout instance (keyless v2 API), if the chain has one Honey reads activity from.
     pub blockscout: Option<String>,
@@ -42,9 +61,15 @@ pub struct Endpoints {
     pub solana_rpc: String,
     pub near_rpc: String,
     pub nearblocks: String,
+    /// FastNEAR's keyless API: every fungible-token balance of an account in one call.
+    pub fastnear: String,
 }
 
 const SOLANA_USDC: &str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+const SPL_TOKEN: &str = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+const SPL_TOKEN_2022: &str = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
+/// Multicall3, at the same address on Ethereum, Base and Arbitrum.
+const MULTICALL3: &str = "0xca11bde05977b3631167028862be2a173976ca11";
 
 fn env_or(name: &str, default: &str) -> String {
     std::env::var(name)
@@ -61,6 +86,7 @@ impl Endpoints {
                 EvmNetwork {
                     chain: "Ethereum",
                     oneclick: "eth",
+                    chain_id: 1,
                     rpc: env_or(
                         "PORTFOLIO_ETHEREUM_RPC_URL",
                         "https://ethereum-rpc.publicnode.com",
@@ -75,6 +101,7 @@ impl Endpoints {
                 EvmNetwork {
                     chain: "Base",
                     oneclick: "base",
+                    chain_id: 8453,
                     rpc: env_or("PORTFOLIO_BASE_RPC_URL", "https://mainnet.base.org"),
                     usdc: Some("0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"),
                     blockscout: Some(env_or(
@@ -86,9 +113,13 @@ impl Endpoints {
                 EvmNetwork {
                     chain: "Arbitrum",
                     oneclick: "arb",
+                    chain_id: 42161,
                     rpc: env_or("PORTFOLIO_ARBITRUM_RPC_URL", "https://arb1.arbitrum.io/rpc"),
                     usdc: Some("0xaf88d065e77c8cc2239327c5edb3a432268e5831"),
-                    blockscout: None,
+                    blockscout: Some(env_or(
+                        "PORTFOLIO_ARBITRUM_BLOCKSCOUT_URL",
+                        "https://arbitrum.blockscout.com",
+                    )),
                     explorer_tx: "https://arbiscan.io/tx/",
                 },
             ],
@@ -98,6 +129,7 @@ impl Endpoints {
             ),
             near_rpc: env_or("PORTFOLIO_NEAR_RPC_URL", "https://free.rpc.fastnear.com"),
             nearblocks: env_or("PORTFOLIO_NEARBLOCKS_URL", "https://api.nearblocks.io"),
+            fastnear: env_or("PORTFOLIO_FASTNEAR_API_URL", "https://api.fastnear.com"),
         }
     }
 }
@@ -172,11 +204,21 @@ fn valid_near_account(id: &str) -> bool {
 #[serde(rename_all = "camelCase")]
 pub struct Holding {
     pub chain: &'static str,
-    pub symbol: &'static str,
-    pub name: &'static str,
+    pub symbol: String,
+    pub name: String,
     pub amount: f64,
     pub price_usd: Option<f64>,
     pub usd: f64,
+    /// The token's contract (ERC-20 address, classic SPL mint or NEP-141 account) when
+    /// it isn't the chain's own coin or a token the app already pays by name (USDC), so
+    /// Send and Swap can pay it. Absent for a Token-2022 mint, which the app can't pay.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contract: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decimals: Option<u8>,
+    /// NEAR Intents' asset id for a token matched in its list, so Swap finds it exactly.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub asset_id: Option<String>,
 }
 
 /// Response shape mirrored in `packages/api-client/src/types.ts` (`Portfolio`).
@@ -196,7 +238,8 @@ pub struct Portfolio {
 pub struct ActivityItem {
     pub chain: &'static str,
     pub hash: String,
-    /// `sent`, `received`, or `other` (contract calls, or Solana where only signatures are read).
+    /// `sent`, `received`, or `other` (contract calls, swaps that moved two tokens, and
+    /// older Solana transactions, which aren't decoded).
     pub direction: &'static str,
     pub symbol: Option<String>,
     pub amount: Option<f64>,
@@ -224,14 +267,39 @@ type ChainRead<'a, T> = std::pin::Pin<
 #[derive(Clone)]
 enum Cached {
     Portfolio(Portfolio),
-    Activity(Activity),
+    /// One chain's history for one address; `None` when it didn't answer.
+    Rows(Option<Vec<ActivityItem>>),
+}
+
+/// Optional keys for explorers whose keyless tier is tight or missing. Never logged.
+#[derive(Clone, Debug, Default)]
+pub struct ExplorerKeys {
+    /// NearBlocks API key, sent as a bearer token.
+    pub nearblocks: Option<String>,
+    /// Etherscan v2 (one key for every EVM chain): history when Blockscout doesn't answer.
+    pub etherscan: Option<String>,
+    pub etherscan_url: String,
+}
+
+impl ExplorerKeys {
+    pub fn from_env() -> Self {
+        let key = |name: &str| std::env::var(name).ok().filter(|v| !v.trim().is_empty());
+        Self {
+            nearblocks: key("PORTFOLIO_NEARBLOCKS_API_KEY"),
+            etherscan: key("PORTFOLIO_ETHERSCAN_API_KEY"),
+            etherscan_url: env_or("PORTFOLIO_ETHERSCAN_URL", "https://api.etherscan.io/v2/api"),
+        }
+    }
 }
 
 pub struct PortfolioService {
     client: reqwest::Client,
     endpoints: Endpoints,
+    keys: ExplorerKeys,
     market: Option<Arc<MarketData>>,
     cache: RwLock<HashMap<String, (Instant, Cached)>>,
+    /// Decoded Solana transactions by signature (final, so kept until the map fills).
+    solana_txs: RwLock<HashMap<String, Option<Movement>>>,
 }
 
 impl PortfolioService {
@@ -242,11 +310,10 @@ impl PortfolioService {
             .redirect(reqwest::redirect::Policy::none())
             .user_agent("honey-wallet-server")
             .build()?;
-        Ok(Arc::new(Self::with_endpoints(
-            client,
-            Endpoints::from_env(),
-            market,
-        )))
+        Ok(Arc::new(
+            Self::with_endpoints(client, Endpoints::from_env(), market)
+                .with_keys(ExplorerKeys::from_env()),
+        ))
     }
 
     pub fn with_endpoints(
@@ -257,9 +324,16 @@ impl PortfolioService {
         Self {
             client,
             endpoints,
+            keys: ExplorerKeys::default(),
             market,
             cache: RwLock::new(HashMap::new()),
+            solana_txs: RwLock::new(HashMap::new()),
         }
+    }
+
+    pub fn with_keys(mut self, keys: ExplorerKeys) -> Self {
+        self.keys = keys;
+        self
     }
 
     async fn cached(&self, key: &str, ttl: Duration) -> Option<Cached> {
@@ -273,12 +347,32 @@ impl PortfolioService {
     async fn store(&self, key: String, value: Cached) {
         let mut cache = self.cache.write().await;
         if cache.len() >= MAX_ENTRIES {
-            cache.retain(|_, (at, _)| at.elapsed() < ACTIVITY_TTL);
+            cache.retain(|_, (at, _)| at.elapsed() < NEAR_ACTIVITY_TTL);
             if cache.len() >= MAX_ENTRIES {
                 cache.clear();
             }
         }
         cache.insert(key, (Instant::now(), value));
+    }
+
+    /// One chain's history through the cache: kept `ttl` once read, `FAILED_TTL` when the
+    /// chain didn't answer (so a rate-limited explorer isn't asked again straight away).
+    async fn rows_cached<F>(&self, key: String, ttl: Duration, read: F) -> Option<Vec<ActivityItem>>
+    where
+        F: std::future::Future<Output = Option<Vec<ActivityItem>>>,
+    {
+        {
+            let cache = self.cache.read().await;
+            if let Some((at, Cached::Rows(rows))) = cache.get(&key) {
+                let fresh = if rows.is_some() { ttl } else { FAILED_TTL };
+                if at.elapsed() < fresh {
+                    return rows.clone();
+                }
+            }
+        }
+        let rows = read.await;
+        self.store(key, Cached::Rows(rows.clone())).await;
+        rows
     }
 
     async fn rpc(&self, url: &str, method: &str, params: Value) -> Option<Value> {
@@ -289,13 +383,27 @@ impl PortfolioService {
     }
 
     async fn get(&self, url: &str) -> Option<Value> {
-        self.client
-            .get(url)
-            .header("Accept", "application/json")
+        self.get_with(url, None).await
+    }
+
+    async fn get_with(&self, url: &str, bearer: Option<&str>) -> Option<Value> {
+        let mut request = self.client.get(url).header("Accept", "application/json");
+        if let Some(key) = bearer {
+            request = request.bearer_auth(key);
+        }
+        request
             .send()
             .await
             .and_then(|r| r.error_for_status())
-            .map_err(|error| tracing::warn!(%error, "portfolio explorer request failed"))
+            // Without the URL: an Etherscan key rides in its query string.
+            .map_err(|error| {
+                let host = reqwest::Url::parse(url)
+                    .ok()
+                    .and_then(|u| u.host_str().map(str::to_string))
+                    .unwrap_or_default();
+                let error = error.without_url();
+                tracing::warn!(%error, %host, "portfolio explorer request failed");
+            })
             .ok()?
             .json()
             .await
@@ -312,23 +420,30 @@ impl PortfolioService {
             Some(m) => m.tokens().await.ok(),
             None => None,
         };
+        let coins = match &self.market {
+            Some(m) => m.coin_markets_cached().await,
+            None => None,
+        };
+        let listed = tokens.as_deref().map(Vec::as_slice);
+        let names = coins.as_deref();
         let mut reads: Vec<ChainRead<'_, Raw>> = Vec::new();
         if let Some(evm) = &addresses.evm {
             for network in &self.endpoints.evm {
                 reads.push(Box::pin(async move {
-                    (network.chain, self.evm_balances(network, evm).await)
+                    let raws = self.evm_balances(network, evm, listed, names).await;
+                    (network.chain, raws)
                 }));
             }
         }
         if let Some(sol) = &addresses.solana {
             reads.push(Box::pin(async move {
-                ("Solana", self.solana_balances(sol).await)
+                ("Solana", self.solana_balances(sol, listed, names).await)
             }));
         }
         if let Some(near) = &addresses.near {
-            reads.push(Box::pin(
-                async move { ("NEAR", self.near_balances(near).await) },
-            ));
+            reads.push(Box::pin(async move {
+                ("NEAR", self.near_balances(near, listed, names).await)
+            }));
         }
         let mut holdings = Vec::new();
         let mut unavailable = Vec::new();
@@ -356,19 +471,20 @@ impl PortfolioService {
         portfolio
     }
 
-    async fn evm_balances(&self, network: &EvmNetwork, address: &str) -> Option<Vec<Raw>> {
+    /// The chain's ETH plus every ERC-20 1Click lists on it. The token balances come
+    /// from one Multicall3 batch of `balanceOf` over the listed contracts (so spam never
+    /// pushes a real token off a page); Blockscout's token list is the fallback, and USDC
+    /// alone when there's no list to match against.
+    async fn evm_balances(
+        &self,
+        network: &EvmNetwork,
+        address: &str,
+        listed: Option<&[OneClickToken]>,
+        coins: Option<&HashMap<String, CoinMarket>>,
+    ) -> Option<Vec<Raw>> {
         let native = self.rpc(&network.rpc, "eth_getBalance", json!([address, "latest"]));
-        let usdc = async {
-            let contract = network.usdc?;
-            let data = format!("0x70a08231{:0>64}", &address[2..]);
-            self.rpc(
-                &network.rpc,
-                "eth_call",
-                json!([{ "to": contract, "data": data }, "latest"]),
-            )
-            .await
-        };
-        let (native, usdc) = tokio::join!(native, usdc);
+        let (native, tokens) =
+            tokio::join!(native, self.evm_tokens(network, address, listed, coins));
         let native = hex_units(native?.as_str()?, 18)?;
         let mut out = vec![Raw::new(
             network.chain,
@@ -377,35 +493,117 @@ impl PortfolioService {
             "Ether",
             native,
         )];
-        if let Some(amount) = usdc
-            .as_ref()
-            .and_then(Value::as_str)
-            .and_then(|h| hex_units(h, 6))
-        {
-            out.push(Raw::new(
-                network.chain,
-                network.oneclick,
-                "USDC",
-                "USD Coin",
-                amount,
-            ));
-        }
+        out.extend(tokens);
         Some(out)
     }
 
-    async fn solana_balances(&self, owner: &str) -> Option<Vec<Raw>> {
+    async fn evm_tokens(
+        &self,
+        network: &EvmNetwork,
+        address: &str,
+        listed: Option<&[OneClickToken]>,
+        coins: Option<&HashMap<String, CoinMarket>>,
+    ) -> Vec<Raw> {
+        let entries: Vec<&OneClickToken> = listed
+            .into_iter()
+            .flatten()
+            .filter(|e| {
+                e.blockchain == network.oneclick
+                    && e.contract_address.as_deref().is_some_and(is_evm_address)
+            })
+            .take(MAX_EVM_TOKENS)
+            .collect();
+        if entries.is_empty() {
+            return self.evm_usdc(network, address).await;
+        }
+        let contracts: Vec<&str> = entries
+            .iter()
+            .filter_map(|e| e.contract_address.as_deref())
+            .collect();
+        let call = json!([
+            { "to": MULTICALL3, "data": multicall_balances(&contracts, address) },
+            "latest"
+        ]);
+        let batch = self
+            .rpc(&network.rpc, "eth_call", call)
+            .await
+            .and_then(|v| decode_multicall(v.as_str()?))
+            .filter(|b| b.len() == entries.len());
+        if let Some(balances) = batch {
+            return entries
+                .iter()
+                .zip(balances)
+                .filter_map(|(entry, atomic)| {
+                    let contract = entry.contract_address.as_deref()?;
+                    let known = network
+                        .usdc
+                        .is_some_and(|u| u.eq_ignore_ascii_case(contract));
+                    listed_raw(
+                        network.chain,
+                        network.oneclick,
+                        entry,
+                        atomic?,
+                        known,
+                        coins,
+                    )
+                })
+                .collect();
+        }
+        if let Some(base) = &network.blockscout {
+            let url = format!("{base}/api/v2/addresses/{address}/tokens?type=ERC-20");
+            if let Some(body) = self.get(&url).await {
+                return blockscout_tokens(network, &body, &entries, coins);
+            }
+        }
+        self.evm_usdc(network, address).await
+    }
+
+    /// USDC alone, by `balanceOf` (no token list to match against).
+    async fn evm_usdc(&self, network: &EvmNetwork, address: &str) -> Vec<Raw> {
+        let Some(contract) = network.usdc else {
+            return Vec::new();
+        };
+        let data = format!("0x70a08231{:0>64}", &address[2..]);
+        let result = self
+            .rpc(
+                &network.rpc,
+                "eth_call",
+                json!([{ "to": contract, "data": data }, "latest"]),
+            )
+            .await;
+        result
+            .as_ref()
+            .and_then(Value::as_str)
+            .and_then(|h| hex_units(h, 6))
+            .map(|amount| Raw::new(network.chain, network.oneclick, "USDC", "USD Coin", amount))
+            .into_iter()
+            .collect()
+    }
+
+    /// SOL plus every SPL and Token-2022 balance whose mint 1Click lists on Solana (USDC
+    /// alone without the list).
+    async fn solana_balances(
+        &self,
+        owner: &str,
+        listed: Option<&[OneClickToken]>,
+        coins: Option<&HashMap<String, CoinMarket>>,
+    ) -> Option<Vec<Raw>> {
         let rpc = &self.endpoints.solana_rpc;
-        let (sol, usdc) = tokio::join!(
+        let accounts = |program: &'static str| {
+            self.rpc(
+                rpc,
+                "getTokenAccountsByOwner",
+                json!([owner, { "programId": program }, { "encoding": "jsonParsed" }]),
+            )
+        };
+        let (sol, classic, token_2022) = tokio::join!(
             self.rpc(
                 rpc,
                 "getBalance",
                 json!([owner, { "commitment": "confirmed" }])
             ),
-            self.rpc(
-                rpc,
-                "getTokenAccountsByOwner",
-                json!([owner, { "mint": SOLANA_USDC }, { "encoding": "jsonParsed" }]),
-            ),
+            accounts(SPL_TOKEN),
+            accounts(SPL_TOKEN_2022),
         );
         let lamports = sol?["value"].as_u64()?;
         let mut out = vec![Raw::new(
@@ -415,33 +613,31 @@ impl PortfolioService {
             "Solana",
             lamports as f64 / 1e9,
         )];
-        let usdc: f64 = usdc
-            .and_then(|v| v["value"].as_array().cloned())
-            .unwrap_or_default()
-            .iter()
-            .filter_map(|a| {
-                a["account"]["data"]["parsed"]["info"]["tokenAmount"]["uiAmountString"]
-                    .as_str()?
-                    .parse::<f64>()
-                    .ok()
-            })
-            .sum();
-        out.push(Raw::new("Solana", "sol", "USDC", "USD Coin", usdc));
+        out.extend(solana_tokens(
+            classic.as_ref(),
+            token_2022.as_ref(),
+            listed,
+            coins,
+        ));
         Some(out)
     }
 
-    async fn near_balances(&self, account: &str) -> Option<Vec<Raw>> {
-        let (result, usdc) = tokio::join!(
-            self.rpc(
-                &self.endpoints.near_rpc,
-                "query",
-                json!({ "request_type": "view_account", "finality": "final", "account_id": account }),
-            ),
-            self.near_ft_balance(crate::jar_dao::USDC_NEAR, account),
+    async fn near_balances(
+        &self,
+        account: &str,
+        listed: Option<&[OneClickToken]>,
+        coins: Option<&HashMap<String, CoinMarket>>,
+    ) -> Option<Vec<Raw>> {
+        let view = self.rpc(
+            &self.endpoints.near_rpc,
+            "query",
+            json!({ "request_type": "view_account", "finality": "final", "account_id": account }),
         );
+        let fts_url = format!("{}/v1/account/{account}/ft", self.endpoints.fastnear);
+        let (result, fts) = tokio::join!(view, self.get(&fts_url));
         // An implicit account that has never received anything doesn't exist yet: that's
         // an empty wallet, not an outage. The node answers with an UNKNOWN_ACCOUNT error.
-        // USDC storage can still be registered for it, so its USDC is read either way.
+        // Token storage can still be registered for it, so its tokens are read either way.
         let mut out = match result {
             Some(result) => {
                 let yocto: u128 = result["amount"].as_str()?.parse().ok()?;
@@ -449,22 +645,36 @@ impl PortfolioService {
                     "NEAR",
                     "near",
                     "NEAR",
-                    "NEAR",
+                    "NEAR Protocol",
                     yocto as f64 / 1e24,
                 )]
             }
             None if self.near_account_missing(account).await => Vec::new(),
             None => return None,
         };
-        // Native Circle USDC on NEAR (NEP-141, 6 decimals).
-        if let Some(atomic) = usdc.filter(|a| *a > 0) {
-            out.push(Raw::new(
-                "NEAR",
-                "near",
-                "USDC",
-                "USD Coin",
-                atomic as f64 / 1e6,
-            ));
+        match (fts, listed) {
+            // Every token the account holds that NEAR Intents lists (and so can price and
+            // swap); anything else is unpriced and often spam, so it's left out.
+            (Some(body), Some(listed)) => {
+                out.extend(near_tokens(&body, listed, coins));
+            }
+            // No index (or no list to price it by): native Circle USDC alone, read from
+            // the node (NEP-141, 6 decimals).
+            _ => {
+                if let Some(atomic) = self
+                    .near_ft_balance(crate::jar_dao::USDC_NEAR, account)
+                    .await
+                    .filter(|a| *a > 0)
+                {
+                    out.push(Raw::new(
+                        "NEAR",
+                        "near",
+                        "USDC",
+                        "USD Coin",
+                        atomic as f64 / 1e6,
+                    ));
+                }
+            }
         }
         Some(out)
     }
@@ -503,31 +713,49 @@ impl PortfolioService {
         .is_err_and(|error| error.is_unknown_account())
     }
 
-    /// Recent transfers and transactions for these addresses, newest first. EVM reads
-    /// Blockscout (native and ERC-20 transfers), NEAR reads NearBlocks, and Solana reads
-    /// signatures from its node (no amounts: decoding them needs an indexer).
+    /// Recent transfers and transactions for these addresses, newest first, one row per
+    /// transaction. EVM reads Blockscout (native and ERC-20 transfers; Etherscan's v2 API
+    /// with a key when Blockscout doesn't answer), NEAR reads NearBlocks, and Solana reads
+    /// signatures from its node and decodes the newest few for amounts. Each chain is
+    /// cached on its own, so one slow explorer doesn't make the others re-read.
     pub async fn activity(&self, addresses: &Addresses) -> Activity {
-        let key = format!("activity:{}", addresses.key());
-        if let Some(Cached::Activity(a)) = self.cached(&key, ACTIVITY_TTL).await {
-            return a;
-        }
+        let tokens = match &self.market {
+            Some(m) => m.tokens().await.ok(),
+            None => None,
+        };
+        let listed = tokens.as_deref().map(Vec::as_slice);
         let mut reads: Vec<ChainRead<'_, ActivityItem>> = Vec::new();
         if let Some(evm) = &addresses.evm {
-            for network in self.endpoints.evm.iter().filter(|n| n.blockscout.is_some()) {
+            let etherscan = self.keys.etherscan.is_some();
+            for network in self
+                .endpoints
+                .evm
+                .iter()
+                .filter(|n| n.blockscout.is_some() || etherscan)
+            {
                 reads.push(Box::pin(async move {
-                    (network.chain, self.evm_activity(network, evm).await)
+                    let key = format!("rows:{}:{evm}", network.chain);
+                    let read = self.evm_activity(network, evm);
+                    (
+                        network.chain,
+                        self.rows_cached(key, ACTIVITY_TTL, read).await,
+                    )
                 }));
             }
         }
         if let Some(sol) = &addresses.solana {
             reads.push(Box::pin(async move {
-                ("Solana", self.solana_activity(sol).await)
+                let key = format!("rows:Solana:{sol}");
+                let read = self.solana_activity(sol, listed);
+                ("Solana", self.rows_cached(key, ACTIVITY_TTL, read).await)
             }));
         }
         if let Some(near) = &addresses.near {
-            reads.push(Box::pin(
-                async move { ("NEAR", self.near_activity(near).await) },
-            ));
+            reads.push(Box::pin(async move {
+                let key = format!("rows:NEAR:{near}");
+                let read = self.near_activity(near);
+                ("NEAR", self.rows_cached(key, NEAR_ACTIVITY_TTL, read).await)
+            }));
         }
         let mut items = Vec::new();
         let mut unavailable = Vec::new();
@@ -539,42 +767,140 @@ impl PortfolioService {
         }
         items.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
         items.truncate(ACTIVITY_LIMIT);
-        let activity = Activity { items, unavailable };
-        if activity.unavailable.is_empty() {
-            self.store(key, Cached::Activity(activity.clone())).await;
-        }
-        activity
+        Activity { items, unavailable }
     }
 
     async fn evm_activity(&self, network: &EvmNetwork, address: &str) -> Option<Vec<ActivityItem>> {
-        let base = network.blockscout.as_deref()?;
-        let txs_url = format!("{base}/api/v2/addresses/{address}/transactions");
-        let transfers_url =
-            format!("{base}/api/v2/addresses/{address}/token-transfers?type=ERC-20");
-        let (txs, transfers) = tokio::join!(self.get(&txs_url), self.get(&transfers_url));
-        let txs = txs?;
-        Some(parse_blockscout(network, address, &txs, transfers.as_ref()))
+        if let Some(base) = network.blockscout.as_deref() {
+            let txs_url = format!("{base}/api/v2/addresses/{address}/transactions");
+            let transfers_url =
+                format!("{base}/api/v2/addresses/{address}/token-transfers?type=ERC-20");
+            let (txs, transfers) = tokio::join!(self.get(&txs_url), self.get(&transfers_url));
+            if let Some(txs) = txs {
+                return Some(parse_blockscout(network, address, &txs, transfers.as_ref()));
+            }
+        }
+        self.etherscan_activity(network, address).await
     }
 
-    async fn solana_activity(&self, owner: &str) -> Option<Vec<ActivityItem>> {
+    /// Etherscan's v2 API (one key, every chain by id): normal transactions and ERC-20
+    /// transfers. Only used with `PORTFOLIO_ETHERSCAN_API_KEY` set.
+    async fn etherscan_activity(
+        &self,
+        network: &EvmNetwork,
+        address: &str,
+    ) -> Option<Vec<ActivityItem>> {
+        let key = self.keys.etherscan.as_deref()?;
+        let url = |action: &str| {
+            let mut url = reqwest::Url::parse(&self.keys.etherscan_url).ok()?;
+            url.query_pairs_mut()
+                .append_pair("chainid", &network.chain_id.to_string())
+                .append_pair("module", "account")
+                .append_pair("action", action)
+                .append_pair("address", address)
+                .append_pair("page", "1")
+                .append_pair("offset", "25")
+                .append_pair("sort", "desc")
+                .append_pair("apikey", key);
+            Some(url.to_string())
+        };
+        let (txs, tokens) = (url("txlist")?, url("tokentx")?);
+        let (txs, tokens) = tokio::join!(self.get(&txs), self.get(&tokens));
+        let txs = etherscan_result(txs?)?;
+        let tokens = tokens.and_then(etherscan_result).unwrap_or_default();
+        Some(parse_etherscan(network, address, &txs, &tokens))
+    }
+
+    /// Signatures from the node; the newest few decoded (`getTransaction`) for what moved,
+    /// each decoded transaction kept by signature so it's only fetched once.
+    async fn solana_activity(
+        &self,
+        owner: &str,
+        listed: Option<&[OneClickToken]>,
+    ) -> Option<Vec<ActivityItem>> {
+        use futures_util::StreamExt as _;
+        let rpc = &self.endpoints.solana_rpc;
         let result = self
             .rpc(
-                &self.endpoints.solana_rpc,
+                rpc,
                 "getSignaturesForAddress",
                 json!([owner, { "limit": 20 }]),
             )
             .await?;
-        Some(parse_solana_signatures(&result))
+        let mut items = parse_solana_signatures(&result);
+        let wanted: Vec<String> = items
+            .iter()
+            .take(SOLANA_DECODED)
+            .map(|i| i.hash.clone())
+            .collect();
+        let known: HashMap<String, Option<Movement>> = {
+            let cache = self.solana_txs.read().await;
+            wanted
+                .iter()
+                .filter_map(|s| cache.get(s).map(|m| (s.clone(), m.clone())))
+                .collect()
+        };
+        let missing: Vec<String> = wanted
+            .into_iter()
+            .filter(|s| !known.contains_key(s))
+            .collect();
+        let fetched: Vec<(String, Option<Movement>)> = futures_util::stream::iter(missing)
+            .map(|signature: String| async move {
+                let params = json!([&signature, {
+                    "encoding": "jsonParsed",
+                    "maxSupportedTransactionVersion": 0,
+                    "commitment": "confirmed",
+                }]);
+                let tx = self.rpc(rpc, "getTransaction", params).await?;
+                // Not found yet (null): try again next time.
+                let movement = (!tx.is_null()).then(|| solana_movement(owner, &tx, listed))?;
+                Some((signature, movement))
+            })
+            .buffer_unordered(SOLANA_CONCURRENCY)
+            .filter_map(|r| async move { r })
+            .collect()
+            .await;
+        if !fetched.is_empty() {
+            let mut cache = self.solana_txs.write().await;
+            if cache.len() + fetched.len() > MAX_ENTRIES {
+                cache.clear();
+            }
+            cache.extend(fetched.iter().cloned());
+        }
+        let moves: HashMap<String, Option<Movement>> = known.into_iter().chain(fetched).collect();
+        for item in &mut items {
+            if let Some(Some(m)) = moves.get(&item.hash) {
+                item.direction = m.direction;
+                item.symbol = m.symbol.clone();
+                item.amount = m.amount;
+                item.counterparty = m.counterparty.clone();
+            }
+        }
+        Some(items)
     }
 
+    /// NEAR transactions (NEAR transfers and calls) and token transfers (NEP-141), from
+    /// NearBlocks. A token transfer replaces the bare call it came from; without the token
+    /// feed the transactions still show.
     async fn near_activity(&self, account: &str) -> Option<Vec<ActivityItem>> {
-        let body = self
-            .get(&format!(
-                "{}/v1/account/{account}/txns-only?per_page=25",
-                self.endpoints.nearblocks
-            ))
-            .await?;
-        Some(parse_nearblocks(account, &body))
+        let base = &self.endpoints.nearblocks;
+        let key = self.keys.nearblocks.as_deref();
+        let txns_url = format!("{base}/v1/account/{account}/txns-only?per_page=25");
+        let fts_url = format!("{base}/v1/account/{account}/ft-txns?per_page=25");
+        let (txns, fts) = tokio::join!(self.get_with(&txns_url, key), self.get_with(&fts_url, key));
+        let mut items = parse_nearblocks(account, &txns?);
+        for item in fts.as_ref().map(parse_nearblocks_ft).unwrap_or_default() {
+            match items.iter_mut().find(|i| i.hash == item.hash) {
+                Some(existing) if existing.amount.is_none() => {
+                    let failed = existing.failed;
+                    *existing = ActivityItem { failed, ..item };
+                }
+                // One row per transaction (the app keys rows by hash).
+                Some(_) => {}
+                None => items.push(item),
+            }
+        }
+        Some(items)
     }
 }
 
@@ -582,50 +908,319 @@ impl PortfolioService {
 struct Raw {
     chain: &'static str,
     oneclick: &'static str,
-    symbol: &'static str,
-    name: &'static str,
+    symbol: String,
+    name: String,
     amount: f64,
+    /// Already priced (a NEP-141 token matched by contract in the 1Click list).
+    price: Option<f64>,
+    contract: Option<String>,
+    decimals: Option<u8>,
+    asset_id: Option<String>,
 }
 
 impl Raw {
     fn new(
         chain: &'static str,
         oneclick: &'static str,
-        symbol: &'static str,
-        name: &'static str,
+        symbol: &str,
+        name: &str,
         amount: f64,
     ) -> Self {
         Self {
             chain,
             oneclick,
-            symbol,
-            name,
+            symbol: symbol.into(),
+            name: name.into(),
             amount,
+            price: None,
+            contract: None,
+            decimals: None,
+            asset_id: None,
         }
     }
+}
+
+/// A balance of a token 1Click lists, with that entry's symbol, decimals, price and asset
+/// id, and the coin's name when CoinGecko's list is cached. `known` tokens (USDC by its
+/// own contract) are paid by name in the app, so they carry no contract. None for zero.
+fn listed_raw(
+    chain: &'static str,
+    oneclick: &'static str,
+    entry: &OneClickToken,
+    atomic: u128,
+    known: bool,
+    coins: Option<&HashMap<String, CoinMarket>>,
+) -> Option<Raw> {
+    if atomic == 0 {
+        return None;
+    }
+    let symbol = normalize_symbol(&entry.symbol).to_string();
+    let name = entry
+        .coingecko_id
+        .as_deref()
+        .and_then(|id| coins?.get(id))
+        .map(|c| c.name.clone())
+        .unwrap_or_else(|| symbol.clone());
+    let amount = atomic as f64 / 10f64.powi(i32::from(entry.decimals));
+    Some(Raw {
+        chain,
+        oneclick,
+        symbol,
+        name,
+        amount,
+        price: entry.price.filter(|p| p.is_finite() && *p >= 0.0),
+        contract: (!known).then(|| entry.contract_address.clone()).flatten(),
+        decimals: (!known).then_some(entry.decimals),
+        asset_id: Some(entry.asset_id.clone()),
+    })
+}
+
+fn is_evm_address(a: &str) -> bool {
+    a.len() == 42 && a.starts_with("0x") && a[2..].chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// `aggregate3((address,bool,bytes)[])` calldata: `balanceOf(owner)` on each contract,
+/// each allowed to fail on its own.
+fn multicall_balances(contracts: &[&str], owner: &str) -> String {
+    let word = |v: usize| format!("{v:064x}");
+    let call = format!("70a08231{:0>64}", &owner[2..]);
+    let n = contracts.len();
+    // Each element: target, allowFailure, offset to bytes, length, 36 bytes padded to 64.
+    const ELEMENT: usize = 6 * 32;
+    let mut out = String::with_capacity(10 + 64 * (2 + n * 7));
+    out.push_str("0x82ad56cb");
+    out.push_str(&word(0x20));
+    out.push_str(&word(n));
+    for i in 0..n {
+        out.push_str(&word(n * 32 + i * ELEMENT));
+    }
+    for contract in contracts {
+        out.push_str(&format!("{:0>64}", contract[2..].to_ascii_lowercase()));
+        out.push_str(&word(1));
+        out.push_str(&word(0x60));
+        out.push_str(&word(36));
+        out.push_str(&call);
+        out.push_str(&"0".repeat(128 - call.len()));
+    }
+    out
+}
+
+/// `aggregate3`'s `(bool success, bytes returnData)[]`: each call's 32-byte answer as a
+/// u128 (None when it failed, answered oddly, or holds more than a u128, which no real
+/// balance does). None when the whole answer is malformed.
+fn decode_multicall(hex: &str) -> Option<Vec<Option<u128>>> {
+    let bytes = ::hex::decode(hex.strip_prefix("0x")?).ok()?;
+    let word = |at: usize| -> Option<usize> {
+        let w = bytes.get(at..at.checked_add(32)?)?;
+        if w[..24].iter().any(|b| *b != 0) {
+            return None;
+        }
+        Some(u64::from_be_bytes(w[24..].try_into().ok()?) as usize)
+    };
+    let array = word(0)?;
+    let n = word(array)?;
+    if n > MAX_EVM_TOKENS {
+        return None;
+    }
+    let base = array.checked_add(32)?;
+    (0..n)
+        .map(|i| {
+            let element = base.checked_add(word(base.checked_add(i * 32)?)?)?;
+            let success = word(element)? != 0;
+            let data = element.checked_add(word(element.checked_add(32)?)?)?;
+            let len = word(data)?;
+            let body = bytes.get(data.checked_add(32)?..data.checked_add(32 + len)?)?;
+            if !success || len != 32 || body[..16].iter().any(|b| *b != 0) {
+                return Some(None);
+            }
+            Some(Some(u128::from_be_bytes(body[16..].try_into().ok()?)))
+        })
+        .collect()
+}
+
+/// Blockscout's `/addresses/{a}/tokens` (`{ items: [{ token: { address_hash }, value }] }`)
+/// as balances of the listed `entries` only, matched by contract.
+fn blockscout_tokens(
+    network: &EvmNetwork,
+    body: &Value,
+    entries: &[&OneClickToken],
+    coins: Option<&HashMap<String, CoinMarket>>,
+) -> Vec<Raw> {
+    let mut out: Vec<Raw> = Vec::new();
+    for item in body["items"].as_array().into_iter().flatten() {
+        let token = &item["token"];
+        let Some(contract) = token["address_hash"]
+            .as_str()
+            .or_else(|| token["address"].as_str())
+        else {
+            continue;
+        };
+        let Some(atomic) = item["value"].as_str().and_then(|v| v.parse::<u128>().ok()) else {
+            continue;
+        };
+        let Some(entry) = entries.iter().find(|e| {
+            e.contract_address
+                .as_deref()
+                .is_some_and(|c| c.eq_ignore_ascii_case(contract))
+        }) else {
+            continue;
+        };
+        if out
+            .iter()
+            .any(|r| r.asset_id.as_deref() == Some(entry.asset_id.as_str()))
+        {
+            continue;
+        }
+        let known = network
+            .usdc
+            .is_some_and(|u| u.eq_ignore_ascii_case(contract));
+        out.extend(listed_raw(
+            network.chain,
+            network.oneclick,
+            entry,
+            atomic,
+            known,
+            coins,
+        ));
+    }
+    out
+}
+
+/// Token accounts from `getTokenAccountsByOwner` (classic SPL and Token-2022), summed
+/// per mint and kept when 1Click lists the mint on Solana. Without the list, USDC alone.
+/// A Token-2022 balance shows but carries no contract: the app can't pay it.
+fn solana_tokens(
+    classic: Option<&Value>,
+    token_2022: Option<&Value>,
+    listed: Option<&[OneClickToken]>,
+    coins: Option<&HashMap<String, CoinMarket>>,
+) -> Vec<Raw> {
+    // (mint, atomic, on-chain decimals, Token-2022)
+    let mut sums: Vec<(String, u128, u64, bool)> = Vec::new();
+    for (body, is_2022) in [(classic, false), (token_2022, true)] {
+        for account in body
+            .and_then(|b| b["value"].as_array())
+            .into_iter()
+            .flatten()
+        {
+            let info = &account["account"]["data"]["parsed"]["info"];
+            let (Some(mint), Some(atomic), Some(decimals)) = (
+                info["mint"].as_str(),
+                info["tokenAmount"]["amount"]
+                    .as_str()
+                    .and_then(|a| a.parse::<u128>().ok()),
+                info["tokenAmount"]["decimals"].as_u64(),
+            ) else {
+                continue;
+            };
+            match sums.iter_mut().find(|(m, ..)| m == mint) {
+                Some(sum) => sum.1 = sum.1.saturating_add(atomic),
+                None => sums.push((mint.to_string(), atomic, decimals, is_2022)),
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for (mint, atomic, decimals, is_2022) in sums {
+        let Some(listed) = listed else {
+            if mint == SOLANA_USDC && atomic > 0 {
+                out.push(Raw::new(
+                    "Solana",
+                    "sol",
+                    "USDC",
+                    "USD Coin",
+                    atomic as f64 / 1e6,
+                ));
+            }
+            continue;
+        };
+        let Some(entry) = listed
+            .iter()
+            .find(|e| e.blockchain == "sol" && e.contract_address.as_deref() == Some(&mint))
+        else {
+            continue;
+        };
+        // A list entry whose decimals disagree with the mint would misstate the amount.
+        if u64::from(entry.decimals) != decimals {
+            continue;
+        }
+        let known = mint == SOLANA_USDC;
+        if let Some(mut raw) = listed_raw("Solana", "sol", entry, atomic, known, coins) {
+            if is_2022 {
+                raw.contract = None;
+                raw.decimals = None;
+            }
+            out.push(raw);
+        }
+    }
+    out
+}
+
+/// Symbols the app pays on NEAR without a contract from the server (lib/send.ts).
+const NEAR_KNOWN: &[&str] = &["NEAR", "USDC"];
+
+/// FastNEAR's `{ "tokens": [{ "contract_id", "balance" }] }` as balances, keeping only
+/// contracts the 1Click list has on NEAR (by contract, never by symbol), with that
+/// entry's symbol, decimals and price, and the coin's name when CoinGecko's list is cached.
+fn near_tokens(
+    body: &Value,
+    listed: &[OneClickToken],
+    coins: Option<&HashMap<String, CoinMarket>>,
+) -> Vec<Raw> {
+    let mut out: Vec<Raw> = Vec::new();
+    for t in body["tokens"].as_array().into_iter().flatten() {
+        let (Some(contract), Some(balance)) = (t["contract_id"].as_str(), t["balance"].as_str())
+        else {
+            continue;
+        };
+        let Ok(atomic) = balance.parse::<u128>() else {
+            continue;
+        };
+        let Some(entry) = listed.iter().find(|e| {
+            e.blockchain == "near"
+                && e.contract_address
+                    .as_deref()
+                    .is_some_and(|c| c.eq_ignore_ascii_case(contract))
+        }) else {
+            continue;
+        };
+        if out
+            .iter()
+            .any(|r| r.asset_id.as_deref() == Some(entry.asset_id.as_str()))
+        {
+            continue;
+        }
+        let known = crate::jar_dao::USDC_NEAR.eq_ignore_ascii_case(contract)
+            && NEAR_KNOWN.contains(&normalize_symbol(&entry.symbol));
+        out.extend(listed_raw("NEAR", "near", entry, atomic, known, coins));
+    }
+    out
 }
 
 /// Prices a balance from the 1Click list: the same symbol on the same chain first, then
 /// the same symbol anywhere (NEAR is listed as wNEAR). Unknown prices leave `usd` at 0.
 fn price(raw: Raw, tokens: Option<&[OneClickToken]>) -> Holding {
-    let price_usd = tokens.and_then(|tokens| {
+    let price_usd = raw.price.or_else(|| {
+        let tokens = tokens?;
         let wrapped = format!("W{}", raw.symbol);
         let is = |t: &&OneClickToken, s: &str| t.symbol.eq_ignore_ascii_case(s);
         tokens
             .iter()
-            .find(|t| t.blockchain == raw.oneclick && is(t, raw.symbol))
-            .or_else(|| tokens.iter().find(|t| is(t, raw.symbol)))
+            .find(|t| t.blockchain == raw.oneclick && is(t, &raw.symbol))
+            .or_else(|| tokens.iter().find(|t| is(t, &raw.symbol)))
             .or_else(|| tokens.iter().find(|t| is(t, &wrapped)))
             .and_then(|t| t.price)
             .filter(|p| p.is_finite() && *p >= 0.0)
     });
     Holding {
         chain: raw.chain,
+        usd: price_usd.map_or(0.0, |p| p * raw.amount),
         symbol: raw.symbol,
         name: raw.name,
         amount: raw.amount,
         price_usd,
-        usd: price_usd.map_or(0.0, |p| p * raw.amount),
+        contract: raw.contract,
+        decimals: raw.decimals,
+        asset_id: raw.asset_id,
     }
 }
 
@@ -662,6 +1257,40 @@ fn direction(address: &str, from: Option<&str>, to: Option<&str>) -> &'static st
     }
 }
 
+/// One EVM transfer (or bare call, with no amount) as an Activity row.
+#[allow(clippy::too_many_arguments)]
+fn evm_row(
+    network: &EvmNetwork,
+    address: &str,
+    hash: &str,
+    from: Option<&str>,
+    to: Option<&str>,
+    moved: Option<(String, f64)>,
+    timestamp: i64,
+    failed: bool,
+) -> ActivityItem {
+    let (symbol, amount) = moved.unzip();
+    ActivityItem {
+        chain: network.chain,
+        hash: hash.into(),
+        direction: if amount.is_some() {
+            direction(address, from, to)
+        } else {
+            "other"
+        },
+        symbol,
+        amount,
+        counterparty: if from.is_some_and(|f| f.eq_ignore_ascii_case(address)) {
+            to.map(str::to_lowercase)
+        } else {
+            from.map(str::to_lowercase)
+        },
+        timestamp,
+        failed,
+        explorer_url: format!("{}{hash}", network.explorer_tx),
+    }
+}
+
 fn parse_blockscout(
     network: &EvmNetwork,
     address: &str,
@@ -673,29 +1302,17 @@ fn parse_blockscout(
         let Some(hash) = tx["hash"].as_str() else {
             continue;
         };
-        let from = tx["from"]["hash"].as_str();
-        let to = tx["to"]["hash"].as_str();
         let value = tx["value"].as_str().and_then(|v| decimal_units(v, 18));
-        let moved = value.filter(|v| *v > 0.0);
-        items.push(ActivityItem {
-            chain: network.chain,
-            hash: hash.into(),
-            direction: if moved.is_some() {
-                direction(address, from, to)
-            } else {
-                "other"
-            },
-            symbol: moved.map(|_| "ETH".into()),
-            amount: moved,
-            counterparty: if from.is_some_and(|f| f.eq_ignore_ascii_case(address)) {
-                to.map(str::to_lowercase)
-            } else {
-                from.map(str::to_lowercase)
-            },
-            timestamp: rfc3339(&tx["timestamp"]).unwrap_or(0),
-            failed: tx["status"].as_str().is_some_and(|s| s != "ok"),
-            explorer_url: format!("{}{hash}", network.explorer_tx),
-        });
+        items.push(evm_row(
+            network,
+            address,
+            hash,
+            tx["from"]["hash"].as_str(),
+            tx["to"]["hash"].as_str(),
+            value.filter(|v| *v > 0.0).map(|v| ("ETH".into(), v)),
+            rfc3339(&tx["timestamp"]).unwrap_or(0),
+            tx["status"].as_str().is_some_and(|s| s != "ok"),
+        ));
     }
     for t in transfers
         .and_then(|t| t["items"].as_array())
@@ -705,44 +1322,292 @@ fn parse_blockscout(
         let Some(hash) = t["transaction_hash"].as_str() else {
             continue;
         };
-        let from = t["from"]["hash"].as_str();
-        let to = t["to"]["hash"].as_str();
         let decimals = t["total"]["decimals"]
             .as_str()
             .and_then(|d| d.parse().ok())
+            .filter(|d| *d <= 36)
             .unwrap_or(18);
         let amount = t["total"]["value"]
             .as_str()
             .and_then(|v| decimal_units(v, decimals));
         let symbol = t["token"]["symbol"].as_str().map(str::to_string);
-        // A token transfer replaces the bare contract call it came from.
-        let item = ActivityItem {
-            chain: network.chain,
-            hash: hash.into(),
-            direction: direction(address, from, to),
-            symbol,
-            amount,
-            counterparty: if from.is_some_and(|f| f.eq_ignore_ascii_case(address)) {
-                to.map(str::to_lowercase)
-            } else {
-                from.map(str::to_lowercase)
-            },
-            timestamp: rfc3339(&t["timestamp"]).unwrap_or(0),
-            failed: false,
-            explorer_url: format!("{}{hash}", network.explorer_tx),
+        items.push(evm_row(
+            network,
+            address,
+            hash,
+            t["from"]["hash"].as_str(),
+            t["to"]["hash"].as_str(),
+            symbol.zip(amount),
+            rfc3339(&t["timestamp"]).unwrap_or(0),
+            false,
+        ));
+    }
+    one_row_per_hash(items)
+}
+
+/// Etherscan's `{ status, message, result }`: the rows, or None for an error (a bad key
+/// or a rate limit answers with a string `result`). "No transactions found" is empty.
+fn etherscan_result(body: Value) -> Option<Vec<Value>> {
+    match body {
+        Value::Object(mut map) => match map.remove("result") {
+            Some(Value::Array(rows)) => Some(rows),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Etherscan v2 `txlist` and `tokentx` rows as Activity rows.
+fn parse_etherscan(
+    network: &EvmNetwork,
+    address: &str,
+    txs: &[Value],
+    tokens: &[Value],
+) -> Vec<ActivityItem> {
+    let seconds = |v: &Value| {
+        v["timeStamp"]
+            .as_str()
+            .and_then(|t| t.parse().ok())
+            .unwrap_or(0)
+    };
+    let mut items: Vec<ActivityItem> = Vec::new();
+    for tx in txs {
+        let Some(hash) = tx["hash"].as_str() else {
+            continue;
         };
-        match items
+        let value = tx["value"].as_str().and_then(|v| decimal_units(v, 18));
+        items.push(evm_row(
+            network,
+            address,
+            hash,
+            tx["from"].as_str(),
+            tx["to"].as_str(),
+            value.filter(|v| *v > 0.0).map(|v| ("ETH".into(), v)),
+            seconds(tx),
+            tx["isError"].as_str() == Some("1"),
+        ));
+    }
+    for t in tokens {
+        let Some(hash) = t["hash"].as_str() else {
+            continue;
+        };
+        let decimals = t["tokenDecimal"]
+            .as_str()
+            .and_then(|d| d.parse::<i32>().ok())
+            .filter(|d| (0..=36).contains(d));
+        let amount = decimals.and_then(|d| decimal_units(t["value"].as_str()?, d));
+        let symbol = t["tokenSymbol"].as_str().map(str::to_string);
+        items.push(evm_row(
+            network,
+            address,
+            hash,
+            t["from"].as_str(),
+            t["to"].as_str(),
+            symbol.zip(amount),
+            seconds(t),
+            false,
+        ));
+    }
+    one_row_per_hash(items)
+}
+
+/// One row per transaction (the app keys rows by chain and hash). A row that moved
+/// something replaces a bare call; the same token moving the same way again adds up; a
+/// transaction that both sent and received (a swap) keeps what came in, as `other`.
+fn one_row_per_hash(items: Vec<ActivityItem>) -> Vec<ActivityItem> {
+    let mut out: Vec<ActivityItem> = Vec::with_capacity(items.len());
+    for item in items {
+        let Some(existing) = out
             .iter_mut()
-            .find(|i| i.hash == item.hash && i.amount.is_none())
-        {
-            Some(existing) => {
-                let failed = existing.failed;
-                *existing = ActivityItem { failed, ..item };
+            .find(|i| i.chain == item.chain && i.hash == item.hash)
+        else {
+            out.push(item);
+            continue;
+        };
+        let failed = existing.failed || item.failed;
+        match (existing.amount, item.amount) {
+            (None, Some(_)) => *existing = item,
+            (Some(a), Some(b))
+                if existing.symbol == item.symbol && existing.direction == item.direction =>
+            {
+                existing.amount = Some(a + b);
             }
-            None => items.push(item),
+            (Some(_), Some(_)) if existing.direction != item.direction => {
+                let incoming = if item.direction == "received" {
+                    item
+                } else {
+                    existing.clone()
+                };
+                *existing = ActivityItem {
+                    direction: "other",
+                    ..incoming
+                };
+            }
+            _ => {}
+        }
+        existing.failed = failed;
+    }
+    out
+}
+
+/// What a Solana transaction moved for one owner.
+#[derive(Clone, Debug, PartialEq)]
+struct Movement {
+    direction: &'static str,
+    symbol: Option<String>,
+    amount: Option<f64>,
+    counterparty: Option<String>,
+}
+
+impl Movement {
+    const NOTHING: Self = Self {
+        direction: "other",
+        symbol: None,
+        amount: None,
+        counterparty: None,
+    };
+}
+
+/// Decodes a `getTransaction` (jsonParsed) answer for `owner`: the token whose balance
+/// changed (by its owner's token balances before and after; only mints 1Click lists, or
+/// USDC without the list, so spam airdrops stay bare), else SOL (the fee left out when
+/// the owner paid it). Sent and received together (a swap) keeps what came in, as `other`.
+fn solana_movement(owner: &str, tx: &Value, listed: Option<&[OneClickToken]>) -> Option<Movement> {
+    let meta = &tx["meta"];
+    let pre = meta["preBalances"].as_array()?;
+    let post = meta["postBalances"].as_array()?;
+    let mut keys: Vec<&str> = tx["transaction"]["message"]["accountKeys"]
+        .as_array()?
+        .iter()
+        .filter_map(|k| k.as_str().or_else(|| k["pubkey"].as_str()))
+        .collect();
+    if keys.len() < pre.len() {
+        for kind in ["writable", "readonly"] {
+            keys.extend(
+                meta["loadedAddresses"][kind]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str),
+            );
         }
     }
-    items
+
+    // Token accounts that changed: (mint, account owner, atomic change, decimals).
+    let side = |name: &str| meta[name].as_array().map(Vec::as_slice).unwrap_or(&[]);
+    let (before, after) = (side("preTokenBalances"), side("postTokenBalances"));
+    let atomic = |b: Option<&Value>| -> i128 {
+        b.and_then(|b| b["uiTokenAmount"]["amount"].as_str()?.parse().ok())
+            .unwrap_or(0)
+    };
+    let mut indexes: Vec<u64> = before
+        .iter()
+        .chain(after)
+        .filter_map(|b| b["accountIndex"].as_u64())
+        .collect();
+    indexes.sort_unstable();
+    indexes.dedup();
+    let mut changes: Vec<(&str, &str, i128, i32)> = Vec::new();
+    for index in indexes {
+        let (was, now) = (token_at(before, index), token_at(after, index));
+        let Some(any) = now.or(was) else {
+            continue;
+        };
+        let (Some(mint), Some(holder), Some(decimals)) = (
+            any["mint"].as_str(),
+            any["owner"].as_str(),
+            any["uiTokenAmount"]["decimals"]
+                .as_u64()
+                .and_then(|d| i32::try_from(d).ok())
+                .filter(|d| *d <= 32),
+        ) else {
+            continue;
+        };
+        let delta = atomic(now) - atomic(was);
+        if delta != 0 {
+            changes.push((mint, holder, delta, decimals));
+        }
+    }
+    let symbol_of = |mint: &str| -> Option<String> {
+        match listed {
+            Some(listed) => listed
+                .iter()
+                .find(|e| e.blockchain == "sol" && e.contract_address.as_deref() == Some(mint))
+                .map(|e| normalize_symbol(&e.symbol).to_string()),
+            None => (mint == SOLANA_USDC).then(|| "USDC".to_string()),
+        }
+    };
+    // The owner's change per listed mint: (mint, symbol, atomic change, decimals).
+    let mut moves: Vec<(&str, String, i128, i32)> = Vec::new();
+    for (mint, holder, _, decimals) in &changes {
+        if *holder != owner || moves.iter().any(|m| m.0 == *mint) {
+            continue;
+        }
+        let total: i128 = changes
+            .iter()
+            .filter(|c| c.0 == *mint && c.1 == owner)
+            .map(|c| c.2)
+            .sum();
+        if let (true, Some(symbol)) = (total != 0, symbol_of(mint)) {
+            moves.push((mint, symbol, total, *decimals));
+        }
+    }
+    if !moves.is_empty() {
+        let pick = |incoming: bool| {
+            moves
+                .iter()
+                .filter(|m| (m.2 > 0) == incoming)
+                .max_by_key(|m| m.2.unsigned_abs())
+        };
+        let (direction, (mint, symbol, delta, decimals)) = match (pick(true), pick(false)) {
+            (Some(i), Some(_)) => ("other", i),
+            (Some(i), None) => ("received", i),
+            (None, Some(o)) => ("sent", o),
+            (None, None) => return Some(Movement::NOTHING),
+        };
+        // Who was on the other side: the other holder of that mint whose balance moved
+        // the opposite way the most.
+        let counterparty = changes
+            .iter()
+            .filter(|c| c.0 == *mint && c.1 != owner && (c.2 > 0) != (*delta > 0))
+            .max_by_key(|c| c.2.unsigned_abs())
+            .map(|c| c.1.to_string());
+        return Some(Movement {
+            direction,
+            symbol: Some(symbol.clone()),
+            amount: Some(delta.unsigned_abs() as f64 / 10f64.powi(*decimals)),
+            counterparty,
+        });
+    }
+
+    let lamports = |list: &[Value], i: usize| list.get(i).and_then(Value::as_u64).map(i128::from);
+    let Some(me) = keys.iter().position(|k| *k == owner) else {
+        return Some(Movement::NOTHING);
+    };
+    let mut delta = lamports(post, me)? - lamports(pre, me)?;
+    if me == 0 {
+        delta += i128::from(meta["fee"].as_u64().unwrap_or(0));
+    }
+    if delta == 0 {
+        return Some(Movement::NOTHING);
+    }
+    let counterparty = (0..keys.len().min(pre.len()))
+        .filter(|i| *i != me)
+        .filter_map(|i| Some((i, lamports(post, i)? - lamports(pre, i)?)))
+        .filter(|(_, d)| *d != 0 && (*d > 0) != (delta > 0))
+        .max_by_key(|(_, d)| d.unsigned_abs())
+        .map(|(i, _)| keys[i].to_string());
+    Some(Movement {
+        direction: if delta < 0 { "sent" } else { "received" },
+        symbol: Some("SOL".into()),
+        amount: Some(delta.unsigned_abs() as f64 / 1e9),
+        counterparty,
+    })
+}
+
+fn token_at(list: &[Value], index: u64) -> Option<&Value> {
+    list.iter()
+        .find(|b| b["accountIndex"].as_u64() == Some(index))
 }
 
 fn parse_solana_signatures(result: &Value) -> Vec<ActivityItem> {
@@ -821,6 +1686,55 @@ fn parse_nearblocks(account: &str, body: &Value) -> Vec<ActivityItem> {
         .collect()
 }
 
+/// NearBlocks' `ft-txns`: one row per token movement on the account, `delta_amount`
+/// signed (negative = sent), with the token's symbol and decimals. Keeps the newest
+/// movement per transaction.
+fn parse_nearblocks_ft(body: &Value) -> Vec<ActivityItem> {
+    let mut items: Vec<ActivityItem> = Vec::new();
+    for t in body["txns"].as_array().into_iter().flatten() {
+        let Some(hash) = t["transaction_hash"].as_str() else {
+            continue;
+        };
+        if items.iter().any(|i| i.hash == hash) {
+            continue;
+        }
+        let delta = match &t["delta_amount"] {
+            Value::String(s) => s.parse::<f64>().ok(),
+            Value::Number(n) => n.as_f64(),
+            _ => None,
+        };
+        let decimals = t["ft"]["decimals"]
+            .as_u64()
+            .and_then(|d| i32::try_from(d).ok())
+            .filter(|d| *d <= 32);
+        let (Some(delta), Some(decimals)) = (delta.filter(|d| d.is_finite()), decimals) else {
+            continue;
+        };
+        let symbol = t["ft"]["symbol"]
+            .as_str()
+            .map(|s| normalize_symbol(s).to_string())
+            .filter(|s| !s.is_empty() && s.len() <= 32);
+        let timestamp = match &t["block_timestamp"] {
+            Value::String(s) => s.parse::<i128>().ok(),
+            Value::Number(n) => n.as_f64().map(|v| v as i128),
+            _ => None,
+        }
+        .map_or(0, |ns| (ns / 1_000_000_000) as i64);
+        items.push(ActivityItem {
+            chain: "NEAR",
+            hash: hash.into(),
+            direction: if delta < 0.0 { "sent" } else { "received" },
+            symbol,
+            amount: Some(delta.abs() / 10f64.powi(decimals)),
+            counterparty: t["involved_account_id"].as_str().map(str::to_string),
+            timestamp,
+            failed: t["outcomes"]["status"].as_bool() == Some(false),
+            explorer_url: format!("https://nearblocks.io/txns/{hash}"),
+        });
+    }
+    items
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -892,6 +1806,87 @@ mod tests {
     }
 
     #[test]
+    fn near_tokens_are_matched_by_contract_and_priced_from_1click() {
+        let listed: Vec<OneClickToken> = serde_json::from_value(json!([
+            { "assetId": "nep141:token.rhealab.near", "blockchain": "near", "symbol": "RHEA",
+              "decimals": 18, "price": 0.036, "contractAddress": "token.rhealab.near",
+              "coingeckoId": "rhea-2" },
+            { "assetId": "nep141:usdc", "blockchain": "near", "symbol": "USDC", "decimals": 6,
+              "price": 1.0, "contractAddress": crate::jar_dao::USDC_NEAR, "coingeckoId": "usd-coin" },
+            { "assetId": "nep141:wrap.near", "blockchain": "near", "symbol": "wNEAR",
+              "decimals": 24, "price": 3.5, "contractAddress": "wrap.near" },
+            { "assetId": "nep141:eth-rhea", "blockchain": "eth", "symbol": "RHEA",
+              "decimals": 18, "price": 9.0, "contractAddress": "spam.near" },
+        ]))
+        .unwrap();
+        let body = json!({ "tokens": [
+            { "contract_id": "token.rhealab.near", "balance": "2500000000000000000000" },
+            { "contract_id": crate::jar_dao::USDC_NEAR, "balance": "1500000" },
+            { "contract_id": "wrap.near", "balance": "0" },
+            { "contract_id": "spam.near", "balance": "1000000000000000000000000" },
+            { "contract_id": "token.rhealab.near", "balance": "1" },
+        ]});
+        let coins: HashMap<String, CoinMarket> = [(
+            "rhea-2".to_string(),
+            CoinMarket {
+                id: "rhea-2".into(),
+                symbol: "RHEA".into(),
+                name: "Rhea".into(),
+                image: None,
+                price_usd: None,
+                market_cap: None,
+                rank: None,
+                volume_24h: None,
+                change_24h: None,
+            },
+        )]
+        .into_iter()
+        .collect();
+        let raws = near_tokens(&body, &listed, Some(&coins));
+        assert_eq!(
+            raws.len(),
+            2,
+            "zero balances, unlisted contracts and repeats are left out"
+        );
+        let rhea = price(raws.into_iter().next().unwrap(), Some(&listed));
+        assert_eq!(rhea.symbol, "RHEA");
+        assert_eq!(rhea.name, "Rhea");
+        assert_eq!(rhea.amount, 2500.0);
+        assert_eq!(rhea.price_usd, Some(0.036));
+        assert!((rhea.usd - 90.0).abs() < 1e-9);
+        assert_eq!(rhea.contract.as_deref(), Some("token.rhealab.near"));
+        assert_eq!(rhea.decimals, Some(18));
+        let usdc = &near_tokens(&body, &listed, None)[1];
+        assert_eq!((usdc.symbol.as_str(), usdc.amount), ("USDC", 1.5));
+        assert_eq!(
+            usdc.contract, None,
+            "the app pays USDC on NEAR by its own contract"
+        );
+    }
+
+    #[test]
+    fn nearblocks_token_transfers() {
+        let items = parse_nearblocks_ft(&json!({ "txns": [
+            { "transaction_hash": "t1", "delta_amount": "-2500000", "involved_account_id": "bob.near",
+              "block_timestamp": "1762000000000000000", "outcomes": { "status": true },
+              "ft": { "symbol": "USDC", "decimals": 6 } },
+            { "transaction_hash": "t1", "delta_amount": "1", "ft": { "symbol": "X", "decimals": 0 } },
+            { "transaction_hash": "t2", "delta_amount": "3000000000000000000",
+              "involved_account_id": "pool.near", "block_timestamp": 1762000001000000000u64,
+              "ft": { "symbol": "RHEA", "decimals": 18 } },
+            { "transaction_hash": "t3", "delta_amount": "5", "ft": { "symbol": "NODEC" } },
+        ]}));
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].direction, "sent");
+        assert_eq!(items[0].amount, Some(2.5));
+        assert_eq!(items[0].symbol.as_deref(), Some("USDC"));
+        assert_eq!(items[0].counterparty.as_deref(), Some("bob.near"));
+        assert_eq!(items[1].direction, "received");
+        assert_eq!(items[1].amount, Some(3.0));
+        assert_eq!(items[1].timestamp, 1_762_000_001);
+    }
+
+    #[test]
     fn blockscout_token_transfer_replaces_contract_call() {
         let network = Endpoints::from_env().evm.remove(1);
         let me = "0x1111111111111111111111111111111111111111";
@@ -941,5 +1936,316 @@ mod tests {
         );
         assert!(sol[0].failed);
         assert_eq!(sol[0].direction, "other");
+    }
+
+    const ME: &str = "0xd8da6bf26964af9d7eed9e03e53415d37aa96045";
+
+    #[test]
+    fn multicall_calldata_matches_the_abi() {
+        // `cast calldata "aggregate3((address,bool,bytes)[])"` with two balanceOf calls.
+        let data = multicall_balances(
+            &[
+                "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                "0x4200000000000000000000000000000000000006",
+            ],
+            "0x1111111111111111111111111111111111111111",
+        );
+        let call = "70a082310000000000000000000000001111111111111111111111111111111111111111";
+        let element = |target: &str| {
+            format!(
+                "{target:0>64}{:064x}{:064x}{:064x}{call}{}",
+                1,
+                0x60,
+                0x24,
+                "0".repeat(56)
+            )
+        };
+        let expected = format!(
+            "0x82ad56cb{:064x}{:064x}{:064x}{:064x}{}{}",
+            0x20,
+            2,
+            0x40,
+            0x100,
+            element("833589fcd6edb6e08f4c7c32d4f71b54bda02913"),
+            element("4200000000000000000000000000000000000006"),
+        );
+        assert_eq!(data, expected);
+    }
+
+    #[test]
+    fn decodes_a_live_multicall_answer() {
+        // Base mainnet: USDC, WETH, then a call that returned no data (counts as failed).
+        let answer = "0x00000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000003000000000000000000000000000000000000000000000000000000000000006000000000000000000000000000000000000000000000000000000000000000e000000000000000000000000000000000000000000000000000000000000001600000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000004e0503c00000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000040000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000003d3135217ee901b000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000400000000000000000000000000000000000000000000000000000000000000000";
+        assert_eq!(
+            decode_multicall(answer),
+            Some(vec![Some(0x4e0503c), Some(0x3d3135217ee901b), None])
+        );
+        assert_eq!(decode_multicall("0x"), None);
+        assert_eq!(decode_multicall("0x00"), None);
+    }
+
+    fn listed() -> Vec<OneClickToken> {
+        serde_json::from_value(json!([
+            { "assetId": "nep141:base-usdc", "blockchain": "base", "symbol": "USDC", "decimals": 6,
+              "price": 1.0, "contractAddress": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913" },
+            { "assetId": "nep141:base-weth", "blockchain": "base", "symbol": "WETH", "decimals": 18,
+              "price": 3000.0, "contractAddress": "0x4200000000000000000000000000000000000006",
+              "coingeckoId": "weth" },
+            { "assetId": "nep141:sol-wif", "blockchain": "sol", "symbol": "$WIF", "decimals": 6,
+              "price": 2.0, "contractAddress": "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm" },
+            { "assetId": "nep141:sol-usdc", "blockchain": "sol", "symbol": "USDC", "decimals": 6,
+              "price": 1.0, "contractAddress": SOLANA_USDC },
+            { "assetId": "nep141:sol-t22", "blockchain": "sol", "symbol": "PYUSD", "decimals": 6,
+              "price": 1.0, "contractAddress": "2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo" },
+            { "assetId": "nep141:sol-bad", "blockchain": "sol", "symbol": "BAD", "decimals": 9,
+              "price": 1.0, "contractAddress": "BADmint1111111111111111111111111111111111111" },
+        ]))
+        .unwrap()
+    }
+
+    #[test]
+    fn erc20s_from_blockscout_are_matched_by_contract() {
+        let network = Endpoints::from_env().evm.remove(1);
+        let tokens = listed();
+        let entries: Vec<&OneClickToken> =
+            tokens.iter().filter(|t| t.blockchain == "base").collect();
+        let body = json!({ "items": [
+            { "token": { "address_hash": "0x4200000000000000000000000000000000000006", "symbol": "WETH" },
+              "value": "500000000000000000" },
+            { "token": { "address_hash": "0x833589FCD6EDB6E08F4C7C32D4F71B54BDA02913", "symbol": "USDC" },
+              "value": "2500000" },
+            // A look-alike "USDC" that 1Click doesn't list: spam, left out.
+            { "token": { "address_hash": "0x9999999999999999999999999999999999999999", "symbol": "USDC" },
+              "value": "1000000000000" },
+        ]});
+        let holdings: Vec<Holding> = blockscout_tokens(&network, &body, &entries, None)
+            .into_iter()
+            .map(|r| price(r, Some(&tokens)))
+            .collect();
+        assert_eq!(holdings.len(), 2);
+        let weth = &holdings[0];
+        assert_eq!(
+            (weth.symbol.as_str(), weth.amount, weth.usd),
+            ("WETH", 0.5, 1500.0)
+        );
+        assert_eq!(
+            weth.contract.as_deref(),
+            Some("0x4200000000000000000000000000000000000006")
+        );
+        assert_eq!(weth.decimals, Some(18));
+        assert_eq!(weth.asset_id.as_deref(), Some("nep141:base-weth"));
+        let usdc = &holdings[1];
+        assert_eq!((usdc.amount, usdc.contract.as_deref()), (2.5, None));
+        assert_eq!(usdc.asset_id.as_deref(), Some("nep141:base-usdc"));
+    }
+
+    fn token_account(mint: &str, amount: &str, decimals: u64) -> Value {
+        json!({ "account": { "data": { "parsed": { "info": {
+            "mint": mint, "tokenAmount": { "amount": amount, "decimals": decimals },
+        }}}}})
+    }
+
+    #[test]
+    fn spl_and_token_2022_balances_by_mint() {
+        let tokens = listed();
+        let wif = "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm";
+        let classic = json!({ "value": [
+            token_account(wif, "1500000", 6),
+            token_account(wif, "500000", 6),
+            token_account(SOLANA_USDC, "3000000", 6),
+            token_account("SpamMint11111111111111111111111111111111111", "9", 0),
+            token_account("BADmint1111111111111111111111111111111111111", "5", 6),
+        ]});
+        let token_2022 = json!({ "value": [
+            token_account("2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo", "4000000", 6),
+        ]});
+        let raws = solana_tokens(Some(&classic), Some(&token_2022), Some(&tokens), None);
+        let shown: Vec<(&str, f64, Option<&str>)> = raws
+            .iter()
+            .map(|r| (r.symbol.as_str(), r.amount, r.contract.as_deref()))
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                ("WIF", 2.0, Some(wif)),
+                ("USDC", 3.0, None),
+                // Shown, but not payable here: no contract.
+                ("PYUSD", 4.0, None),
+            ],
+            "summed per mint; unlisted mints and wrong decimals left out"
+        );
+        // No list: USDC alone.
+        let raws = solana_tokens(Some(&classic), None, None, None);
+        assert_eq!(raws.len(), 1);
+        assert_eq!((raws[0].symbol.as_str(), raws[0].amount), ("USDC", 3.0));
+    }
+
+    #[test]
+    fn one_row_per_evm_transaction() {
+        let network = Endpoints::from_env().evm.remove(0);
+        let other = "0x2222222222222222222222222222222222222222";
+        let rows = |direction_out: bool, symbol: &str, amount: f64| {
+            let (from, to) = if direction_out {
+                (ME, other)
+            } else {
+                (other, ME)
+            };
+            evm_row(
+                &network,
+                ME,
+                "0xswap",
+                Some(from),
+                Some(to),
+                Some((symbol.into(), amount)),
+                10,
+                false,
+            )
+        };
+        let bare = evm_row(
+            &network,
+            ME,
+            "0xswap",
+            Some(ME),
+            Some(other),
+            None,
+            10,
+            true,
+        );
+        let merged = one_row_per_hash(vec![
+            bare,
+            rows(true, "USDC", 100.0),
+            rows(false, "WETH", 0.03),
+            rows(false, "WETH", 0.01),
+        ]);
+        assert_eq!(merged.len(), 1);
+        let row = &merged[0];
+        assert_eq!(row.direction, "other", "sent and received: a swap");
+        assert_eq!(row.symbol.as_deref(), Some("WETH"));
+        assert!(row.failed, "the transaction's own status is kept");
+        let twice = one_row_per_hash(vec![rows(true, "USDC", 1.0), rows(true, "USDC", 2.0)]);
+        assert_eq!((twice.len(), twice[0].amount), (1, Some(3.0)));
+    }
+
+    #[test]
+    fn etherscan_rows() {
+        let network = Endpoints::from_env().evm.remove(2);
+        let txs = etherscan_result(json!({ "status": "1", "result": [
+            { "hash": "0xa", "from": ME, "to": "0x3333333333333333333333333333333333333333",
+              "value": "1000000000000000000", "timeStamp": "1762000000", "isError": "0" },
+            { "hash": "0xb", "from": ME, "to": "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
+              "value": "0", "timeStamp": "1762000100", "isError": "0" },
+        ]}))
+        .unwrap();
+        let tokens = etherscan_result(json!({ "status": "1", "result": [
+            { "hash": "0xb", "from": ME, "to": "0x4444444444444444444444444444444444444444",
+              "value": "2500000", "tokenSymbol": "USDC", "tokenDecimal": "6", "timeStamp": "1762000100" },
+        ]}))
+        .unwrap();
+        let items = parse_etherscan(&network, ME, &txs, &tokens);
+        assert_eq!(items.len(), 2);
+        assert_eq!(
+            (items[0].direction, items[0].amount, items[0].timestamp),
+            ("sent", Some(1.0), 1_762_000_000)
+        );
+        assert_eq!(items[0].explorer_url, "https://arbiscan.io/tx/0xa");
+        assert_eq!(items[1].symbol.as_deref(), Some("USDC"));
+        assert_eq!(items[1].amount, Some(2.5));
+        assert_eq!(
+            etherscan_result(
+                json!({ "status": "0", "message": "No transactions found", "result": [] })
+            ),
+            Some(vec![])
+        );
+        assert_eq!(
+            etherscan_result(json!({ "status": "0", "result": "Invalid API Key" })),
+            None
+        );
+    }
+
+    const OWNER: &str = "Own3r1111111111111111111111111111111111111111";
+    const PEER: &str = "Peer11111111111111111111111111111111111111111";
+
+    fn solana_tx(pre: [u64; 2], post: [u64; 2], tokens: Value) -> Value {
+        json!({
+            "meta": {
+                "fee": 5000, "preBalances": pre, "postBalances": post,
+                "preTokenBalances": tokens["pre"], "postTokenBalances": tokens["post"],
+            },
+            "transaction": { "message": { "accountKeys": [
+                { "pubkey": OWNER, "signer": true }, { "pubkey": PEER, "signer": false },
+            ]}},
+        })
+    }
+
+    fn token_balance(index: u64, mint: &str, owner: &str, amount: &str) -> Value {
+        json!({ "accountIndex": index, "mint": mint, "owner": owner,
+                "uiTokenAmount": { "amount": amount, "decimals": 6 } })
+    }
+
+    #[test]
+    fn decodes_solana_transfers() {
+        let tokens = listed();
+        // SOL sent: 1 SOL left the owner (plus the fee, which isn't the amount).
+        let sent = solana_tx(
+            [3_000_000_000, 0],
+            [1_999_995_000, 1_000_000_000],
+            json!({}),
+        );
+        let m = solana_movement(OWNER, &sent, Some(&tokens)).unwrap();
+        assert_eq!(
+            (m.direction, m.symbol.as_deref(), m.amount),
+            ("sent", Some("SOL"), Some(1.0))
+        );
+        assert_eq!(m.counterparty.as_deref(), Some(PEER));
+
+        // USDC received: the token change wins over the SOL fee.
+        let received = solana_tx(
+            [1_000_000, 0],
+            [995_000, 0],
+            json!({
+                "pre": [token_balance(2, SOLANA_USDC, PEER, "9000000")],
+                "post": [
+                    token_balance(2, SOLANA_USDC, PEER, "7000000"),
+                    token_balance(3, SOLANA_USDC, OWNER, "2000000"),
+                ],
+            }),
+        );
+        let m = solana_movement(OWNER, &received, Some(&tokens)).unwrap();
+        assert_eq!(
+            (m.direction, m.symbol.as_deref(), m.amount),
+            ("received", Some("USDC"), Some(2.0))
+        );
+        assert_eq!(m.counterparty.as_deref(), Some(PEER));
+
+        // A swap: USDC out, WIF in, shown as what came in.
+        let wif = "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm";
+        let swap = solana_tx(
+            [1_000_000, 0],
+            [995_000, 0],
+            json!({
+                "pre": [token_balance(2, SOLANA_USDC, OWNER, "5000000")],
+                "post": [
+                    token_balance(2, SOLANA_USDC, OWNER, "0"),
+                    token_balance(3, wif, OWNER, "2000000"),
+                ],
+            }),
+        );
+        let m = solana_movement(OWNER, &swap, Some(&tokens)).unwrap();
+        assert_eq!(
+            (m.direction, m.symbol.as_deref(), m.amount),
+            ("other", Some("WIF"), Some(2.0))
+        );
+
+        // An unlisted airdrop and only the fee paid: nothing worth a row.
+        let spam = solana_tx(
+            [1_000_000, 0],
+            [995_000, 0],
+            json!({ "post": [token_balance(3, "SpamMint11111111111111111111111111111111111", OWNER, "1")] }),
+        );
+        assert_eq!(
+            solana_movement(OWNER, &spam, Some(&tokens)),
+            Some(Movement::NOTHING)
+        );
+        assert_eq!(solana_movement(OWNER, &json!({}), None), None);
     }
 }

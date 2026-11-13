@@ -58,6 +58,7 @@ import {
   lineSpanMs,
 } from '@/lib/jar-chart';
 import { useDaoJar } from '@/lib/jar-dao';
+import { useJarValues } from '@/lib/jar-holdings';
 import { livePrices, useLivePrices, useTokenChart } from '@/lib/market';
 import { formatUsd, RANGE_LABEL } from '@/lib/mock-wallet';
 import { approvalsLeft, useMultisig, useProposal } from '@/lib/multisig';
@@ -90,7 +91,7 @@ import {
   usePostJar,
   useSocial,
 } from '@/lib/social';
-import { SOCIAL } from '@/lib/surface';
+import { COPY_FEES, SOCIAL, SOON, SOON_OPACITY } from '@/lib/surface';
 import { TEST_MODE } from '@/lib/test-mode';
 import { jarReturn, jarValue, ME, type ThesisJar, updateJarBuy, useThesisJars } from '@/lib/thesis';
 import { showErrorToast } from '@/lib/toast';
@@ -314,10 +315,12 @@ function JarPage({ jar, id }: { jar: ThesisJar | undefined; id: string }) {
         ) : jar?.mine && !jar.groupId && !jar.sharedWallet ? (
           // Your own jar: what you do after looking at a position is sell (some of) it.
           <View style={styles.footer}>
+            {/* Selling isn't live outside test mode: there, dimmed, and doing nothing. */}
             <PillButton
-              label={`Sell ${formatUsd(jarValue(jar))}`}
+              label={SOON.jarSell ? 'Sell · coming soon' : `Sell ${formatUsd(jarValue(jar))}`}
               variant="secondary"
-              style={styles.flex}
+              disabled={SOON.jarSell}
+              style={[styles.flex, SOON.jarSell && styles.soon]}
               onPress={() => {
                 tap();
                 router.push({ pathname: '/jar-sell', params: { id: jar.id } });
@@ -515,6 +518,9 @@ function JarBody({
     const timer = setInterval(tick, 10_000);
     return () => clearInterval(timer);
   }, [jar.id, moving]);
+  // A real jar's value is what its tokens are worth now (lib/jar-holdings): kept fresh
+  // while it's open, with a mark a day for its chart and return.
+  useJarValues(60_000, jar.mine && !!jar.buy?.length);
 
   const left = shared && approval ? approvalsLeft(shared, approval) : 0;
   // Its age as of opening the page, so the line keeps its identity across re-renders
@@ -776,11 +782,14 @@ function JarBody({
                 value={jar.copiers.toLocaleString()}
               />
             ) : null}
-            <StatRow
-              icon={<Icon name="pieOutline" size={15} color={c.textSecondary} />}
-              label={jar.copiedFrom ? 'Their cut' : 'Copy fee'}
-              value={`${jar.copiedFrom?.fee ?? jar.copyFee}%`}
-            />
+            {/* Copy fees aren't charged yet: outside test mode, no fee is shown (lib/surface). */}
+            {COPY_FEES ? (
+              <StatRow
+                icon={<Icon name="pieOutline" size={15} color={c.textSecondary} />}
+                label={jar.copiedFrom ? 'Their cut' : 'Copy fee'}
+                value={`${jar.copiedFrom?.fee ?? jar.copyFee}%`}
+              />
+            ) : null}
           </>
         )}
         <StatRow
@@ -816,8 +825,9 @@ function JarBody({
         />
       </View>
 
-      {/* About: why it exists, as the coin page's About section (the same component). */}
-      {jar.thesis ? (
+      {/* About: why it exists, as the coin page's About section (the same component).
+          A jar built by hand keeps its token list as its words: that's already above. */}
+      {jar.thesis && jar.thesis.trim() !== jar.picks.map((p) => p.symbol).join(', ') ? (
         <View style={[styles.section, styles.gutter]}>
           <Description title="About this jar" text={jar.thesis} />
         </View>
@@ -879,7 +889,7 @@ const STAT_ICONS: { icon: IconName; label: string }[] = [
   { icon: 'personOutline', label: 'Created by' },
   { icon: 'clock', label: 'Started' },
   { icon: 'layersOutline', label: 'Tokens' },
-];
+].filter((s) => COPY_FEES || s.label !== 'Copy fee') as { icon: IconName; label: string }[];
 
 /** The whole page while the jar loads, shaped like it so nothing jumps. */
 function PageSkeleton() {
@@ -949,6 +959,7 @@ function Message({ text, action, onPress }: { text: string; action: string; onPr
 }
 
 const useStyles = makeStyles((c) => ({
+  soon: { opacity: SOON_OPACITY },
   // As a post's Save and Share (social/parts PostActions).
   headerActions: { flexDirection: 'row', alignItems: 'center', gap: 4, marginRight: -8 },
   headerAction: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },

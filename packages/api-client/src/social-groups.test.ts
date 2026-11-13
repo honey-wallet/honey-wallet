@@ -125,4 +125,54 @@ describe('group jars', () => {
       twice.jarDaoSponsor('t', { account: 'b'.repeat(64), groupId: 'g1' }),
     ).rejects.toBeInstanceOf(ApiError);
   });
+
+  it('relays a signed delegate, or says to pay your own gas when the relayer is off', async () => {
+    const on = mockFetch(200, { txHash: 'h', relayer: 'honey.near' });
+    const api = createApiClient({ baseUrl: 'http://api.test', fetch: on });
+    await expect(api.jarDaoRelay('t', { groupId: 'g1', signedDelegate: 'AAA=' })).resolves.toEqual({
+      txHash: 'h',
+      relayer: 'honey.near',
+    });
+    expect(sent(on)).toEqual({
+      url: 'http://api.test/api/v1/jar-dao/relay',
+      method: 'POST',
+      body: { groupId: 'g1', signedDelegate: 'AAA=' },
+      auth: 'Bearer t',
+    });
+    const off = createApiClient({
+      baseUrl: 'http://api.test',
+      fetch: mockFetch(503, { error: { code: 'relayer_off', message: 'off' } }),
+    });
+    await expect(off.jarDaoRelay('t', { groupId: 'g1', signedDelegate: 'AAA=' })).resolves.toBe(
+      null,
+    );
+    const refused = createApiClient({
+      baseUrl: 'http://api.test',
+      fetch: mockFetch(400, { error: { code: 'bad_request', message: 'no' } }),
+    });
+    await expect(
+      refused.jarDaoRelay('t', { groupId: 'g1', signedDelegate: 'AAA=' }),
+    ).rejects.toBeInstanceOf(ApiError);
+  });
+});
+
+describe('push tokens', () => {
+  it('registers and removes this phone with the exact paths and bodies', async () => {
+    const fetch = mockFetch(200, { ok: true });
+    const api = createApiClient({ baseUrl: 'http://api.test', fetch });
+    await api.registerPushToken('t', { token: 'ExponentPushToken[x]', platform: 'ios' });
+    expect(sent(fetch)).toEqual({
+      url: 'http://api.test/api/v1/push/tokens',
+      method: 'POST',
+      body: { token: 'ExponentPushToken[x]', platform: 'ios' },
+      auth: 'Bearer t',
+    });
+    await api.removePushToken('t', 'ExponentPushToken[x]');
+    expect(sent(fetch, 1)).toEqual({
+      url: 'http://api.test/api/v1/push/tokens/remove',
+      method: 'POST',
+      body: { token: 'ExponentPushToken[x]' },
+      auth: 'Bearer t',
+    });
+  });
 });

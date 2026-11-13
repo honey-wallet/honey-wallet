@@ -57,6 +57,7 @@ import {
   shareProfile,
   timeAgo,
 } from '@/lib/social';
+import { COPY_FEES } from '@/lib/surface';
 import { updateSwap } from '@/lib/swap';
 import { copyProposal, manualProposal, thesisJars } from '@/lib/thesis';
 import { chatDraft } from '@/lib/thesis-chat';
@@ -933,10 +934,12 @@ function openToken(symbol: string) {
   router.push({ pathname: '/token/[symbol]', params: { symbol } });
 }
 
-/** A jar's small print, only what's worth saying: copies once there are some, and its fee. */
+/** A jar's small print, only what's worth saying: copies once there are some, and its fee
+ * (only where copy fees are charged, lib/surface COPY_FEES). */
 function jarMeta(jar: SocialJar) {
-  const copies = jar.copies > 0 ? `${jar.copies} ${jar.copies === 1 ? 'copy' : 'copies'} · ` : '';
-  return `${copies}${jar.copyFee}% fee`;
+  const copies = jar.copies > 0 ? `${jar.copies} ${jar.copies === 1 ? 'copy' : 'copies'}` : '';
+  const fee = COPY_FEES ? `${jar.copyFee}% fee` : '';
+  return [copies, fee].filter(Boolean).join(' · ');
 }
 
 const KIND: Record<SocialFeedItem['kind'], string> = {

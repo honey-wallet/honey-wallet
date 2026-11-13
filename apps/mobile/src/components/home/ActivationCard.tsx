@@ -7,6 +7,7 @@ import { PressableScale } from '@/components/motion/PressableScale';
 import { PillButton } from '@/components/onboarding/PillButton';
 import { tap } from '@/lib/haptics';
 import { doneCount, SETUP_REWARD_USD, setupSteps, useOnboarding } from '@/lib/onboarding';
+import { SETUP_REWARD } from '@/lib/surface';
 import { TEST_MODE } from '@/lib/test-mode';
 import { makeStyles, radius, useTheme } from '@/theme';
 
@@ -113,10 +114,14 @@ export function FinishSetupCard() {
   const state = useOnboarding();
   const done = doneCount(state);
   const total = setupSteps(state.method).length;
+  // No fee credit is spent yet (lib/surface SETUP_REWARD), so only test mode promises one.
+  const setupLine = SETUP_REWARD
+    ? `Get $${SETUP_REWARD_USD} off network fees`
+    : 'A few steps to keep it safe';
   return (
     <PressableScale
       accessibilityRole="button"
-      accessibilityLabel={`Finish setting up, ${done} of ${total} done. Get $${SETUP_REWARD_USD} off network fees`}
+      accessibilityLabel={`Finish setting up, ${done} of ${total} done. ${setupLine}`}
       scaleTo={0.98}
       onPress={() => {
         tap();
@@ -127,7 +132,7 @@ export function FinishSetupCard() {
       <Progress done={done} total={total} />
       <View style={styles.flex}>
         <Text style={styles.setupTitle}>Finish setting up</Text>
-        <Text style={styles.reward}>Get ${SETUP_REWARD_USD} off network fees</Text>
+        <Text style={styles.reward}>{setupLine}</Text>
       </View>
       <Text style={styles.count}>
         {done}/{total}

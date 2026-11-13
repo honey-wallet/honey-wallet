@@ -99,6 +99,9 @@ pub struct LegStatus {
     pub status: String,
     pub destination_tx_hashes: Vec<String>,
     pub refunded_amount: Option<String>,
+    /// Atomic units of the destination asset delivered (1Click `swapDetails.amountOut`),
+    /// so the app can count what a jar holds. None until 1Click reports it.
+    pub amount_out: Option<String>,
 }
 
 /// How long a quoted deposit address stays tied to the user who asked for it.
@@ -515,6 +518,10 @@ fn parse_status(deposit_address: &str, body: &Value) -> Result<LegStatus, AppErr
             .as_str()
             .filter(|s| atomic(s).is_some())
             .map(String::from),
+        amount_out: details["amountOut"]
+            .as_str()
+            .filter(|s| atomic(s).is_some())
+            .map(String::from),
     })
 }
 
@@ -639,6 +646,12 @@ mod tests {
             "destinationChainTxHashes": [{ "hash": "abc", "explorerUrl": "x" }], "refundedAmount": "0" } });
         let s = parse_status("0xdeposit", &body).unwrap();
         assert_eq!(s.destination_tx_hashes, vec!["abc"]);
+        assert_eq!(s.amount_out, None);
+        let delivered = json!({ "status": "SUCCESS", "swapDetails": { "amountOut": "1336500" } });
+        let s = parse_status("0xdeposit", &delivered).unwrap();
+        assert_eq!(s.amount_out.as_deref(), Some("1336500"));
+        let junk = json!({ "status": "SUCCESS", "swapDetails": { "amountOut": "1.5" } });
+        assert_eq!(parse_status("0xdeposit", &junk).unwrap().amount_out, None);
         assert!(parse_status("0xdeposit", &json!({ "status": "WEIRD" })).is_err());
     }
 

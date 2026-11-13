@@ -862,6 +862,34 @@ export interface JarDaoSponsorResult {
   txHash: string | null;
 }
 
+/**
+ * `POST /api/v1/jar-dao/relay`: Honey pays the gas of a group member's own call
+ * (NEP-366). The member signs a delegate action on their phone; only proposals and
+ * votes on the group's DAO, or their share into it, are relayed.
+ */
+export interface JarDaoRelayRequest {
+  groupId: string;
+  /** Borsh `SignedDelegateAction`, base64. */
+  signedDelegate: string;
+}
+
+export interface JarDaoRelayResult {
+  /** The relayer's transaction (base58); for a share, what `/paid` takes. */
+  txHash: string;
+  /** The relayer account that signed it. */
+  relayer: string;
+}
+
+/** `POST /api/v1/push/tokens`: this phone's Expo push token, for the signed-in person. */
+export interface PushTokenRequest {
+  token: string;
+  platform: 'ios' | 'android';
+}
+
+export interface PushTokenResult {
+  ok: boolean;
+}
+
 /** A shared jar's Sputnik DAO, read from NEAR (`GET /api/v1/jar-dao/state`). */
 export interface JarDaoState {
   dao: string;
@@ -872,7 +900,7 @@ export interface JarDaoState {
   balances: { tokenId: string; amount: string }[];
   /** Server's reference jar value now (micro-USD), or null when a held token has no price. */
   navMicroUsd: string | null;
-  /** Whether the NEP-366 gas relayer is on (members pay their own gas when false). */
+  /** Whether Honey's NEP-366 gas relayer is on (members pay their own gas when false). */
   relayer: boolean;
 }
 
@@ -940,6 +968,8 @@ export interface JarBuyStatus {
   status: JarBuyState;
   destinationTxHashes: string[];
   refundedAmount: string | null;
+  /** Atomic units of the destination asset delivered, once 1Click reports it (SUCCESS). */
+  amountOut?: string | null;
 }
 
 /** Addresses whose public balances and activity are read. Mirrors `portfolio::Addresses`. */
@@ -958,6 +988,15 @@ export interface PortfolioHolding {
   /** 1Click price; null when the asset has none. */
   priceUsd: number | null;
   usd: number;
+  /**
+   * A token's contract (ERC-20 address, classic SPL mint or NEP-141 account) and decimals,
+   * to pay it; absent for the chain's coin, USDC (paid by name) and Token-2022 mints (not
+   * payable here).
+   */
+  contract?: string;
+  decimals?: number;
+  /** NEAR Intents' asset id when the token is in its list (every token but the chain's coin). */
+  assetId?: string;
 }
 
 /** `GET /portfolio/balances`. Mirrors `portfolio::Portfolio`. */
@@ -994,13 +1033,29 @@ export interface AccountDeletion {
   waitlistEntries: number;
 }
 
-/** `GET /market/tokens` entry. Mirrors `market_data::MarketListToken`. */
+/**
+ * `GET /market/tokens` entry, ranked by market cap. Mirrors `market_data::MarketListing`.
+ * `symbol` and `chains` are what NEAR Intents delivers under that symbol; `aliases` are
+ * wrapped copies folded into this row (cbBTC and WBTC under BTC). The coin's fields are
+ * optional: an older server sends only symbol, price and chains.
+ */
 export interface MarketListToken {
   symbol: string;
+  /** The coin's name ("Bitcoin"), else the symbol. */
+  name?: string;
+  /** https logo (CoinGecko). */
+  logo?: string | null;
   /** 1Click's live price (median across the symbol's assets). */
   priceUsd: number;
+  /** Percent, CoinGecko. */
+  change24h?: number | null;
+  volume24h?: number | null;
+  marketCap?: number | null;
+  /** CoinGecko market-cap rank. */
+  rank?: number | null;
   /** Honey chain names it can be delivered on. */
   chains: string[];
+  aliases?: string[];
 }
 
 /** `GET /market/token`. Mirrors `market_data::TokenMarket`. */

@@ -2,12 +2,21 @@ import { Text, View } from 'react-native';
 import { Icon } from '@/components/Icon';
 import { TextsReveal } from '@/components/motion/TextsReveal';
 import { PillButton } from '@/components/onboarding/PillButton';
+import { ComingSoonSheet } from '@/components/sheets/ComingSoon';
 import { closeSheet, SheetScreen } from '@/components/sheets/Sheet';
 import { tap } from '@/lib/haptics';
+import { UNWIRED_SETTINGS } from '@/lib/surface';
 import { makeStyles, useTheme } from '@/theme';
 
+/** Smart wallets are a demo state (lib/surface UNWIRED_SETTINGS): a link straight here says so. */
+export default function SmartWalletInfoRoute() {
+  if (!UNWIRED_SETTINGS)
+    return <ComingSoonSheet icon="wallet" hint="Smart wallets are coming soon." />;
+  return <SmartWalletInfoSheet />;
+}
+
 /** Explains what turning a wallet into a smart wallet does. */
-export default function SmartWalletInfoSheet() {
+function SmartWalletInfoSheet() {
   const styles = useStyles();
   const c = useTheme();
   return (

@@ -4,7 +4,7 @@ import { type AddedWallet, canReceive } from '@/lib/wallets';
 /** One address to receive on, and what can be sent to it. */
 export type ReceiveAddress = {
   family: ChainFamily;
-  /** Where it works, e.g. "Solana" or "Ethereum, Base and other EVM networks". */
+  /** Where it works, e.g. "Solana" or "Ethereum, Base and Arbitrum". */
   name: string;
   /** Short form for list rows. */
   title: string;
@@ -16,7 +16,7 @@ export type ReceiveAddress = {
 };
 
 const FAMILIES: Record<ChainFamily, Omit<ReceiveAddress, 'family' | 'address' | 'uri'>> = {
-  evm: { title: 'Ethereum & Base', name: 'Ethereum, Base and other EVM networks', symbol: 'ETH' },
+  evm: { title: 'Ethereum & Base', name: 'Ethereum, Base and Arbitrum', symbol: 'ETH' },
   solana: { title: 'Solana', name: 'Solana', symbol: 'SOL' },
   near: { title: 'NEAR', name: 'NEAR Mainnet', symbol: 'NEAR' },
   tron: { title: 'Tron', name: 'Tron', symbol: 'TRX' },
@@ -27,19 +27,13 @@ const FAMILIES: Record<ChainFamily, Omit<ReceiveAddress, 'family' | 'address' | 
 // NEAR: phrase wallets derive an implicit account (docs/NEAR.md); watched/imported-key wallets don't.
 const ORDER: ChainFamily[] = ['evm', 'solana', 'near'];
 
-/** Networks the one EVM address works on, shown as logos. */
-export const EVM_LOGOS = [
-  'ETH',
-  'BASE',
-  'ARB',
-  'OP',
-  'POL',
-  'BNB',
-  'AVAX',
-  'GNO',
-  'LINEA',
-  'SCROLL',
-];
+/**
+ * EVM networks shown beside the one EVM address, as logos: only the ones whose balances
+ * Honey reads (apps/server/src/portfolio.rs `Endpoints`: Ethereum, Base, Arbitrum).
+ * The address works on any EVM chain, but money sent on one Honey doesn't read would be
+ * invisible here, so Receive doesn't invite it. Add a logo when its balances are read.
+ */
+export const EVM_LOGOS = ['ETH', 'BASE', 'ARB'];
 
 // EIP-681 and Solana Pay prefixes; NEAR, Tron and XRP wallets scan the bare address.
 const uriFor = (family: ChainFamily, address: string) =>

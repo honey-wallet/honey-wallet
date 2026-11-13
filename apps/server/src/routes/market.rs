@@ -4,8 +4,8 @@
 use crate::{
     error::AppError,
     market_data::{
-        ChartRange, History, MarketData, MarketListToken, NewPool, TokenChart, TokenInfo,
-        TokenMarket, Venues, market_list,
+        ChartRange, History, MarketData, MarketListing, NewPool, TokenChart, TokenInfo,
+        TokenMarket, Venues,
     },
 };
 use axum::{
@@ -108,16 +108,13 @@ async fn chart(
         .map_err(|_| AppError::Unsupported("no price history for this token".into()))
 }
 
-/// `GET /market/tokens`: every symbol 1Click can deliver on Honey's chains, with its
-/// live 1Click price (Search's list; 24h numbers come from `/market/token`).
+/// `GET /market/tokens`: Search's list. Every symbol 1Click can deliver on Honey's chains,
+/// with its live 1Click price, the coin's name, logo, market cap and 24h volume and change
+/// (CoinGecko), wrapped copies folded into their coin, ranked by market cap.
 async fn tokens(
     State(market): State<Arc<MarketData>>,
-) -> Result<Json<Vec<MarketListToken>>, AppError> {
-    market
-        .tokens()
-        .await
-        .map(|t| Json(market_list(&t)))
-        .map_err(|_| AppError::Busy)
+) -> Result<Json<Vec<MarketListing>>, AppError> {
+    market.listing().await.map(Json).map_err(|_| AppError::Busy)
 }
 
 /// `GET /market/token?symbol=ETH`: price, 24h change, volume, liquidity and caps.

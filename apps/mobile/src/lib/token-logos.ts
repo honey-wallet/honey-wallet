@@ -29,6 +29,25 @@ function load() {
     });
 }
 
+/**
+ * Logos that arrived with Search's list, laid over the saved map (without counting as the
+ * daily refresh), so a token shows its logo as soon as the list is in.
+ */
+export function addTokenLogos(more: Record<string, string>) {
+  const now = logos.get().logos;
+  const fresh = Object.entries(more).filter(
+    ([symbol, url]) => url.startsWith('https://') && now[symbol.toUpperCase()] !== url,
+  );
+  if (!fresh.length) return;
+  logos.set((prev) => ({
+    ...prev,
+    logos: {
+      ...prev.logos,
+      ...Object.fromEntries(fresh.map(([symbol, url]) => [symbol.toUpperCase(), url])),
+    },
+  }));
+}
+
 /** The logo URL for a symbol, if the server knows one (https only). */
 export function useTokenLogo(symbol: string): string | undefined {
   const state = logos.useValue();

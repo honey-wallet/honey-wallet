@@ -1,6 +1,6 @@
 import { router } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
-import { Linking, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import { OperationHistory } from '@/components/activity/OperationHistory';
 import { Icon, type IconName } from '@/components/Icon';
 import { PressableRow } from '@/components/motion/PressableRow';
@@ -8,13 +8,15 @@ import { SkeletonBar, SkeletonReveal, useFirstLoad } from '@/components/motion/S
 import { Sticky } from '@/components/motion/Sticky';
 import { ProposalRow, ProposalRowSkeleton } from '@/components/wallet/MultisigParts';
 import { EmptyState, TokenIcon } from '@/components/wallet/parts';
+import { activityFeed, jarBuyRecords, swapRecords } from '@/lib/activity-feed';
 import { tap } from '@/lib/haptics';
-import { loadSwapTokens, swapTokenList } from '@/lib/intents-swap';
+import { loadSwapTokens, swapTokenList, useIntentsSwaps } from '@/lib/intents-swap';
 import { LOADS } from '@/lib/loads';
 import { ACTIVITY, type Activity } from '@/lib/mock-wallet';
 import { describe, useActiveMultisig, useProposals } from '@/lib/multisig';
-import { isLikelySpam, toActivity, usePortfolio } from '@/lib/portfolio';
+import { isLikelySpam, usePortfolio } from '@/lib/portfolio';
 import { type ActivityFilter, updateSectionPrefs, useSectionPrefs } from '@/lib/section-prefs';
+import { useThesisJars } from '@/lib/thesis';
 import { useWalletView } from '@/lib/wallet-view';
 import { useActiveWallet } from '@/lib/wallets';
 import { Gate } from '@/lib/warnings';
@@ -37,7 +39,8 @@ const FILTER_KIND: Record<Exclude<ActivityFilter, 'All'>, Activity['kind']> = {
 /**
  * Transaction history (2026-11-12: a section of the Wallet screen, beside Tokens, Jars
  * and NFTs, rather than its own tab): a shared wallet's proposals, then the wallet's
- * on-chain history by month, likely spam folded away, and the Honey requests made here.
+ * on-chain history by month with its swaps and jar buys made here (lib/activity-feed),
+ * likely spam folded away, and the Honey requests made here.
  */
 export function ActivitySection() {
   const styles = useStyles();
@@ -68,8 +71,18 @@ export function ActivitySection() {
   const [showSpam, setShowSpam] = useState(false);
   const items = live.activity ?? [];
   const spam = real ? items.filter((i) => isLikelySpam(i, known)) : [];
+  // Swaps and jar buys this phone made: a watched wallet never pays, so it has none.
+  const swaps = useIntentsSwaps();
+  const jars = useThesisJars();
+  const local = useMemo(
+    () =>
+      real && !wallet.watchOnly
+        ? [...swapRecords(Object.values(swaps), wallet.id), ...jarBuyRecords(jars)]
+        : [],
+    [real, wallet.watchOnly, wallet.id, swaps, jars],
+  );
   const all = real
-    ? toActivity(showSpam ? items : items.filter((i) => !spam.includes(i)))
+    ? activityFeed(showSpam ? items : items.filter((i) => !spam.includes(i)), local)
     : empty
       ? []
       : ACTIVITY;
@@ -77,7 +90,7 @@ export function ActivitySection() {
     (a) =>
       (activityFilter === 'All' || a.kind === FILTER_KIND[activityFilter]) &&
       !(activityHideApprovals && a.kind === 'approved') &&
-      matches(KIND[a.kind].title, a.detail, a.symbol),
+      matches(a.title ?? KIND[a.kind].title, a.detail, a.symbol),
   );
   const months = [...new Set(shown.map((a) => a.month))];
   // A shared wallet's proposals still collecting approvals come first.
@@ -300,9 +313,8 @@ function ActivityRow({ activity: a }: { activity: Activity }) {
     <PressableRow
       onPress={() => {
         tap();
-        // Live rows open the transaction on its explorer; the detail screen is the fixture's.
-        if (a.url) Linking.openURL(a.url).catch(() => {});
-        else router.push({ pathname: '/activity/[id]', params: { id: a.id } });
+        // Every row opens its detail sheet; live ones link out to the explorer from there.
+        router.push({ pathname: '/activity/[id]', params: { id: a.id } });
       }}
       style={styles.row}
     >
@@ -313,7 +325,7 @@ function ActivityRow({ activity: a }: { activity: Activity }) {
         </View>
       </View>
       <View style={styles.flex}>
-        <Text style={styles.title}>{kind.title}</Text>
+        <Text style={styles.title}>{a.title ?? kind.title}</Text>
         {a.swap ? (
           <View style={styles.swap}>
             <TokenIcon symbol={a.swap.from[0]} size={16} />

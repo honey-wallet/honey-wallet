@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createApiClient } from './client';
 import {
   isChainActivity,
+  isMarketListTokens,
   isPortfolio,
   isTokenChart,
   isTokenInfo,
@@ -28,6 +29,41 @@ const item = {
   failed: false,
   explorerUrl: 'https://nearblocks.io/txns/abc',
 };
+
+describe('market list', () => {
+  it('accepts the ranked list and the older symbol-price-chains shape', () => {
+    const old = { symbol: 'NEAR', priceUsd: 3.5, chains: ['NEAR'] };
+    const ranked = {
+      ...old,
+      symbol: 'BTC',
+      name: 'Bitcoin',
+      logo: 'https://coin-images.coingecko.com/coins/bitcoin.png',
+      change24h: 1.2,
+      volume24h: 3e10,
+      marketCap: 1.4e12,
+      rank: 1,
+      aliases: ['cbBTC', 'WBTC'],
+    };
+    const unknown = { ...old, symbol: 'cNEAR', name: 'cNEAR', logo: null, rank: null, aliases: [] };
+    expect(isMarketListTokens([old, ranked, unknown])).toBe(true);
+    expect(isMarketListTokens([{ ...ranked, rank: '1' }])).toBe(false);
+    expect(isMarketListTokens([{ ...ranked, aliases: [1] }])).toBe(false);
+  });
+
+  it('accepts NEP-141 holdings with their contract', () => {
+    const rhea = {
+      ...holding,
+      chain: 'NEAR',
+      symbol: 'RHEA',
+      contract: 'token.rhealab.near',
+      decimals: 18,
+    };
+    expect(isPortfolio({ holdings: [rhea], totalUsd: 0, unavailable: [] })).toBe(true);
+    expect(
+      isPortfolio({ holdings: [{ ...rhea, decimals: '18' }], totalUsd: 0, unavailable: [] }),
+    ).toBe(false);
+  });
+});
 
 describe('portfolio', () => {
   it('builds a query from present addresses only', () => {

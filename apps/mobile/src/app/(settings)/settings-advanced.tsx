@@ -7,10 +7,16 @@ import { SheetRow, SheetScreen } from '@/components/sheets/Sheet';
 import { tap } from '@/lib/haptics';
 import { leaveSheetTo } from '@/lib/navigation';
 import { updateSettings, useSettings } from '@/lib/settings';
+import { UNWIRED_SETTINGS } from '@/lib/surface';
 import { showToast } from '@/lib/toast';
 import { makeStyles, useTheme } from '@/theme';
 
-/** Advanced settings: testnets, network cost, app data and smart wallets. */
+/**
+ * Advanced settings: testnets, network cost, app data and smart wallets. Testnet mode,
+ * a custom network cost and smart wallets change nothing yet, and failures are only ever
+ * simulated on sample money, so outside test mode only App data is here
+ * (lib/surface UNWIRED_SETTINGS).
+ */
 export default function AdvancedSheet() {
   const styles = useStyles();
   const c = useTheme();
@@ -21,6 +27,16 @@ export default function AdvancedSheet() {
     tap();
     leaveSheetTo(href);
   };
+
+  const appData = (
+    <SheetRow
+      icon="box"
+      title="App data"
+      accessory="chevron"
+      onPress={() => openPage('/app-data')}
+    />
+  );
+  if (!UNWIRED_SETTINGS) return <SheetScreen title="Advanced settings">{appData}</SheetScreen>;
 
   return (
     <SheetScreen title="Advanced settings">
@@ -70,12 +86,7 @@ export default function AdvancedSheet() {
           />
         }
       />
-      <SheetRow
-        icon="box"
-        title="App data"
-        accessory="chevron"
-        onPress={() => openPage('/app-data')}
-      />
+      {appData}
       <SheetRow
         icon="wallet"
         title="Smart wallet"

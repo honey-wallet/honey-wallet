@@ -3,13 +3,13 @@ import { Text, View } from 'react-native';
 import { PressableRow } from '@/components/motion/PressableRow';
 import { Change, PushedScreen, SCREEN, TokenIcon } from '@/components/wallet/parts';
 import { tap } from '@/lib/haptics';
-import { useMarketList } from '@/lib/market';
+import { findMarketToken, useMarketList } from '@/lib/market';
 import { formatPrice } from '@/lib/mock-wallet';
 import { useSavedTokens } from '@/lib/saved';
 import { makeStyles } from '@/theme';
 
 /** Search's suggestions until you save your own (same list as Search). */
-const SUGGESTED = ['ETH', 'cbBTC', 'SOL', 'NEAR'];
+const SUGGESTED = ['BTC', 'ETH', 'SOL', 'NEAR'];
 
 /**
  * Search's Favorite tokens → See all: every favourite as a row, in the same style as
@@ -21,8 +21,9 @@ export default function FavoritesScreen() {
   const list = useMarketList();
   const symbols = saved.length ? saved : SUGGESTED;
   const tokens = symbols
-    .map((symbol) => list.find((t) => t.symbol === symbol))
-    .filter((t): t is NonNullable<typeof t> => !!t);
+    // A token saved as a wrapped copy (cbBTC) shows as its coin's row (Bitcoin), once.
+    .map((symbol) => findMarketToken(list, symbol))
+    .filter((t, i, all): t is NonNullable<typeof t> => !!t && all.indexOf(t) === i);
   return (
     <PushedScreen
       title="Favorite tokens"
@@ -39,7 +40,7 @@ export default function FavoritesScreen() {
             }}
             style={styles.row}
           >
-            <TokenIcon symbol={token.symbol} size={40} />
+            <TokenIcon symbol={token.symbol} size={40} uri={token.logo} />
             <View style={styles.flex}>
               <Text style={styles.title} numberOfLines={1}>
                 {token.name}

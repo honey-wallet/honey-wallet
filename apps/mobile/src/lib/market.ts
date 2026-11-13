@@ -10,6 +10,7 @@ import { api } from '@/lib/api';
 import { CHAINS, type Chain, MARKET, type MarketToken } from '@/lib/mock-wallet';
 import { createStore } from '@/lib/store';
 import { TEST_MODE } from '@/lib/test-mode';
+import { addTokenLogos } from '@/lib/token-logos';
 
 /**
  * Live market numbers per symbol (price, 24h change, volume, caps), from the server's
@@ -225,12 +226,28 @@ export function seriesChange(
   return range === '1D' && change24h != null ? change24h : null;
 }
 
-/** Search's list from `GET /market/tokens`: every symbol 1Click delivers, live prices. */
+/**
+ * Search's list from `GET /market/tokens`: every token NEAR Intents delivers, ranked by
+ * market cap, each with its coin's name, logo, 24h volume and change (CoinGecko, via the
+ * server, one call for the whole list), wrapped copies folded into their coin.
+ */
 const LIST_STALE_MS = 5 * 60_000;
-/** 24h numbers (change, volume, caps) are fetched per symbol for this many tokens. */
-const ENRICHED = 40;
+/**
+ * 24h numbers are fetched per symbol (DexScreener) only for tokens the list has none for,
+ * this many at most. An older server sends no numbers at all, so its first 40 load.
+ */
+const ENRICHED = 12;
+const ENRICHED_OLD_SERVER = 40;
 type Listing = { tokens?: MarketListToken[]; at: number; loading: boolean; error?: boolean };
 const listing = createStore<Listing>({ at: 0, loading: false });
+/** The last list, kept on the device: Search and Build your own open on it at once. */
+const savedListing = createStore<{ tokens?: MarketListToken[] }>(
+  {},
+  { persist: 'market-listing-v1' },
+);
+
+/** The list in hand: this session's, else the one saved last time. */
+const listedTokens = (list: Listing = listing.get()) => list.tokens ?? savedListing.get().tokens;
 
 /** Loads Search's list. `force` skips freshness, for a retry after a failure. */
 export async function loadListing(force = false) {
@@ -243,38 +260,53 @@ export async function loadListing(force = false) {
   } catch {
     // Missing stays missing: Search says it's offline, never sample prices.
   }
+  if (tokens?.length) {
+    savedListing.set({ tokens });
+    const logos: Record<string, string> = {};
+    for (const t of tokens) {
+      if (!t.logo) continue;
+      logos[t.symbol] = t.logo;
+      for (const alias of t.aliases ?? []) logos[alias] ??= t.logo;
+    }
+    addTokenLogos(logos);
+  }
   listing.set((prev) => ({
     tokens: tokens ?? prev.tokens,
     at: Date.now(),
     loading: false,
     // Only an error while there's nothing to show: a failed refresh keeps the old list.
-    error: !tokens && !prev.tokens,
+    error: !tokens && !prev.tokens && !savedListing.get().tokens,
   }));
 }
 
 /**
  * Live USD prices by uppercase symbol from Search's list (the sample table fills gaps in
- * test mode),
- * read once, e.g. when saving a strategy. Loads the list if it hasn't been.
+ * test mode), read once, e.g. when saving a strategy. Loads the list if it hasn't been.
+ * A wrapped copy folded into a row (cbBTC under BTC) is priced like its row.
  */
 export function livePrices(): Record<string, number> {
   const out: Record<string, number> = {};
   // Test mode keeps live prices too (lib/test-mode); the sample table only fills gaps.
   if (TEST_MODE) for (const t of MARKET) if (t.price > 0) out[t.symbol.toUpperCase()] = t.price;
-  const tokens = listing.get().tokens;
-  if (!tokens) void loadListing();
-  for (const t of tokens ?? []) if (t.priceUsd > 0) out[t.symbol.toUpperCase()] = t.priceUsd;
+  if (!listing.get().tokens) void loadListing();
+  const tokens = listedTokens() ?? [];
+  for (const t of tokens) {
+    if (!(t.priceUsd > 0)) continue;
+    for (const alias of t.aliases ?? []) out[alias.toUpperCase()] ??= t.priceUsd;
+  }
+  for (const t of tokens) if (t.priceUsd > 0) out[t.symbol.toUpperCase()] = t.priceUsd;
   return out;
 }
 
 /** The same, kept current (Jars → Saved's "since you saved"). */
 export function useLivePrices(): Record<string, number> {
   const list = listing.useValue();
+  const saved = savedListing.useValue();
   useEffect(() => {
     void loadListing();
   }, []);
   // biome-ignore lint/correctness/useExhaustiveDependencies: recompute when the list changes.
-  return useMemo(() => livePrices(), [list.tokens]);
+  return useMemo(() => livePrices(), [list.tokens, saved.tokens]);
 }
 
 /** Stable, so screens can use it in focus effects. */
@@ -301,21 +333,24 @@ export function useMarketListStatus() {
 
 const HONEY_CHAINS = new Set<string>(CHAINS.map((ch) => ch.name));
 const KNOWN = new Map(MARKET.map((t) => [t.symbol.toUpperCase(), t]));
-/** Well-known symbols first (so their 24h numbers load first), then the rest A-Z. */
+/** An older server's list is A-Z: well-known symbols first, then the rest A-Z. */
 const RANK = new Map(MARKET.map((t, i) => [t.symbol.toUpperCase(), i]));
 
-/** Symbols whose 24h numbers Search fetches: the best-known first. */
-export function enrichedSymbols(tokens: MarketListToken[], limit = ENRICHED) {
+/** Whether the server ranked the list and sent each coin's numbers (not an older server). */
+const isRanked = (tokens: MarketListToken[]) => tokens.some((t) => t.rank !== undefined);
+/** The list carries this token's 24h volume or market cap. */
+const hasNumbers = (t: MarketListToken) => t.volume24h != null || t.marketCap != null;
+
+/** Symbols whose 24h numbers are fetched one by one: those the list has none for. */
+export function enrichedSymbols(tokens: MarketListToken[], limit?: number) {
+  const ranked = isRanked(tokens);
+  const gaps = new Set(tokens.filter((t) => !hasNumbers(t)).map((t) => t.symbol));
   return liveMarketList(tokens, {})
-    .slice(0, limit)
+    .filter((t) => gaps.has(t.symbol))
+    .slice(0, limit ?? (ranked ? ENRICHED : ENRICHED_OLD_SERVER))
     .map((t) => t.symbol);
 }
 
-/**
- * Search's market list: every token NEAR Intents can deliver on a Honey chain, priced
- * live by 1Click, with 24h change, volume and market cap where they have loaded
- * (test mode keeps the samples).
- */
 /**
  * One entry per symbol, the first in list order (the market list is ordered by size, so
  * that's the most liquid), for the jar and social surfaces where a token is just its
@@ -331,14 +366,47 @@ export function uniqueBySymbol<T extends { symbol: string }>(list: T[]): T[] {
   });
 }
 
+/**
+ * The list's row for a symbol: by symbol (any case), else the row a wrapped copy was
+ * folded into, so a token saved as cbBTC finds Bitcoin.
+ */
+export function findMarketToken<T extends { symbol: string; aliases?: string[] }>(
+  list: readonly T[],
+  symbol: string,
+): T | undefined {
+  const s = symbol.toUpperCase();
+  return (
+    list.find((t) => t.symbol === symbol) ??
+    list.find((t) => t.symbol.toUpperCase() === s) ??
+    list.find((t) => t.aliases?.some((a) => a.toUpperCase() === s))
+  );
+}
+
+/** Whether a row matches a search: its name, symbol or a folded-in copy's symbol. */
+export function matchesQuery(t: { symbol: string; name: string; aliases?: string[] }, q: string) {
+  const query = q.trim().toLowerCase();
+  return (
+    !query ||
+    t.name.toLowerCase().includes(query) ||
+    t.symbol.toLowerCase().includes(query) ||
+    !!t.aliases?.some((a) => a.toLowerCase().includes(query))
+  );
+}
+
+/**
+ * Search's market list: every token NEAR Intents can deliver on a Honey chain, priced
+ * live by 1Click, named and ranked by market cap, with 24h change, volume and market cap
+ * (test mode lists the same; the samples only stand in until the list arrives).
+ */
 export function useMarketList(): MarketToken[] {
   const list = listing.useValue();
+  const saved = savedListing.useValue();
   useEffect(() => {
     void loadListing();
   }, []);
-  const tokens = list.tokens ?? [];
+  const tokens = list.tokens ?? saved.tokens ?? [];
   const all = useTokenMarkets(enrichedSymbols(tokens), true);
-  const live = liveMarketList(tokens, all);
+  const live = useMemo(() => liveMarketList(tokens, all), [tokens, all]);
   // Test mode lists the same live tokens as the real app (2026-11-13: Build your own
   // showed only the 7 samples); the samples only stand in until the list arrives.
   if (TEST_MODE && !live.length) return MARKET;
@@ -349,52 +417,74 @@ export function liveMarketList(
   tokens: MarketListToken[],
   all: Record<string, { market?: TokenMarket }>,
 ): MarketToken[] {
-  return tokens
-    .flatMap((t) => {
-      const known = KNOWN.get(t.symbol.toUpperCase());
-      // A well-known token shows on its home chain (NEAR on NEAR), else its first Honey chain.
-      const chain = (
-        known && t.chains.includes(known.chain)
-          ? known.chain
-          : t.chains.find((ch) => HONEY_CHAINS.has(ch))
-      ) as Chain | undefined;
-      if (!chain) return [];
-      const m = all[t.symbol]?.market;
-      return [
-        {
-          symbol: t.symbol,
-          name: known?.name ?? t.symbol,
-          chain,
-          price: m?.priceUsd ?? t.priceUsd,
-          change: m?.change24h ?? 0,
-          volume: m?.volume24h ?? 0,
-          marketCap: m?.marketCap ?? m?.fdv ?? 0,
-        },
-      ];
-    })
-    .sort(
-      (a, b) =>
-        (RANK.get(a.symbol.toUpperCase()) ?? Infinity) -
-          (RANK.get(b.symbol.toUpperCase()) ?? Infinity) || a.symbol.localeCompare(b.symbol),
-    );
+  const rows = tokens.flatMap((t) => {
+    const known = KNOWN.get(t.symbol.toUpperCase());
+    // A well-known token shows on its home chain (NEAR on NEAR), else its first Honey chain.
+    const chain = (
+      known && t.chains.includes(known.chain)
+        ? known.chain
+        : t.chains.find((ch) => HONEY_CHAINS.has(ch))
+    ) as Chain | undefined;
+    if (!chain) return [];
+    const m = all[t.symbol]?.market;
+    // The coin's name from the server ("Bitcoin"); a bare symbol falls back to ours.
+    const name = t.name && t.name !== t.symbol ? t.name : (known?.name ?? t.symbol);
+    return [
+      {
+        symbol: t.symbol,
+        name,
+        chain,
+        price: m?.priceUsd ?? t.priceUsd,
+        change: t.change24h ?? m?.change24h ?? 0,
+        volume: t.volume24h ?? m?.volume24h ?? 0,
+        marketCap: t.marketCap ?? m?.marketCap ?? m?.fdv ?? 0,
+        logo: t.logo ?? null,
+        aliases: t.aliases ?? [],
+      },
+    ];
+  });
+  // A ranked list (market cap, from the server) keeps its order; an older server's is A-Z.
+  if (isRanked(tokens)) return rows;
+  return rows.sort(
+    (a, b) =>
+      (RANK.get(a.symbol.toUpperCase()) ?? Infinity) -
+        (RANK.get(b.symbol.toUpperCase()) ?? Infinity) || a.symbol.localeCompare(b.symbol),
+  );
 }
 
 /** How long a market list waits for the live market before showing whatever has arrived. */
 const MARKET_WAIT_MS = 8000;
 
 /**
- * True once the live list is in and the 24h numbers of its best-known tokens (the ones
- * lists rank by) have loaded, or after MARKET_WAIT_MS, so a slow or failed feed still
- * ends in the list or its empty state rather than skeletons forever.
+ * True once the live list is in and its top tokens have their 24h numbers (from the list
+ * itself, or fetched one by one for the few it has none for), or after MARKET_WAIT_MS, so
+ * a slow or failed feed still ends in the list or its empty state rather than skeletons
+ * forever.
  */
 export function useMarketSettled(list: { symbol: string }[]) {
   const all = markets.useValue();
+  const listed = listing.useValue();
+  const saved = savedListing.useValue();
   const [timedOut, setTimedOut] = useState(false);
   useEffect(() => {
     const timer = setTimeout(() => setTimedOut(true), MARKET_WAIT_MS);
     return () => clearTimeout(timer);
   }, []);
+  const tokens = listed.tokens ?? saved.tokens ?? [];
+  const pending = useMemo(() => new Set(enrichedSymbols(tokens)), [tokens]);
   if (timedOut) return true;
   if (!list.length) return false;
-  return list.slice(0, 12).every((t) => all[t.symbol] && !all[t.symbol].loading);
+  return list
+    .slice(0, 12)
+    .every((t) => !pending.has(t.symbol) || (all[t.symbol] && !all[t.symbol].loading));
+}
+
+/**
+ * A dollar stablecoin: a USD symbol, or a USD name priced at a dollar. Search's Top tokens
+ * and the jar builder leave them out (jars are bought with dollars already).
+ */
+const DOLLARS = new Set(['USDT', 'USDC', 'DAI', 'USD1', 'USDE', 'PYUSD', 'FDUSD', 'USDS', 'TUSD']);
+export function isDollar(t: { symbol: string; name?: string; price?: number }) {
+  if (DOLLARS.has(t.symbol.toUpperCase())) return true;
+  return /\busd\b|dollar/i.test(t.name ?? '') && Math.abs((t.price ?? 0) - 1) < 0.03;
 }

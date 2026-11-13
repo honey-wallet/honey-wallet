@@ -5,6 +5,7 @@ import { Icon } from '@/components/Icon';
 import { SplitRing } from '@/components/jars/JarParts';
 import { Trend } from '@/components/social/parts';
 import { Sparkline, TokenIcon } from '@/components/wallet/parts';
+import { COPY_FEES } from '@/lib/surface';
 import { tokenColor } from '@/lib/token-colors';
 import { makeStyles, radius, useTheme } from '@/theme';
 
@@ -35,11 +36,19 @@ const TILES: { title: string; hint: string; art: (w: number, h: number) => React
     hint: 'Public jars show their return.',
     art: (w, h) => <CopyArt w={w} h={h} />,
   },
-  {
-    title: 'Creators earn when you do',
-    hint: 'A cut of profit, never of a loss.',
-    art: (w) => <FeeArt w={w} />,
-  },
+  // Copy fees aren't charged yet (lib/surface COPY_FEES): outside test mode the last tile
+  // says who holds a jar's tokens instead.
+  COPY_FEES
+    ? {
+        title: 'Creators earn when you do',
+        hint: 'A cut of profit, never of a loss.',
+        art: (w) => <FeeArt w={w} />,
+      }
+    : {
+        title: 'Held by you',
+        hint: 'Tokens sit in your wallet. Keys stay on your phone.',
+        art: () => <KeysArt />,
+      },
 ];
 
 /**
@@ -160,6 +169,17 @@ function CopyArt({ w, h }: { w: number; h: number }) {
 }
 
 /** A profit bar: most of it yours, a honey slice the creator's fee, under a shield. */
+/** Your keys, in the same round well as the fee's shield. */
+function KeysArt() {
+  const styles = useStyles();
+  const c = useTheme();
+  return (
+    <View style={styles.shield}>
+      <Icon name="key" size={20} color={c.accentText} />
+    </View>
+  );
+}
+
 function FeeArt({ w }: { w: number }) {
   const styles = useStyles();
   const c = useTheme();

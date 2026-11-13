@@ -17,12 +17,13 @@ import {
   useOnboarding,
 } from '@/lib/onboarding';
 import { isWeb } from '@/lib/platform';
-import { LANDING } from '@/lib/surface';
+import { LANDING, SETUP_REWARD } from '@/lib/surface';
 import { makeStyles, radius, useTheme } from '@/theme';
 
 /**
- * Finish setting up: four short steps that make the wallet safe and yours, and $5
- * off network fees for doing them. Shown only once the wallet has money in it, so
+ * Finish setting up: four short steps that make the wallet safe and yours, and (test mode
+ * only, lib/surface SETUP_REWARD: nothing spends the credit yet) $5 off network fees for
+ * doing them. Shown only once the wallet has money in it, so
  * the reward lands when there's something to spend it on.
  */
 export default function SetupSheet() {
@@ -40,8 +41,12 @@ export default function SetupSheet() {
       <SheetScreen>
         <SuccessPage
           compact
-          title={`$${SETUP_REWARD_USD} off network fees`}
-          detail="Your wallet is set up. The credit comes off your next network fees automatically."
+          title={SETUP_REWARD ? `$${SETUP_REWARD_USD} off network fees` : 'You’re all set'}
+          detail={
+            SETUP_REWARD
+              ? 'Your wallet is set up. The credit comes off your next network fees automatically.'
+              : 'Your wallet is set up.'
+          }
           onDone={() => {
             tap();
             closeSheet();
@@ -56,7 +61,9 @@ export default function SetupSheet() {
       <View style={styles.head}>
         <Progress done={doneCount(state)} total={total} size={48} />
         <View style={styles.flex}>
-          <Text style={styles.reward}>Get ${SETUP_REWARD_USD} off network fees</Text>
+          <Text style={styles.reward}>
+            {SETUP_REWARD ? `Get $${SETUP_REWARD_USD} off network fees` : 'Keep your wallet safe'}
+          </Text>
           <Text style={styles.meta}>
             {doneCount(state)} of {total} done · about 2 minutes
           </Text>
@@ -105,19 +112,21 @@ export default function SetupSheet() {
         })}
       </View>
 
-      <SheetText center>
-        Up to ${SETUP_REWARD_USD} in network fees on Honey, applied automatically within 30 days of
-        finishing. One per person.{' '}
-        <Text
-          style={styles.link}
-          onPress={() => {
-            tap();
-            router.push('/disclosures');
-          }}
-        >
-          Terms apply
-        </Text>
-      </SheetText>
+      {SETUP_REWARD ? (
+        <SheetText center>
+          Up to ${SETUP_REWARD_USD} in network fees on Honey, applied automatically within 30 days
+          of finishing. One per person.{' '}
+          <Text
+            style={styles.link}
+            onPress={() => {
+              tap();
+              router.push('/disclosures');
+            }}
+          >
+            Terms apply
+          </Text>
+        </SheetText>
+      ) : null}
       <PillButton label="Later" variant="secondary" onPress={closeSheet} style={styles.later} />
     </SheetScreen>
   );

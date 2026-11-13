@@ -1,17 +1,20 @@
 import { router, useLocalSearchParams } from 'expo-router';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Text, View } from 'react-native';
 import { JarAmount } from '@/components/jars/JarAmount';
 import { JarIcon, StrategyCard } from '@/components/jars/JarParts';
 import { ContentSwap } from '@/components/motion/ContentSwap';
 import { PillButton } from '@/components/onboarding/PillButton';
+import { ComingSoonSheet } from '@/components/sheets/ComingSoon';
 import { SheetScreen, StatRow } from '@/components/sheets/Sheet';
 import { SuccessPage } from '@/components/sheets/SuccessPage';
 import { FlowTray, InlineTray } from '@/components/sheets/Tray';
 import { TokenIcon } from '@/components/wallet/parts';
 import { confirmOwner } from '@/lib/auth';
 import { success, tap } from '@/lib/haptics';
+import { executeJarSell, type JarSellQuote, quoteJarSell } from '@/lib/jar-sell';
 import { formatUsd } from '@/lib/mock-wallet';
+import { SOON } from '@/lib/surface';
 import { TEST_MODE } from '@/lib/test-mode';
 import { jarValue, thesisJars, useThesisJars } from '@/lib/thesis';
 import { showErrorToast } from '@/lib/toast';
@@ -23,9 +26,18 @@ const TRAY_PAGES = ['review', 'sold'] as const;
  * Selling your jar the way Send works: the amount on the How much? screen (the jar's
  * card, keypad, 25%, 50%, Max), then the review in the wallet's small tray ("You're
  * selling", where it goes, Confirm sell, Face ID), then the receipt in the same tray.
- * It comes back as USDC on Base, the money jars are bought with.
+ * It comes back as USDC on Base. For real (lib/jar-sell), the review quotes one NEAR
+ * Intents swap per token and Confirm sends them all after one Face ID.
  */
-export default function JarSellSheet() {
+export default function JarSellRoute() {
+  // Real sells (each token back to USDC through NEAR Intents) aren't wired yet: a link
+  // straight here says so (lib/surface SOON); test mode shows the whole flow.
+  if (SOON.jarSell)
+    return <ComingSoonSheet icon="sell" hint="Selling jars from the app is coming soon." />;
+  return <JarSellSheet />;
+}
+
+function JarSellSheet() {
   const { id = '' } = useLocalSearchParams<{ id?: string }>();
   const live = useThesisJars().find((j) => j.id === id);
   // Kept from when the screen opened: selling all of it removes the jar.
@@ -35,20 +47,72 @@ export default function JarSellSheet() {
   const [usd, setUsd] = useState(0);
   const [page, setPage] = useState<'amount' | 'review' | 'sold'>('amount');
   const [selling, setSelling] = useState(false);
+  // Real sells: the review's quotes (one swap per token), fetched when it opens.
+  const [quote, setQuote] = useState<JarSellQuote | null>(null);
+  const [quoting, setQuoting] = useState(false);
+  const asked = useRef(0);
+  const mounted = useRef(true);
+  useEffect(
+    () => () => {
+      mounted.current = false;
+    },
+    [],
+  );
   if (!jar) return null;
   const value = jarValue(live ?? jar);
   const cap = Math.floor(value * 100) / 100;
   const all = usd >= cap - 0.01;
+  const real = !TEST_MODE;
+  // What comes back: the quotes' expected USDC for real, the amount in test mode.
+  const got = real ? (quote?.usdOut ?? null) : usd;
+  const gotText = got === null ? '…' : `≈ ${got.toFixed(2)} USDC`;
+  // Each token's own network pays its swap's fee, in that network's coin.
+  const feeCoins = [
+    ...new Set(
+      (quote?.swaps ?? []).map(({ swap }) =>
+        swap.sell.chain === 'Solana' ? 'SOL' : swap.sell.chain === 'NEAR' ? 'NEAR' : 'ETH',
+      ),
+    ),
+  ];
+  const networks = [...new Set((quote?.swaps ?? []).map(({ swap }) => swap.sell.chain))];
+
+  const review = (amount: number) => {
+    setUsd(amount);
+    setPage('review');
+    if (!real) return;
+    const n = ++asked.current;
+    setQuote(null);
+    setQuoting(true);
+    quoteJarSell(live ?? jar, amount, value)
+      .then((q) => {
+        if (n === asked.current && mounted.current) setQuote(q);
+      })
+      .catch((error) => {
+        if (n !== asked.current || !mounted.current) return;
+        showErrorToast(error instanceof Error ? error.message : 'Couldn’t get a price');
+        setPage('amount');
+      })
+      .finally(() => {
+        if (n === asked.current && mounted.current) setQuoting(false);
+      });
+  };
 
   const confirm = async () => {
     tap();
     setSelling(true);
     try {
+      if (real) {
+        if (!quote) return;
+        // One Face ID for every swap, inside executeJarSell; each token goes out in turn.
+        await executeJarSell(live ?? jar, quote, () => mounted.current);
+        success();
+        setPage('sold');
+        return;
+      }
       if (!(await confirmOwner(`Sell ${formatUsd(usd)} of ${jar.name}`, true)))
         throw new Error('Cancelled');
-      // Real sells (each token back to USDC through NEAR Intents) aren't wired yet:
-      // test mode shows the whole flow; the real app says so plainly.
-      if (!TEST_MODE) throw new Error('Selling jars from the app is coming soon');
+      // Never reached outside test mode (see JarSellRoute); kept as a guard.
+      if (SOON.jarSell) throw new Error('Selling jars from the app is coming soon');
       const frac = Math.min(1, usd / (value || 1));
       thesisJars.set((list) =>
         frac >= 0.999
@@ -93,8 +157,7 @@ export default function JarSellSheet() {
           cta={(amount) => `Sell ${formatUsd(amount)}`}
           onDone={(amount) => {
             tap();
-            setUsd(amount);
-            setPage('review');
+            review(amount);
           }}
         />
       </SheetScreen>
@@ -122,20 +185,32 @@ export default function JarSellSheet() {
                     value={
                       <View style={styles.inline}>
                         <TokenIcon symbol="USDC" size={20} ring={c.sheet} />
-                        <Text style={styles.rowValue}>≈ {usd.toFixed(2)} USDC</Text>
+                        <Text style={styles.rowValue}>{gotText}</Text>
                       </View>
                     }
                   />
-                  <StatRow label="Network" value="Base" />
-                  <StatRow label="Network cost" value="<$0.01" />
+                  <StatRow
+                    label="Network"
+                    value={real && networks.length ? `${networks.join(', ')} → Base` : 'Base'}
+                  />
+                  <StatRow
+                    label="Network cost"
+                    value={
+                      real
+                        ? feeCoins.length
+                          ? `Paid in ${feeCoins.join(' and ')}`
+                          : '…'
+                        : '<$0.01'
+                    }
+                  />
                   <StatRow
                     label="Total"
-                    value={<Text style={styles.total}>{formatUsd(usd)}</Text>}
+                    value={<Text style={styles.total}>{got === null ? '…' : formatUsd(got)}</Text>}
                   />
                 </View>
                 <PillButton
-                  label={selling ? 'Selling…' : 'Confirm sell'}
-                  disabled={selling}
+                  label={selling ? 'Selling…' : quoting ? 'Getting prices…' : 'Confirm sell'}
+                  disabled={selling || quoting || (real && !quote)}
                   onPress={() => void confirm()}
                   style={styles.cta}
                 />
@@ -145,12 +220,19 @@ export default function JarSellSheet() {
                 <SuccessPage
                   compact
                   title={all ? 'Jar sold' : 'Sold'}
-                  amount={{ symbol: 'USDC', text: `${usd.toFixed(2)} USDC`, usd: formatUsd(usd) }}
+                  amount={{
+                    symbol: 'USDC',
+                    text: `${(got ?? usd).toFixed(2)} USDC`,
+                    usd: formatUsd(got ?? usd),
+                  }}
                   rows={[
                     { label: 'From', value: jar.name },
                     { label: 'To', value: 'Your wallet' },
                     { label: 'Network', value: 'Base' },
-                    { label: 'Sold', value: 'Just now' },
+                    {
+                      label: 'Sold',
+                      value: real ? 'Just now · arriving in a few minutes' : 'Just now',
+                    },
                   ]}
                   onDone={finish}
                 />

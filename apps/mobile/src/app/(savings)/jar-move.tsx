@@ -15,6 +15,7 @@ import { moveJar, usdValue, useJars } from '@/lib/jars';
 import { formatUsd } from '@/lib/mock-wallet';
 import { type ProposalAction, propose, useSigner } from '@/lib/multisig';
 import { followFix, useFailure } from '@/lib/outcomes';
+import { addMoneyHref, SOON } from '@/lib/surface';
 import { useWalletView } from '@/lib/wallet-view';
 import { makeStyles } from '@/theme';
 
@@ -109,9 +110,9 @@ function JarMoveSheetContent() {
                 : signer.multisig
                   ? { label: 'Receive', onPress: () => router.replace('/receive') }
                   : {
-                      label: `Buy ${jar.symbol}`,
-                      onPress: () =>
-                        router.replace({ pathname: '/buy-cash', params: { symbol: jar.symbol } }),
+                      // Buying with cash is coming soon outside test mode: receive it.
+                      label: `${SOON.buyCash ? 'Receive' : 'Buy'} ${jar.symbol}`,
+                      onPress: () => router.replace(addMoneyHref(jar.symbol)),
                     }
             }
           />

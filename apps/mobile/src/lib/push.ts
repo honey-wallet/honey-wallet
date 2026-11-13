@@ -1,10 +1,17 @@
+import Constants from 'expo-constants';
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
+import { api } from '@/lib/api';
+import { backendSession, backendSessionToken } from '@/lib/backend-session';
+import { loadInbox } from '@/lib/inbox';
 import { TEST_MODE } from '@/lib/test-mode';
 
 /**
- * System notifications. For now they're local (scheduled on this device by the demo);
- * a push service will send the same ones once shared wallets live on the server.
+ * System notifications. Remote pushes come from Honey's server through Expo's push
+ * service for inbox events (group invites, votes, "add your share"): this phone's
+ * Expo push token is registered for the signed-in person once notifications are
+ * allowed. Permission is asked when it's useful (after joining or starting a group),
+ * never at launch. Locally scheduled ones (`notify`) are test mode's simulations.
  */
 
 /** The actions on an approval request, right on the notification. */
@@ -85,4 +92,100 @@ export async function notify(content: {
   } catch {
     return false;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Remote push
+
+/** Remote push runs on phones outside test mode (test mode's news is simulated). */
+const REMOTE_PUSH = Platform.OS !== 'web' && !TEST_MODE;
+
+let pushToken: string | null = null;
+/** Who this phone's token was last registered for (the signed-in user id). */
+let registeredFor: string | null = null;
+
+const projectId = () =>
+  (Constants.expoConfig?.extra?.eas?.projectId as string | undefined) ??
+  Constants.easConfig?.projectId;
+
+/** This phone's Expo push token (no prompt; needs permission already given). */
+async function devicePushToken() {
+  if (pushToken) return pushToken;
+  const id = projectId();
+  if (!id) return null;
+  if (Platform.OS === 'android')
+    await Notifications.setNotificationChannelAsync('default', {
+      name: 'Honey',
+      importance: Notifications.AndroidImportance.DEFAULT,
+    });
+  pushToken = (await Notifications.getExpoPushTokenAsync({ projectId: id })).data;
+  return pushToken;
+}
+
+/**
+ * Registers this phone for the signed-in person's pushes when notifications are
+ * already allowed. Never asks; quietly does nothing signed out, on web or in test mode.
+ */
+export async function syncPushRegistration() {
+  if (!REMOTE_PUSH) return;
+  const session = backendSessionToken();
+  const user = backendSession.get().profile?.userId ?? null;
+  if (!session || !user || registeredFor === user) return;
+  if (!(await notificationsAllowed())) return;
+  const token = await devicePushToken();
+  if (!token) return;
+  await api.registerPushToken(session, {
+    token,
+    platform: Platform.OS === 'ios' ? 'ios' : 'android',
+  });
+  registeredFor = user;
+}
+
+/**
+ * After joining or starting a group, when friends' answers, votes and "add your
+ * share" will come while you're away: asks for notifications (iOS shows its prompt
+ * once) and registers this phone. Never throws.
+ */
+export async function enableGroupPush() {
+  if (!REMOTE_PUSH) return;
+  try {
+    await setUpNotifications();
+    if (await askForNotifications()) await syncPushRegistration();
+  } catch {
+    // Notifications are a convenience; the bell still has everything.
+  }
+}
+
+/** Signing out: this phone stops getting the person's pushes (best effort, at most 3s). */
+export async function forgetPushDevice() {
+  if (!REMOTE_PUSH) return;
+  const session = backendSessionToken();
+  registeredFor = null;
+  if (!session) return;
+  try {
+    const token = pushToken ?? ((await notificationsAllowed()) ? await devicePushToken() : null);
+    if (!token) return;
+    await Promise.race([
+      api.removePushToken(session, token),
+      new Promise((resolve) => setTimeout(resolve, 3000)),
+    ]);
+  } catch {
+    // The server forgets tokens Expo says are gone, and the next sign-in moves it.
+  }
+}
+
+let watching = false;
+/**
+ * Keeps this phone's registration current as people sign in (only once allowed), and
+ * refreshes the bell when a push arrives while Honey is open.
+ */
+export function watchPushRegistration() {
+  if (watching || !REMOTE_PUSH) return;
+  watching = true;
+  const sync = () => void syncPushRegistration().catch(() => {});
+  sync();
+  backendSession.subscribe(sync);
+  Notifications.addNotificationReceivedListener((n) => {
+    if (typeof n.request.content.data?.inboxId === 'string') void loadInbox();
+  });
 }

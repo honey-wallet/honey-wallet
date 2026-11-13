@@ -69,7 +69,7 @@ export function ChainPicker({
                 {showAddress
                   ? shortAddress(entry.address)
                   : evm
-                    ? 'Ethereum, Base and 200+ more'
+                    ? 'Ethereum, Base and Arbitrum'
                     : SUBTITLES[entry.family]}
               </Text>
             </View>

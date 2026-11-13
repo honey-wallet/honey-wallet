@@ -26,6 +26,7 @@ import { tap } from '@/lib/haptics';
 import { useTokenInfo } from '@/lib/market';
 import { formatBalance, formatUsd, tokenName } from '@/lib/mock-wallet';
 import { useProfile } from '@/lib/profile';
+import { COPY_FEES } from '@/lib/surface';
 import { TEST_MODE } from '@/lib/test-mode';
 import { jarReturn, jarValue, type Pick, type ThesisJar } from '@/lib/thesis';
 import { tokenColor } from '@/lib/token-colors';
@@ -714,7 +715,7 @@ export function JarRow({ jar, gutter, rank }: { jar: ThesisJar; gutter: number; 
         // Someone else's jar leads with how it did; its fee is the small print.
         <View style={styles.end}>
           <Text style={[styles.value, ret < 0 ? styles.down : styles.up]}>{signedPct(ret)}</Text>
-          <Text style={styles.fee}>{jar.copyFee}% fee</Text>
+          {COPY_FEES ? <Text style={styles.fee}>{jar.copyFee}% fee</Text> : null}
         </View>
       )}
     </PressableRow>

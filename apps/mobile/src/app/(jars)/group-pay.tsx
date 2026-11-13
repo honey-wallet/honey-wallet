@@ -1,112 +1,117 @@
 import { router, useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
-import { ActivityIndicator, Text, View } from 'react-native';
-import { StrategyCard } from '@/components/jars/JarParts';
+import { Text, View } from 'react-native';
+import { ContentSwap } from '@/components/motion/ContentSwap';
 import { PillButton } from '@/components/onboarding/PillButton';
 import { SheetScreen, StatRow } from '@/components/sheets/Sheet';
 import { SuccessPage } from '@/components/sheets/SuccessPage';
+import { TokenIcon } from '@/components/wallet/parts';
 import { dollars } from '@/lib/group-jar-core';
-import { groupError, groupPicks, payShare, useGroup } from '@/lib/group-jars';
+import { groupError, payShare, useGroup } from '@/lib/group-jars';
 import { success, tap } from '@/lib/haptics';
 import { useMyNearUsdc } from '@/lib/jar-dao';
 import { showErrorToast } from '@/lib/toast';
 import { makeStyles, useTheme } from '@/theme';
 
-type Stage = 'review' | 'sending' | 'done';
+const PAGES = ['review', 'done'] as const;
 
 /**
- * Adding your share to a group jar, the way every payment in Honey goes: a review of
- * what leaves your wallet and where it lands, one confirm (Face ID), then a receipt.
+ * Adding your share to a group jar, in the wallet's small tray as Send does: what leaves
+ * your wallet and where it lands, Confirm (Face ID), then the receipt in the same tray.
  * Opened from the group page's "Add your $X".
  */
-export default function GroupPaySheet() {
+export default function GroupPayTray() {
   const { id = '' } = useLocalSearchParams<{ id?: string }>();
   const g = useGroup(id);
   const styles = useStyles();
   const c = useTheme();
-  const [stage, setStage] = useState<Stage>('review');
+  const [page, setPage] = useState<(typeof PAGES)[number]>('review');
+  const [sending, setSending] = useState(false);
   const nearUsdc = useMyNearUsdc(!!g);
   if (!g) return null;
   const share = dollars(g.shareUsd);
   const fromNear = nearUsdc !== null && nearUsdc >= g.shareUsd;
-  const others = g.people - 1;
 
   const pay = async () => {
     tap();
-    setStage('sending');
+    setSending(true);
     try {
       await payShare(g, nearUsdc);
       success();
-      setStage('done');
+      setPage('done');
     } catch (error) {
-      setStage('review');
       if (!(error instanceof Error && /cancel/i.test(error.message)))
         showErrorToast(groupError(error));
+    } finally {
+      setSending(false);
     }
   };
 
-  if (stage === 'done')
-    return (
-      <SheetScreen title="" size="fill">
-        <SuccessPage
-          title="Your share is in"
-          detail={
-            fromNear
-              ? `${g.name} buys once everyone has added theirs.`
-              : `It lands in ${g.name} in about a minute. The jar buys once everyone is in.`
-          }
-          amount={{ symbol: 'USDC', text: `${g.shareUsd} USDC`, usd: share }}
-          rows={[
-            { label: 'To', value: g.name },
-            { label: 'Your share', value: `1 of ${g.people}` },
-          ]}
-          onDone={() => {
-            tap();
-            router.back();
-          }}
-        />
-      </SheetScreen>
-    );
-
   return (
-    <SheetScreen
-      title={`Add your ${share}`}
-      size="fill"
-      footer={
-        <PillButton
-          label={stage === 'sending' ? 'Sending…' : `Pay ${share}`}
-          disabled={stage === 'sending'}
-          onPress={() => void pay()}
-        />
-      }
-    >
-      <View style={styles.body}>
-        <StrategyCard
-          split
-          picks={groupPicks(g)}
-          name={g.name}
-          meta={`Group jar · you and ${others} ${others === 1 ? 'other' : 'others'}`}
-        />
-        <View>
-          <StatRow label="You pay" value={`${share} USDC`} />
-          <StatRow label="From" value={fromNear ? 'USDC on NEAR' : 'USDC on Base'} />
-          <StatRow label="To" value={`${g.name} (group)`} />
-          <StatRow label="Your share" value={`1 of ${g.people}`} />
-          <StatRow label="Arrives" value={fromNear ? 'In seconds' : 'In about a minute'} />
-        </View>
-        {stage === 'sending' ? (
-          <View style={styles.sending}>
-            <ActivityIndicator size="small" color={c.textSecondary} />
-            <Text style={styles.sendingText}>Sending your share…</Text>
+    <ContentSwap id={page} index={PAGES.indexOf(page)}>
+      {page === 'review' ? (
+        <SheetScreen title="Review">
+          <View style={styles.summary}>
+            <Text style={styles.summaryLabel}>You're adding</Text>
+            <Text style={styles.summaryAmount} adjustsFontSizeToFit numberOfLines={1}>
+              {share}
+            </Text>
+            <Text style={styles.summaryTo} numberOfLines={1}>
+              To {g.name}
+            </Text>
           </View>
-        ) : null}
-      </View>
-    </SheetScreen>
+          <View style={styles.rule} />
+          <View style={styles.rows}>
+            <StatRow
+              label="You pay"
+              value={
+                <View style={styles.inline}>
+                  <TokenIcon symbol="USDC" size={20} ring={c.sheet} />
+                  <Text style={styles.rowValue}>{g.shareUsd.toFixed(2)} USDC</Text>
+                </View>
+              }
+            />
+            <StatRow label="Network" value={fromNear ? 'NEAR' : 'Base'} />
+            <StatRow label="Your share" value={`1 of ${g.people}`} />
+            <StatRow label="Arrives" value={fromNear ? 'In seconds' : 'In about a minute'} />
+          </View>
+          <PillButton
+            label={sending ? 'Sending…' : 'Confirm'}
+            disabled={sending}
+            onPress={() => void pay()}
+            style={styles.cta}
+          />
+        </SheetScreen>
+      ) : (
+        <SheetScreen>
+          <SuccessPage
+            compact
+            title="Your share is in"
+            amount={{ symbol: 'USDC', text: `${g.shareUsd.toFixed(2)} USDC`, usd: share }}
+            rows={[
+              { label: 'To', value: g.name },
+              { label: 'Your share', value: `1 of ${g.people}` },
+              { label: 'Next', value: fromNear ? 'Buys when all are in' : 'Lands in ~1 min' },
+            ]}
+            onDone={() => {
+              tap();
+              router.back();
+            }}
+          />
+        </SheetScreen>
+      )}
+    </ContentSwap>
   );
 }
 
 const useStyles = makeStyles((c) => ({
-  body: { gap: 20 },
-  sending: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  sendingText: { color: c.textSecondary, fontSize: 15 },
+  summary: { alignItems: 'center', paddingTop: 28, paddingBottom: 26, gap: 6 },
+  summaryLabel: { color: c.textSecondary, fontSize: 15 },
+  summaryAmount: { color: c.text, fontSize: 44, fontWeight: '500', letterSpacing: -1 },
+  summaryTo: { color: c.textSecondary, fontSize: 17 },
+  rule: { height: 1, backgroundColor: c.divider },
+  rows: { paddingTop: 12, gap: 4 },
+  inline: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  rowValue: { color: c.text, fontSize: 16 },
+  cta: { marginTop: 20 },
 }));

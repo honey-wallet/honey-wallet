@@ -1169,7 +1169,11 @@ async fn paid(
                 return Err(AppError::BadRequest("invalid transaction hash".into()));
             }
             let near = near.ok_or_else(|| AppError::Conflict("join with a NEAR account".into()))?;
-            let check = chain(&state)?.verify_deposit(hash, &near, &dao).await?;
+            // A share Honey's relayer sent for you is checked through its transaction.
+            let relayer = crate::routes::jar_dao::relayed_by(pool, hash, &near).await?;
+            let check = chain(&state)?
+                .verify_deposit_via(hash, &near, &dao, relayer.as_deref())
+                .await?;
             let amount: u128 = check.amount.parse().map_err(|_| AppError::Busy)?;
             (amount, format!("near:{hash}"))
         }

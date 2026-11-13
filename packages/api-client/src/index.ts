@@ -36,6 +36,7 @@ export {
   type NearIntentsToken,
 } from './near-intents';
 export {
+  deliveredAmount,
   fetchOneClickStatus,
   ONE_CLICK_BASE,
   type OneClickStatus,

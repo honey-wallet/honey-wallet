@@ -8,6 +8,7 @@ import { CLOUD_NAMES } from '@/lib/cloud-backup';
 import { tap } from '@/lib/haptics';
 import { HERE, isWeb } from '@/lib/platform';
 import { getProfile } from '@/lib/profile';
+import { SOON_OPACITY } from '@/lib/surface';
 import { showErrorToast, showToast } from '@/lib/toast';
 import { createAccount } from '@/lib/vault';
 import { addVaultWallet, nextWalletLabel } from '@/lib/wallets';
@@ -198,7 +199,7 @@ function OptionRow({ option: o }: { option: Option }) {
 }
 
 const useStyles = makeStyles((c) => ({
-  soon: { opacity: 0.45 },
+  soon: { opacity: SOON_OPACITY },
   icon: {
     width: 44,
     height: 44,

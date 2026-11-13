@@ -112,6 +112,7 @@ mod tests {
             evm: vec![EvmNetwork {
                 chain: "Base",
                 oneclick: "base",
+                chain_id: 8453,
                 rpc: format!("{base}/rpc"),
                 usdc: Some("0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"),
                 blockscout: Some(base.clone()),
@@ -119,7 +120,8 @@ mod tests {
             }],
             solana_rpc: format!("{base}/rpc"),
             near_rpc: format!("{base}/rpc"),
-            nearblocks: base,
+            nearblocks: base.clone(),
+            fastnear: base,
         };
         router(Arc::new(PortfolioService::with_endpoints(
             reqwest::Client::new(),
@@ -197,6 +199,7 @@ mod tests {
             solana_rpc: "http://127.0.0.1:9".into(),
             near_rpc: "http://127.0.0.1:9".into(),
             nearblocks: "http://127.0.0.1:9".into(),
+            fastnear: "http://127.0.0.1:9".into(),
         };
         let app = router(Arc::new(PortfolioService::with_endpoints(
             reqwest::Client::new(),

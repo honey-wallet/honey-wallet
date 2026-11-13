@@ -27,6 +27,7 @@ const {
   refreshSwap,
   FALLBACK_SWAP_TOKENS,
   shownInWallet,
+  swapRefForSymbol,
   swapStage,
   tokenRef,
   unsupportedReason,
@@ -211,6 +212,22 @@ describe('every NEAR Intents token', () => {
     expect(canSellRef(btc, MORE)).toBe(false);
     expect(unsupportedReason({ symbol: 'ETH', chain: 'Base' }, btc, MORE)).toBeNull();
     expect(assetFor(MORE, btc).decimals).toBe(8);
+  });
+
+  it('finds a token page’s symbol on a network this wallet pays from first', () => {
+    // The app's own tokens keep the plain refs the pickers use.
+    expect(swapRefForSymbol(MORE, 'ETH')).toEqual({ symbol: 'ETH', chain: 'Ethereum' });
+    expect(swapRefForSymbol(MORE, 'ETH', 'Base')).toEqual({ symbol: 'ETH', chain: 'Base' });
+    expect(swapRefForSymbol(MORE, 'USDT')).toEqual({
+      symbol: 'USDT',
+      chain: 'Ethereum',
+      assetId: 'nep141:eth-0xdac17f958d2ee523a2206206994597c13d831ec7.omft.near',
+    });
+    expect(swapRefForSymbol(MORE, 'USDT', 'Solana')?.chain).toBe('Solana');
+    // Native NEAR is bought as wNEAR; a symbol only elsewhere is still found.
+    expect(swapRefForSymbol(MORE, 'NEAR')?.assetId).toBe('nep141:wrap.near');
+    expect(swapRefForSymbol(MORE, 'btc')?.assetId).toBe('nep141:btc.omft.near');
+    expect(swapRefForSymbol(MORE, 'NOPE')).toBeNull();
   });
 
   it('refuses a stored asset id whose symbol or network was changed', () => {

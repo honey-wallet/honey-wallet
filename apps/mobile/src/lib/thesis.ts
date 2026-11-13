@@ -94,8 +94,23 @@ export type ThesisJar = {
   groupId?: string;
   /** The real NEAR Intents swaps that bought this jar, one per asset and chain. */
   buy?: import('@/lib/jar-buy').BuyLeg[];
+  /** Real sells out of this jar, one NEAR Intents swap per token (lib/jar-sell). */
+  sells?: JarSell[];
+  /** When the newest `history` mark was started; a new one starts a day later. */
+  markedAt?: number;
   /** A resting limit order still waiting to fill, if the jar was bought that way. */
   openOrder?: { kind: OrderKind; amount: number; placedAt: number };
+};
+
+/** One token sold out of a jar: a NEAR Intents swap of `units` of `asset` to USDC on Base. */
+export type JarSell = {
+  depositAddress: string;
+  /** The jar leg's destination asset that was sold. */
+  asset: string;
+  /** Atomic units sent to the swap. */
+  units: string;
+  status: import('@/lib/intents-swap').SwapStatus;
+  at: number;
 };
 
 export const ME = 'You';
@@ -625,7 +640,11 @@ export function copyProposal(jar: ThesisJar, amount: number): Proposal {
     risk: 'Medium',
     picks: jar.picks.map((p) => ({ ...p, reason: p.reason || `${p.weight}% of ${jar.name}` })),
     unmatched: [],
-    caution: `Past returns don’t promise future ones. ${jar.creator} gets ${jar.copyFee}% of your profit, and nothing if it loses.`,
+    // Copy fees aren't charged yet: outside test mode, none is promised. Same rule as
+    // lib/surface `COPY_FEES` (not imported: it pulls react-native into this pure module).
+    caution: TEST_MODE
+      ? `Past returns don’t promise future ones. ${jar.creator} gets ${jar.copyFee}% of your profit, and nothing if it loses.`
+      : 'Past returns don’t promise future ones.',
     feesUsd: TEST_MODE ? +(amount * 0.006).toFixed(2) : 0,
     sources: [],
     provenance: TEST_MODE

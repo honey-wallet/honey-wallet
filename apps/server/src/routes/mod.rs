@@ -12,6 +12,7 @@ pub mod operations;
 pub mod pairing;
 pub mod portfolio;
 pub mod prices;
+pub mod push;
 pub mod relay_quotes;
 pub mod social;
 pub mod stealth_jar_boxes;

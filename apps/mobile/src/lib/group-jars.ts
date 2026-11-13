@@ -46,9 +46,11 @@ import {
   payShareFromNear,
   proposeGroupBuy,
   proposeGroupPayout,
+  relayForGroup,
   trackGroupDao,
 } from '@/lib/jar-dao';
 import type { Route } from '@/lib/jar-routes';
+import { enableGroupPush } from '@/lib/push';
 import { social, socialPicks } from '@/lib/social';
 import { createStore } from '@/lib/store';
 import { TEST_MODE } from '@/lib/test-mode';
@@ -158,6 +160,8 @@ export async function syncGroup(id: string) {
 /** The group's DAO as a quiet shared wallet on this phone, once there is one. */
 export function groupWallet(g: SocialGroup) {
   if (!g.dao || isDemoGroup(g.id)) return null;
+  // Its calls may have their gas paid by Honey (the relayer, when it's on).
+  relayForGroup(g.dao, g.id);
   return trackGroupDao({
     dao: g.dao,
     label: g.name,
@@ -214,7 +218,7 @@ export async function startGroup(
   } catch {
     // No NEAR key yet: given when the group is created on NEAR instead.
   }
-  return put(
+  const created = put(
     await api.socialCreateGroup(token(), {
       name: options.name.slice(0, 60),
       thesis: proposal.thesis.slice(0, 280),
@@ -228,6 +232,9 @@ export async function startGroup(
       nearAccount,
     }),
   );
+  // Friends answer while you're away: the moment to ask for notifications.
+  void enableGroupPush();
+  return created;
 }
 
 /**
@@ -248,7 +255,10 @@ export async function joinGroup(id: string) {
   if (isDemoGroup(id)) return demo(id, 'join');
   const account = myNearAccount();
   await sponsor(id, account);
-  return put(await api.socialAcceptGroup(token(), id, account));
+  const joined = put(await api.socialAcceptGroup(token(), id, account));
+  // Votes and "add your share" come while you're away: the moment to ask.
+  void enableGroupPush();
+  return joined;
 }
 
 export async function declineGroup(id: string) {
@@ -361,6 +371,7 @@ export async function payShare(g: SocialGroup, nearUsdc: number | null) {
   const dao = g.dao;
   if (!dao) throw new Error('The group isn’t on NEAR yet');
   if (nearUsdc !== null && nearUsdc >= g.shareUsd) {
+    relayForGroup(dao, g.id);
     const txHash = await payShareFromNear(dao, g.shareUsd);
     // The server reads the transfer from NEAR; give finality a moment.
     for (let i = 0; ; i++) {

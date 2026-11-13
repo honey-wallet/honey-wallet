@@ -37,6 +37,7 @@ import { memberName, propose, useActiveMultisig } from '@/lib/multisig';
 import { SHEET_EXIT } from '@/lib/navigation';
 import { useProfile } from '@/lib/profile';
 import { JAR_VISIBILITY, settings, useSettings } from '@/lib/settings';
+import { COPY_FEES } from '@/lib/surface';
 import { TEST_MODE } from '@/lib/test-mode';
 import {
   copyProposal,
@@ -171,7 +172,8 @@ export default function NewThesisSheet() {
     friendPicks.set([]);
     return () => friendPicks.set([]);
   }, []);
-  const [copyFee, setCopyFee] = useState(() => settings.get().jarCopyFee);
+  // No copy fee is charged yet (lib/surface COPY_FEES), so outside test mode none is set.
+  const [copyFee, setCopyFee] = useState(() => (COPY_FEES ? settings.get().jarCopyFee : 0));
   // Limit orders are off for now, so every buy is a market order.
   const [order] = useState<OrderKind>('market');
   // Slippage is automatic here: the max from Settings, changed there, not on Launch.
@@ -482,7 +484,7 @@ export default function NewThesisSheet() {
                         : 'Honey’s pick'
                   }
                   fee={
-                    copied && !copied.mine && copied.copyFee > 0
+                    COPY_FEES && copied && !copied.mine && copied.copyFee > 0
                       ? `${copied.copyFee}% fee`
                       : undefined
                   }
@@ -580,7 +582,7 @@ export default function NewThesisSheet() {
     const share = proposal.amount;
     // A copy can't be resold for a cut of someone else's idea, and only Everyone's jars
     // show the picks a copy buys.
-    const copyable = !copied && visibility === 'public';
+    const copyable = COPY_FEES && !copied && visibility === 'public';
     return (
       <SheetScreen
         title="Launch your jar"
@@ -758,7 +760,7 @@ export default function NewThesisSheet() {
               value={proposal.feesUsd > 0 ? formatUsd(proposal.feesUsd) : 'In each quote'}
             />
             {/* Copying someone's jar: their cut, said once here rather than on the jar. */}
-            {copied && !copied.mine && copied.copyFee > 0 ? (
+            {COPY_FEES && copied && !copied.mine && copied.copyFee > 0 ? (
               <StatRow
                 label="Creator fee"
                 value={`${copied.copyFee}% of profit, never of a loss`}

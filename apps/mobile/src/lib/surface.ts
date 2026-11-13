@@ -1,4 +1,6 @@
+import type { Href } from 'expo-router';
 import { isWeb } from '@/lib/platform';
+import { TEST_MODE } from '@/lib/test-mode';
 
 /**
  * What each build of Honey is for (2026-11-12).
@@ -26,6 +28,54 @@ export const EXTENSION_OFFERED = false;
  * libraries stay: group jars are built on them.
  */
 export const SHARED_WALLETS = false;
+
+/**
+ * Features that aren't live yet (2026-11-13). Outside test mode their buttons stay where
+ * they are, dimmed (`SOON_OPACITY`) with "Coming soon", and do nothing; a link straight
+ * to one of their screens says "Not available yet". Test mode keeps them working with
+ * sample money.
+ */
+export const SOON = {
+  /** Buying crypto with a card or bank: no on-ramp provider is connected. */
+  buyCash: !TEST_MODE,
+  /** Selling crypto for cash: no off-ramp provider either. Swapping is live. */
+  sellCash: !TEST_MODE,
+  /** Selling a jar back to USDC through NEAR Intents isn't wired yet. */
+  jarSell: !TEST_MODE,
+  /** Earning on a token: the markets' rates only, no deposits. */
+  earn: !TEST_MODE,
+} as const;
+
+/**
+ * Creators' copy fees ("x% of your profit"): nothing charges one yet (no escrow, no payout
+ * when a copy is sold), so outside test mode no screen offers, sets or promises a fee.
+ */
+export const COPY_FEES = TEST_MODE;
+
+/**
+ * Settings that change nothing yet, hidden outside test mode until they're wired:
+ * amounts always print in USD (no FX), there are no translations, a custom network
+ * cost isn't applied to sends, and smart wallets are a demo state.
+ */
+export const UNWIRED_SETTINGS = TEST_MODE;
+
+/**
+ * The setup checklist's "Get $5 off network fees": no sponsor or paymaster spends the
+ * credit, so outside test mode the checklist promises no reward.
+ */
+export const SETUP_REWARD = TEST_MODE;
+
+/** A coming-soon button's hint or label. */
+export const COMING_SOON = 'Coming soon';
+
+/** How a coming-soon button looks: in its place, dimmed. */
+export const SOON_OPACITY = 0.45;
+
+/** Where "Add money" goes: buying with cash, or Receive while that's coming soon. */
+export function addMoneyHref(symbol?: string): Href {
+  if (SOON.buyCash) return '/receive';
+  return symbol ? { pathname: '/buy-cash', params: { symbol } } : '/buy-cash';
+}
 
 /** Social and Jars: the phone only. */
 export const SOCIAL = !EXTENSION;

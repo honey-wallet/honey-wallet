@@ -4,21 +4,20 @@ import { TextsReveal } from '@/components/motion/TextsReveal';
 import { PillButton } from '@/components/onboarding/PillButton';
 import { closeSheet, SheetScreen } from '@/components/sheets/Sheet';
 import { Chip } from '@/components/wallet/Chip';
-import { NetworkGrid, TokenIcon } from '@/components/wallet/parts';
+import { TokenIcon } from '@/components/wallet/parts';
 // import { CHAINS } from '@/lib/mock-wallet';
 import { makeStyles, radius, useTheme } from '@/theme';
 
-/** Every EVM chain shares the Ethereum address (lib/receive.ts), so these all work. NEAR is phrase wallets only. */
+/**
+ * The networks whose balances Honey reads (lib/receive.ts EVM_LOGOS). Every EVM chain
+ * shares the Ethereum address. NEAR is phrase wallets only.
+ */
 const NETWORKS = [
   { name: 'Solana', symbol: 'SOL' },
   { name: 'NEAR', symbol: 'NEAR' },
   { name: 'Ethereum', symbol: 'ETH' },
   { name: 'Base', symbol: 'BASE' },
   { name: 'Arbitrum', symbol: 'ARB' },
-  { name: 'Optimism', symbol: 'OP' },
-  { name: 'Polygon', symbol: 'POL' },
-  { name: 'BNB Chain', symbol: 'BNB' },
-  { name: 'Avalanche', symbol: 'AVAX' },
 ];
 
 export default function NetworksSheet() {
@@ -39,7 +38,7 @@ export default function NetworksSheet() {
         second={
           // <Text style={styles.subtitle}>One Honey wallet holds addresses on each of these.</Text>
           <Text style={styles.subtitle}>
-            Solana, NEAR and 200+ EVM chains, all in one Honey wallet.
+            Solana, NEAR, Ethereum, Base and Arbitrum, all in one Honey wallet.
           </Text>
         }
       />
@@ -56,7 +55,6 @@ export default function NetworksSheet() {
             leading={<TokenIcon symbol={ch.symbol} size={22} />}
           />
         ))}
-        <Chip label="200+ more EVM chains" variant="filled" leading={<NetworkGrid size={22} />} />
       </View>
     </SheetScreen>
   );

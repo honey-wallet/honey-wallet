@@ -9,6 +9,7 @@ vi.mock('@/lib/intents-swap', () => ({
   unitsText: (units: string, decimals: number) => (Number(units) / 10 ** decimals).toString(),
 }));
 vi.mock('@/lib/jar-buy', () => ({ refreshJarBuy: vi.fn() }));
+vi.mock('@/lib/jar-holdings', () => ({ refreshJarValues: vi.fn(async () => undefined) }));
 vi.mock('@/lib/thesis', () => ({
   thesisJars: { get: () => [], subscribe: () => () => {} },
   useThesisJars: () => [],

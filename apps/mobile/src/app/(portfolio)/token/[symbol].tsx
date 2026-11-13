@@ -52,7 +52,7 @@ import {
   VAULTS,
 } from '@/lib/mock-wallet';
 import { toggleSavedToken, useSavedTokens } from '@/lib/saved';
-import { SOCIAL } from '@/lib/surface';
+import { COMING_SOON, SOCIAL, SOON, SOON_OPACITY } from '@/lib/surface';
 import { TEST_MODE } from '@/lib/test-mode';
 import { showToast } from '@/lib/toast';
 import { requireSignIn, requireWallet, useHasWallet } from '@/lib/wallet-gate';
@@ -81,12 +81,15 @@ export default function TokenScreen() {
 
   // Outside test mode every number here is live: the price Honey quotes (1Click, lib/market)
   // and the token's details and chart (CoinGecko). The samples are test mode's only.
-  const liveMarkets = useTokenMarkets([symbol], !TEST_MODE);
-  const live = TEST_MODE ? undefined : liveMarkets[symbol];
-  const details = useTokenInfo(symbol, !TEST_MODE);
-  const about = details.info;
+  // Test mode's Search lists every live token: one without a sample reads live here too,
+  // so tapping it never lands on "No market data".
   const fixture = MARKET.find((t) => t.symbol === symbol);
-  const market = TEST_MODE
+  const sample = TEST_MODE && !!fixture;
+  const liveMarkets = useTokenMarkets([symbol], !sample);
+  const live = sample ? undefined : liveMarkets[symbol];
+  const details = useTokenInfo(symbol, !sample);
+  const about = details.info;
+  const market = sample
     ? fixture
     : live?.market?.priceUsd != null
       ? {
@@ -103,11 +106,11 @@ export default function TokenScreen() {
         }
       : undefined;
   // The sample portfolio's extras (performance, per-chain split) are test mode's only.
-  const info = TEST_MODE ? TOKEN_INFO[symbol] : undefined;
+  const info = sample ? TOKEN_INFO[symbol] : undefined;
   // About and links: live details, else (test mode) the samples.
-  const aboutText = TEST_MODE ? info?.about : about?.description;
-  const website = TEST_MODE ? info?.website : about?.website?.url;
-  const explorer = TEST_MODE ? info?.explorer : (about?.explorer ?? undefined);
+  const aboutText = sample ? info?.about : about?.description;
+  const website = sample ? info?.website : about?.website?.url;
+  const explorer = sample ? info?.explorer : (about?.explorer ?? undefined);
   // What the wallet in use holds: none for a new wallet, its own for a shared one.
   const view = useWalletView();
   const buyAction: FooterAction = {
@@ -132,10 +135,10 @@ export default function TokenScreen() {
 
   const [range, setRange] = useState<Range>('1D');
   const [scrub, setScrub] = useState<number | null>(null);
-  const chart = useTokenChart(symbol, range, !TEST_MODE);
+  const chart = useTokenChart(symbol, range, !sample);
   const firstLoad = useFirstLoad(LOADS.token(symbol));
-  const loading = firstLoad || (!TEST_MODE && !live?.market && live?.loading !== false);
-  const detailsLoading = !TEST_MODE && details.loading;
+  const loading = firstLoad || (!sample && !live?.market && live?.loading !== false);
+  const detailsLoading = !sample && details.loading;
   const [showBreakdown, setShowBreakdown] = useState(true);
   // const [menuOpen, setMenuOpen] = useState(false);
 
@@ -193,7 +196,7 @@ export default function TokenScreen() {
     );
   }
 
-  const data = TEST_MODE
+  const data = sample
     ? series(symbol, range, market.price, range === '1D' ? market.change : undefined)
     : chart.prices;
   const shown = scrub === null ? market.price : data[scrub];
@@ -381,27 +384,39 @@ export default function TokenScreen() {
       )}
 
       {/* Earn banner */}
-      {/* Glides with the Breakdown above as it opens and closes. */}
+      {/* Glides with the Breakdown above as it opens and closes. Earning isn't live
+          outside test mode (lib/surface SOON): the banner stays, dimmed with Coming soon
+          and no sample rate, and does nothing. */}
       {vault && (
         <Animated.View layout={RESIZE}>
           <PressableScale
+            accessibilityRole="button"
+            accessibilityState={{ disabled: SOON.earn }}
+            disabled={SOON.earn}
             scaleTo={0.98}
             onPress={() => {
               tap();
               router.push({ pathname: '/earn/[symbol]', params: { symbol } });
             }}
-            style={[styles.earn, styles.gutterMargin]}
+            style={[styles.earn, styles.gutterMargin, SOON.earn && styles.soon]}
           >
             <View style={styles.earnIcon}>
               <Icon name="leaf" size={18} color={c.accentText} />
             </View>
             <View style={styles.flex}>
-              <Text style={styles.earnTitle}>
-                Earn <Text style={styles.accent}>{vault.apy.toFixed(2)}% APY</Text> on your {symbol}
+              {SOON.earn ? (
+                <Text style={styles.earnTitle}>Earn on your {symbol}</Text>
+              ) : (
+                <Text style={styles.earnTitle}>
+                  Earn <Text style={styles.accent}>{vault.apy.toFixed(2)}% APY</Text> on your{' '}
+                  {symbol}
+                </Text>
+              )}
+              <Text style={styles.earnHint}>
+                {SOON.earn ? COMING_SOON : 'No lockup. Withdraw any time.'}
               </Text>
-              <Text style={styles.earnHint}>No lockup. Withdraw any time.</Text>
             </View>
-            <Icon name="chevronRight" size={13} color={c.textSecondary} />
+            {SOON.earn ? null : <Icon name="chevronRight" size={13} color={c.textSecondary} />}
           </PressableScale>
         </Animated.View>
       )}
@@ -476,7 +491,7 @@ export default function TokenScreen() {
           </SkeletonReveal>
         </View>
       ) : (
-        !TEST_MODE && (
+        !sample && (
           <View style={[styles.section, styles.gutter]}>
             <Text style={styles.heading}>Stats</Text>
             <SkeletonReveal
@@ -589,6 +604,7 @@ function LinkPill({ icon, label, url }: { icon: IconName; label: string; url: st
 }
 
 const useStyles = makeStyles((c) => ({
+  soon: { opacity: SOON_OPACITY },
   flex: {
     flex: 1,
   },

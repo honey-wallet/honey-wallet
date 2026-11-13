@@ -37,6 +37,7 @@ pub mod pairing_store;
 pub mod portfolio;
 pub mod preparation;
 pub mod providers;
+pub mod push;
 pub mod reconciliation;
 pub mod redis_store;
 pub mod routes;
@@ -282,11 +283,11 @@ fn router(config: &Config, health: runtime::RuntimeHealth, services: RouterServi
         .merge(routes::aave::router(identity.clone(), aave))
         .merge(routes::morpho::router(identity.clone(), morpho))
         .merge(routes::hyperliquid::router(identity.clone(), redis.clone()))
-        .merge(routes::social::router(
-            identity.clone(),
-            market.clone(),
-            jar_dao,
+        .merge(push::after_writes(
+            routes::social::router(identity.clone(), market.clone(), jar_dao),
+            push_sender(identity.as_ref()),
         ))
+        .merge(routes::push::router(identity.clone()))
         .merge(routes::stealth_jars::router(
             identity.clone(),
             redis.clone(),
@@ -357,6 +358,16 @@ fn confidential_intents_router(
             Router::new()
         }
     }
+}
+
+/// Remote push for inbox events; off unless `EXPO_PUSH_ENABLED=1` and Postgres is up.
+fn push_sender(identity: Option<&identity::Identity>) -> Option<std::sync::Arc<push::Push>> {
+    let pool = identity?.pool().clone();
+    push::Push::from_env(pool)
+        .map_err(|error| tracing::error!(%error, "push notifications disabled"))
+        .ok()
+        .flatten()
+        .map(std::sync::Arc::new)
 }
 
 /// Real jar buys through NEAR Intents; needs market data for prices and the cap.

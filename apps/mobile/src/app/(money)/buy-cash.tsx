@@ -13,9 +13,10 @@ import { SkeletonBar, useFirstLoad } from '@/components/motion/Skeleton';
 import { TextSwap } from '@/components/motion/TextSwap';
 import { PillButton } from '@/components/onboarding/PillButton';
 import { DemoMoneyNotice } from '@/components/savings/DemoMoneyNotice';
+import { ComingSoonSheet } from '@/components/sheets/ComingSoon';
 import { Copyable } from '@/components/sheets/Details';
 import { FailurePage } from '@/components/sheets/FailurePage';
-import { closeSheet, SHEET, SheetScreen, SheetText, StatRow } from '@/components/sheets/Sheet';
+import { closeSheet, SHEET, SheetScreen, StatRow } from '@/components/sheets/Sheet';
 import { finishDemo, SuccessPage } from '@/components/sheets/SuccessPage';
 import { FlowTray, InlineTray } from '@/components/sheets/Tray';
 import { applyKey, Keypad, TypedAmount } from '@/components/wallet/Keypad';
@@ -26,6 +27,7 @@ import { success, tap } from '@/lib/haptics';
 import { LOADS } from '@/lib/loads';
 import { formatBalance, formatPrice, formatUsd, MARKET, marketOf } from '@/lib/mock-wallet';
 import { type ProposalAction, propose, useSigner } from '@/lib/multisig';
+import { leaveSheetTo } from '@/lib/navigation';
 import { markDemoFunded, useOnboarding } from '@/lib/onboarding';
 import { followFix, useFailure } from '@/lib/outcomes';
 import { isWeb } from '@/lib/platform';
@@ -47,24 +49,22 @@ const QUICK = [50, 100, 250];
 /** Buy crypto with cash, or sell it for cash: amount, then a review. Demo only. */
 export default function BuyCashSheet() {
   const { wallet } = useWalletView();
+  const { mode } = useLocalSearchParams<{ mode?: string }>();
   if (!wallet.demo) {
-    // No card or bank provider: offer what works today, without advertising what doesn't.
-    return (
-      <SheetScreen
-        title="Add money"
-        size="fill"
-        footer={
-          <PillButton
-            label="Receive crypto instead"
-            onPress={() => {
-              tap();
-              router.replace('/receive');
-            }}
-          />
-        }
-      >
-        <SheetText lead>Send crypto to Honey from an exchange or another wallet.</SheetText>
-      </SheetScreen>
+    // No card or bank provider (lib/surface SOON): a link straight here says so and
+    // offers what works today.
+    return mode === 'sell' ? (
+      <ComingSoonSheet
+        icon="bank"
+        hint="Selling for cash is coming soon."
+        action={{ label: 'Swap tokens', onPress: () => leaveSheetTo('/trade', { navigate: true }) }}
+      />
+    ) : (
+      <ComingSoonSheet
+        icon="bank"
+        hint="Buying with a card or bank is coming soon."
+        action={{ label: 'Receive crypto', onPress: () => router.replace('/receive') }}
+      />
     );
   }
   return <DemoBuyCashSheet />;

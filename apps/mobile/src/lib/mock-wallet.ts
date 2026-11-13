@@ -65,6 +65,10 @@ export type MarketToken = {
   /** 24h volume, in USD. */
   volume: number;
   marketCap: number;
+  /** Logo (https) from the live list, for tokens without bundled art. */
+  logo?: string | null;
+  /** Wrapped copies shown as this row (cbBTC and WBTC under BTC), for search and saved tokens. */
+  aliases?: string[];
 };
 
 /** Sample market rows for test mode; outside it their names and order seed the live list. */
@@ -192,8 +196,10 @@ export type Activity = {
   swap?: { from: [string, string]; to: [string, string] };
   month: string;
   date: string;
-  /** Live rows: the transaction on the chain's explorer, opened instead of the fixture detail. */
+  /** Live rows: the transaction on the chain's explorer (linked from the detail sheet). */
   url?: string;
+  /** The row's heading when the kind's own word doesn't fit ("Jar buy", "Swap refunded"). */
+  title?: string;
 };
 
 export const ACTIVITY: Activity[] = [
@@ -302,7 +308,8 @@ export function formatBalance(value: number) {
 
 /** Prices keep sub-dollar precision, e.g. $0.999 or $80,649.68. */
 export function formatPrice(value: number) {
-  return value < 1 ? `$${Number(value.toPrecision(3))}` : formatUsd(value);
+  // Just under a dollar reads as one, in cents ($1.00, not "$1" next to "$0.999").
+  return value < 0.995 ? `$${Number(value.toPrecision(3))}` : formatUsd(value);
 }
 
 // ---------------------------------------------------------------------------

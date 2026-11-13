@@ -24,6 +24,7 @@ import {
   series,
 } from '@/lib/mock-wallet';
 import { useProfile } from '@/lib/profile';
+import { addMoneyHref } from '@/lib/surface';
 import { useWalletView } from '@/lib/wallet-view';
 
 /**
@@ -75,7 +76,7 @@ export default function SharePortfolioSheet() {
           hint="Add money first, then share how it's doing."
           action={{
             label: 'Add money',
-            onPress: () => router.replace({ pathname: '/buy-cash', params: { symbol: 'USDC' } }),
+            onPress: () => router.replace(addMoneyHref('USDC')),
           }}
         />
       </SheetScreen>

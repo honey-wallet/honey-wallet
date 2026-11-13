@@ -63,6 +63,8 @@ import type {
   JarBuyStatus,
   JarDaoBuyRequest,
   JarDaoDepositCheck,
+  JarDaoRelayRequest,
+  JarDaoRelayResult,
   JarDaoSponsorRequest,
   JarDaoSponsorResult,
   JarDaoState,
@@ -72,6 +74,8 @@ import type {
   PairMessage,
   PairSlot,
   PortfolioAddresses,
+  PushTokenRequest,
+  PushTokenResult,
   SocialFeed,
   SocialFeedScope,
   SocialGroup,
@@ -356,6 +360,38 @@ export function createApiClient({ baseUrl, fetch: fetchImpl = fetch }: ApiClient
         throw error;
       }
     },
+    /**
+     * Asks Honey to pay the gas of a group member's own signed call (NEP-366). Null
+     * while Honey isn't paying (503 `relayer_off`, or past the daily budget): the member
+     * pays their own. 400 when the call isn't one a group jar makes.
+     */
+    jarDaoRelay: async (token: string, input: JarDaoRelayRequest, init?: RequestInit) => {
+      try {
+        return await request<JarDaoRelayResult>(
+          '/api/v1/jar-dao/relay',
+          authorizedJson(
+            token,
+            { groupId: input.groupId, signedDelegate: input.signedDelegate },
+            init,
+          ),
+        );
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 503) return null;
+        throw error;
+      }
+    },
+    /** Registers this phone's Expo push token for the signed-in person. */
+    registerPushToken: (token: string, input: PushTokenRequest, init?: RequestInit) =>
+      request<PushTokenResult>(
+        '/api/v1/push/tokens',
+        authorizedJson(token, { token: input.token, platform: input.platform }, init),
+      ),
+    /** Forgets this phone's push token (signing out). */
+    removePushToken: (token: string, pushToken: string, init?: RequestInit) =>
+      request<PushTokenResult>(
+        '/api/v1/push/tokens/remove',
+        authorizedJson(token, { token: pushToken }, init),
+      ),
     startThesis: (token: string, input: StartThesis, init?: RequestInit) =>
       validated('/api/v1/theses', isThesisStarted, authorizedJson(token, input, init)),
     thesis: (token: string, runId: string, init?: RequestInit) =>

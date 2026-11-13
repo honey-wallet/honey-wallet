@@ -12,7 +12,7 @@ import { LOADS } from '@/lib/loads';
 import { formatUsd } from '@/lib/mock-wallet';
 import { leaveSheetTo } from '@/lib/navigation';
 import { HIDDEN_AMOUNT, useSettings } from '@/lib/settings';
-import { TEST_MODE } from '@/lib/test-mode';
+import { COMING_SOON, SOON, SOON_OPACITY } from '@/lib/surface';
 import { useWalletRequired } from '@/lib/wallet-gate';
 import { useWalletView } from '@/lib/wallet-view';
 import { makeStyles, radius, useTheme } from '@/theme';
@@ -20,13 +20,13 @@ import { makeStyles, radius, useTheme } from '@/theme';
 /** Ways to add money, drawn as home's honey action tiles. */
 const DEPOSITS: { icon: IconName; label: string; hint: string; href: Href; soon?: boolean }[] = [
   // No card or bank provider is connected outside test mode: the tile stays, dimmed and
-  // saying Coming soon, and does nothing (2026-11-13).
+  // saying Coming soon, and does nothing (lib/surface SOON).
   {
     icon: 'bank',
     label: 'Buy with cash',
-    hint: TEST_MODE ? 'Card or bank' : 'Coming soon',
+    hint: SOON.buyCash ? COMING_SOON : 'Card or bank',
     href: '/buy-cash',
-    soon: !TEST_MODE,
+    soon: SOON.buyCash,
   },
   { icon: 'qr', label: 'Receive crypto', hint: 'Wallet or exchange', href: '/receive' },
 ];
@@ -134,7 +134,7 @@ function BalanceSheet() {
 }
 
 const useStyles = makeStyles((c) => ({
-  tileSoon: { opacity: 0.45 },
+  tileSoon: { opacity: SOON_OPACITY },
   label: {
     color: c.textSecondary,
     fontSize: 15,

@@ -9,6 +9,7 @@ import { EmptyState, ScreenHeader } from '@/components/wallet/parts';
 import { SearchField } from '@/components/wallet/SearchField';
 import { tap } from '@/lib/haptics';
 import { isWeb } from '@/lib/platform';
+import { COPY_FEES } from '@/lib/surface';
 import { warningOn } from '@/lib/warnings';
 import { makeStyles, useTheme } from '@/theme';
 
@@ -36,7 +37,7 @@ const FAQ: { q: string; a: string }[] = [
   {
     q: 'Which chains are supported?',
     // a: 'Honey supports Ethereum, Solana, Tron and the XRP Ledger, with more on the way. Switch networks from the network picker on the home screen.',
-    a: 'Honey supports Solana, and Ethereum, Base and other EVM networks. Switch networks from the network picker on the home screen.',
+    a: 'Honey supports Solana, NEAR, and Ethereum, Base and Arbitrum. Switch networks from the network picker on the home screen.',
   },
   {
     q: 'How do I contact support?',
@@ -56,7 +57,10 @@ const JAR_FAQ: { q: string; a: string }[] = [
   },
   {
     q: 'What does copying cost?',
-    a: 'The creator’s fee is a share of your profit, and nothing on a loss. Network and route fees show before you approve.',
+    // Copy fees aren't charged yet (lib/surface COPY_FEES).
+    a: COPY_FEES
+      ? 'The creator’s fee is a share of your profit, and nothing on a loss. Network and route fees show before you approve.'
+      : 'Only the network and route fees, and they show before you approve.',
   },
   ...(warningOn('jarGuideSmallBuys')
     ? [

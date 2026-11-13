@@ -66,6 +66,7 @@ import { isWeb } from '@/lib/platform';
 import { HIDDEN_AMOUNT, updateSettings, useSettings } from '@/lib/settings';
 import { EXTENSION, SHARED_WALLETS, SOCIAL, WALLET } from '@/lib/surface';
 import { useTabReselect } from '@/lib/tab-reselect';
+import { TEST_MODE } from '@/lib/test-mode';
 import { useThesisJars } from '@/lib/thesis';
 import { showToast } from '@/lib/toast';
 import { requireWallet, useHasWallet } from '@/lib/wallet-gate';
@@ -171,8 +172,12 @@ function HomeScreen() {
   // review: no trading in the extension, so the browser never shows the Trades tab.
   // const sections = SECTIONS.filter((s) => s !== 'Trades' || (!isWeb && hasTrades && !empty));
   // Jars are the phone's (Honey for Chrome is only a wallet), and a shared wallet has none.
+  // NFTs: Honey doesn't read collectibles from chain yet (no NFT indexer), so only test
+  // mode's sample wallets have any; a real wallet gets no empty NFTs tab.
+  const sampleNfts = TEST_MODE && !('live' in view) && !multisig && !empty;
   const sections = SECTIONS.filter(
-    (s) => s !== 'Trades' && (s !== 'Jars' || (!multisig && SOCIAL)),
+    (s) =>
+      s !== 'Trades' && (s !== 'Jars' || (!multisig && SOCIAL)) && (s !== 'NFTs' || sampleNfts),
   );
   void hasTrades;
   // Switching to a shared wallet (which can't trade) hides Trades; fall back to Tokens.
@@ -277,9 +282,11 @@ function HomeScreen() {
                     <SkeletonBar width={190} height={34} radius={10} />
                     <SkeletonBar width={150} height={14} />
                   </View>
-                  <View style={styles.sparkSkeleton}>
-                    <SkeletonChart height={60} inset={4} />
-                  </View>
+                  {'live' in view ? null : (
+                    <View style={styles.sparkSkeleton}>
+                      <SkeletonChart height={60} inset={4} />
+                    </View>
+                  )}
                 </View>
               }
             >
@@ -306,17 +313,17 @@ function HomeScreen() {
                     <Icon name="chevronRight" size={11} color={c.textSecondary} />
                   </PressableScale>
                 </View>
-                <PressableScale
-                  accessibilityLabel="Portfolio"
-                  scaleTo={0.97}
-                  onPress={() => openPortfolio()}
-                >
-                  <Sparkline
-                    data={empty || 'live' in view ? FLAT_DAY : BALANCE_HISTORY}
-                    width={116}
-                    height={60}
-                  />
-                </PressableScale>
+                {/* A real wallet has no balance history yet (no indexer): no sparkline
+                    rather than a flat line. Today's change above is real (24h prices). */}
+                {'live' in view ? null : (
+                  <PressableScale
+                    accessibilityLabel="Portfolio"
+                    scaleTo={0.97}
+                    onPress={() => openPortfolio()}
+                  >
+                    <Sparkline data={empty ? FLAT_DAY : BALANCE_HISTORY} width={116} height={60} />
+                  </PressableScale>
+                )}
               </View>
             </SkeletonReveal>
           </Rise>
@@ -530,18 +537,8 @@ function HomeScreen() {
                   )}
                 </SkeletonReveal>
               )}
-              {/* The demo collectibles and positions belong to your own wallets (shared wallets
-                  can't trade, so Trading never shows for them). */}
-              {shownSection === 'NFTs' &&
-                (multisig || empty ? (
-                  <EmptyState
-                    icon="image"
-                    title="No NFTs yet"
-                    hint="Collectibles you own will show up here."
-                  />
-                ) : (
-                  <NftGallery />
-                ))}
+              {/* Sample collectibles: test mode's own wallets only (see sampleNfts). */}
+              {shownSection === 'NFTs' && <NftGallery />}
               {shownSection === 'Jars' && <HomeJars />}
               {shownSection === 'Activity' && <ActivitySection />}
               {/* {shownSection === 'Trades' && <TradesList />} */}

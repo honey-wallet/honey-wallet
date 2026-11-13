@@ -4,6 +4,7 @@ import { type ReactNode, useEffect } from 'react';
 import { Linking, Text, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { Icon, type IconName } from '@/components/Icon';
+import { PickIcon, SplitRing } from '@/components/jars/JarParts';
 import { PressableRow } from '@/components/motion/PressableRow';
 import { PressableScale } from '@/components/motion/PressableScale';
 import { fadeIn, fadeOut } from '@/components/motion/reducedFade';
@@ -17,7 +18,7 @@ import { Sticky } from '@/components/motion/Sticky';
 import { useHasMounted } from '@/components/motion/useHasMounted';
 import { MemberAvatar, NetworkBadge } from '@/components/wallet/MultisigParts';
 import { EmptyState, PushedScreen, TokenIcon } from '@/components/wallet/parts';
-import { groups } from '@/lib/group-jars';
+import { groupPicks, groups } from '@/lib/group-jars';
 import { tap } from '@/lib/haptics';
 import { markInboxRead, useInbox, useInboxPolling } from '@/lib/inbox';
 import { LOADS } from '@/lib/loads';
@@ -206,7 +207,8 @@ const GROUP_BADGE: Record<SocialInboxItem['kind'], IconName> = {
 function GroupRow({ item }: { item: SocialInboxItem }) {
   const styles = useStyles();
   const c = useTheme();
-  const name = item.groupId ? groups.get()[item.groupId]?.name : undefined;
+  const g = item.groupId ? groups.get()[item.groupId] : undefined;
+  const name = g?.name;
   return (
     <PressableRow
       accessibilityRole="button"
@@ -223,9 +225,13 @@ function GroupRow({ item }: { item: SocialInboxItem }) {
     >
       <Lead
         face={
-          <View style={styles.well}>
-            <Icon name="jar" size={22} color={c.accentText} />
-          </View>
+          g ? (
+            <GroupFace picks={groupPicks(g)} />
+          ) : (
+            <View style={styles.well}>
+              <Icon name="jar" size={22} color={c.accentText} />
+            </View>
+          )
         }
         badge={{ icon: GROUP_BADGE[item.kind], color: c.success }}
       />
@@ -239,6 +245,17 @@ function GroupRow({ item }: { item: SocialInboxItem }) {
         <Text style={styles.detail}>{item.text}</Text>
       </View>
     </PressableRow>
+  );
+}
+
+/** A group jar's face: its split as a ring around its biggest token, as on the Jars list. */
+function GroupFace({ picks }: { picks: ReturnType<typeof groupPicks> }) {
+  const top = [...picks].sort((a, b) => b.weight - a.weight)[0];
+  if (!top) return null;
+  return (
+    <SplitRing slices={picks} size={42} stroke={4} tight>
+      <PickIcon pick={top} size={30} />
+    </SplitRing>
   );
 }
 

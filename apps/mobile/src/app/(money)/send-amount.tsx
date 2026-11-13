@@ -39,7 +39,14 @@ import {
 } from '@/lib/mock-wallet';
 import { type ProposalAction, propose, useSigner } from '@/lib/multisig';
 import { followFix, useFailure } from '@/lib/outcomes';
-import { prepareSend, recipientChains, type SendPlan, type SendResult } from '@/lib/send';
+import {
+  prepareSend,
+  recipientChains,
+  type SendPlan,
+  type SendResult,
+  type SendToken,
+} from '@/lib/send';
+import { addMoneyHref } from '@/lib/surface';
 import { showErrorToast } from '@/lib/toast';
 import { txReceipt } from '@/lib/tx-receipt';
 import { useWalletView } from '@/lib/wallet-view';
@@ -112,6 +119,8 @@ export default function SendAmountSheet() {
 
   const token =
     sendable.find((h) => h.symbol === symbol && h.chain === chain) ?? sendable[0] ?? SENDABLE[0];
+  // Live NEAR tokens beyond NEAR and USDC carry their contract (lib/portfolio toHoldings).
+  const sendToken = (token as { token?: SendToken }).token;
   const price = token.usd / token.amount;
   const value = Number(amount) || 0;
   const tokenValue = unit === 'usd' ? value / price : value;
@@ -170,7 +179,12 @@ export default function SendAmountSheet() {
           chain,
           symbol,
           to: recipient.address,
-          amount: trimNumber(tokenValue, symbol === 'USDC' ? 6 : 8),
+          amount: trimNumber(
+            tokenValue,
+            symbol === 'USDC' ? 6 : Math.min(8, sendToken?.decimals ?? 8),
+          ),
+          // A NEAR token (RHEA, wNEAR…): paid by its contract, from the balance read.
+          token: sendToken,
         }),
       );
       setPage('review');
@@ -255,7 +269,7 @@ export default function SendAmountSheet() {
           action={
             signer.multisig
               ? undefined
-              : { label: 'Add money', onPress: () => router.replace('/buy-cash') }
+              : { label: 'Add money', onPress: () => router.replace(addMoneyHref()) }
           }
         />
       </SheetScreen>

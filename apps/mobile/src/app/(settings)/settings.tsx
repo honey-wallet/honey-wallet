@@ -22,7 +22,7 @@ import { isWeb } from '@/lib/platform';
 import { setProfile, useProfile } from '@/lib/profile';
 import { JAR_VISIBILITY, updateSettings, useSettings } from '@/lib/settings';
 import { privacyOf, type SocialProfile, setPrivacy, socialError, useSocialMe } from '@/lib/social';
-import { SOCIAL } from '@/lib/surface';
+import { COPY_FEES, SOCIAL, UNWIRED_SETTINGS } from '@/lib/surface';
 import { showErrorToast, showToast } from '@/lib/toast';
 import { requireSignIn } from '@/lib/wallet-gate';
 import { useActiveWallet } from '@/lib/wallets';
@@ -195,13 +195,16 @@ export default function SettingsScreen() {
               onPress={open('/settings-jar-visibility')}
               accessory="chevron"
             />
-            <SheetRow
-              icon="pie"
-              title="Your cut on copies"
-              value={`${settings.jarCopyFee}%`}
-              onPress={open('/settings-copy-fee')}
-              accessory="chevron"
-            />
+            {/* No copy fee is charged yet (lib/surface COPY_FEES). */}
+            {COPY_FEES ? (
+              <SheetRow
+                icon="pie"
+                title="Your cut on copies"
+                value={`${settings.jarCopyFee}%`}
+                onPress={open('/settings-copy-fee')}
+                accessory="chevron"
+              />
+            ) : null}
             <SheetRow
               icon="trade"
               title="Max slippage"
@@ -284,20 +287,26 @@ export default function SettingsScreen() {
             accessory="chevron"
           />
         )}
-        <SheetRow
-          icon="currency"
-          title="Local currency"
-          value={settings.currency}
-          onPress={open('/settings-currency')}
-          accessory="chevron"
-        />
-        <SheetRow
-          icon="language"
-          title="Language"
-          value={settings.language}
-          onPress={open('/settings-language')}
-          accessory="chevron"
-        />
+        {/* Amounts always print in USD and there are no translations yet: hidden until
+            they're wired (lib/surface UNWIRED_SETTINGS). */}
+        {UNWIRED_SETTINGS ? (
+          <>
+            <SheetRow
+              icon="currency"
+              title="Local currency"
+              value={settings.currency}
+              onPress={open('/settings-currency')}
+              accessory="chevron"
+            />
+            <SheetRow
+              icon="language"
+              title="Language"
+              value={settings.language}
+              onPress={open('/settings-language')}
+              accessory="chevron"
+            />
+          </>
+        ) : null}
         <SheetRow
           icon="chart"
           title="Balances and activity"
@@ -398,7 +407,7 @@ export default function SettingsScreen() {
         <SheetRow
           icon="advanced"
           title="Advanced settings"
-          subtitle="Testnet, network cost and app data"
+          subtitle={UNWIRED_SETTINGS ? 'Testnet, network cost and app data' : 'App data'}
           onPress={open('/settings-advanced')}
           accessory="chevron"
         />

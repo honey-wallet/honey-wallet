@@ -6,17 +6,30 @@ import { Icon } from '@/components/Icon';
 import { PressableRow } from '@/components/motion/PressableRow';
 import { SkeletonBar, useFirstLoad } from '@/components/motion/Skeleton';
 import { TextSwap } from '@/components/motion/TextSwap';
-import { HeaderIconButton, PushedScreen } from '@/components/wallet/parts';
+import { EmptyState, HeaderIconButton, PushedScreen } from '@/components/wallet/parts';
 import { tap } from '@/lib/haptics';
 import { LOADS } from '@/lib/loads';
 import { shortAddress } from '@/lib/mock-wallet';
 import { useProfile } from '@/lib/profile';
+import { UNWIRED_SETTINGS } from '@/lib/surface';
 import { showToast } from '@/lib/toast';
 import { allWallets, useWallets } from '@/lib/wallets';
 import { makeStyles, useTheme } from '@/theme';
 
+/** Smart wallets are a demo state (lib/surface UNWIRED_SETTINGS): a link straight here says so. */
+export default function SmartWalletRoute() {
+  if (!UNWIRED_SETTINGS) {
+    return (
+      <PushedScreen title="Smart wallet" fallback="/settings">
+        <EmptyState icon="wallet" title="Not available yet" hint="Smart wallets are coming soon." />
+      </PushedScreen>
+    );
+  }
+  return <SmartWalletScreen />;
+}
+
 /** Turn smart wallet features on or off for each of the user's wallets. */
-export default function SmartWalletScreen() {
+function SmartWalletScreen() {
   const styles = useStyles();
   const c = useTheme();
   const profile = useProfile();

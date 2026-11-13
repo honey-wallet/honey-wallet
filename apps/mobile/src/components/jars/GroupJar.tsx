@@ -3,6 +3,7 @@ import { useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { Text, View } from 'react-native';
 import { Icon } from '@/components/Icon';
+import { PressableRow } from '@/components/motion/PressableRow';
 import { PillButton } from '@/components/onboarding/PillButton';
 import { SheetRow, StatRow } from '@/components/sheets/Sheet';
 import { dollars, membersIn } from '@/lib/group-jar-core';
@@ -230,28 +231,40 @@ export function GroupJarSection({ state }: { state: GroupJarState }) {
             </View>
           ) : (
             <>
+              {/* Same rows as Your position above, so the page reads as one list. */}
               {n > 1 ? (
-                <SheetRow
-                  icon="arrowDown"
-                  title="Cash out together"
-                  subtitle="Close the jar and split it"
-                  accessory="chevron"
+                <PressableRow
+                  accessibilityRole="button"
+                  accessibilityLabel="Cash out together. Close the jar and split it."
                   onPress={() => {
                     tap();
                     setConfirm('cashout');
                   }}
-                />
+                  style={styles.action}
+                >
+                  <StatRow
+                    icon={<Icon name="arrowDown" size={15} color={c.textSecondary} />}
+                    label="Cash out together"
+                    value={<Icon name="chevronRight" size={12} color={c.textSecondary} />}
+                  />
+                </PressableRow>
               ) : null}
-              <SheetRow
-                icon="minusCircle"
-                title="Leave group"
-                subtitle={`Take your ${dollars(slice)} out`}
-                destructive
+              <PressableRow
+                accessibilityRole="button"
+                accessibilityLabel={`Leave group. Take your ${dollars(slice)} out.`}
                 onPress={() => {
                   tap();
                   setConfirm('leave');
                 }}
-              />
+                style={styles.action}
+              >
+                <StatRow
+                  destructive
+                  icon={<Icon name="minusCircle" size={15} color={c.error} />}
+                  label="Leave group"
+                  value={<Text style={styles.actionValue}>{dollars(slice)}</Text>}
+                />
+              </PressableRow>
             </>
           )}
         </View>
@@ -264,6 +277,9 @@ const useStyles = makeStyles((c) => ({
   root: { gap: 28 },
   flex: { flex: 1 },
   heading: { marginBottom: 6, color: c.textSecondary, fontSize: 15 },
+  // The press highlight runs edge to edge; the row stays on the page's gutter.
+  action: { marginHorizontal: -20, paddingHorizontal: 20 },
+  actionValue: { color: c.textSecondary, fontSize: 16 },
   confirm: { gap: 6, paddingVertical: 8 },
   confirmTitle: { color: c.text, fontSize: 17, fontWeight: '600' },
   confirmHint: { color: c.textSecondary, fontSize: 14, lineHeight: 20 },

@@ -26,7 +26,14 @@ import { hostOfUrl, toUrl } from '@/lib/browser';
 import { POSITIONS } from '@/lib/collectibles';
 import { tap } from '@/lib/haptics';
 import { LOADS } from '@/lib/loads';
-import { useMarketList, useMarketListStatus, useMarketSettled } from '@/lib/market';
+import {
+  findMarketToken,
+  isDollar,
+  matchesQuery,
+  useMarketList,
+  useMarketListStatus,
+  useMarketSettled,
+} from '@/lib/market';
 import {
   CHAINS,
   type Chain,
@@ -115,7 +122,7 @@ const removeOut = lazy(() =>
  */
 
 /** Search's cards before you've saved a token: the best-known ones. */
-const SUGGESTED_FAVORITES = ['ETH', 'cbBTC', 'SOL', 'NEAR'];
+const SUGGESTED_FAVORITES = ['BTC', 'ETH', 'SOL', 'NEAR'];
 
 /** Search's "Earn more" cards; removed for now (2026-11-13). */
 const EARN_SECTION = false;
@@ -146,7 +153,8 @@ export default function SearchScreen() {
   const [dragging, setDragging] = useState(false);
   /** A favourite's card: price and move; while editing, a − to remove it. */
   const favoriteCard = (symbol: string) => {
-    const token = marketList.find((t) => t.symbol === symbol);
+    // A token saved as a wrapped copy (cbBTC) shows as its coin's row (Bitcoin).
+    const token = findMarketToken(marketList, symbol);
     if (!token) return null;
     return (
       <>
@@ -156,7 +164,7 @@ export default function SearchScreen() {
           style={styles.favorite}
         >
           <View style={styles.favoriteName}>
-            <TokenIcon symbol={token.symbol} size={22} />
+            <TokenIcon symbol={token.symbol} size={22} uri={token.logo} />
             <Text style={styles.favoriteSymbol}>{token.symbol}</Text>
           </View>
           <Text style={styles.favoritePrice} numberOfLines={1}>
@@ -171,7 +179,7 @@ export default function SearchScreen() {
             scaleTo={0.97}
             onPress={() => {
               tap();
-              toggleSavedToken(token.symbol);
+              toggleSavedToken(symbol);
             }}
             style={styles.remove}
           >
@@ -211,9 +219,14 @@ export default function SearchScreen() {
   // A wallet that's never had money in it isn't earning yet.
   const { empty } = useWalletView();
 
-  const results = marketList.filter(
-    (t) => t.name.toLowerCase().includes(q) || t.symbol.toLowerCase().includes(q),
-  );
+  // By name, symbol, or a wrapped copy's symbol ("cbBTC" finds Bitcoin); exact symbols first.
+  const results = marketList
+    .filter((t) => matchesQuery(t, q))
+    .sort(
+      (a, b) =>
+        Number(b.symbol.toLowerCase() === q) - Number(a.symbol.toLowerCase() === q) ||
+        Number(b.name.toLowerCase().startsWith(q)) - Number(a.name.toLowerCase().startsWith(q)),
+    );
   const jarResults =
     q && SOCIAL
       ? publicJars.filter(
@@ -224,7 +237,11 @@ export default function SearchScreen() {
   useEffect(() => {
     if (SOCIAL && q && !publicJars.length) void syncPublicJars();
   }, [!!q]);
-  const top = marketList.filter((t) => chain === 'All' || t.chain === chain).sort(COMPARE[sort]);
+  // Dollars aren't something to discover: stablecoins stay findable by search but sit out
+  // of Top tokens, or they'd hold the top places on volume.
+  const top = marketList
+    .filter((t) => (chain === 'All' || t.chain === chain) && !isDollar(t))
+    .sort(COMPARE[sort]);
 
   return (
     <TabScreen>
@@ -525,7 +542,7 @@ function MarketRow({ token, rank }: { token: MarketToken; rank?: number }) {
   return (
     <PressableRow onPress={() => openToken(token.symbol)} style={styles.row}>
       {rank ? <Text style={styles.rank}>{rank}</Text> : null}
-      <TokenIcon symbol={token.symbol} size={40} />
+      <TokenIcon symbol={token.symbol} size={40} uri={token.logo} />
       <View style={styles.flex}>
         <Text style={styles.rowTitle} numberOfLines={1}>
           {token.name}
@@ -1014,10 +1031,12 @@ const useStyles = makeStyles((c) => ({
     justifyContent: 'center',
     backgroundColor: c.accentSurface,
   },
+  // Room for two digits on one line, and the numbers line up down the list.
   rank: {
-    width: 18,
+    width: 24,
     color: c.textSecondary,
     fontSize: 15,
+    fontVariant: ['tabular-nums'],
   },
   rowTitle: {
     color: c.text,
@@ -1040,7 +1059,7 @@ const useStyles = makeStyles((c) => ({
     paddingVertical: 10,
   },
   skeletonRank: {
-    width: 18,
+    width: 24,
   },
   skeletonLines: {
     flex: 1,

@@ -1,4 +1,9 @@
-import { nearTransferOutcome, signNearCall } from '@honey-wallet/keyring';
+import {
+  type DelegateAction,
+  nearTransferOutcome,
+  signDelegateAction,
+  signNearCall,
+} from '@honey-wallet/keyring';
 import type { Prepared, Rpc } from '@/lib/jar-dao-core';
 import { privateKeyOf } from '@/lib/vault';
 
@@ -27,4 +32,22 @@ export async function signAndSendNearCall(
   if (nearTransferOutcome(result, signed.hash, tx.signerId) !== 'success')
     throw new Error('The NEAR transaction failed');
   return signed.hash;
+}
+
+/**
+ * Signs a NEP-366 delegate action with the wallet's vault key (wiped right after), for
+ * Honey's relayer to send. Returns the borsh SignedDelegateAction, base64. Callers
+ * confirm with the owner first.
+ */
+export async function signNearDelegate(
+  walletId: string,
+  delegate: DelegateAction,
+  keyOf: typeof privateKeyOf = privateKeyOf,
+) {
+  const key = await keyOf(walletId, 'near');
+  try {
+    return signDelegateAction(key, delegate);
+  } finally {
+    key.fill(0);
+  }
 }

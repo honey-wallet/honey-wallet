@@ -9,7 +9,13 @@ import { PillButton } from '@/components/onboarding/PillButton';
 import { SheetRow, SheetScreen } from '@/components/sheets/Sheet';
 import { EmptyState } from '@/components/wallet/parts';
 import { tap } from '@/lib/haptics';
-import { seriesChange, useMarketList, useTokenChart, useTokenInfo } from '@/lib/market';
+import {
+  findMarketToken,
+  seriesChange,
+  useMarketList,
+  useTokenChart,
+  useTokenInfo,
+} from '@/lib/market';
 import { formatBalance, formatUsd, RANGES, type Range, series } from '@/lib/mock-wallet';
 import { TEST_MODE } from '@/lib/test-mode';
 import { showErrorToast } from '@/lib/toast';
@@ -24,7 +30,7 @@ export default function ShareTokenSheet() {
   const symbol = params.symbol ?? 'ETH';
   const range = params.range && RANGES.includes(params.range) ? params.range : '1D';
   // Live price and chart outside test mode (lib/market).
-  const market = useMarketList().find((t) => t.symbol === symbol);
+  const market = findMarketToken(useMarketList(), symbol);
   const chart = useTokenChart(symbol, range, !TEST_MODE);
   const logo = useTokenInfo(symbol, !TEST_MODE).info?.image;
   const { tokens } = useWalletView();

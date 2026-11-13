@@ -187,16 +187,33 @@ impl JarDao {
         member: &str,
         dao: &str,
     ) -> Result<DepositCheck, AppError> {
+        self.verify_deposit_via(tx_hash, member, dao, None).await
+    }
+
+    /// `verify_deposit`, for a deposit Honey's relayer sent for `member` (NEP-366) when
+    /// `relayer` names its account: the transaction is the relayer's, carrying the
+    /// member's signed delegate action.
+    pub async fn verify_deposit_via(
+        &self,
+        tx_hash: &str,
+        member: &str,
+        dao: &str,
+        relayer: Option<&str>,
+    ) -> Result<DepositCheck, AppError> {
         if !is_account(member) || !is_jar_dao(dao) || tx_hash.is_empty() || tx_hash.len() > 64 {
             return Err(AppError::BadRequest("invalid deposit reference".into()));
         }
+        let sender = relayer.unwrap_or(member);
         let result = self
             .rpc(
                 "tx",
-                json!({ "tx_hash": tx_hash, "sender_account_id": member, "wait_until": "FINAL" }),
+                json!({ "tx_hash": tx_hash, "sender_account_id": sender, "wait_until": "FINAL" }),
             )
             .await?;
-        check_deposit(&result, tx_hash, member, dao)
+        match relayer {
+            Some(relayer) => check_relayed_deposit(&result, tx_hash, member, dao, relayer),
+            None => check_deposit(&result, tx_hash, member, dao),
+        }
     }
 }
 
@@ -272,41 +289,100 @@ pub fn check_deposit(
     member: &str,
     dao: &str,
 ) -> Result<DepositCheck, AppError> {
-    let bad = || AppError::BadRequest("not a jar deposit".into());
     let tx = &result["transaction"];
     if tx["hash"] != tx_hash || tx["signer_id"] != member || tx["receiver_id"] != USDC_NEAR {
-        return Err(bad());
+        return Err(not_a_deposit());
     }
     // ft_transfer_call's final value is ft_resolve_transfer's: the amount intents.near
     // actually kept (base64 JSON string). A refunded deposit resolves to "0".
-    let used: u128 = result["status"]["SuccessValue"]
+    let used = resolved_amount(&result["status"]).ok_or_else(not_a_deposit)?;
+    let sent = deposit_call(&tx["actions"][0], dao).ok_or_else(not_a_deposit)?;
+    deposit_check(tx_hash, member, dao, used, sent)
+}
+
+/// `check_deposit` for a relayed deposit: the relayer's transaction to `member`,
+/// whose one `Delegate` action is the member's `ft_transfer_call` on USDC. The amount
+/// kept is ft_resolve_transfer's value, read from USDC's receipt (the delegate's
+/// inner call runs after the transaction's own receipt).
+pub fn check_relayed_deposit(
+    result: &Value,
+    tx_hash: &str,
+    member: &str,
+    dao: &str,
+    relayer: &str,
+) -> Result<DepositCheck, AppError> {
+    let tx = &result["transaction"];
+    if tx["hash"] != tx_hash || tx["signer_id"] != relayer || tx["receiver_id"] != member {
+        return Err(not_a_deposit());
+    }
+    if tx["actions"].as_array().map(Vec::len) != Some(1) {
+        return Err(not_a_deposit());
+    }
+    let delegate = &tx["actions"][0]["Delegate"]["delegate_action"];
+    if delegate["sender_id"] != member
+        || delegate["receiver_id"] != USDC_NEAR
+        || delegate["actions"].as_array().map(Vec::len) != Some(1)
+    {
+        return Err(not_a_deposit());
+    }
+    if result["status"].get("Failure").is_some() {
+        return Err(not_a_deposit());
+    }
+    let sent = deposit_call(&delegate["actions"][0], dao).ok_or_else(not_a_deposit)?;
+    let used = result["receipts_outcome"]
+        .as_array()
+        .and_then(|receipts| {
+            receipts
+                .iter()
+                .filter(|r| r["outcome"]["executor_id"] == USDC_NEAR)
+                .filter_map(|r| resolved_amount(&r["outcome"]["status"]))
+                .next_back()
+        })
+        .ok_or_else(not_a_deposit)?;
+    deposit_check(tx_hash, member, dao, used, sent)
+}
+
+fn not_a_deposit() -> AppError {
+    AppError::BadRequest("not a jar deposit".into())
+}
+
+/// A `SuccessValue` holding a JSON string of digits (a NEP-141 amount).
+fn resolved_amount(status: &Value) -> Option<u128> {
+    status["SuccessValue"]
         .as_str()
         .and_then(|v| STANDARD.decode(v).ok())
         .and_then(|v| serde_json::from_slice::<String>(&v).ok())
         .and_then(|v| v.parse().ok())
-        .ok_or_else(bad)?;
-    if used == 0 {
-        return Err(bad());
-    }
-    let call = &tx["actions"][0]["FunctionCall"];
+}
+
+/// The amount of an `ft_transfer_call` action to intents.near crediting `dao`.
+fn deposit_call(action: &Value, dao: &str) -> Option<u128> {
+    let call = &action["FunctionCall"];
     if call["method_name"] != "ft_transfer_call" {
-        return Err(bad());
+        return None;
     }
     let args: Value = call["args"]
         .as_str()
         .and_then(|a| STANDARD.decode(a).ok())
-        .and_then(|a| serde_json::from_slice(&a).ok())
-        .ok_or_else(bad)?;
+        .and_then(|a| serde_json::from_slice(&a).ok())?;
     if args["receiver_id"] != INTENTS || args["msg"] != dao {
-        return Err(bad());
+        return None;
     }
-    let sent: u128 = args["amount"]
+    args["amount"]
         .as_str()
         .filter(|a| !a.is_empty() && a.len() <= 38 && a.bytes().all(|b| b.is_ascii_digit()))
         .and_then(|a| a.parse().ok())
-        .ok_or_else(bad)?;
-    if used > sent {
-        return Err(bad());
+}
+
+fn deposit_check(
+    tx_hash: &str,
+    member: &str,
+    dao: &str,
+    used: u128,
+    sent: u128,
+) -> Result<DepositCheck, AppError> {
+    if used == 0 || used > sent {
+        return Err(not_a_deposit());
     }
     Ok(DepositCheck {
         tx_hash: tx_hash.into(),
@@ -423,5 +499,45 @@ mod tests {
         let mut failed = deposit_tx(DAO);
         failed["status"] = json!({ "Failure": {} });
         assert!(check_deposit(&failed, "h", MEMBER, DAO).is_err());
+    }
+
+    fn relayed_deposit(msg: &str, used: &str) -> Value {
+        let direct = deposit_tx_used(msg, "5000000");
+        let call = direct["transaction"]["actions"][0].clone();
+        json!({
+            "status": { "SuccessValue": "" },
+            "transaction": {
+                "hash": "h", "signer_id": "relayer.near", "receiver_id": MEMBER,
+                "actions": [{ "Delegate": { "delegate_action": {
+                    "sender_id": MEMBER, "receiver_id": USDC_NEAR, "actions": [call],
+                    "nonce": 5, "max_block_height": 9, "public_key": "ed25519:x"
+                }, "signature": "ed25519:y" } }]
+            },
+            "receipts_outcome": [
+                { "outcome": { "executor_id": MEMBER, "status": { "SuccessReceiptId": "r" } } },
+                { "outcome": { "executor_id": USDC_NEAR, "status": { "SuccessReceiptId": "s" } } },
+                { "outcome": { "executor_id": INTENTS,
+                               "status": { "SuccessValue": STANDARD.encode("\"0\"") } } },
+                { "outcome": { "executor_id": USDC_NEAR,
+                               "status": { "SuccessValue": STANDARD.encode(json!(used).to_string()) } } }
+            ]
+        })
+    }
+
+    #[test]
+    fn verifies_a_relayed_deposit_into_the_jar() {
+        let relayed = relayed_deposit(DAO, "5000000");
+        let ok = check_relayed_deposit(&relayed, "h", MEMBER, DAO, "relayer.near").unwrap();
+        assert_eq!(ok.amount, "5000000");
+        // Only Honey's relayer, for this member, into this jar, and kept.
+        assert!(check_relayed_deposit(&relayed, "h", MEMBER, DAO, "other.near").is_err());
+        assert!(check_relayed_deposit(&relayed, "h", "b.near", DAO, "relayer.near").is_err());
+        let other = relayed_deposit("other.sputnik-dao.near", "5000000");
+        assert!(check_relayed_deposit(&other, "h", MEMBER, DAO, "relayer.near").is_err());
+        let refunded = relayed_deposit(DAO, "0");
+        assert!(check_relayed_deposit(&refunded, "h", MEMBER, DAO, "relayer.near").is_err());
+        // A direct check never accepts the relayer's transaction, nor the reverse.
+        assert!(check_deposit(&relayed, "h", MEMBER, DAO).is_err());
+        assert!(check_relayed_deposit(&deposit_tx(DAO), "h", MEMBER, DAO, "relayer.near").is_err());
     }
 }

@@ -2,8 +2,9 @@
  * Shared jars on NEAR mainnet (Sputnik DAO per jar): the device half. Each member is
  * the NEAR implicit account of their keyring NEAR key; this device signs every
  * transaction and sends it straight to NEAR RPC. Honey's server only reads chain
- * state and prepares 1Click quotes; it never holds keys or funds. Members pay their
- * own gas until the NEP-366 relayer is switched on.
+ * state and prepares 1Click quotes; it never holds keys or funds. In a group jar, a
+ * member whose account can't cover a call's gas signs it as a NEP-366 delegate action
+ * instead and Honey's relayer pays (when it's on); otherwise members pay their own.
  */
 
 import type { JarDaoProposal, JarDaoState } from '@honey-wallet/api-client';
@@ -36,6 +37,7 @@ import {
   prepare,
   proposalId,
   type QuotedLeg,
+  sendViaRelayer,
   unitRecordTx,
   verifyBuyWith1Click,
   viewFtBalance,
@@ -52,7 +54,7 @@ import {
   walletName,
   YOU,
 } from '@/lib/multisig';
-import { signAndSendNearCall } from '@/lib/near-call';
+import { signAndSendNearCall, signNearDelegate } from '@/lib/near-call';
 import { createStore } from '@/lib/store';
 import { TEST_MODE } from '@/lib/test-mode';
 import { addWallet, wallets } from '@/lib/wallets';
@@ -80,11 +82,53 @@ function member() {
   return { walletId: wallet.id, account: wallet.addresses?.near as string };
 }
 
-/** Prepares, confirms, signs on device and sends one transaction. Returns its hash. */
-async function send(reason: string, receiverId: string, actions: FunctionCall[]) {
+/** Group jars by their DAO, so a call to one knows which group's gas Honey may pay. */
+const groupOfDao = new Map<string, string>();
+/** Set once Honey said it isn't paying gas right now (the relayer is off or out of budget). */
+export const relayerOff = createStore(false);
+
+/** Lets calls for this group's DAO use Honey's gas relayer (lib/group-jars). */
+export function relayForGroup(dao: string, groupId: string) {
+  groupOfDao.set(dao, groupId);
+}
+
+/**
+ * Prepares, confirms, signs on device and sends one transaction. Returns its hash. A
+ * group jar's call (to its DAO, or `dao` named for a share into it) goes through
+ * Honey's gas relayer when this account can't pay and the relayer is on.
+ */
+async function send(
+  reason: string,
+  receiverId: string,
+  actions: FunctionCall[],
+  dao: string = receiverId,
+) {
   const me = member();
+  const groupId = groupOfDao.get(dao);
+  let confirmed = false;
+  if (groupId && !relayerOff.get() && daoStates.get()[dao]?.relayer !== false) {
+    const hash = await sendViaRelayer(
+      {
+        rpc,
+        signerId: me.account,
+        sign: async (delegate) => {
+          if (!(await confirmOwner(reason, true))) throw new Error('Cancelled');
+          confirmed = true;
+          return signNearDelegate(me.walletId, delegate);
+        },
+        relay: async (signedDelegate) => {
+          const result = await api.jarDaoRelay(token(), { groupId, signedDelegate });
+          if (result === null) relayerOff.set(true);
+          return result;
+        },
+      },
+      receiverId,
+      actions,
+    );
+    if (hash) return hash;
+  }
   const tx = await prepare(rpc, me.account, receiverId, actions);
-  if (!(await confirmOwner(reason, true))) throw new Error('Cancelled');
+  if (!confirmed && !(await confirmOwner(reason, true))) throw new Error('Cancelled');
   return signAndSendNearCall(rpc, me.walletId, tx);
 }
 
@@ -488,7 +532,7 @@ export async function payShareFromNear(dao: string, usd: number) {
   if (amount > (await viewFtBalance(rpc, USDC_NEAR, me.account)))
     throw new Error('You have less USDC on NEAR than your share.');
   const d = depositTx(dao, amount, me.account);
-  return send(`Add your $${usd.toFixed(2)}`, d.receiverId, d.actions);
+  return send(`Add your $${usd.toFixed(2)}`, d.receiverId, d.actions, dao);
 }
 
 const chainNumber = (id: string | undefined) => {

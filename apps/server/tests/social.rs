@@ -1387,7 +1387,7 @@ async fn near_rpc(chain: SharedChain) -> String {
                         }
                     }
                     (Some("query"), Some("view_access_key")) => ok(json!({
-                        "nonce": 41, "permission": "FullAccess",
+                        "nonce": 41, "permission": "FullAccess", "block_height": 100,
                         "block_hash": bs58::encode([1u8; 32]).into_string(),
                     })),
                     (Some("tx"), _) => match chain.txs.get(p["tx_hash"].as_str().unwrap()) {
@@ -2227,6 +2227,499 @@ async fn group_jars_invite_create_pay_buy_publish_leave_and_cash_out() {
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT);
+
+    db.close().await;
+}
+
+// ---------------------------------------------------------------------------
+// Gas relays (NEP-366) and push tokens.
+
+/// NEAR key of the public BIP-39 test phrase "abandon … about" (account 0), as
+/// derived by packages/keyring. A published test vector, never a real key.
+const TEST_SEED: &str = "0c158d858a52316667d03d1d04aad51b3b542cd705215810629b78c501492fba";
+
+/// A member's borsh `SignedDelegateAction` (base64), signed with `seed` as NEP-366
+/// says: ed25519 over sha256(u32 2^30 + 366 || DelegateAction).
+fn signed_delegate(
+    seed: &str,
+    receiver: &str,
+    calls: &[(&str, Value, u64, u128)],
+    max_block_height: u64,
+) -> String {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    use ring::signature::{Ed25519KeyPair, KeyPair};
+    use sha2::{Digest, Sha256};
+    let pair = Ed25519KeyPair::from_seed_unchecked(&hex::decode(seed).unwrap()).unwrap();
+    let public = pair.public_key().as_ref().to_vec();
+    let string = |out: &mut Vec<u8>, v: &[u8]| {
+        out.extend_from_slice(&(v.len() as u32).to_le_bytes());
+        out.extend_from_slice(v);
+    };
+    let mut body = Vec::new();
+    string(&mut body, hex::encode(&public).as_bytes());
+    string(&mut body, receiver.as_bytes());
+    body.extend_from_slice(&(calls.len() as u32).to_le_bytes());
+    for (method, args, tgas, deposit) in calls {
+        body.push(2);
+        string(&mut body, method.as_bytes());
+        string(&mut body, args.to_string().as_bytes());
+        body.extend_from_slice(&(tgas * 1_000_000_000_000).to_le_bytes());
+        body.extend_from_slice(&deposit.to_le_bytes());
+    }
+    body.extend_from_slice(&42u64.to_le_bytes());
+    body.extend_from_slice(&max_block_height.to_le_bytes());
+    body.push(0);
+    body.extend_from_slice(&public);
+    let mut message = ((1u32 << 30) + 366).to_le_bytes().to_vec();
+    message.extend_from_slice(&body);
+    let signature = pair.sign(&Sha256::digest(&message));
+    body.push(0);
+    body.extend_from_slice(signature.as_ref());
+    STANDARD.encode(body)
+}
+
+#[tokio::test]
+#[ignore = "requires isolated TEST_DATABASE_URL"]
+async fn group_jar_gas_relay_pays_only_for_a_members_own_group_calls() {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    let db = TestDatabase::new().await;
+    let identity = identity(&db);
+    let alice = bearer(&identity, 41).await;
+    let bob = bearer(&identity, 42).await;
+    let eve = bearer(&identity, 43).await;
+    let chain: SharedChain = Arc::default();
+    let rpc = near_rpc(chain.clone()).await;
+    let reader = Arc::new(honey_server::jar_dao::JarDao::new(rpc.clone(), false).unwrap());
+    let app =
+        routes::social::router_with(Some(identity.clone()), None, String::new(), Some(reader));
+    for (token, handle, name) in [
+        (&alice, "alice", "Alice Ade"),
+        (&bob, "bob", "Bob Bell"),
+        (&eve, "eve", "Eve Eng"),
+    ] {
+        let (status, _) = call(
+            &app,
+            "PUT",
+            "/social/me",
+            Some(token),
+            Some(json!({ "handle": handle, "displayName": name })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+    // Alice's NEAR account is the test key's implicit account, so she can sign.
+    let a = "5510e2b44cae6eb807e3e0e45d579dda058c274abcba15e5cb84636f5d1ee412".to_string();
+    let b = "b".repeat(64);
+    let dao = "honeyjar.sputnik-dao.near";
+    let (status, g) = call(
+        &app,
+        "POST",
+        "/social/groups",
+        Some(&alice),
+        Some(json!({
+            "name": "Honey jar", "thesis": "",
+            "picks": [{ "symbol": "ETH", "chain": "Base", "weight": 100 }],
+            "shareUsd": 5, "members": ["bob"], "clientJarId": "jar-r", "nearAccount": a,
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{g}");
+    let id = g["id"].as_str().unwrap().to_string();
+    let path = |p: &str| format!("/social/groups/{id}{p}");
+    let (status, g) = call(
+        &app,
+        "POST",
+        &path("/accept"),
+        Some(&bob),
+        Some(json!({ "nearAccount": b })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{g}");
+    assert_eq!(g["status"], "creating");
+    chain.lock().unwrap().members = vec![a.clone(), b.clone()];
+    chain.lock().unwrap().threshold = 2;
+    let (status, g) = call(
+        &app,
+        "POST",
+        &path("/created"),
+        Some(&alice),
+        Some(json!({ "dao": dao })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{g}");
+    assert_eq!(g["status"], "funding");
+
+    let key = || {
+        honey_server::near_relayer::RelayerKey::parse(
+            "honey-relayer.near",
+            &format!("ed25519:{}", bs58::encode([9u8; 32]).into_string()),
+        )
+        .unwrap()
+    };
+    let relayer = Arc::new(honey_server::near_relayer::Relayer::new(rpc.clone(), key()).unwrap());
+    let switched_on = Arc::new(honey_server::jar_dao::JarDao::new(rpc.clone(), true).unwrap());
+    let switched_off = Arc::new(honey_server::jar_dao::JarDao::new(rpc.clone(), false).unwrap());
+    let on = routes::jar_dao::router(
+        Some(identity.clone()),
+        switched_on.clone(),
+        None,
+        Some(relayer.clone()),
+    );
+    let vote = signed_delegate(
+        TEST_SEED,
+        dao,
+        &[(
+            "act_proposal",
+            json!({ "id": 0, "action": "VoteApprove" }),
+            300,
+            0,
+        )],
+        200,
+    );
+    let ask = |d: &str| json!({ "groupId": id, "signedDelegate": d });
+
+    // Off unless both the switch and the key are there: the phone pays its own gas.
+    for off in [
+        routes::jar_dao::router(Some(identity.clone()), switched_on.clone(), None, None),
+        routes::jar_dao::router(Some(identity.clone()), switched_off, None, Some(relayer)),
+    ] {
+        let (status, body) = call(
+            &off,
+            "POST",
+            "/jar-dao/relay",
+            Some(&alice),
+            Some(ask(&vote)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body["error"]["code"], "relayer_off");
+    }
+    let (_, state) = call(
+        &on,
+        "GET",
+        &format!("/jar-dao/state?dao={dao}"),
+        Some(&alice),
+        None,
+    )
+    .await;
+    assert_eq!(state["relayer"], true);
+
+    // A vote on the group's DAO, signed by Alice's own key: relayed.
+    let (status, body) = call(
+        &on,
+        "POST",
+        "/jar-dao/relay",
+        Some(&alice),
+        Some(ask(&vote)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["relayer"], "honey-relayer.near");
+    let hash = body["txHash"].as_str().unwrap().to_string();
+    {
+        let chain = chain.lock().unwrap();
+        let sent = STANDARD.decode(chain.sent.last().unwrap()).unwrap();
+        // The relayer's transaction to Alice carrying her delegate (action 8) unchanged.
+        let delegate = STANDARD.decode(&vote).unwrap();
+        assert!(
+            sent.windows(delegate.len() + 1)
+                .any(|w| w[0] == 8 && w[1..] == delegate[..])
+        );
+        assert_eq!(chain.sent.len(), 1);
+    }
+    // Someone else can't spend Alice's delegate, nor can anyone outside the group.
+    let (status, _) = call(&on, "POST", "/jar-dao/relay", Some(&bob), Some(ask(&vote))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "not Bob's account");
+    let (status, _) = call(&on, "POST", "/jar-dao/relay", Some(&eve), Some(ask(&vote))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    // A tampered signature, another receiver, a deposit, an expired request: refused.
+    let mut forged = STANDARD.decode(&vote).unwrap();
+    let last = forged.len() - 1;
+    forged[last] ^= 1;
+    let (status, _) = call(
+        &on,
+        "POST",
+        "/jar-dao/relay",
+        Some(&alice),
+        Some(ask(&STANDARD.encode(forged))),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "bad signature");
+    for (receiver, calls, height) in [
+        (
+            "other.sputnik-dao.near",
+            vec![("act_proposal", json!({}), 100, 0u128)],
+            200,
+        ),
+        (
+            dao,
+            vec![("act_proposal", json!({}), 100, 10u128.pow(24))],
+            200,
+        ),
+        (dao, vec![("act_proposal", json!({}), 100, 0)], 50),
+        (dao, vec![("act_proposal", json!({}), 100, 0)], 5_000),
+        (
+            USDC_NEAR,
+            vec![(
+                "ft_transfer",
+                json!({ "receiver_id": "evil.near", "amount": "1" }),
+                30,
+                1,
+            )],
+            200,
+        ),
+    ] {
+        let d = signed_delegate(TEST_SEED, receiver, &calls, height);
+        let (status, body) = call(&on, "POST", "/jar-dao/relay", Some(&alice), Some(ask(&d))).await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "{receiver} {height}: {body}"
+        );
+    }
+    assert_eq!(chain.lock().unwrap().sent.len(), 1, "nothing else was sent");
+
+    // Alice's share, relayed, then counted through the relayer's transaction.
+    let share = signed_delegate(
+        TEST_SEED,
+        USDC_NEAR,
+        &[(
+            "ft_transfer_call",
+            json!({ "receiver_id": "intents.near", "amount": "5000000", "msg": dao }),
+            100,
+            1,
+        )],
+        200,
+    );
+    let (status, body) = call(
+        &on,
+        "POST",
+        "/jar-dao/relay",
+        Some(&alice),
+        Some(ask(&share)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let share_hash = body["txHash"].as_str().unwrap().to_string();
+    assert_ne!(share_hash, hash);
+    let args = STANDARD.encode(
+        json!({ "receiver_id": "intents.near", "amount": "5000000", "msg": dao }).to_string(),
+    );
+    chain.lock().unwrap().txs.insert(
+        share_hash.clone(),
+        json!({
+            "status": { "SuccessValue": "" },
+            "transaction": {
+                "hash": share_hash, "signer_id": "honey-relayer.near", "receiver_id": a,
+                "actions": [{ "Delegate": { "delegate_action": {
+                    "sender_id": a, "receiver_id": USDC_NEAR,
+                    "actions": [{ "FunctionCall": { "method_name": "ft_transfer_call", "args": args } }],
+                    "nonce": 42, "max_block_height": 200, "public_key": "ed25519:x"
+                }, "signature": "ed25519:y" } }]
+            },
+            "receipts_outcome": [{ "outcome": { "executor_id": USDC_NEAR,
+                "status": { "SuccessValue": STANDARD.encode("\"5000000\"") } } }]
+        }),
+    );
+    let (status, g) = call(
+        &app,
+        "POST",
+        &path("/paid"),
+        Some(&alice),
+        Some(json!({ "txHash": share_hash })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{g}");
+    assert_eq!(member(&g, "alice")["paid"], true);
+
+    // Past a person's daily budget, the phone pays its own gas.
+    let user: Uuid = sqlx::query_scalar("SELECT user_id FROM jar_dao_relays LIMIT 1")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    for _ in 0..25 {
+        sqlx::query(
+            "INSERT INTO jar_dao_relays (id, user_id, group_id, sender, receiver, methods, relayer)
+             VALUES ($1, $2, $3, $4, $5, 'act_proposal', 'honey-relayer.near')",
+        )
+        .bind(Uuid::new_v4())
+        .bind(user)
+        .bind(Uuid::parse_str(&id).unwrap())
+        .bind(&a)
+        .bind(dao)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    }
+    let (status, body) = call(
+        &on,
+        "POST",
+        "/jar-dao/relay",
+        Some(&alice),
+        Some(ask(&vote)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(body["error"]["code"], "relayer_off");
+
+    db.close().await;
+}
+
+#[tokio::test]
+#[ignore = "requires isolated TEST_DATABASE_URL"]
+async fn push_tokens_register_and_inbox_events_are_pushed_once() {
+    let db = TestDatabase::new().await;
+    let identity = identity(&db);
+    let alice = bearer(&identity, 51).await;
+    let bob = bearer(&identity, 52).await;
+    // An Expo push double: records each batch and says the second device is gone.
+    let got: Arc<Mutex<Vec<Value>>> = Arc::default();
+    let seen = got.clone();
+    let expo = Router::new().route(
+        "/send",
+        axum::routing::post(move |axum::Json(batch): axum::Json<Value>| {
+            let seen = seen.clone();
+            async move {
+                let tickets: Vec<Value> = batch
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|m| {
+                        seen.lock().unwrap().push(m.clone());
+                        if m["to"] == "ExponentPushToken[gone-device-0000000]" {
+                            json!({ "status": "error", "details": { "error": "DeviceNotRegistered" } })
+                        } else {
+                            json!({ "status": "ok", "id": "r" })
+                        }
+                    })
+                    .collect();
+                axum::Json(json!({ "data": tickets }))
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}/send", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, expo).await.unwrap() });
+    let push = Arc::new(honey_server::push::Push::new(db.pool.clone(), endpoint, None).unwrap());
+    let app = honey_server::push::after_writes(
+        routes::social::router_with(Some(identity.clone()), None, String::new(), None),
+        Some(push.clone()),
+    )
+    .merge(routes::push::router(Some(identity.clone())));
+    for (token, handle, name) in [(&alice, "alice", "Alice Ade"), (&bob, "bob", "Bob Bell")] {
+        let (status, _) = call(
+            &app,
+            "PUT",
+            "/social/me",
+            Some(token),
+            Some(json!({ "handle": handle, "displayName": name })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    // Registering: signed in, Expo tokens only, a known platform.
+    let device = "ExponentPushToken[bob-phone-00000000]";
+    let gone = "ExponentPushToken[gone-device-0000000]";
+    let register = |token: &str, platform: &str| json!({ "token": token, "platform": platform });
+    let (status, _) = call(
+        &app,
+        "POST",
+        "/push/tokens",
+        None,
+        Some(register(device, "ios")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, _) = call(
+        &app,
+        "POST",
+        "/push/tokens",
+        Some(&bob),
+        Some(register("abc", "ios")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _) = call(
+        &app,
+        "POST",
+        "/push/tokens",
+        Some(&bob),
+        Some(register(device, "web")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    for token in [device, gone] {
+        let (status, body) = call(
+            &app,
+            "POST",
+            "/push/tokens",
+            Some(&bob),
+            Some(register(token, "ios")),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+
+    // Alice invites Bob: the invite reaches both of Bob's devices once.
+    let (status, g) = call(
+        &app,
+        "POST",
+        "/social/groups",
+        Some(&alice),
+        Some(json!({
+            "name": "Japan trip", "thesis": "",
+            "picks": [{ "symbol": "ETH", "chain": "Base", "weight": 100 }],
+            "shareUsd": 5, "members": ["bob"], "clientJarId": "jar-p",
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{g}");
+    for _ in 0..50 {
+        if got.lock().unwrap().len() >= 2 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    {
+        let got = got.lock().unwrap();
+        assert_eq!(got.len(), 2, "{got:?}");
+        assert_eq!(got[0]["data"]["kind"], "group_invite");
+        assert_eq!(got[0]["data"]["groupId"], g["id"]);
+        assert!(got.iter().any(|m| m["to"] == device));
+    }
+    // Pushed once: another flush finds nothing; the gone device was forgotten.
+    assert_eq!(push.flush().await.unwrap(), 0);
+    let left: Vec<String> = sqlx::query_scalar("SELECT token FROM push_tokens ORDER BY token")
+        .fetch_all(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(left, vec![device.to_string()]);
+
+    // Signing out forgets the device, only for its owner.
+    let (status, _) = call(
+        &app,
+        "POST",
+        "/push/tokens/remove",
+        Some(&alice),
+        Some(json!({ "token": device })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = call(
+        &app,
+        "POST",
+        "/push/tokens/remove",
+        Some(&bob),
+        Some(json!({ "token": device })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM push_tokens")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
 
     db.close().await;
 }

@@ -22,8 +22,9 @@ import { ToastHost } from '@/components/motion/ToastHost';
 import { Tray } from '@/components/sheets/Tray';
 import { appLock } from '@/lib/app-lock';
 import { useInFlightWatcher } from '@/lib/in-flight';
+import { markInboxRead } from '@/lib/inbox';
 import { createMultisig, reject, startDemoRequests } from '@/lib/multisig';
-import { ACTION_REJECT, setUpNotifications } from '@/lib/push';
+import { ACTION_REJECT, setUpNotifications, watchPushRegistration } from '@/lib/push';
 import { EXTENSION, hiddenHere, SHARED_WALLETS, WALLET } from '@/lib/surface';
 import { showToast } from '@/lib/toast';
 import { walletConnect } from '@/lib/walletconnect';
@@ -31,15 +32,26 @@ import { useTheme } from '@/theme';
 
 /**
  * Tapping a notification about a proposal opens it; its Reject button rejects it
- * without opening Honey.
+ * without opening Honey. Tapping a group push (an inbox item) opens its group, or the
+ * invite, as the bell does.
  */
 const consumedResponses = new Set<string>();
 
 function handleResponse(response: Notifications.NotificationResponse) {
-  const id = response.notification.request.content.data?.proposalId;
-  if (typeof id !== 'string' || !appLock.get().unlocked) return;
+  const data = response.notification.request.content.data ?? {};
+  if (!appLock.get().unlocked) return;
   const key = `${response.notification.request.identifier}:${response.actionIdentifier}`;
   if (consumedResponses.has(key)) return;
+  if (typeof data.groupId === 'string') {
+    consumedResponses.add(key);
+    if (typeof data.inboxId === 'string') markInboxRead([data.inboxId]);
+    if (data.kind === 'group_invite')
+      router.push({ pathname: '/group-invite', params: { id: data.groupId } });
+    else router.push({ pathname: '/group/[id]', params: { id: data.groupId } });
+    return;
+  }
+  const id = data.proposalId;
+  if (typeof id !== 'string') return;
   consumedResponses.add(key);
   if (response.actionIdentifier === ACTION_REJECT) {
     const _outcome = reject(id);
@@ -53,6 +65,8 @@ function useNotificationResponses() {
   useEffect(() => {
     let mounted = true;
     setUpNotifications();
+    // This phone's push registration follows sign-in (it never asks for permission).
+    watchPushRegistration();
     // Shared wallets are off for now (2026-11-13): group jars replace them, so the demo
     // no longer invents requests from a sample shared wallet's members.
     if (SHARED_WALLETS) startDemoRequests();
@@ -234,7 +248,7 @@ export default function RootLayout() {
               {/* Group jars: the group's page, its invite and Launch's friend picker */}
               <Stack.Screen name="(jars)/group/[id]" />
               <Stack.Screen name="(jars)/group-invite" options={tray()} />
-              <Stack.Screen name="(jars)/group-pay" options={sheet([1])} />
+              <Stack.Screen name="(jars)/group-pay" options={tray()} />
               <Stack.Screen name="(jars)/jar-post" options={tray()} />
               <Stack.Screen name="(jars)/jar-sell" options={sheet([1])} />
               <Stack.Screen name="(jars)/group-friends" options={tray()} />

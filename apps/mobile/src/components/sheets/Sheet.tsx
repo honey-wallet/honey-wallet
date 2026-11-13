@@ -511,16 +511,19 @@ export function StatRow({
   label,
   value,
   icon,
+  destructive,
 }: {
   label: string;
   value: ReactNode;
   icon?: ReactNode;
+  /** A red label, for a row that leaves or closes something. */
+  destructive?: boolean;
 }) {
   const styles = useStyles();
   return (
     <View style={styles.stat}>
       {icon}
-      <Text style={styles.statLabel}>{label}</Text>
+      <Text style={[styles.statLabel, destructive && styles.statDestructive]}>{label}</Text>
       {typeof value === 'string' ? <Text style={styles.statValue}>{value}</Text> : value}
     </View>
   );
@@ -701,6 +704,9 @@ const useStyles = makeStyles((c) => ({
     flex: 1,
     color: c.text,
     fontSize: 16,
+  },
+  statDestructive: {
+    color: c.error,
   },
   statValue: {
     color: c.text,

@@ -10,6 +10,7 @@ import { failure, tap } from '@/lib/haptics';
 import { leaveSheetTo } from '@/lib/navigation';
 import { signOut } from '@/lib/onboarding';
 import { HERE } from '@/lib/platform';
+import { forgetPushDevice } from '@/lib/push';
 import { showErrorToast } from '@/lib/toast';
 import { loadAccounts, type VaultAccount } from '@/lib/vault';
 import { Gate, warningOn } from '@/lib/warnings';
@@ -47,6 +48,8 @@ export default function SignOutSheet() {
         setBusy(false);
         return;
       }
+      // This phone stops getting your pushes while the session can still say so.
+      await forgetPushDevice();
       await signOut(confirmed);
     } catch {
       failure();

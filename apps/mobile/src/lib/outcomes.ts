@@ -2,6 +2,7 @@ import { type Href, router } from 'expo-router';
 import { useState } from 'react';
 import { SHEET_EXIT } from '@/lib/navigation';
 import { settings, useSettings } from '@/lib/settings';
+import { addMoneyHref } from '@/lib/surface';
 
 /**
  * What can go wrong at the end of a money flow, said the way a person would want to
@@ -91,7 +92,7 @@ export function describeFailure(kind: FailureKind, flow: Flow): Failure {
         title: 'Not enough for the network fee',
         reason: 'This needs about $0.40 of ETH to pay the network, and the wallet has less.',
         safe: undone,
-        action: { label: 'Add ETH', href: { pathname: '/buy-cash', params: { symbol: 'ETH' } } },
+        action: { label: 'Add ETH', href: addMoneyHref('ETH') },
       };
     case 'priceMoved':
       return {

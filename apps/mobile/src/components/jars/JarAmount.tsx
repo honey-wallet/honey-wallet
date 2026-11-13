@@ -7,6 +7,7 @@ import { PillButton } from '@/components/onboarding/PillButton';
 import { SHEET } from '@/components/sheets/Sheet';
 import { Chip } from '@/components/wallet/Chip';
 import { applyKey, Keypad, TypedAmount, trimNumber } from '@/components/wallet/Keypad';
+import { PAY_CHAINS } from '@/lib/jar-buy';
 import { formatUsd } from '@/lib/mock-wallet';
 import { TEST_MODE } from '@/lib/test-mode';
 import { useWalletView } from '@/lib/wallet-view';
@@ -14,7 +15,10 @@ import { makeStyles } from '@/theme';
 
 const PRESETS = [50, 100, 250];
 
-/** USDC on Base the wallet in use can spend on a jar (jars are paid in it, lib/jar-buy). */
+/**
+ * USDC the wallet in use can spend on a jar: on Base, Solana, NEAR and Ethereum together
+ * (lib/jar-buy pays each buy from the network that holds it).
+ */
 function useJarFunds() {
   const view = useWalletView();
   // Sample wallets aren't held to it: they end on the demo's success instead.
@@ -25,7 +29,7 @@ function useJarFunds() {
   const failed = real && 'live' in view && !!view.error;
   const available = real
     ? (view.holdings ?? [])
-        .filter((h) => h.symbol === 'USDC' && h.chain === 'Base')
+        .filter((h) => h.symbol === 'USDC' && (PAY_CHAINS as readonly string[]).includes(h.chain))
         .reduce((s, h) => s + h.usd, 0)
     : view.tokens.filter((t) => t.symbol === 'USDC').reduce((s, t) => s + t.usd, 0);
   return { real, available, watchOnly, loading, failed };
@@ -96,18 +100,18 @@ export function JarAmount({
             watchOnly
               ? 'This wallet is watch-only: its keys aren’t on this phone'
               : loading
-                ? 'Checking your USDC on Base…'
+                ? 'Checking your USDC…'
                 : failed
                   ? 'Couldn’t check your balance. Pull to refresh your Wallet, then try again'
                   : tooMuch
                     ? sell
                       ? `The jar holds ${formatUsd(available)}`
-                      : `You have ${formatUsd(available)} USDC on Base`
+                      : `You have ${formatUsd(available)} in USDC`
                     : amount && note
                       ? note
                       : sell
                         ? `${formatUsd(available)} in this jar`
-                        : `${formatUsd(available)} USDC${real ? ' on Base' : ''} available`
+                        : `${formatUsd(available)} USDC available`
           }
           style={[styles.hint, tooMuch && styles.error]}
         />
@@ -158,7 +162,7 @@ export function JarAmount({
                   : tooMuch
                     ? sell
                       ? 'More than the jar holds'
-                      : 'Not enough USDC on Base'
+                      : 'Not enough USDC'
                     : (hold ?? (typeof cta === 'function' ? cta(amount) : cta))
         }
         disabled={!amount || tooMuch || watchOnly || loading || failed || !!hold}

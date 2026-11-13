@@ -124,8 +124,14 @@ function LiveTokens({
   const [chain, setChain] = useState<string | null>(null);
   useEffect(loadSwapTokens, []);
 
+  // By asset when the server matched the holding in this list (look-alikes never merge);
+  // the chain's own coin, which carries no asset id, by symbol and network.
   const heldOf = (t: OneClickToken) =>
-    holdings.find((h) => h.symbol === t.symbol && h.chain === chainName(t.blockchain));
+    holdings.find((h) =>
+      h.assetId
+        ? h.assetId === t.assetId
+        : h.symbol === t.symbol && h.chain === chainName(t.blockchain),
+    );
   const listed = (tokens ?? [])
     .filter((t) => side === 'buy' || canSell(t))
     .sort(

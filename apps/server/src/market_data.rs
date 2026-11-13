@@ -20,8 +20,10 @@ const GECKOTERMINAL: &str = "https://api.geckoterminal.com/api/v2";
 const COINGECKO: &str = "https://api.coingecko.com/api/v3";
 /// Descriptions and links barely change; caps on the page may be this old.
 const INFO_TTL: Duration = Duration::from_secs(30 * 60);
-/// Logos barely change: one CoinGecko call a day covers every token 1Click lists.
-const LOGOS_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+/// Names, logos, caps, 24h volume and change for every token 1Click lists: one CoinGecko
+/// `/coins/markets` call (≤250 ids a page) every five minutes; older copies serve while a
+/// refresh runs or CoinGecko is down.
+const COINS_TTL: Duration = Duration::from_secs(5 * 60);
 /// After CoinGecko says "too many requests" without a usable Retry-After, ask nothing for
 /// this long (stale answers serve). A Retry-After is honoured between 1s and 10 minutes.
 const COINGECKO_COOLDOWN: Duration = Duration::from_secs(60);
@@ -40,6 +42,9 @@ const MAX_ENTRIES: usize = 2_000;
 /// Swap fee assumed when the source doesn't say (most AMM pools charge 0.05–0.3%).
 const DEFAULT_FEE_BPS: u32 = 30;
 const MAX_PRICE_GAP: f64 = 0.05;
+/// A listed token takes CoinGecko's numbers for its coin only when the two prices are
+/// within this of each other (they're both live; a bigger gap means another asset).
+const MAX_COIN_PRICE_GAP: f64 = 0.25;
 /// Pools that traded less than this in 24 hours are ignored.
 const MIN_VOLUME_USD: f64 = 5_000.0;
 /// New pools shallower than this are mostly spam; the feed skips them.
@@ -187,20 +192,20 @@ pub fn market_list(tokens: &[OneClickToken]) -> Vec<MarketListToken> {
         let Some(index) = CHAINS.iter().position(|c| c.3 == t.blockchain) else {
             continue;
         };
-        if t.symbol.is_empty()
-            || t.symbol.len() > 20
-            || !t
-                .symbol
+        let symbol = normalize_symbol(&t.symbol);
+        if symbol.is_empty()
+            || symbol.len() > 20
+            || !symbol
                 .chars()
                 .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
         {
             continue;
         }
         // Native NEAR is listed as wNEAR (wrap.near); Honey shows and sends it as NEAR.
-        let symbol = if t.blockchain == "near" && t.symbol.eq_ignore_ascii_case("wNEAR") {
+        let symbol = if t.blockchain == "near" && symbol.eq_ignore_ascii_case("wNEAR") {
             "NEAR"
         } else {
-            t.symbol.as_str()
+            symbol
         };
         let entry = by_symbol
             .entry(symbol.to_ascii_uppercase())
@@ -222,6 +227,221 @@ pub fn market_list(tokens: &[OneClickToken]) -> Vec<MarketListToken> {
             }
         })
         .collect()
+}
+
+/// A symbol as Honey shows it: 1Click spells a few with a leading `$` ("$WIF").
+pub fn normalize_symbol(symbol: &str) -> &str {
+    let symbol = symbol.trim();
+    symbol.strip_prefix('$').unwrap_or(symbol)
+}
+
+/// Wrapped and bridged copies that CoinGecko lists as their own coin, mapped to the coin
+/// they stand for. Other `wrapped-…` ids fold into the id without the prefix.
+const SAME_ASSET: &[(&str, &str)] = &[
+    ("coinbase-wrapped-btc", "bitcoin"),
+    ("wrapped-bitcoin", "bitcoin"),
+    ("weth", "ethereum"),
+    ("wrapped-near", "near"),
+    ("wrapped-solana", "solana"),
+];
+
+/// The coin a CoinGecko id stands for: cbBTC and WBTC are Bitcoin, wNEAR is NEAR.
+pub fn asset_key(id: &str) -> &str {
+    SAME_ASSET
+        .iter()
+        .find(|(from, _)| *from == id)
+        .map(|(_, to)| *to)
+        .unwrap_or_else(|| id.strip_prefix("wrapped-").unwrap_or(id))
+}
+
+/// One coin's row from CoinGecko's `/coins/markets`. Zero means unknown, so it's dropped.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CoinMarket {
+    pub id: String,
+    /// CoinGecko's ticker, upper case ("BTC").
+    pub symbol: String,
+    pub name: String,
+    pub image: Option<String>,
+    pub price_usd: Option<f64>,
+    pub market_cap: Option<f64>,
+    pub rank: Option<u32>,
+    pub volume_24h: Option<f64>,
+    pub change_24h: Option<f64>,
+}
+
+fn parse_coin_markets(body: &Value) -> Vec<CoinMarket> {
+    body.as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|c| {
+            let id = c["id"].as_str().filter(|id| valid_coingecko_id(id))?;
+            let name = c["name"].as_str()?.trim();
+            if name.is_empty() || name.len() > 80 {
+                return None;
+            }
+            let positive = |v: &Value| num(v).filter(|v| *v > 0.0);
+            Some(CoinMarket {
+                id: id.to_string(),
+                symbol: c["symbol"]
+                    .as_str()
+                    .unwrap_or("")
+                    .trim()
+                    .to_ascii_uppercase(),
+                name: name.to_string(),
+                image: https(&c["image"]).filter(|u| u.len() <= 300),
+                price_usd: positive(&c["current_price"]),
+                market_cap: positive(&c["market_cap"]),
+                rank: c["market_cap_rank"]
+                    .as_u64()
+                    .and_then(|r| u32::try_from(r).ok())
+                    .filter(|r| *r > 0),
+                volume_24h: positive(&c["total_volume"]),
+                change_24h: num(&c["price_change_percentage_24h"]),
+            })
+        })
+        .collect()
+}
+
+/// One row of Search's list (`GET /market/tokens`). Mirrored in
+/// `packages/api-client/src/types.ts` (`MarketListToken`). `symbol` and `chains` are what
+/// NEAR Intents delivers under that symbol (what a buy or a jar pick names); `aliases` are
+/// wrapped copies of the same coin folded into this row (cbBTC and WBTC under BTC), still
+/// buyable under their own symbols. Numbers are CoinGecko's, missing when unknown.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketListing {
+    pub symbol: String,
+    /// The coin's name ("Bitcoin", "NEAR Protocol"), else the symbol.
+    pub name: String,
+    /// https only.
+    pub logo: Option<String>,
+    /// 1Click's live price (what Honey quotes).
+    pub price_usd: f64,
+    /// In percent.
+    pub change_24h: Option<f64>,
+    pub volume_24h: Option<f64>,
+    pub market_cap: Option<f64>,
+    /// CoinGecko's market-cap rank.
+    pub rank: Option<u32>,
+    pub chains: Vec<&'static str>,
+    pub aliases: Vec<String>,
+}
+
+/// Search's list from the per-symbol list (`market_list`) and CoinGecko's coin rows.
+/// Symbols for the same coin (cbBTC, WBTC and BTC; WETH and ETH; wNEAR and NEAR) become
+/// one row named for the coin, under the coin's own ticker when 1Click lists it, else the
+/// symbol on the most chains; a copy priced more than 5% off the row stays its own row.
+/// Ranked by CoinGecko's market-cap rank, then market cap, then 24h volume; tokens
+/// CoinGecko doesn't know come last, A-Z.
+pub fn market_listing(
+    tokens: &[OneClickToken],
+    coins: &HashMap<String, CoinMarket>,
+) -> Vec<MarketListing> {
+    let base = market_list(tokens);
+    let ids: Vec<Option<String>> = base
+        .iter()
+        .map(|t| coingecko_id(&t.symbol, tokens))
+        .collect();
+    let mut groups: Vec<(Option<String>, Vec<usize>)> = Vec::new();
+    for (i, id) in ids.iter().enumerate() {
+        let key = id.as_deref().map(|id| asset_key(id).to_string());
+        match groups.iter_mut().find(|(k, _)| key.is_some() && *k == key) {
+            Some((_, members)) => members.push(i),
+            None => groups.push((key, vec![i])),
+        }
+    }
+    let mut out = Vec::new();
+    for (key, members) in groups {
+        let coin = key.as_deref().and_then(|k| coins.get(k));
+        // The coin's own ticker first, then the symbol whose id is the coin itself, then
+        // the one on the most chains (ties: A-Z, the list's order).
+        let lead = *members
+            .iter()
+            .min_by_key(|&&i| {
+                let t = &base[i];
+                (
+                    !coin.is_some_and(|c| c.symbol.eq_ignore_ascii_case(&t.symbol)),
+                    ids[i].as_deref() != key.as_deref(),
+                    std::cmp::Reverse(t.chains.len()),
+                    i,
+                )
+            })
+            .unwrap_or(&members[0]);
+        let price = base[lead].price_usd;
+        let (folded, apart): (Vec<usize>, Vec<usize>) = members
+            .iter()
+            .filter(|&&i| i != lead)
+            .partition(|&&i| (base[i].price_usd - price).abs() <= price * MAX_PRICE_GAP);
+        out.push(listing_row(
+            &base[lead],
+            ids[lead].as_deref(),
+            key.as_deref(),
+            !folded.is_empty(),
+            folded.iter().map(|&i| base[i].symbol.clone()).collect(),
+            coins,
+        ));
+        // Priced unlike its coin: its own row, without the coin's name or numbers.
+        for i in apart {
+            out.push(listing_row(&base[i], None, None, false, Vec::new(), coins));
+        }
+    }
+    out.sort_by(|a, b| {
+        a.rank
+            .is_none()
+            .cmp(&b.rank.is_none())
+            .then(a.rank.cmp(&b.rank))
+            .then(
+                b.market_cap
+                    .unwrap_or(0.0)
+                    .total_cmp(&a.market_cap.unwrap_or(0.0)),
+            )
+            .then(
+                b.volume_24h
+                    .unwrap_or(0.0)
+                    .total_cmp(&a.volume_24h.unwrap_or(0.0)),
+            )
+            .then_with(|| {
+                a.symbol
+                    .to_ascii_uppercase()
+                    .cmp(&b.symbol.to_ascii_uppercase())
+            })
+    });
+    out
+}
+
+/// One listing row: the coin a merged row stands for (or the token's own coin), its
+/// numbers, and the symbols folded into it.
+fn listing_row(
+    t: &MarketListToken,
+    id: Option<&str>,
+    key: Option<&str>,
+    merged: bool,
+    aliases: Vec<String>,
+    coins: &HashMap<String, CoinMarket>,
+) -> MarketListing {
+    // A merged row is its coin (cbBTC + BTC = Bitcoin); a lone wrapped token keeps its
+    // own page (wstETH is not stETH).
+    let coin = key
+        .filter(|k| merged || Some(*k) == id)
+        .and_then(|k| coins.get(k))
+        .or_else(|| id.and_then(|id| coins.get(id)))
+        // A mislabelled id (a vault share carrying its asset's id) keeps none of its numbers.
+        .filter(|c| {
+            c.price_usd
+                .is_none_or(|p| (t.price_usd - p).abs() <= p * MAX_COIN_PRICE_GAP)
+        });
+    MarketListing {
+        symbol: t.symbol.clone(),
+        name: coin.map_or_else(|| t.symbol.clone(), |c| c.name.clone()),
+        logo: coin.and_then(|c| c.image.clone()),
+        price_usd: t.price_usd,
+        change_24h: coin.and_then(|c| c.change_24h),
+        volume_24h: coin.and_then(|c| c.volume_24h),
+        market_cap: coin.and_then(|c| c.market_cap),
+        rank: coin.and_then(|c| c.rank),
+        chains: t.chains.clone(),
+        aliases,
+    }
 }
 
 /// A token's market numbers for its detail screen, Search and share cards. Response
@@ -259,7 +479,7 @@ enum Cached {
     History(History),
     Info(Box<TokenInfo>),
     Chart(TokenChart),
-    Logos(Arc<std::collections::BTreeMap<String, String>>),
+    Coins(Arc<HashMap<String, CoinMarket>>),
 }
 
 pub struct MarketData {
@@ -277,6 +497,8 @@ pub struct MarketData {
     gecko: RwLock<HashMap<String, (Instant, Cached)>>,
     /// One CoinGecko request per key at a time: concurrent misses wait for the first.
     gecko_flights: std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    /// Set while a background refresh of the coin list runs, so requests start at most one.
+    coins_refreshing: std::sync::atomic::AtomicBool,
 }
 
 #[derive(Debug)]
@@ -320,6 +542,7 @@ impl MarketData {
             cache: RwLock::new(HashMap::new()),
             gecko: RwLock::new(HashMap::new()),
             gecko_flights: std::sync::Mutex::new(HashMap::new()),
+            coins_refreshing: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -411,73 +634,121 @@ impl MarketData {
         coingecko_id(symbol, tokens.as_deref().map(Vec::as_slice).unwrap_or(&[])).ok_or(Unavailable)
     }
 
-    /// A logo URL (https, CoinGecko's CDN) for every symbol 1Click lists, keyed by the
-    /// upper-case symbol. One `/coins/markets` call for all of them (≤250 ids a page),
-    /// cached a day; the last answer is served while CoinGecko is down or limiting us.
-    pub async fn token_logos(
-        &self,
-    ) -> Result<Arc<std::collections::BTreeMap<String, String>>, Unavailable> {
-        let key = "logos".to_string();
-        if let Some(Cached::Logos(logos)) = self.gecko_cached(&key, LOGOS_TTL).await {
-            return Ok(logos);
+    /// CoinGecko's market row (name, logo, caps, 24h volume and change) for every
+    /// CoinGecko id the 1Click list gives a token, plus the coins wrapped ones stand for
+    /// (cbBTC → bitcoin), keyed by id. Pages of 250 ids, cached for `COINS_TTL`; the last
+    /// answer is served while CoinGecko is down or limiting us.
+    pub async fn coin_markets(&self) -> Result<Arc<HashMap<String, CoinMarket>>, Unavailable> {
+        let key = "coins".to_string();
+        if let Some(Cached::Coins(coins)) = self.gecko_cached(&key, COINS_TTL).await {
+            return Ok(coins);
         }
         let flight = self.gecko_flight(&key);
         let _turn = flight.lock().await;
-        if let Some(Cached::Logos(logos)) = self.gecko_cached(&key, LOGOS_TTL).await {
-            return Ok(logos);
+        if let Some(Cached::Coins(coins)) = self.gecko_cached(&key, COINS_TTL).await {
+            return Ok(coins);
         }
         let tokens = self.tokens().await?;
-        let mut ids: Vec<(String, String)> = Vec::new();
-        let mut seen = std::collections::BTreeSet::new();
+        let mut ids = std::collections::BTreeSet::new();
         for t in tokens.iter() {
-            let symbol = t.symbol.trim().to_ascii_uppercase();
-            if symbol.is_empty() || !seen.insert(symbol.clone()) {
-                continue;
-            }
-            if let Some(id) = coingecko_id(&symbol, &tokens) {
-                ids.push((symbol, id));
+            if let Some(id) = coingecko_id(&t.symbol, &tokens) {
+                ids.insert(asset_key(&id).to_string());
+                ids.insert(id);
             }
         }
-        let mut logos = std::collections::BTreeMap::new();
+        let ids: Vec<String> = ids
+            .into_iter()
+            .filter(|id| valid_coingecko_id(id))
+            .collect();
+        let mut coins = HashMap::new();
         let mut failed = false;
         for page in ids.chunks(250) {
-            let list = page
-                .iter()
-                .map(|(_, id)| id.as_str())
-                .collect::<Vec<_>>()
-                .join(",");
             let path = format!(
-                "/coins/markets?vs_currency=usd&ids={list}&per_page=250&page=1&sparkline=false"
+                "/coins/markets?vs_currency=usd&ids={}&per_page=250&page=1&sparkline=false",
+                page.join(",")
             );
             match self.coingecko_get(&path).await {
-                Ok(body) => {
-                    let images: std::collections::BTreeMap<&str, &str> = body
-                        .as_array()
+                Ok(body) => coins.extend(
+                    parse_coin_markets(&body)
                         .into_iter()
-                        .flatten()
-                        .filter_map(|coin| {
-                            Some((coin.get("id")?.as_str()?, coin.get("image")?.as_str()?))
-                        })
-                        .filter(|(_, url)| url.starts_with("https://") && url.len() <= 300)
-                        .collect();
-                    for (symbol, id) in page {
-                        if let Some(url) = images.get(id.as_str()) {
-                            logos.insert(symbol.clone(), (*url).to_string());
-                        }
-                    }
-                }
+                        .map(|c| (c.id.clone(), c)),
+                ),
                 Err(_) => failed = true,
             }
         }
-        if failed && logos.is_empty() {
+        if failed && coins.is_empty() {
             return match self.gecko_stale(&key).await {
-                Some(Cached::Logos(logos)) => Ok(logos),
+                Some(Cached::Coins(coins)) => Ok(coins),
                 _ => Err(Unavailable),
             };
         }
-        let logos = Arc::new(logos);
-        self.gecko_store(key, Cached::Logos(logos.clone())).await;
-        Ok(logos)
+        let coins = Arc::new(coins);
+        self.gecko_store(key, Cached::Coins(coins.clone())).await;
+        Ok(coins)
+    }
+
+    /// The coin list without waiting on CoinGecko when any copy exists: a stale copy is
+    /// served at once and one background refresh is started. Only the very first call waits.
+    pub async fn coin_markets_now(
+        self: &Arc<Self>,
+    ) -> Result<Arc<HashMap<String, CoinMarket>>, Unavailable> {
+        use std::sync::atomic::Ordering;
+        if let Some(Cached::Coins(coins)) = self.gecko_cached("coins", COINS_TTL).await {
+            return Ok(coins);
+        }
+        let Some(Cached::Coins(stale)) = self.gecko_stale("coins").await else {
+            return self.coin_markets().await;
+        };
+        if !self.coins_refreshing.swap(true, Ordering::AcqRel) {
+            let me = self.clone();
+            tokio::spawn(async move {
+                let _ = me.coin_markets().await;
+                me.coins_refreshing.store(false, Ordering::Release);
+            });
+        }
+        Ok(stale)
+    }
+
+    /// The coin list if one has been fetched (however old), without any request: for
+    /// naming balances, where waiting on CoinGecko isn't worth it.
+    pub async fn coin_markets_cached(&self) -> Option<Arc<HashMap<String, CoinMarket>>> {
+        match self.gecko_stale("coins").await {
+            Some(Cached::Coins(coins)) => Some(coins),
+            _ => None,
+        }
+    }
+
+    /// Search's list: every token 1Click delivers on Honey's chains, named, with a logo
+    /// and CoinGecko's caps and 24h numbers, wrapped copies folded into their coin, and
+    /// ranked by market cap (see `market_listing`). Without CoinGecko it still lists every
+    /// token, priced by 1Click, unranked.
+    pub async fn listing(self: &Arc<Self>) -> Result<Vec<MarketListing>, Unavailable> {
+        let tokens = self.tokens().await?;
+        let coins = self.coin_markets_now().await.unwrap_or_default();
+        Ok(market_listing(&tokens, &coins))
+    }
+
+    /// A logo URL (https, CoinGecko's CDN) for every symbol 1Click lists, keyed by the
+    /// upper-case symbol, from the coin list above.
+    pub async fn token_logos(
+        self: &Arc<Self>,
+    ) -> Result<Arc<std::collections::BTreeMap<String, String>>, Unavailable> {
+        let tokens = self.tokens().await?;
+        let coins = self.coin_markets_now().await?;
+        let mut logos = std::collections::BTreeMap::new();
+        for t in tokens.iter() {
+            let symbol = normalize_symbol(&t.symbol).to_ascii_uppercase();
+            if symbol.is_empty() || logos.contains_key(&symbol) {
+                continue;
+            }
+            if let Some(url) = coingecko_id(&symbol, &tokens)
+                .and_then(|id| coins.get(&id))
+                .and_then(|c| c.image.clone())
+            {
+                logos.insert(symbol, url);
+            }
+        }
+        Ok(Arc::new(logos))
     }
 
     /// Name, About text, website, explorer, logo, caps and supply for one symbol.
@@ -895,14 +1166,14 @@ const COINGECKO_IDS: &[(&str, &str)] = &[
 
 /// A curated id, else the id most of the 1Click entries for this symbol carry.
 fn coingecko_id(symbol: &str, tokens: &[OneClickToken]) -> Option<String> {
-    let upper = symbol.trim().to_ascii_uppercase();
+    let upper = normalize_symbol(symbol).to_ascii_uppercase();
     if let Some((_, id)) = COINGECKO_IDS.iter().find(|(s, _)| *s == upper) {
         return Some((*id).to_string());
     }
     let mut counts: Vec<(&str, usize)> = Vec::new();
     for t in tokens
         .iter()
-        .filter(|t| t.symbol.eq_ignore_ascii_case(&upper))
+        .filter(|t| normalize_symbol(&t.symbol).eq_ignore_ascii_case(&upper))
     {
         let Some(id) = t
             .coingecko_id
@@ -1091,8 +1362,9 @@ fn num(v: &Value) -> Option<f64> {
 /// The same asset on every supported chain: tokens sharing the symbol's CoinGecko
 /// id, so "NEAR" also finds wNEAR on NEAR and bridged NEAR elsewhere.
 fn variants_of<'a>(symbol: &str, tokens: &'a [OneClickToken]) -> Vec<&'a OneClickToken> {
+    let symbol = normalize_symbol(symbol);
     let wrapped = format!("W{symbol}");
-    let is = |t: &OneClickToken, s: &str| t.symbol.eq_ignore_ascii_case(s);
+    let is = |t: &OneClickToken, s: &str| normalize_symbol(&t.symbol).eq_ignore_ascii_case(s);
     let anchor = tokens
         .iter()
         .filter(|t| chain_from_oneclick(&t.blockchain).is_some())
@@ -1371,6 +1643,194 @@ mod tests {
         assert_eq!(list[0].symbol, "NEAR");
         assert_eq!(list[0].price_usd, 3.7);
         assert_eq!(list[0].chains, ["Ethereum", "Base", "BSC", "NEAR"]);
+    }
+
+    fn priced(
+        asset: &str,
+        chain: &str,
+        symbol: &str,
+        gecko: Option<&str>,
+        price: f64,
+    ) -> OneClickToken {
+        OneClickToken {
+            asset_id: asset.into(),
+            blockchain: chain.into(),
+            symbol: symbol.into(),
+            decimals: 18,
+            price: Some(price),
+            contract_address: Some(format!("{asset}-addr")),
+            coingecko_id: gecko.map(Into::into),
+        }
+    }
+
+    fn coin(
+        id: &str,
+        symbol: &str,
+        name: &str,
+        rank: Option<u32>,
+        cap: f64,
+        volume: f64,
+    ) -> (String, CoinMarket) {
+        (
+            id.into(),
+            CoinMarket {
+                id: id.into(),
+                symbol: symbol.into(),
+                name: name.into(),
+                image: Some(format!("https://coin-images.coingecko.com/{id}.png")),
+                price_usd: None,
+                market_cap: Some(cap).filter(|c| *c > 0.0),
+                rank,
+                volume_24h: Some(volume),
+                change_24h: Some(1.5),
+            },
+        )
+    }
+
+    #[test]
+    fn the_listing_folds_wrapped_copies_into_their_coin_and_ranks_by_market_cap() {
+        let tokens = vec![
+            priced("btc", "near", "BTC", Some("bitcoin"), 69_000.0),
+            priced(
+                "cb",
+                "base",
+                "cbBTC",
+                Some("coinbase-wrapped-btc"),
+                68_950.0,
+            ),
+            priced(
+                "cb2",
+                "eth",
+                "cbBTC",
+                Some("coinbase-wrapped-btc"),
+                68_950.0,
+            ),
+            priced("wb", "eth", "WBTC", Some("wrapped-bitcoin"), 69_010.0),
+            priced("eth", "eth", "ETH", Some("ethereum"), 3_000.0),
+            priced("weth", "base", "WETH", Some("ethereum"), 3_000.0),
+            priced("wn", "near", "wNEAR", Some("wrapped-near"), 3.5),
+            priced("wns", "sol", "wNEAR", Some("wrapped-near"), 3.5),
+            priced("wif", "sol", "$WIF", Some("dogwifcoin"), 0.4),
+            priced("bd", "near", "BLACKDRAGON", Some("black-dragon"), 5e-9),
+            priced("st", "near", "stNEAR", Some("staked-near"), 5.3),
+            priced("cn", "near", "cNEAR", None, 3.5),
+            // Same id, but priced like a different thing: never folded in.
+            priced("odd", "sol", "xBTC", Some("bitcoin"), 10.0),
+        ];
+        let coins: HashMap<String, CoinMarket> = [
+            coin("bitcoin", "BTC", "Bitcoin", Some(1), 1.4e12, 3e10),
+            coin(
+                "coinbase-wrapped-btc",
+                "CBBTC",
+                "Coinbase Wrapped BTC",
+                Some(40),
+                7e9,
+                4e8,
+            ),
+            coin("ethereum", "ETH", "Ethereum", Some(2), 3.6e11, 2e10),
+            coin("near", "NEAR", "NEAR Protocol", Some(30), 4e9, 3e8),
+            coin("dogwifcoin", "WIF", "dogwifhat", Some(90), 6e8, 2e8),
+            coin(
+                "black-dragon",
+                "BLACKDRAGON",
+                "Black Dragon",
+                None,
+                0.0,
+                9e3,
+            ),
+            coin("staked-near", "STNEAR", "Staked NEAR", Some(700), 2e7, 1e5),
+        ]
+        .into_iter()
+        .collect();
+        let mut coins = coins;
+        coins.get_mut("bitcoin").unwrap().price_usd = Some(69_100.0);
+        // CoinGecko prices stNEAR far from 1Click's: it keeps no CoinGecko numbers.
+        let mut wrong = coins.clone();
+        wrong.get_mut("staked-near").unwrap().price_usd = Some(50.0);
+        let st = market_listing(&tokens, &wrong)
+            .into_iter()
+            .find(|t| t.symbol == "stNEAR")
+            .unwrap();
+        assert_eq!((st.name.as_str(), st.rank), ("stNEAR", None));
+        let list = market_listing(&tokens, &coins);
+        let symbols: Vec<&str> = list.iter().map(|t| t.symbol.as_str()).collect();
+        assert_eq!(
+            symbols,
+            [
+                "BTC",
+                "ETH",
+                "NEAR",
+                "WIF",
+                "stNEAR",
+                "BLACKDRAGON",
+                "cNEAR",
+                "xBTC"
+            ]
+        );
+        let btc = &list[0];
+        assert_eq!(btc.name, "Bitcoin");
+        assert_eq!(btc.aliases, ["cbBTC", "WBTC"]);
+        assert_eq!(
+            btc.chains,
+            ["NEAR"],
+            "a buy names BTC where 1Click delivers BTC"
+        );
+        assert_eq!(btc.price_usd, 69_000.0);
+        assert_eq!((btc.rank, btc.market_cap), (Some(1), Some(1.4e12)));
+        assert_eq!(list[1].aliases, ["WETH"]);
+        let near = &list[2];
+        assert_eq!(
+            (near.name.as_str(), near.aliases.clone()),
+            ("NEAR Protocol", vec!["wNEAR".to_string()])
+        );
+        assert_eq!(near.chains, ["NEAR"]);
+        assert_eq!(list[3].name, "dogwifhat");
+        assert_eq!(list[5].name, "Black Dragon");
+        assert_eq!(list[5].volume_24h, Some(9e3));
+        // Unknown to CoinGecko: listed last under its symbol, no invented numbers.
+        assert_eq!(
+            (
+                list[6].name.as_str(),
+                list[6].market_cap,
+                list[6].logo.clone()
+            ),
+            ("cNEAR", None, None)
+        );
+        // Without CoinGecko every token still lists, priced by 1Click.
+        let bare = market_listing(&tokens, &HashMap::new());
+        assert_eq!(bare.len(), list.len());
+        assert!(bare.iter().all(|t| t.rank.is_none() && t.price_usd > 0.0));
+    }
+
+    #[test]
+    fn asset_keys_and_symbols() {
+        assert_eq!(asset_key("coinbase-wrapped-btc"), "bitcoin");
+        assert_eq!(asset_key("wrapped-near"), "near");
+        assert_eq!(asset_key("weth"), "ethereum");
+        assert_eq!(asset_key("wrapped-steth"), "steth");
+        assert_eq!(asset_key("near"), "near");
+        assert_eq!(normalize_symbol(" $WIF"), "WIF");
+        let body = json!([
+            { "id": "near", "symbol": "near", "name": "NEAR Protocol", "image": "https://x/near.png",
+              "current_price": 3.5, "market_cap": 4.0e9, "market_cap_rank": 30,
+              "total_volume": 3.0e8, "price_change_percentage_24h": -2.5 },
+            { "id": "bad id", "symbol": "x", "name": "X" },
+            { "id": "zero", "symbol": "z", "name": "Zero", "image": "http://insecure/z.png",
+              "market_cap": 0, "market_cap_rank": null, "total_volume": 0 },
+        ]);
+        let coins = parse_coin_markets(&body);
+        assert_eq!(coins.len(), 2);
+        assert_eq!(coins[0].symbol, "NEAR");
+        assert_eq!(coins[0].rank, Some(30));
+        assert_eq!(coins[0].change_24h, Some(-2.5));
+        assert_eq!(
+            (
+                coins[1].image.clone(),
+                coins[1].market_cap,
+                coins[1].volume_24h
+            ),
+            (None, None, None)
+        );
     }
 
     #[test]

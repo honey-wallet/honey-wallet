@@ -12,7 +12,13 @@ import { Chip } from '@/components/wallet/Chip';
 import { Change, PushedScreen, SCREEN, TokenIcon } from '@/components/wallet/parts';
 import { SearchField } from '@/components/wallet/SearchField';
 import { tap } from '@/lib/haptics';
-import { uniqueBySymbol, useMarketList, useMarketSettled } from '@/lib/market';
+import {
+  isDollar,
+  matchesQuery,
+  uniqueBySymbol,
+  useMarketList,
+  useMarketSettled,
+} from '@/lib/market';
 import { formatCompactUsd, formatPrice, type MarketToken } from '@/lib/mock-wallet';
 import { manualProposal } from '@/lib/thesis';
 import { chatDraft } from '@/lib/thesis-chat';
@@ -23,7 +29,6 @@ const MAX_PICKS = 8;
 /** Rows drawn per page as you scroll; the list is every token 1Click delivers. */
 const SHOWN = 40;
 /** Stablecoins aren't a bet; they'd only dilute the jar. */
-const SKIP = new Set(['USDC', 'USDT', 'DAI', 'USDE', 'PYUSD']);
 
 /** A token is just its symbol here; NEAR Intents picks the chain when it buys. */
 const keyOf = (t: { symbol: string }) => t.symbol.toUpperCase();
@@ -58,11 +63,7 @@ export default function BuildJarScreen() {
   // Search's Top tokens, in its order (most traded first), drawn a page at a time as
   // you scroll, so the list never ends until the tokens do.
   const matches = list
-    .filter(
-      (t) =>
-        !SKIP.has(t.symbol.toUpperCase()) &&
-        (!q || t.symbol.toLowerCase().includes(q) || t.name.toLowerCase().includes(q)),
-    )
+    .filter((t) => !isDollar(t) && matchesQuery(t, q))
     .sort((a, b) => {
       const rank = order.current;
       const ra = rank?.get(keyOf(a)) ?? Number.MAX_SAFE_INTEGER;
@@ -118,7 +119,7 @@ export default function BuildJarScreen() {
                   key={keyOf(t)}
                   label={t.symbol}
                   selected
-                  leading={<TokenIcon symbol={t.symbol} size={20} />}
+                  leading={<TokenIcon symbol={t.symbol} size={20} uri={t.logo} />}
                   accessibilityLabel={`Remove ${t.symbol}`}
                   onPress={() => toggle(t)}
                 />
@@ -162,7 +163,7 @@ export default function BuildJarScreen() {
               style={[styles.row, full && styles.off]}
             >
               {/* Search's Top tokens row: logo, name and volume, price and the day's move. */}
-              <TokenIcon symbol={item.symbol} size={40} />
+              <TokenIcon symbol={item.symbol} size={40} uri={item.logo} />
               <View style={styles.flex}>
                 <Text style={styles.name} numberOfLines={1}>
                   {item.name}

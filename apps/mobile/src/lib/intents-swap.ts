@@ -176,8 +176,17 @@ const EVM_CHAIN_ID: Partial<Record<Chain, number>> = { Ethereum: 1, Base: 8453 }
 
 /** Slippage every swap asks for: 1%. */
 export const SWAP_SLIPPAGE_BPS = 100;
-/** Hard client-side ceiling in dollars, whatever cap the server reports. */
-export const MAX_SWAP_USD = 1_000;
+/**
+ * Hard client-side ceiling in dollars, whatever cap the server reports (the server's own
+ * per-quote cap is `JAR_BUY_CAP_USD`, at most $1,000). `EXPO_PUBLIC_MAX_SWAP_USD` can
+ * lower it for a build; unset, or anything outside (0, 1000], it's $1,000.
+ */
+export const MAX_SWAP_USD = swapCeiling(process.env.EXPO_PUBLIC_MAX_SWAP_USD);
+
+function swapCeiling(raw: string | undefined) {
+  const n = Number(raw);
+  return raw?.trim() && Number.isFinite(n) && n > 0 && n <= 1_000 ? n : 1_000;
+}
 /** A quote that keeps less than this share of the value is refused outright. */
 const MIN_VALUE_KEPT = 0.5;
 
@@ -191,6 +200,37 @@ export const tokenRef = (t: OneClickToken): TokenRef => ({
   chain: chainName(t.blockchain),
   assetId: t.assetId,
 });
+
+/** Where a symbol named without a network is looked for first: the networks this wallet pays from. */
+const HOME_BLOCKCHAINS = ['eth', 'base', 'sol', 'near'];
+
+/**
+ * The swap token for a symbol named without an asset (a token page's Buy): 1Click's entry
+ * with that symbol on `chain` when given and listed, else on Ethereum, Base, Solana or
+ * NEAR (in that order), else on any network. Native NEAR is bought as wNEAR on NEAR, the
+ * way 1Click trades it. Tokens the app names itself (ETH, SOL, USDC) keep the plain ref
+ * the pickers use. Null when 1Click doesn't list the symbol.
+ */
+export function swapRefForSymbol(
+  tokens: OneClickToken[],
+  symbol: string,
+  chain?: string,
+): TokenRef | null {
+  const wanted = symbol === 'NEAR' ? 'wNEAR' : symbol;
+  const exact = tokens.filter((t) => t.symbol === wanted);
+  const matches = exact.length
+    ? exact
+    : tokens.filter((t) => t.symbol.toUpperCase() === wanted.toUpperCase());
+  const order = [...(chain ? [blockchainOf(chain)] : []), ...HOME_BLOCKCHAINS];
+  const rank = (t: OneClickToken) => {
+    const i = order.indexOf(t.blockchain);
+    return i < 0 ? order.length : i;
+  };
+  const [best] = [...matches].sort((a, b) => rank(a) - rank(b));
+  if (!best) return null;
+  const plain = { symbol: best.symbol, chain: chainName(best.blockchain) };
+  return findAsset(tokens, plain)?.assetId === best.assetId ? plain : tokenRef(best);
+}
 
 /**
  * Whether this wallet can pay `t` with lib/send.ts: the chain's own coin on Ethereum,

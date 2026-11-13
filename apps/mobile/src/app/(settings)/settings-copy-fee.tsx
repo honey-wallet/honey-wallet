@@ -1,9 +1,18 @@
+import { ComingSoonSheet } from '@/components/sheets/ComingSoon';
 import { closeSheet, SheetRow, SheetScreen, SheetText } from '@/components/sheets/Sheet';
 import { tap } from '@/lib/haptics';
 import { JAR_FEES, updateSettings, useSettings } from '@/lib/settings';
+import { COPY_FEES } from '@/lib/surface';
+
+/** No copy fee is charged yet (lib/surface COPY_FEES): a link straight here says so. */
+export default function CopyFeeRoute() {
+  if (!COPY_FEES)
+    return <ComingSoonSheet icon="pie" hint="Creator fees on copies are coming soon." />;
+  return <CopyFeeSheet />;
+}
 
 /** Your cut when people copy a jar you launch: where Launch your jar starts. */
-export default function CopyFeeSheet() {
+function CopyFeeSheet() {
   const { jarCopyFee } = useSettings();
   const choose = (value: number) => {
     tap();

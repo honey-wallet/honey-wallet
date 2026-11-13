@@ -1,8 +1,9 @@
 import { ed25519 } from '@noble/curves/ed25519.js';
 import { sha256 } from '@noble/hashes/sha2.js';
-import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils.js';
+import { bytesToHex, hexToBytes, utf8ToBytes } from '@noble/hashes/utils.js';
 import { base58, base64 } from '@scure/base';
 import { describe, expect, it } from 'vitest';
+import delegateVector from './fixtures/near-delegate.json';
 import { encodeNearTransfer, nearAddressOfKey } from './near';
 import {
   actProposalCall,
@@ -84,6 +85,28 @@ describe('NEAR function-call transactions', () => {
 });
 
 describe('NEP-366 delegate actions', () => {
+  it('encodes and signs exactly like near-api-js 7.3.1', () => {
+    const v = delegateVector;
+    const memberKey = hexToBytes(v.memberSecretSeedHex);
+    expect(nearAddressOfKey(memberKey)).toBe(v.member);
+    const d = {
+      senderId: v.member,
+      receiverId: v.receiverId,
+      actions: v.actions.map((a) => ({
+        methodName: a.methodName,
+        args: utf8ToBytes(a.argsJson),
+        gas: BigInt(a.gas),
+        deposit: BigInt(a.deposit),
+      })),
+      nonce: BigInt(v.nonce),
+      maxBlockHeight: BigInt(v.maxBlockHeight),
+    };
+    // near-api-js's encodeDelegateAction includes the NEP-461 prefix; ours is the body.
+    expect(`6e010040${bytesToHex(encodeDelegateAction(d))}`).toBe(v.delegateActionHex);
+    expect(bytesToHex(sha256(hexToBytes(v.delegateActionHex)))).toBe(v.delegateHashHex);
+    expect(signDelegateAction(memberKey, d)).toBe(v.signedDelegateBase64);
+  });
+
   it('signs the prefixed hash of the delegate action', () => {
     const d = {
       senderId: signer,

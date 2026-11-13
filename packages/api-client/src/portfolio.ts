@@ -18,6 +18,8 @@ const isNumber = (v: unknown): v is number => typeof v === 'number' && Number.is
 const isStrings = (v: unknown): v is string[] =>
   Array.isArray(v) && v.every((s) => typeof s === 'string');
 const nullable = <T>(v: unknown, is: (v: unknown) => v is T) => v === null || is(v);
+/** Missing (an older server), null, or the type. */
+const optional = <T>(v: unknown, is: (v: unknown) => v is T) => v === undefined || nullable(v, is);
 const isString = (v: unknown): v is string => typeof v === 'string';
 
 /** Query string for the portfolio endpoints; empty values are left out. */
@@ -38,7 +40,9 @@ export function isPortfolioHolding(v: unknown): v is PortfolioHolding {
     isString(v.name) &&
     isNumber(v.amount) &&
     nullable(v.priceUsd, isNumber) &&
-    isNumber(v.usd)
+    isNumber(v.usd) &&
+    (v.contract === undefined || isString(v.contract)) &&
+    (v.decimals === undefined || isNumber(v.decimals))
   );
 }
 
@@ -161,7 +165,14 @@ export function isMarketListTokens(v: unknown): v is MarketListToken[] {
         isString(t.symbol) &&
         isNumber(t.priceUsd) &&
         Array.isArray(t.chains) &&
-        t.chains.every(isString),
+        t.chains.every(isString) &&
+        (t.name === undefined || isString(t.name)) &&
+        optional(t.logo, isString) &&
+        optional(t.change24h, isNumber) &&
+        optional(t.volume24h, isNumber) &&
+        optional(t.marketCap, isNumber) &&
+        optional(t.rank, isNumber) &&
+        (t.aliases === undefined || isStrings(t.aliases)),
     )
   );
 }
