@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   address: vi.fn(),
   active: 'real',
   store: new Map<string, string>(),
+  failReads: 0,
 }));
 // Everything the keychain holds, joined (null when empty).
 const stored = () => [...mocks.store.values()].join('\n') || null;
@@ -35,7 +36,13 @@ vi.mock('@/lib/api', () => ({
   },
 }));
 vi.mock('@/lib/secure-store', () => ({
-  getItemAsync: async (key: string) => mocks.store.get(key) ?? null,
+  getItemAsync: async (key: string) => {
+    if (key === 'honey.backend-refresh-families' && mocks.failReads > 0) {
+      mocks.failReads -= 1;
+      throw new Error('Keychain busy');
+    }
+    return mocks.store.get(key) ?? null;
+  },
   setItemAsync: async (key: string, value: string) => {
     mocks.store.set(key, value);
   },
@@ -97,6 +104,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   mocks.active = 'real';
   mocks.store.clear();
+  mocks.failReads = 0;
   vi.stubEnv('EXPO_PUBLIC_AUTH_ORIGIN', 'http://localhost:5173');
   vi.stubEnv('EXPO_PUBLIC_AUTH_CHAIN_ID', 'eip155:1');
   backendVisibility('active');
@@ -670,4 +678,26 @@ it('keeps every saved session when the wallet list reads back empty', async () =
   expect(stored()).toContain('c'.repeat(64));
   expect(mocks.refresh).not.toHaveBeenCalled();
   expect(mocks.signOut).not.toHaveBeenCalled();
+});
+
+it('a failed keychain read never rewrites the saved sessions of other wallets', async () => {
+  mocks.accounts.mockResolvedValue([
+    { id: 'real', addresses: { evm: address } },
+    { id: 'other', addresses: { evm: address } },
+  ]);
+  await prepareBackendSignIn();
+  await approveBackendSignIn();
+  mocks.active = 'other';
+  backendWalletChanged();
+  await prepareBackendSignIn();
+  await vi.advanceTimersByTimeAsync(0);
+  // The read before the save fails once.
+  mocks.failReads = 1;
+  await approveBackendSignIn();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(mocks.store.get('honey.backend-refresh-families')).toContain('"real"');
+  expect(stored()).toContain('c'.repeat(64));
+  mocks.active = 'real';
+  backendWalletChanged();
+  expect(await refreshResumeAvailability()).toBe(true);
 });
