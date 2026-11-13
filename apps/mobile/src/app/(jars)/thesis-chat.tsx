@@ -14,9 +14,9 @@ import {
 } from 'react-native';
 import Animated, { FadeIn } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Svg, { Line, Path, Text as SvgText } from 'react-native-svg';
+import Svg, { Circle, Defs, LinearGradient, Path, Stop, Text as SvgText } from 'react-native-svg';
 import { Icon } from '@/components/Icon';
-import { Facts, IdeaGrid, StrategyCard } from '@/components/jars/JarParts';
+import { IdeaGrid, StrategyCard } from '@/components/jars/JarParts';
 import { StepsCard } from '@/components/jars/StepsCard';
 import { HoneyLogo } from '@/components/logo/HoneyLogo';
 import { PressableScale } from '@/components/motion/PressableScale';
@@ -548,37 +548,84 @@ function ProjectionCard({ amount, risk }: { amount: number; risk: Risk }) {
   const c = useTheme();
   const [width, setWidth] = useState(0);
   const { low, mid, high } = projection(amount, risk);
-  const H = 150;
+  const H = 156;
+  // Room at the right for each outcome's number, at the end of its line.
+  const LABELS = 60;
   const max = Math.max(...high);
   const min = Math.min(...low);
-  const x = (i: number) => (i / (mid.length - 1)) * (width - 8) + 4;
-  const y = (v: number) => 10 + (1 - (v - min) / Math.max(max - min, 1)) * (H - 30);
+  const plot = Math.max(width - LABELS, 1);
+  const x = (i: number) => (i / (mid.length - 1)) * (plot - 8) + 4;
+  const y = (v: number) => 12 + (1 - (v - min) / Math.max(max - min, 1)) * (H - 36);
   const line = (vs: number[]) => vs.map((v, i) => `${i ? 'L' : 'M'}${x(i)},${y(v)}`).join('');
   const band = `${line(high)}${[...low]
     .reverse()
     .map((v, i) => `L${x(low.length - 1 - i)},${y(v)}`)
     .join('')}Z`;
+  const end = (vs: number[]) => Math.round(vs.at(-1) ?? 0);
+  const ends = [
+    { v: end(high), color: c.success, word: 'Good' },
+    { v: end(mid), color: c.text, word: 'Likely' },
+    { v: end(low), color: c.error, word: 'Bad' },
+  ];
   return (
     <View style={styles.card}>
-      <Text style={styles.muted}>In 12 months, roughly</Text>
-      <Text style={styles.cardValue}>
-        {money(Math.round(low.at(-1) ?? 0))} – {money(Math.round(high.at(-1) ?? 0))}
+      {/* The likely outcome leads; the range sits under it, as a price and its move. */}
+      <Text style={styles.muted}>{money(amount)} in 12 months, likely</Text>
+      <Text style={styles.cardValue}>{money(end(mid))}</Text>
+      <Text style={styles.muted}>
+        Between {money(end(low))} and {money(end(high))}
       </Text>
-      <View onLayout={(e) => setWidth(e.nativeEvent.layout.width)}>
+      <View onLayout={(e) => setWidth(e.nativeEvent.layout.width)} style={styles.projChart}>
         {width > 0 ? (
           <Svg width={width} height={H}>
-            <Path d={band} fill={c.primary} opacity={0.14} />
-            <Path d={line(high)} stroke={c.success} strokeWidth={1.5} fill="none" opacity={0.7} />
-            <Path d={line(low)} stroke={c.error} strokeWidth={1.5} fill="none" opacity={0.7} />
+            <Defs>
+              <LinearGradient id="projBand" x1="0" y1="0" x2="0" y2="1">
+                <Stop offset="0" stopColor={c.success} stopOpacity={0.22} />
+                <Stop offset="0.5" stopColor={c.text} stopOpacity={0.05} />
+                <Stop offset="1" stopColor={c.error} stopOpacity={0.18} />
+              </LinearGradient>
+            </Defs>
+            <Path d={band} fill="url(#projBand)" />
+            <Path d={line(high)} stroke={c.success} strokeWidth={1.5} fill="none" opacity={0.8} />
+            <Path d={line(low)} stroke={c.error} strokeWidth={1.5} fill="none" opacity={0.8} />
             <Path d={line(mid)} stroke={c.primary} strokeWidth={2.5} fill="none" />
-            <Line
-              x1={4}
-              x2={width - 4}
-              y1={y(amount)}
-              y2={y(amount)}
-              stroke={c.divider}
-              strokeDasharray="4 4"
-            />
+            {ends.map((e, i) => {
+              const vs = i === 0 ? high : i === 1 ? mid : low;
+              const cy = y(vs.at(-1) ?? 0);
+              return (
+                <Circle
+                  key={e.word}
+                  cx={x(vs.length - 1)}
+                  cy={cy}
+                  r={3.5}
+                  fill={i === 1 ? c.primary : e.color}
+                />
+              );
+            })}
+            {ends.map((e, i) => {
+              const vs = i === 0 ? high : i === 1 ? mid : low;
+              // Keep the three numbers apart even when the band is narrow.
+              const raw = y(vs.at(-1) ?? 0);
+              const cy =
+                i === 0
+                  ? Math.min(raw, y(mid.at(-1) ?? 0) - 18)
+                  : i === 2
+                    ? Math.max(raw, y(mid.at(-1) ?? 0) + 18)
+                    : raw;
+              return (
+                <SvgText
+                  key={`t${e.word}`}
+                  x={plot + 6}
+                  y={cy + 4}
+                  fill={e.color}
+                  fontSize={13}
+                  fontWeight="600"
+                  fontFamily="system-ui, -apple-system, sans-serif"
+                >
+                  {money(e.v)}
+                </SvgText>
+              );
+            })}
             <SvgText
               x={4}
               y={H - 4}
@@ -589,7 +636,7 @@ function ProjectionCard({ amount, risk }: { amount: number; risk: Risk }) {
               Today
             </SvgText>
             <SvgText
-              x={width - 4}
+              x={plot - 4}
               y={H - 4}
               fill={c.textSecondary}
               fontSize={11}
@@ -603,13 +650,6 @@ function ProjectionCard({ amount, risk }: { amount: number; risk: Risk }) {
           <View style={{ height: H }} />
         )}
       </View>
-      <Facts
-        facts={[
-          { label: 'Bad year', value: money(Math.round(low.at(-1) ?? 0)) },
-          { label: 'Middle', value: money(Math.round(mid.at(-1) ?? 0)) },
-          { label: 'Good year', value: money(Math.round(high.at(-1) ?? 0)) },
-        ]}
-      />
       <Gate id="projectionFootnote">
         <Text style={styles.footnote}>
           Assumes a typical yearly swing of {Math.round(SWING[risk] * 100)}% for{' '}
@@ -623,6 +663,7 @@ function ProjectionCard({ amount, risk }: { amount: number; risk: Risk }) {
 }
 
 const useStyles = makeStyles((c) => ({
+  projChart: { marginTop: 8 },
   answer: { gap: 12 },
   cardTitle: { color: c.text, fontSize: 17, fontWeight: '600' },
   flex: { flex: 1 },

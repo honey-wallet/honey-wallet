@@ -1,10 +1,11 @@
 import { router, useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
-import { TextInput, View } from 'react-native';
+import { Text, TextInput, View } from 'react-native';
 import { StrategyCard } from '@/components/jars/JarParts';
+import { PressableScale } from '@/components/motion/PressableScale';
 import { PillButton } from '@/components/onboarding/PillButton';
 import { SheetScreen } from '@/components/sheets/Sheet';
-import { PersonByline } from '@/components/social/parts';
+import { SocialAvatar } from '@/components/social/parts';
 import { success, tap } from '@/lib/haptics';
 import { publishJar, socialError, useSocialMe } from '@/lib/social';
 import { TEST_MODE } from '@/lib/test-mode';
@@ -49,47 +50,82 @@ export default function JarPostSheet() {
   return (
     <SheetScreen
       title="Post your jar"
+      // Skipping is a quiet word up top, so Post is the one button (X's composer).
+      right={
+        <PressableScale
+          accessibilityRole="button"
+          hitSlop={10}
+          scaleTo={0.96}
+          disabled={posting}
+          onPress={() => {
+            tap();
+            router.back();
+          }}
+        >
+          <Text style={styles.skip}>Not now</Text>
+        </PressableScale>
+      }
       footer={
-        <View style={styles.footer}>
-          <PillButton
-            label="Not now"
-            variant="secondary"
-            disabled={posting}
-            onPress={() => {
-              tap();
-              router.back();
-            }}
-          />
-          <PillButton
-            label={posting ? 'Posting…' : 'Post'}
-            disabled={!text || posting}
-            onPress={() => void post()}
-          />
-        </View>
+        <PillButton
+          label={posting ? 'Posting…' : 'Post'}
+          disabled={!text || posting}
+          onPress={() => void post()}
+        />
       }
     >
-      <View style={styles.body}>
-        {me ? <PersonByline who={me} /> : null}
-        <TextInput
-          value={why}
-          onChangeText={setWhy}
-          autoFocus
-          multiline
-          maxLength={280}
-          placeholder="Why this jar?"
-          placeholderTextColor={c.placeholder}
-          selectionColor={c.accentText}
-          style={styles.input}
-          accessibilityLabel="Why this jar"
-        />
-        <StrategyCard split jar={jar} picks={jar.picks} name={jar.name} />
+      {/* As the post will look: your face, and the words beside it under your name,
+          then the jar's card. */}
+      <View style={styles.post}>
+        {me ? <SocialAvatar who={me} size={40} /> : null}
+        <View style={styles.flex}>
+          {me ? (
+            <View style={styles.nameRow}>
+              <Text style={styles.name} numberOfLines={1}>
+                {me.displayName}
+              </Text>
+              <Text style={styles.handle} numberOfLines={1}>
+                @{me.handle}
+              </Text>
+            </View>
+          ) : null}
+          <TextInput
+            value={why}
+            onChangeText={setWhy}
+            autoFocus
+            multiline
+            maxLength={MAX}
+            placeholder="What’s the idea?"
+            placeholderTextColor={c.placeholder}
+            selectionColor={c.accentText}
+            style={styles.input}
+            accessibilityLabel="Why this jar"
+          />
+          {why.length > MAX - 60 ? <Text style={styles.count}>{MAX - why.length}</Text> : null}
+        </View>
       </View>
+      <StrategyCard split jar={jar} picks={jar.picks} name={jar.name} />
     </SheetScreen>
   );
 }
 
+/** A post's length, as on X. */
+const MAX = 280;
+
 const useStyles = makeStyles((c) => ({
-  body: { gap: 14 },
-  input: { color: c.text, fontSize: 17, lineHeight: 24, minHeight: 72, padding: 0 },
-  footer: { gap: 10 },
+  flex: { flex: 1 },
+  post: { flexDirection: 'row', gap: 12, marginBottom: 16 },
+  nameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  name: { color: c.text, fontSize: 15, fontWeight: '700', flexShrink: 1 },
+  handle: { color: c.textSecondary, fontSize: 15, flexShrink: 2 },
+  input: {
+    marginTop: 4,
+    color: c.text,
+    fontSize: 17,
+    lineHeight: 24,
+    minHeight: 96,
+    padding: 0,
+    textAlignVertical: 'top',
+  },
+  count: { alignSelf: 'flex-end', color: c.textSecondary, fontSize: 13 },
+  skip: { color: c.textSecondary, fontSize: 16, fontWeight: '600' },
 }));
