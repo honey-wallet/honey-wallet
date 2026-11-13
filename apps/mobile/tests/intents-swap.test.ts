@@ -21,6 +21,7 @@ const {
   executeSwapPayment,
   fetchSwapTokens,
   intentsSwaps,
+  isFinal,
   needsMemoWarning,
   parseOneClickTokens,
   prepareSwapPayment,
@@ -849,6 +850,37 @@ describe('quote → pay', () => {
     expect(
       (await refreshSwap(unpaid, { ...late, fetcher: status('PENDING_DEPOSIT') })).status,
     ).toBe('EXPIRED');
+  });
+
+  it('settles a sent deposit 1Click never saw once past its deadline and grace (money audit 7)', async () => {
+    const pending = (async () =>
+      new Response(
+        JSON.stringify({
+          status: 'PENDING_DEPOSIT',
+          quoteResponse: { quoteRequest: {}, quote: {} },
+        }),
+      )) as unknown as typeof fetch;
+    const sent = swap({ status: 'KNOWN_DEPOSIT_TX' as const, txHash: `0x${'d'.repeat(64)}` });
+    const late = { token: () => null, now: () => Date.parse('2026-11-09T12:30:00Z') };
+    const at = async (state: 'success' | 'failure' | 'missing' | 'unknown', now = late) => {
+      const depositTx = vi.fn(async () => state);
+      const next = await refreshSwap(sent, { ...now, fetcher: pending, depositTx });
+      return { next, depositTx };
+    };
+    const reverted = await at('failure');
+    expect(reverted.depositTx).toHaveBeenCalledWith('Base', `0x${'d'.repeat(64)}`);
+    expect(reverted.next.status).toBe('FAILED');
+    const dropped = (await at('missing')).next;
+    expect(dropped.status).toBe('EXPIRED');
+    // Both are final: the in-flight bar and polling stop.
+    expect(isFinal(reverted.next) && isFinal(dropped)).toBe(true);
+    // Landed or unreadable: left as sent.
+    expect((await at('success')).next.status).toBe('KNOWN_DEPOSIT_TX');
+    expect((await at('unknown')).next.status).toBe('KNOWN_DEPOSIT_TX');
+    // Before the deadline and grace: not even looked at.
+    const early = await at('missing', { token: () => null, now: () => NOW });
+    expect(early.next.status).toBe('KNOWN_DEPOSIT_TX');
+    expect(early.depositTx).not.toHaveBeenCalled();
   });
 });
 

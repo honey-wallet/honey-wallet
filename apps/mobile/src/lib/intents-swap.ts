@@ -27,6 +27,7 @@ import {
 import { formatUnits, isAddress } from 'viem';
 import { api } from '@/lib/api';
 import { backendSessionToken } from '@/lib/backend-session';
+import { depositTxState } from '@/lib/deposit-tx';
 import {
   atomic,
   checkDeadline,
@@ -692,6 +693,8 @@ export type SwapDeps = {
   nearFtReady: (token: string, account: string) => Promise<boolean>;
   prepare: typeof prepareSend;
   now: () => number;
+  /** A sent deposit's state on its own chain (lib/deposit-tx). */
+  depositTx: typeof depositTxState;
 };
 
 const defaults: SwapDeps = {
@@ -702,6 +705,7 @@ const defaults: SwapDeps = {
   prepare: prepareSend,
   // The server's clock: deadlines are set on it, and a phone's may be minutes off.
   now: serverNow,
+  depositTx: (chain, hash) => depositTxState(chain, hash),
 };
 
 /** A live, verified quote for selling `amount` (decimal text) of `sell` for `buy`. Nothing is signed. */
@@ -1096,7 +1100,17 @@ export async function refreshSwap(
   if (status === 'PENDING_DEPOSIT') {
     // Never step back from "sent"; an address nobody paid runs out after its deadline.
     const late = d.now() > Date.parse(swap.deadline) + EXPIRY_GRACE_MS;
-    if (swap.status === 'KNOWN_DEPOSIT_TX') return swap;
+    // if (swap.status === 'KNOWN_DEPOSIT_TX') return swap;
+    // Replaced 14 Nov (money audit 7): a deposit 1Click never saw by the deadline and its
+    // grace is read on its own chain. Reverted: nothing was paid (FAILED); unknown to the
+    // chain: it was dropped (EXPIRED). Either way it stops, and so does the in-flight bar.
+    if (swap.status === 'KNOWN_DEPOSIT_TX') {
+      if (!late || !swap.txHash) return swap;
+      const tx = await d.depositTx(swap.sell.chain, swap.txHash).catch(() => 'unknown' as const);
+      if (tx === 'failure') return { ...swap, status: 'FAILED' };
+      if (tx === 'missing') return { ...swap, status: 'EXPIRED' };
+      return swap;
+    }
     return { ...swap, status: late ? 'EXPIRED' : swap.status };
   }
   return { ...swap, status, destinationTxHashes, refundedAmount };
