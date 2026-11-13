@@ -1,9 +1,13 @@
+import { router } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import { RefreshControl, Text, View } from 'react-native';
 import { ChatRow } from '@/components/jars/ChatRow';
 import { SkeletonReveal } from '@/components/motion/Skeleton';
 import { SheetRowSkeletons } from '@/components/sheets/Sheet';
 import { EmptyState, PushedScreen, SCREEN } from '@/components/wallet/parts';
+import { useRestoringSession } from '@/lib/backend-lifecycle';
+import { backendSession } from '@/lib/backend-session';
+import { TEST_MODE } from '@/lib/test-mode';
 import {
   fetchPastChats,
   HistoryUnavailable,
@@ -29,6 +33,11 @@ export default function ThesisHistoryScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const hidden = hiddenChats.useValue();
   const loading = useRef(false);
+  // Chats are the signed-in account's: signed out (or still reconnecting) isn't "No chats
+  // yet", and they load once the session arrives (2026-11-14).
+  const signedInAs = backendSession.useValue().profile?.wallet.id ?? null;
+  const restoring = useRestoringSession();
+  const signedOut = !TEST_MODE && !signedInAs;
 
   const load = async (before?: string) => {
     if (loading.current) return;
@@ -55,10 +64,13 @@ export default function ThesisHistoryScreen() {
     setRefreshing(false);
   };
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: once, on open
+  // biome-ignore lint/correctness/useExhaustiveDependencies: on open, and again when the signed-in wallet changes
   useEffect(() => {
+    // void load();
+    if (signedOut) return;
+    setChats(null);
     void load();
-  }, []);
+  }, [signedInAs]);
 
   const sections = chats ? historySections(visibleChats(chats, hidden)) : [];
   // The cursor is the oldest run the server sent, hidden or not.
@@ -72,8 +84,19 @@ export default function ThesisHistoryScreen() {
       onEndReached={more && oldest ? () => void load(oldest) : undefined}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void refresh()} />}
     >
-      <SkeletonReveal loading={chats === null} skeleton={<SheetRowSkeletons count={5} />}>
-        {sections.length ? (
+      <SkeletonReveal
+        // loading={chats === null}
+        loading={signedOut ? restoring : chats === null}
+        skeleton={<SheetRowSkeletons count={5} />}
+      >
+        {signedOut ? (
+          <EmptyState
+            icon="chat"
+            title="Sign in to see your chats"
+            hint="Your chats with the agent are kept with your Honey account."
+            action={{ label: 'Sign in', onPress: () => router.push('/wallet-sign-in') }}
+          />
+        ) : sections.length ? (
           <View style={styles.sections}>
             {sections.map((section) => (
               <View key={section.title}>
