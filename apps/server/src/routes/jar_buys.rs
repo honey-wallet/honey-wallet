@@ -70,6 +70,31 @@ impl Quota {
     }
 }
 
+/// Charges `quota` per verified person (their linked Apple or Google sign-in) where
+/// there is one; otherwise per wallet, and inside the smaller `unverified` slice too, so
+/// free-to-make wallets can't use up the shared ceiling between them.
+pub(crate) async fn charge_per_person(
+    identity: &Identity,
+    user: uuid::Uuid,
+    quota: Quota,
+    unverified: Quota,
+) -> Result<(), AppError> {
+    let person: Option<String> =
+        sqlx::query_scalar("SELECT firebase_uid FROM user_verified_identities WHERE user_id = $1")
+            .bind(user)
+            .fetch_optional(identity.pool())
+            .await
+            .map_err(crate::identity::unavailable)?;
+    match person {
+        Some(uid) => quota.charge(identity, &format!("person:{uid}")).await,
+        None => {
+            let user = user.to_string();
+            unverified.charge(identity, &user).await?;
+            quota.charge(identity, &user).await
+        }
+    }
+}
+
 /// Charges a 1Click quote: per verified person (their linked Apple or Google sign-in)
 /// where there is one; otherwise per wallet and inside the unverified slice too.
 pub(crate) async fn charge_quote(identity: &Identity, user: uuid::Uuid) -> Result<(), AppError> {

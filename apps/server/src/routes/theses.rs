@@ -36,6 +36,14 @@ const RUNS: Quota = Quota {
     per_user: 5,
 };
 
+/// The slice of `RUNS` wallets with no linked Apple or Google sign-in share: they are
+/// free to make, so four of them could otherwise take the whole global budget.
+const UNVERIFIED_RUNS: Quota = Quota {
+    domain: "thesis_run_unverified",
+    global: 6,
+    per_user: 5,
+};
+
 #[derive(Clone)]
 struct StateData {
     identity: Option<Identity>,
@@ -164,7 +172,9 @@ async fn start(
     let identity = state.identity.as_ref().ok_or(AppError::Unauthorized)?;
     // Each run spends model calls, news searches and link fetches on Honey's keys
     // (R-PF-4, R-IN-10): a per-user budget under a global ceiling.
-    RUNS.charge(identity, &owner.to_string()).await?;
+    // Replaced (audit #5): keyed per verified person, unverified wallets in a smaller slice.
+    // RUNS.charge(identity, &owner.to_string()).await?;
+    super::jar_buys::charge_per_person(identity, owner, RUNS, UNVERIFIED_RUNS).await?;
     let Json(input) = body.map_err(|_| AppError::BadRequest("invalid thesis request".into()))?;
     let run_id = state
         .service
@@ -450,6 +460,13 @@ mod tests {
     fn thesis_runs_have_a_global_ceiling() {
         super::super::jar_buys::tests::assert_valid(RUNS);
         assert_eq!(RUNS.global, 20);
+    }
+
+    #[test]
+    fn unverified_wallets_share_under_a_third_of_the_run_budget() {
+        super::super::jar_buys::tests::assert_valid(UNVERIFIED_RUNS);
+        const { assert!(UNVERIFIED_RUNS.global * 3 <= RUNS.global) };
+        const { assert!(UNVERIFIED_RUNS.per_user <= RUNS.per_user) };
     }
 
     #[test]
