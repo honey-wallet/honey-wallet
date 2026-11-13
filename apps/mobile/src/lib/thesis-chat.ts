@@ -1,5 +1,7 @@
 import { createStore } from '@/lib/store';
 import {
+  askThesis,
+  type Citation,
   followThesis,
   loadRun,
   type OnStage,
@@ -9,6 +11,7 @@ import {
   STAGES,
   type ThesisInput,
   withAmount,
+  withFollowUp,
   withoutPick,
 } from '@/lib/thesis';
 import { type Chartable, type ChatRange, chartAsk, SHOW_CHARTS } from '@/lib/thesis-charts';
@@ -29,7 +32,8 @@ export type ChatAction =
   | { kind: 'say'; text: string };
 
 export type ChatPart =
-  | { type: 'text'; text: string }
+  /** `sources`: what its `[n]` citation markers point at, drawn as small site pills. */
+  | { type: 'text'; text: string; sources?: Citation[] }
   | { type: 'stages'; at: number; done: boolean; live?: LiveProgress }
   /** The idea as the agent understood it, and its picks as they're chosen. */
   | { type: 'understood'; theme: string; picks: PartialPick[] }
@@ -63,6 +67,41 @@ export function nearestStep(amount: number, steps: readonly number[]): number {
   let best = steps[0] ?? amount;
   for (const s of steps) if (Math.abs(s - amount) < Math.abs(best - amount)) best = s;
   return best;
+}
+
+/** The quick reply that applies a follow-up answer's proposed picks. */
+export const UPDATE_JAR = 'Update the jar';
+
+/** The strategy a follow-up answer proposed, until "Update the jar" applies it. */
+export const chatPending = createStore<Proposal | null>(null);
+
+const QUESTION_START = /^(how|what|why|can|should|is|are|could|would|does|do|will)\b/i;
+const ABOUT_IT = /\b(this|it|the jar|these|them|my picks|the picks)\b/i;
+/** A request to change the strategy here, which the chat does without the agent. */
+const COMMAND = /\b(make|switch|change|set|turn|go|remove|drop|add)\b/i;
+
+/**
+ * A follow-up on the strategy you have, not a new idea: a question (ends with "?", or
+ * starts with how, what, why, can, should, is, are, could, would…) or a message about it
+ * ("this", "it", "the jar"). "How can I hedge against this ?" is one; "AI bubble is going
+ * to burst" is a new idea.
+ */
+export function isFollowUp(text: string): boolean {
+  const t = text.trim();
+  if (t.split(/\s+/).length < 2) return false;
+  return t.endsWith('?') || QUESTION_START.test(t) || ABOUT_IT.test(t);
+}
+
+/** Asking for advice ("should I add gold?"), not asking the chat to do something. */
+const ADVICE = /^(how|what|why|should|is|are|does|do|will)\b/i;
+
+/**
+ * A follow-up for the agent: a question or remark, not a change the chat makes itself
+ * ("Make it safer", "Can you make it low risk?").
+ */
+export function asksAgent(text: string): boolean {
+  const t = text.trim();
+  return isFollowUp(t) && (ADVICE.test(t) || !COMMAND.test(t));
 }
 
 /** The quick reply offered when a run fails: it runs the same message again. */
@@ -149,8 +188,12 @@ type Turn = {
   listed?: readonly string[];
   /** Sets Create jar to a typed amount; returns the amount the button now shows. */
   stake?: (amount: number) => number;
+  /** Dollars as the user's currency ("$5", "₹420"), as Create jar shows them; `money` without. */
+  format?: (usd: number) => string;
   /** The chat's Stop. */
   signal?: AbortSignal;
+  /** Answers a follow-up question (`askThesis`; tests pass a stand-in). */
+  ask?: typeof askThesis;
 };
 
 /** Answers one message, given the strategy so far. Returns the strategy after it. */
@@ -173,7 +216,20 @@ export async function reply(
 
   // Follow-ups on a strategy you already have.
   if (current) {
-    if (/project|expect|future|return|graph|chart|year|worst|best/i.test(asked)) {
+    // "Update the jar": the change the last answer proposed, as a new strategy card.
+    const pending = chatPending.get();
+    if (asked.toLowerCase() === UPDATE_JAR.toLowerCase() && pending) {
+      chatPending.set(null);
+      turn.update([
+        { type: 'text', text: "Here's the jar with that change." },
+        { type: 'strategy', proposal: pending },
+        { type: 'replies', options: nextSteps(pending.risk, pending.picks.length > 0) },
+      ]);
+      return pending;
+    }
+    // if (/project|expect|future|return|graph|chart|year|worst|best/i.test(asked)) {
+    // Only an ask for the projection itself: "what's the worst case if…" is a question.
+    if (/\b(projection|project(ed)?|expected returns?)\b/i.test(asked)) {
       turn.update([
         {
           type: 'text',
@@ -184,7 +240,12 @@ export async function reply(
       ]);
       return current;
     }
-    if (/why|explain|reason/i.test(asked)) {
+    // if (/why|explain|reason/i.test(asked)) {
+    // The picks' reasons for "Why these picks?"; "Why would gold help?" asks the agent.
+    if (
+      /^why\??$/i.test(asked) ||
+      /\b(why (these|the|my) picks|explain (the|these|my) picks|why these)\b/i.test(asked)
+    ) {
       turn.update([
         {
           type: 'text',
@@ -218,6 +279,22 @@ export async function reply(
       ]);
       return next;
     }
+    // A question or remark about the strategy: the agent answers it with the strategy
+    // as context (POST /theses/ask), instead of starting a brand-new thesis.
+    if (asksAgent(asked)) {
+      turn.update([]);
+      const answered = await (turn.ask ?? askThesis)(asked, current, turn.signal);
+      const proposed = withFollowUp(current, answered);
+      chatPending.set(proposed);
+      turn.update([
+        { type: 'text', text: answered.answer, sources: answered.citations },
+        {
+          type: 'replies',
+          options: [...(proposed ? [UPDATE_JAR] : []), 'Show a projection', 'Make it safer'],
+        },
+      ]);
+      return current;
+    }
     const talk = asksRisk(asked);
     const safer = talk && /\b(safer|lower|less risk(y)?)\b/i.test(asked);
     const riskier = talk && /\b(riskier|higher|more risk(y)?)\b/i.test(asked);
@@ -235,10 +312,15 @@ export async function reply(
       turn.update([
         {
           type: 'text',
+          // text:
+          //   set === amount
+          //     ? `Same picks. Create jar is set to ${set} USDC.`
+          //     : `Same picks. Create jar is set to ${set} USDC, the closest step to ${money(amount)}.`,
+          // In dollars (the user's currency), as the button reads (2026-11-14).
           text:
             set === amount
-              ? `Same picks. Create jar is set to ${set} USDC.`
-              : `Same picks. Create jar is set to ${set} USDC, the closest step to ${money(amount)}.`,
+              ? `Same picks. Create jar is set to ${(turn.format ?? money)(set)}.`
+              : `Same picks. Create jar is set to ${(turn.format ?? money)(set)}, the closest step to ${(turn.format ?? money)(amount)}.`,
         },
         { type: 'strategy', proposal: next },
       ]);
@@ -351,14 +433,51 @@ function answer(proposal: Proposal, live: LiveProgress | undefined, lead?: strin
     {
       type: 'text',
       text:
-        lead ??
-        (proposal.picks.length
-          ? `${live?.theme ? "Here's a way to back it" : `Here's a way to back “${proposal.thesis}”`}: ${names}, sized for ${proposal.risk.toLowerCase()} risk.`
-          : "I couldn't find tokens you can buy for this yet."),
+        (lead ??
+          (proposal.picks.length
+            ? `${live?.theme ? "Here's a way to back it" : `Here's a way to back “${proposal.thesis}”`}: ${names}, sized for ${proposal.risk.toLowerCase()} risk.`
+            : "I couldn't find tokens you can buy for this yet.")) +
+        // The agent's reasoning when it cites what it read, with its sources.
+        (cites(proposal) ? `\n\n${proposal.caution}` : ''),
+      sources: cites(proposal) ? proposal.citations : undefined,
     },
     { type: 'strategy', proposal },
     { type: 'replies', options: nextSteps(proposal.risk, proposal.picks.length > 0) },
   ];
+}
+
+/** Whether the rationale cites one of the run's sources. */
+const cites = (p: Proposal) => !!p.citations?.length && /\[\d+\]/.test(p.caution ?? '');
+
+/**
+ * A text with `[n]` citation markers as runs of plain text and the sources they point
+ * at; a marker with no source is dropped, with the space before it.
+ */
+export function citationParts(
+  text: string,
+  sources: readonly Citation[] | undefined,
+): ({ text: string } | { source: Citation })[] {
+  const out: ({ text: string } | { source: Citation })[] = [];
+  let at = 0;
+  for (const m of text.matchAll(/\s?\[(\d{1,2})\]/g)) {
+    const before = text.slice(at, m.index);
+    if (before) out.push({ text: before });
+    const source = sources?.find((s) => s.n === Number(m[1]));
+    if (source) out.push({ source });
+    at = (m.index ?? 0) + m[0].length;
+  }
+  const rest = text.slice(at);
+  if (rest) out.push({ text: rest });
+  return out;
+}
+
+/** The text without citation markers, then its sources' links (for Copy and Share). */
+export function plainWithSources(text: string, sources: readonly Citation[] | undefined) {
+  const words = citationParts(text, sources)
+    .map((p) => ('text' in p ? p.text : ` [${p.source.n}]`))
+    .join('');
+  const used = (sources ?? []).filter((s) => words.includes(`[${s.n}]`));
+  return used.length ? `${words}\n\n${used.map((s) => `[${s.n}] ${s.url}`).join('\n')}` : words;
 }
 
 /** Runs the agent (or follows a run already going), showing its progress as it goes. */
@@ -440,6 +559,10 @@ export function nextSteps(risk: Risk, picks = true) {
     risk === 'Low' ? 'Make it riskier' : 'Make it safer',
   ];
 }
+
+/** Create jar's amount in the user's currency, without empty cents: "$5", "₹420". */
+export const shortMoney = (format: (usd: number) => string) => (usd: number) =>
+  format(usd).replace(/[.,]00$/, '');
 
 export const money = (n: number) =>
   `$${n.toLocaleString(undefined, { maximumFractionDigits: n % 1 ? 2 : 0 })}`;

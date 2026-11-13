@@ -69,7 +69,25 @@ describe('chat follow-ups', () => {
       },
     });
     expect(next?.amount).toBe(250);
-    expect(texts.join(' ')).toContain('set to 250 USDC');
+    // expect(texts.join(' ')).toContain('set to 250 USDC');
+    // In dollars, as Create jar reads (2026-11-14), never "USDC".
+    expect(texts.join(' ')).toContain('set to $250, the closest step to $300.');
+    expect(texts.join(' ')).not.toContain('USDC');
+    // In the user's currency when the chat passes its formatter.
+    const { shortMoney } = await import('@/lib/thesis-chat');
+    const { moneyFor } = await import('@/lib/money');
+    const inr = shortMoney(moneyFor('INR', 84).format);
+    const local: string[] = [];
+    await reply('$100', sampleProposal(input), {
+      stake: (n) => nearestStep(n, steps),
+      format: inr,
+      update: (parts) => {
+        for (const p of parts) if (p.type === 'text') local.push(p.text);
+      },
+    });
+    expect(local.join(' ')).toContain(`set to ${inr(100)}.`);
+    expect(shortMoney(moneyFor('USD', 1).format)(5)).toBe('$5');
+    expect(shortMoney(moneyFor('USD', 1).format)(5.5)).toBe('$5.50');
   });
 
   it('stops a run when Stop is pressed, without an answer', async () => {
@@ -122,5 +140,128 @@ describe('the answer card', () => {
       'Five.',
     ]);
     expect(bearBullets(undefined)).toEqual([]);
+  });
+});
+
+describe('follow-up questions', () => {
+  const input = { text: 'Hedge against Nvidia', amount: 50, risk: 'Medium' as const };
+
+  it('tells a question about the strategy from a new idea', async () => {
+    const { asksAgent, isFollowUp } = await import('@/lib/thesis-chat');
+    for (const q of [
+      'How can I hedge against this ?',
+      'What if Nvidia drops 30%',
+      'Is this low risk?',
+      'should I add gold',
+      'I think it needs some solana',
+      'why would gold help here?',
+    ])
+      expect(asksAgent(q), q).toBe(true);
+    for (const idea of ['AI bubble is going to burst', 'Gold over dollars', 'hedge']) {
+      expect(isFollowUp(idea), idea).toBe(false);
+    }
+    // Changes the chat makes itself stay local.
+    for (const command of ['Make it safer', 'Can you make it low risk?', 'remove TAO from it'])
+      expect(asksAgent(command), command).toBe(false);
+  });
+
+  it('answers "How can I hedge against this ?" with the strategy, then updates the jar', async () => {
+    const { reply, UPDATE_JAR, chatPending } = await import('@/lib/thesis-chat');
+    const { sampleProposal } = await import('@/lib/thesis');
+    const current = { ...sampleProposal(input), runId: 'run-1' };
+    const asked: { question: string; runId?: string }[] = [];
+    const parts: import('@/lib/thesis-chat').ChatPart[][] = [];
+    const ask = async (question: string, strategy: import('@/lib/thesis').Proposal) => {
+      asked.push({ question, runId: strategy.runId });
+      return {
+        answer: 'Gold has held up in tech selloffs [1]. Add XAUT at 20%.',
+        picks: [
+          { ...(current.picks[0] as (typeof current.picks)[0]), weight: 40 },
+          {
+            symbol: 'XAUT',
+            name: 'XAUT',
+            chain: 'eth',
+            weight: 20,
+            match: 'direct' as const,
+            reason: 'Gold.',
+            color: '#c9a',
+          },
+        ],
+        cashPct: 40,
+        citations: [{ n: 1, url: 'https://reuters.com/a', title: 'Gold', domain: 'reuters.com' }],
+      };
+    };
+    const after = await reply('How can I hedge against this ?', current, {
+      ask,
+      update: (p) => parts.push(p),
+    });
+    // The agent got the question and the run, and no chart or new thesis was made.
+    expect(asked).toEqual([{ question: 'How can I hedge against this ?', runId: 'run-1' }]);
+    expect(after).toBe(current);
+    const last = parts.at(-1) ?? [];
+    expect(last[0]).toMatchObject({ type: 'text', sources: [{ n: 1, domain: 'reuters.com' }] });
+    expect(last.some((p) => p.type === 'chart' || p.type === 'stages')).toBe(false);
+    expect(last.at(-1)).toEqual({
+      type: 'replies',
+      options: [UPDATE_JAR, 'Show a projection', 'Make it safer'],
+    });
+    // "Update the jar" applies the proposed picks as a new strategy card, locally.
+    const shown: import('@/lib/thesis-chat').ChatPart[][] = [];
+    const updated = await reply(UPDATE_JAR, current, { ask, update: (p) => shown.push(p) });
+    expect(updated?.picks.map((p) => [p.symbol, p.weight])).toEqual([
+      [current.picks[0]?.symbol, 40],
+      ['XAUT', 20],
+    ]);
+    expect(updated?.cashPct).toBe(40);
+    expect(shown.at(-1)?.some((p) => p.type === 'strategy')).toBe(true);
+    expect(chatPending.get()).toBeNull();
+    expect(asked).toHaveLength(1);
+  });
+
+  it('starts a new thesis only for a new idea', async () => {
+    const { reply } = await import('@/lib/thesis-chat');
+    const { sampleProposal, ThesisStopped } = await import('@/lib/thesis');
+    const stop = new AbortController();
+    stop.abort();
+    let asked = 0;
+    const ask = async () => {
+      asked++;
+      return { answer: 'x', citations: [] };
+    };
+    // A new idea goes to a run (stopped here before it starts), never to the follow-up.
+    await expect(
+      reply('AI bubble is going to burst', sampleProposal(input), {
+        ask,
+        signal: stop.signal,
+        update: () => {},
+      }),
+    ).rejects.toBeInstanceOf(ThesisStopped);
+    expect(asked).toBe(0);
+  });
+
+  it('reads citation markers as pills and keeps only real sources', async () => {
+    const { citationParts, plainWithSources } = await import('@/lib/thesis-chat');
+    const { citationsFrom } = await import('@/lib/thesis');
+    const sources = citationsFrom([
+      { n: 1, url: 'https://www.reuters.com/a', title: 'Gold', domain: 'reuters.com' },
+      { n: 2, url: 'javascript:alert(1)', title: 'x', domain: 'x' },
+      { n: 3, url: 'https://ft.com/b', title: 'FT' },
+      { url: 'https://nonum.example' },
+    ]);
+    expect(sources.map((s) => [s.n, s.domain])).toEqual([
+      [1, 'reuters.com'],
+      [3, 'ft.com'],
+    ]);
+    expect(citationParts('Gold held [1]. Both fell [2][3].', sources)).toEqual([
+      { text: 'Gold held' },
+      { source: sources[0] },
+      { text: '. Both fell' },
+      { source: sources[1] },
+      { text: '.' },
+    ]);
+    expect(citationParts('No markers.', sources)).toEqual([{ text: 'No markers.' }]);
+    expect(plainWithSources('Gold held [1]. Gone [2].', sources)).toBe(
+      'Gold held [1]. Gone.\n\n[1] https://www.reuters.com/a',
+    );
   });
 });

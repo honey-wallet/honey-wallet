@@ -59,7 +59,29 @@ export type Proposal = {
    * from older servers: then the switch is hidden.
    */
   byRisk?: Partial<Record<Risk, Proposal>>;
+  /** The run this came from, so a follow-up question reads its stored result. */
+  runId?: string;
+  /**
+   * The pages the run read, numbered as the `[n]` citation markers in `caution` (the
+   * rationale) and `bearCase` cite them.
+   */
+  citations?: Citation[];
 };
+
+/** A numbered page a `[n]` citation marker points at (the server checks every one). */
+export type Citation = { n: number; url: string; title: string; domain: string };
+
+/** The citations a server sent, keeping only http(s) pages with a number. */
+export function citationsFrom(raw: unknown): Citation[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((r): Citation[] => {
+    const c = r as Partial<Citation> | null;
+    if (!c || typeof c.n !== 'number' || typeof c.url !== 'string') return [];
+    if (!/^https?:\/\/[^\s/?#]+/i.test(c.url)) return [];
+    const domain = typeof c.domain === 'string' && c.domain ? c.domain : hostOf(c.url);
+    return [{ n: c.n, url: c.url, title: typeof c.title === 'string' ? c.title : domain, domain }];
+  });
+}
 
 export type Member = {
   id: string;
@@ -596,6 +618,7 @@ type LiveStrategy = {
   unmatched: { idea: string; note: string }[];
   bearCase?: string[] | null;
   cashPct?: number | null;
+  sources?: unknown;
 };
 
 /**
@@ -711,6 +734,9 @@ function fromStrategy(run: LiveRun, strategy: LiveStrategy, input: ThesisInput):
       title: l.status === 'read' && l.title ? l.title : hostOf(l.url),
       url: l.url,
     })),
+    runId: run.runId,
+    // The run's numbered pages, shared by every risk level (the server sends them once).
+    citations: citationsFrom(run.proposal?.sources),
   };
 }
 
@@ -917,6 +943,162 @@ function sampleSteps(createdAt?: string): RunLive['steps'] {
     const startedAt = new Date(t).toISOString();
     t += (lengths[i] ?? 3) * 1000;
     return { step, startedAt, endedAt: new Date(t).toISOString() };
+  });
+}
+
+/** Honey's answer to a follow-up question, maybe with a changed set of picks. */
+export type FollowUp = {
+  answer: string;
+  /** The change it proposes ("Update the jar"); absent when nothing changes. */
+  picks?: Pick[];
+  /** What the proposed picks leave in USDC. */
+  cashPct?: number;
+  citations: Citation[];
+};
+
+/** The server's answer as the chat uses it; anything malformed is left out. */
+export function followUpFrom(body: unknown): FollowUp {
+  const b = (body ?? {}) as {
+    answer?: unknown;
+    picks?: unknown;
+    cashPct?: unknown;
+    sources?: unknown;
+  };
+  const answer = typeof b.answer === 'string' ? b.answer.trim() : '';
+  if (!answer) throw new ThesisError('The agent gave no answer. Nothing was changed.');
+  const picks = Array.isArray(b.picks)
+    ? b.picks.flatMap((raw, i): Pick[] => {
+        const p = raw as {
+          symbol?: unknown;
+          chain?: unknown;
+          weightPct?: unknown;
+          reason?: unknown;
+        };
+        if (typeof p?.symbol !== 'string' || typeof p.weightPct !== 'number') return [];
+        const weight = Math.max(0, Math.min(100, Math.round(p.weightPct)));
+        if (!weight) return [];
+        return [
+          {
+            symbol: p.symbol,
+            name: p.symbol,
+            chain: typeof p.chain === 'string' ? p.chain : '',
+            weight,
+            match: 'direct',
+            reason: typeof p.reason === 'string' ? p.reason : '',
+            color: tokenColor(p.symbol, i),
+          },
+        ];
+      })
+    : [];
+  const used = picks.reduce((sum, p) => sum + p.weight, 0);
+  return {
+    answer,
+    picks: picks.length && used <= 100 ? picks : undefined,
+    cashPct:
+      picks.length && used <= 100
+        ? typeof b.cashPct === 'number'
+          ? Math.max(0, Math.min(100, Math.round(b.cashPct)))
+          : 100 - used
+        : undefined,
+    citations: citationsFrom(b.sources),
+  };
+}
+
+/** The strategy with a follow-up's proposed picks in place ("Update the jar"). */
+export function withFollowUp(current: Proposal, followUp: FollowUp): Proposal | null {
+  if (!followUp.picks?.length) return null;
+  return {
+    ...current,
+    picks: followUp.picks,
+    cashPct: followUp.cashPct || undefined,
+    // Sized by the answer, not the run: no other risk levels to switch to.
+    byRisk: undefined,
+  };
+}
+
+/**
+ * Asks the agent a follow-up question on the strategy (POST /theses/ask): a short
+ * answer with the strategy as context, instead of a brand-new thesis. In test mode, a
+ * scripted answer.
+ */
+export async function askThesis(
+  question: string,
+  current: Proposal,
+  signal?: AbortSignal,
+): Promise<FollowUp> {
+  checkStopped(signal);
+  if (TEST_MODE) return sampleFollowUp(question, current, signal);
+  const token = await sessionToken();
+  return explained(async () => {
+    const { api } = await import('@/lib/api');
+    const body = await api.askThesis(
+      token,
+      {
+        ...(current.runId ? { runId: current.runId } : {}),
+        question,
+        strategy: {
+          thesis: current.thesis,
+          risk: current.risk.toLowerCase() as 'low' | 'medium' | 'high',
+          amountUsd: current.amount,
+          cashPct: current.cashPct ?? 0,
+          picks: current.picks.map((p) => ({
+            symbol: p.symbol,
+            weightPct: p.weight,
+            ...(p.reason ? { reason: p.reason } : {}),
+          })),
+        },
+      },
+      { signal },
+    );
+    checkStopped(signal);
+    return followUpFrom(body);
+  }, signal);
+}
+
+/** Test mode's answer: a hedge question gets a cited answer that adds gold. */
+async function sampleFollowUp(
+  question: string,
+  current: Proposal,
+  signal?: AbortSignal,
+): Promise<FollowUp> {
+  await wait(900, signal);
+  checkStopped(signal);
+  const symbols = current.picks.map((p) => p.symbol).join(', ');
+  if (!/hedg|protect|safe|crash|downside|lose/i.test(question))
+    return {
+      answer: `Sample answer (test mode): the live agent answers this with your picks (${symbols}) in mind. Nothing was changed.`,
+      citations: [],
+    };
+  const scale = 0.8;
+  const kept = current.picks.map((p) => ({ ...p, weight: Math.floor(p.weight * scale) }));
+  const used = kept.reduce((sum, p) => sum + p.weight, 0) + 20;
+  return followUpFrom({
+    answer:
+      'Gold has tended to hold up when tech stocks sell off, so a gold token is the usual hedge here [1]. Adding XAUT at 20% would soften a fall in the rest, and the other picks stay as they are. It helps less if everything falls together [2].',
+    picks: [
+      ...kept.map((p) => ({
+        symbol: p.symbol,
+        chain: p.chain,
+        weightPct: p.weight,
+        reason: p.reason,
+      })),
+      {
+        symbol: 'XAUT',
+        chain: 'eth',
+        weightPct: 20,
+        reason: 'Tokenized gold, which tends to hold up in a selloff.',
+      },
+    ],
+    cashPct: Math.max(0, 100 - used),
+    sources: [
+      {
+        n: 1,
+        url: 'https://www.reuters.com/markets/commodities/',
+        title: 'Gold in tech selloffs',
+        domain: 'reuters.com',
+      },
+      { n: 2, url: 'https://www.ft.com/markets', title: 'When everything falls', domain: 'ft.com' },
+    ],
   });
 }
 

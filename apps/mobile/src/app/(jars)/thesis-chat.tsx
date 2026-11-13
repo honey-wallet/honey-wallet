@@ -20,6 +20,7 @@ import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle, Defs, LinearGradient, Path, Stop, Text as SvgText } from 'react-native-svg';
 import { Icon } from '@/components/Icon';
+import { CitedText, SourcesRow } from '@/components/jars/Citations';
 // import { ChatRow } from '@/components/jars/ChatRow'; (Recent chats, commented out below)
 import { IdeaGrid, PickIcon, StrategyCard } from '@/components/jars/JarParts';
 import { ChatChart } from '@/components/jars/ThesisCharts';
@@ -33,6 +34,7 @@ import { SheetRow } from '@/components/sheets/Sheet';
 import { CopyStepper } from '@/components/social/parts';
 import { HeaderShortcut } from '@/components/wallet/HeaderShortcut';
 import { copyText } from '@/lib/copy';
+import { useMoney } from '@/lib/fx';
 import { tap } from '@/lib/haptics';
 import { chartableTokens } from '@/lib/market';
 import { goBackOr } from '@/lib/navigation';
@@ -54,16 +56,19 @@ import {
   type ChatPart,
   chatAsk,
   chatDraft,
+  chatPending,
   chatStake,
   leftOut,
-  money,
+  // money, (amounts read in the user's currency now: shortMoney(useMoney().format))
   nearestStep,
   newMessage,
+  plainWithSources,
   projection,
   RETRY,
   replay,
   reply,
   SWING,
+  shortMoney,
 } from '@/lib/thesis-chat';
 // Recent chats on the empty state, commented out below:
 // import {
@@ -110,7 +115,8 @@ const stakeAt = (amount: number) => {
 function plainText(message: ChatMessage) {
   return message.parts
     .flatMap((p) => {
-      if (p.type === 'text') return [p.text];
+      // if (p.type === 'text') return [p.text];
+      if (p.type === 'text') return [plainWithSources(p.text, p.sources)];
       if (p.type === 'strategy' && p.proposal.picks.length)
         return [
           `${p.proposal.thesis} (${p.proposal.risk.toLowerCase()} risk)`,
@@ -135,6 +141,7 @@ function plainText(message: ChatMessage) {
 export default function ThesisChatScreen() {
   const styles = useStyles();
   const c = useTheme();
+  const fx = useMoney();
   const insets = useSafeAreaInsets();
   const { idea, run, said } = useLocalSearchParams<{
     idea?: string;
@@ -235,6 +242,8 @@ export default function ThesisChatScreen() {
           update,
           signal,
           stake: stakeAt,
+          // Amounts in the words as Create jar shows them: the user's currency.
+          format: shortMoney(fx.format),
           ...chartableTokens(),
         });
       },
@@ -281,6 +290,7 @@ export default function ThesisChatScreen() {
     strategy.current = null;
     retry.current = null;
     chatStake.set(null);
+    chatPending.set(null);
     setBusy(false);
     setMessages([]);
     setDraft('');
@@ -305,6 +315,7 @@ export default function ThesisChatScreen() {
   // biome-ignore lint/correctness/useExhaustiveDependencies: once, on open
   useEffect(() => {
     chatStake.set(null);
+    chatPending.set(null);
     if (run) open(run);
     else if (idea) send(idea);
     return () => {
@@ -621,6 +632,7 @@ function Message({
       </View>
     );
   const text = plainText(message);
+  const cited = message.parts.flatMap((p) => (p.type === 'text' ? (p.sources ?? []) : []));
   const working = busy && last;
   // Quick replies belong to the newest answer only, as in ChatGPT.
   const parts = last ? message.parts : message.parts.filter((p) => p.type !== 'replies');
@@ -647,6 +659,8 @@ function Message({
           onVariant={onVariant}
         />
       ))}
+      {/* The sites the answer cites, under it. */}
+      {!working && cited.length ? <SourcesRow sources={cited} /> : null}
       {/* Copy, rate and share sit right under the answer; its next steps under them. */}
       {!working && text ? (
         <View style={styles.actions}>
@@ -768,7 +782,13 @@ function Part({
   const styles = useStyles();
   switch (part.type) {
     case 'text':
-      return <StreamText text={part.text} stream={stream} />;
+      // return <StreamText text={part.text} stream={stream} />;
+      // Cited text shows its sources as pills, inline; the rest types itself out.
+      return part.sources?.length ? (
+        <CitedText text={part.text} sources={part.sources} style={styles.agentText} />
+      ) : (
+        <StreamText text={part.text} stream={stream} />
+      );
     case 'understood':
       return <Understood theme={part.theme} picks={part.picks} />;
     case 'stages':
@@ -819,6 +839,7 @@ function AnswerCard({
   const styles = useStyles();
   // The amount on Create jar, shared with the chat's words and the projection.
   const stake = chatStake.useValue();
+  const fx = useMoney();
   const levels = RISKS.filter((r) => proposal.byRisk?.[r]);
   const [level, setLevel] = useState<Risk>(proposal.risk);
   const variant = (r: Risk): Proposal =>
@@ -964,7 +985,12 @@ function AnswerCard({
             {bear.map((line) => (
               <View key={line} style={styles.listItem}>
                 <Text style={styles.listText}>•</Text>
-                <Text style={[styles.listText, styles.shrink]}>{line}</Text>
+                {/* <Text style={[styles.listText, styles.shrink]}>{line}</Text> */}
+                <CitedText
+                  text={line}
+                  sources={shown.citations ?? proposal.citations}
+                  style={[styles.listText, styles.shrink]}
+                />
               </View>
             ))}
           </View>
@@ -989,6 +1015,8 @@ function AnswerCard({
           label="Create jar"
           start={stake ?? undefined}
           onAmount={(amount) => chatStake.set(amount)}
+          // "Create jar $5", in the user's currency, not "5 [USDC]" (2026-11-14).
+          format={shortMoney(fx.format)}
           onCopy={(amount) => {
             tap();
             // The level on screen is the one bought.
@@ -1059,6 +1087,8 @@ function ProjectionCard({ risk }: { risk: Risk }) {
   const stake = chatStake.useValue();
   const { copyAmount } = useSettings();
   const amount = stake ?? copyAmount;
+  // The user's currency, as Create jar shows it (was `money`, always dollars).
+  const fxMoney = shortMoney(useMoney().format);
   const [width, setWidth] = useState(0);
   const { low, mid, high } = projection(amount, risk);
   const H = 156;
@@ -1083,10 +1113,13 @@ function ProjectionCard({ risk }: { risk: Risk }) {
   return (
     <View style={styles.card}>
       {/* The likely outcome leads; the range sits under it, as a price and its move. */}
-      <Text style={styles.muted}>{money(amount)} in 12 months, likely</Text>
-      <Text style={styles.cardValue}>{money(end(mid))}</Text>
+      {/* <Text style={styles.muted}>{money(amount)} in 12 months, likely</Text> */}
+      {/* <Text style={styles.cardValue}>{money(end(mid))}</Text> */}
+      <Text style={styles.muted}>{fxMoney(amount)} in 12 months, likely</Text>
+      <Text style={styles.cardValue}>{fxMoney(end(mid))}</Text>
       <Text style={styles.muted}>
-        Between {money(end(low))} and {money(end(high))}
+        {/* Between {money(end(low))} and {money(end(high))} */}
+        Between {fxMoney(end(low))} and {fxMoney(end(high))}
       </Text>
       <View onLayout={(e) => setWidth(e.nativeEvent.layout.width)} style={styles.projChart}>
         {width > 0 ? (
@@ -1135,7 +1168,8 @@ function ProjectionCard({ risk }: { risk: Risk }) {
                   fontWeight="600"
                   fontFamily="system-ui, -apple-system, sans-serif"
                 >
-                  {money(e.v)}
+                  {/* {money(e.v)} */}
+                  {fxMoney(e.v)}
                 </SvgText>
               );
             })}
