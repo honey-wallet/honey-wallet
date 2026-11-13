@@ -62,12 +62,10 @@ import { DURATION, EASE, lazy } from '@/theme/motion';
 
 /** Which feed to show: Following once you follow someone, Everyone until then. */
 export function useFeedScope() {
-  const { me, signedIn } = useSocialMe();
+  const { signedIn } = useSocialMe();
+  // Always opens on Everyone. It used to switch itself to Following once your profile
+  // loaded with anyone followed, so signing in moved you off the tab you were on.
   const [scope, setScope] = useState<SocialFeedScope>('everyone');
-  const [chosen, setChosen] = useState(false);
-  useEffect(() => {
-    if (!chosen && me && me.following > 0) setScope('following');
-  }, [me, chosen]);
   // biome-ignore lint/correctness/useExhaustiveDependencies: reload when the scope or session changes.
   useEffect(() => {
     void loadFeed(scope);
@@ -77,10 +75,7 @@ export function useFeedScope() {
   }, []);
   return {
     scope,
-    choose: (next: SocialFeedScope) => {
-      setChosen(true);
-      setScope(next);
-    },
+    choose: setScope,
   };
 }
 

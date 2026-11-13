@@ -2,8 +2,9 @@
 // pill glides under the active tab in 200ms on ease-in-out (an on-screen move),
 // starting from wherever it is so rapid taps never jump. It snaps into place on first
 // paint and under Reduce Motion; icons crossfade between muted and active in 150ms
-// and dip to 0.95 under the finger. The honey button morphs between the jar and "Sign
-// in" (width 300ms ease-in-out, content crossfading through 0.9 scale).
+// and dip to 0.95 under the finger. Signed out the whole bar is the honey Sign in button;
+// signed in it's the tabs and the jar button, the label and the jar crossfading through
+// 0.9 scale.
 import { router, type Tabs } from 'expo-router';
 import { type ComponentProps, useEffect, useRef, useState } from 'react';
 import { Text, View } from 'react-native';
@@ -54,9 +55,8 @@ const BORDER = 1;
 const GAP = 3;
 const SLIDE = { duration: DURATION.fast, easing: EASE.inOut };
 const FADE = { duration: DURATION.quick, easing: EASE.ease };
-/** The honey button's width for each face: the jar, or the Sign in label. */
+/** The jar button's width beside the tabs (signed out, Sign in spans the bar). */
 const FAB_JAR = 72;
-const FAB_JOIN = 104;
 const fabIn = lazy(() =>
   new Keyframe({
     0: { opacity: 0, transform: [{ scale: 0.9 }] },
@@ -93,15 +93,6 @@ export function TabBar({ state, navigation }: TabBarProps) {
   const join = !signedIn && !EXTENSION;
   // What Sign in is for, when the screen says ("Sign in to follow" on Following).
   const joinText = joinLabel.useValue();
-  // The button eases between its two widths; the tabs give way frame by frame.
-  const fabW = useSharedValue(join ? FAB_JOIN : FAB_JAR);
-  useEffect(() => {
-    const to = join ? FAB_JOIN : FAB_JAR;
-    fabW.value = reduceMotion
-      ? to
-      : withTiming(to, { duration: DURATION.slow, easing: EASE.inOut });
-  }, [join, reduceMotion, fabW]);
-  const fabWidth = useAnimatedStyle(() => ({ width: fabW.value, height: 58 }));
   const index = PILL_TABS.findIndex((tab) => tab.name === current);
 
   const [tabWidth, setTabWidth] = useState(0);
@@ -210,7 +201,10 @@ export function TabBar({ state, navigation }: TabBarProps) {
         {/* review: Swap is back in the extension, so the Trade button is too.
         {isWeb ? null : ( */}
         {EXTENSION ? null : (
-          <Animated.View style={join ? styles.signInWide : fabWidth}>
+          // A fixed width, not an animated one: the same view used to swap from the
+          // full-width Sign in style to an animated width on sign-in, the width never
+          // took, and the button collapsed to nothing while the tabs filled the bar.
+          <Animated.View style={join ? styles.signInWide : styles.jarButton}>
             <PressableScale
               accessibilityRole="button"
               accessibilityLabel={join ? joinText : 'Create a jar'}
@@ -355,5 +349,6 @@ const useStyles = makeStyles((c) => ({
   },
   fabText: { color: c.onPrimary, fontSize: 17, fontWeight: '700' },
   signInWide: { flex: 1, height: 58 },
+  jarButton: { width: FAB_JAR, height: 58 },
   hidden: { opacity: 0 },
 }));
