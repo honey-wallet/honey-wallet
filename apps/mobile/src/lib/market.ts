@@ -5,7 +5,7 @@ import type {
   TokenMarket,
 } from '@honey-wallet/api-client';
 import { ApiError } from '@honey-wallet/api-client';
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { api } from '@/lib/api';
 import { CHAINS, type Chain, MARKET, type MarketToken } from '@/lib/mock-wallet';
 import { createStore } from '@/lib/store';
@@ -335,4 +335,24 @@ export function liveMarketList(
         (RANK.get(a.symbol.toUpperCase()) ?? Infinity) -
           (RANK.get(b.symbol.toUpperCase()) ?? Infinity) || a.symbol.localeCompare(b.symbol),
     );
+}
+
+/** How long a market list waits for the live market before showing whatever has arrived. */
+const MARKET_WAIT_MS = 8000;
+
+/**
+ * True once the live list is in and the 24h numbers of its best-known tokens (the ones
+ * lists rank by) have loaded, or after MARKET_WAIT_MS, so a slow or failed feed still
+ * ends in the list or its empty state rather than skeletons forever.
+ */
+export function useMarketSettled(list: { symbol: string }[]) {
+  const all = markets.useValue();
+  const [timedOut, setTimedOut] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => setTimedOut(true), MARKET_WAIT_MS);
+    return () => clearTimeout(timer);
+  }, []);
+  if (timedOut) return true;
+  if (!list.length) return false;
+  return list.slice(0, 12).every((t) => all[t.symbol] && !all[t.symbol].loading);
 }

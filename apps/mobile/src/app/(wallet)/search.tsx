@@ -25,7 +25,7 @@ import { hostOfUrl, toUrl } from '@/lib/browser';
 import { POSITIONS } from '@/lib/collectibles';
 import { tap } from '@/lib/haptics';
 import { LOADS } from '@/lib/loads';
-import { markets, useMarketList, useMarketListStatus } from '@/lib/market';
+import { useMarketList, useMarketListStatus, useMarketSettled } from '@/lib/market';
 import {
   CHAINS,
   type Chain,
@@ -116,26 +116,6 @@ const removeOut = lazy(() =>
 /** Search's cards before you've saved a token: the best-known ones. */
 const SUGGESTED_FAVORITES = ['ETH', 'cbBTC', 'SOL', 'NEAR'];
 
-/** How long Search waits for the live market before showing whatever has arrived. */
-const MARKET_WAIT_MS = 8000;
-
-/**
- * True once the live list is in and the 24h numbers of its best-known tokens (the ones
- * Search ranks by) have loaded, or after MARKET_WAIT_MS, so a slow or failed feed still
- * ends in the list or its empty state rather than skeletons forever.
- */
-function useMarketSettled(list: { symbol: string }[]) {
-  const all = markets.useValue();
-  const [timedOut, setTimedOut] = useState(false);
-  useEffect(() => {
-    const timer = setTimeout(() => setTimedOut(true), MARKET_WAIT_MS);
-    return () => clearTimeout(timer);
-  }, []);
-  if (timedOut) return true;
-  if (!list.length) return false;
-  return list.slice(0, 12).every((t) => all[t.symbol] && !all[t.symbol].loading);
-}
-
 /** Search's "Earn more" cards; removed for now (2026-11-13). */
 const EARN_SECTION = false;
 
@@ -222,9 +202,9 @@ export default function SearchScreen() {
   // Prices, volumes and APYs come from the market feed. Live, it's loading until the list
   // and the 24h numbers of its best-known tokens are in: before, the empty state flashed,
   // then favorites popped in and the ranked list reshuffled as each volume arrived.
-  const firstLoad = useFirstLoad(LOADS.market);
   const settled = useMarketSettled(marketList);
-  const loading = TEST_MODE ? firstLoad : !settled;
+  // Test mode lists the live market too now (2026-11-13), so it waits the same way.
+  const loading = !settled;
   // Earn rates are their own feed, shared with Savings and Home's promo.
   const ratesLoading = useFirstLoad(LOADS.earnRates);
   // A wallet that's never had money in it isn't earning yet.

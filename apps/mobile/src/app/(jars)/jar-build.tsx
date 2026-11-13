@@ -1,9 +1,10 @@
 import { router } from 'expo-router';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Icon } from '@/components/Icon';
 import { PressableRow } from '@/components/motion/PressableRow';
+import { SkeletonBar } from '@/components/motion/Skeleton';
 import { Sticky } from '@/components/motion/Sticky';
 import { PillButton } from '@/components/onboarding/PillButton';
 import { KeyboardFooter } from '@/components/sheets/KeyboardFooter';
@@ -11,7 +12,7 @@ import { Chip } from '@/components/wallet/Chip';
 import { Change, PushedScreen, SCREEN, TokenIcon } from '@/components/wallet/parts';
 import { SearchField } from '@/components/wallet/SearchField';
 import { tap } from '@/lib/haptics';
-import { uniqueBySymbol, useMarketList } from '@/lib/market';
+import { uniqueBySymbol, useMarketList, useMarketSettled } from '@/lib/market';
 import { formatCompactUsd, formatPrice, type MarketToken } from '@/lib/mock-wallet';
 import { manualProposal } from '@/lib/thesis';
 import { chatDraft } from '@/lib/thesis-chat';
@@ -37,6 +38,14 @@ export default function BuildJarScreen() {
   const market = useMarketList();
   // One row per symbol (USDC on three chains is one USDC), the most liquid listing first.
   const list = useMemo(() => uniqueBySymbol(market), [market]);
+  // Rows wait behind a skeleton until the list and its top tokens' numbers are in, then
+  // keep the order they first settled in: late prices fill in rows, never reshuffle them.
+  const settled = useMarketSettled(list);
+  const order = useRef<Map<string, number> | null>(null);
+  if (settled && !order.current && list.length)
+    order.current = new Map(
+      [...list].sort((a, b) => b.volume - a.volume).map((t, i) => [keyOf(t), i]),
+    );
   const [query, setQuery] = useState('');
   const [picked, setPicked] = useState<MarketToken[]>([]);
   const insets = useSafeAreaInsets();
@@ -54,7 +63,12 @@ export default function BuildJarScreen() {
         !SKIP.has(t.symbol.toUpperCase()) &&
         (!q || t.symbol.toLowerCase().includes(q) || t.name.toLowerCase().includes(q)),
     )
-    .sort((a, b) => b.volume - a.volume);
+    .sort((a, b) => {
+      const rank = order.current;
+      const ra = rank?.get(keyOf(a)) ?? Number.MAX_SAFE_INTEGER;
+      const rb = rank?.get(keyOf(b)) ?? Number.MAX_SAFE_INTEGER;
+      return ra - rb || b.volume - a.volume;
+    });
   const tokens = matches.slice(0, limit);
   const more = matches.length > tokens.length;
   const isPicked = (t: MarketToken) => picked.some((p) => keyOf(p) === keyOf(t));
@@ -116,10 +130,26 @@ export default function BuildJarScreen() {
         </View>
       </Sticky>
       <View style={styles.gutter}>
-        {tokens.length ? null : (
-          <Text style={styles.hint}>{list.length ? 'No tokens match' : 'Loading tokens…'}</Text>
+        {!settled ? (
+          // The Top tokens skeleton: logo, two lines, price and change.
+          Array.from({ length: 9 }, (_, i) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: placeholders have no identity
+            <View key={i} style={styles.row}>
+              <SkeletonBar width={40} height={40} radius={20} />
+              <View style={[styles.flex, styles.skeletonLines]}>
+                <SkeletonBar width="50%" height={14} />
+                <SkeletonBar width="32%" height={12} />
+              </View>
+              <View style={styles.end}>
+                <SkeletonBar width={68} height={14} />
+                <SkeletonBar width={44} height={12} />
+              </View>
+            </View>
+          ))
+        ) : tokens.length ? null : (
+          <Text style={styles.hint}>No tokens match</Text>
         )}
-        {tokens.map((item) => {
+        {(settled ? tokens : []).map((item) => {
           const on = isPicked(item);
           const full = !on && picked.length >= MAX_PICKS;
           return (
@@ -193,6 +223,9 @@ const useStyles = makeStyles((c) => ({
   end: {
     alignItems: 'flex-end',
     gap: 2,
+  },
+  skeletonLines: {
+    gap: 6,
   },
   name: {
     color: c.text,

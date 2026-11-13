@@ -144,18 +144,20 @@ export default function NewThesisSheet() {
   const [spend, setSpend] = useState(() =>
     fromChat && fromChat.amount > 0 ? fromChat.amount : settings.get().copyAmount,
   );
-  // A hand-built jar starts unnamed: its "thesis" is only the token list, which made a
-  // poor name ("cbBTC, SOL, AAVE, PEPE") and a worse post.
-  const [name, setName] = useState(
-    copied ? copied.name : named ? named : fromChat && !manual ? shortName(fromChat.thesis) : '',
-  );
+  // Every jar is named by you on Launch (2026-11-13): the field starts empty, with a
+  // suggestion as its placeholder (the idea's words, or the jar you copied).
+  const [name, setName] = useState(named ?? '');
+  const suggestedName = copied
+    ? copied.name
+    : proposal && !manual
+      ? shortName(proposal.thesis)
+      : 'Bitcoin and friends';
   // A copy whose jar loaded after this opened (a cold start from a link): start on it now.
   useEffect(() => {
     if (!copied || proposal || !openAt) return;
     const next = copyProposal(copied, settings.get().copyAmount);
     setProposal(next);
     setSpend(next.amount);
-    setName(copied.name);
     setText(next.thesis);
     setStep(openAt);
   }, [copied, proposal, openAt]);
@@ -246,7 +248,6 @@ export default function NewThesisSheet() {
       return;
     }
     setProposal(result);
-    setName(shortName(result.thesis));
     setStep('proposal');
   };
 
@@ -598,23 +599,23 @@ export default function NewThesisSheet() {
         }
       >
         <View style={styles.gap}>
-          {/* The Feed's strategy card: logos and the name (tap to rename), then the split. */}
-          <StrategyCard
-            split
-            picks={proposal.picks}
-            name={name}
-            nameSlot={
-              <TextInput
-                value={name}
-                onChangeText={setName}
-                maxLength={32}
-                placeholder="Name your jar"
-                placeholderTextColor={c.placeholder}
-                style={styles.nameInput}
-                accessibilityLabel="Jar name"
-              />
-            }
+          {/* First thing on Launch: its name, in a field of its own (a name inside the
+              card read as a title, not a box to fill). */}
+          <Text style={[styles.section, styles.sectionFirst]}>Name your jar</Text>
+          <TextInput
+            value={name}
+            onChangeText={setName}
+            autoFocus
+            maxLength={32}
+            placeholder={suggestedName}
+            placeholderTextColor={c.placeholder}
+            selectionColor={c.accentText}
+            cursorColor={c.accentText}
+            returnKeyType="done"
+            style={styles.nameField}
+            accessibilityLabel="Jar name"
           />
+          <StrategyCard split picks={proposal.picks} name={name.trim() || suggestedName} />
 
           <Text style={styles.section}>Who's in</Text>
           {multisig ? (
@@ -882,7 +883,18 @@ export default function NewThesisSheet() {
 
 const useStyles = makeStyles((c) => ({
   reworking: { opacity: 0.5 },
-  nameInput: { color: c.text, fontSize: 16, fontWeight: '600', padding: 0 },
+  nameField: {
+    height: 52,
+    paddingHorizontal: 16,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: c.divider,
+    backgroundColor: c.card,
+    color: c.text,
+    fontSize: 17,
+    fontWeight: '600',
+  },
+  sectionFirst: { marginTop: 0 },
   flex: { flex: 1 },
   gap: { gap: 12, paddingBottom: 16 },
   fill: { flex: 1 },
