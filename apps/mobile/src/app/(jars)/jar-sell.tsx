@@ -1,9 +1,11 @@
 import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import { Text, View } from 'react-native';
+import { Icon } from '@/components/Icon';
 import { JarAmount } from '@/components/jars/JarAmount';
 import { JarIcon, StrategyCard } from '@/components/jars/JarParts';
 import { ContentSwap } from '@/components/motion/ContentSwap';
+import { MenuDropdown } from '@/components/motion/MenuDropdown';
 import { PillButton } from '@/components/onboarding/PillButton';
 import { ComingSoonSheet } from '@/components/sheets/ComingSoon';
 import { SheetScreen, StatRow } from '@/components/sheets/Sheet';
@@ -12,7 +14,14 @@ import { FlowTray, InlineTray } from '@/components/sheets/Tray';
 import { TokenIcon } from '@/components/wallet/parts';
 import { confirmOwner } from '@/lib/auth';
 import { success, tap } from '@/lib/haptics';
-import { executeJarSell, type JarSellQuote, quoteJarSell } from '@/lib/jar-sell';
+import {
+  executeJarSell,
+  type JarSellQuote,
+  quoteJarSell,
+  SELL_INTO,
+  type SellInto,
+  sellIntoChain,
+} from '@/lib/jar-sell';
 import { formatUsd } from '@/lib/mock-wallet';
 import { SOON } from '@/lib/surface';
 import { TEST_MODE } from '@/lib/test-mode';
@@ -50,6 +59,8 @@ function JarSellSheet() {
   // Real sells: the review's quotes (one swap per token), fetched when it opens.
   const [quote, setQuote] = useState<JarSellQuote | null>(null);
   const [quoting, setQuoting] = useState(false);
+  // What the jar is sold for: USDC on Base unless you pick ETH or SOL on the review.
+  const [into, setInto] = useState<SellInto>('USDC');
   const asked = useRef(0);
   const mounted = useRef(true);
   useEffect(
@@ -63,9 +74,22 @@ function JarSellSheet() {
   const cap = Math.floor(value * 100) / 100;
   const all = usd >= cap - 0.01;
   const real = !TEST_MODE;
-  // What comes back: the quotes' expected USDC for real, the amount in test mode.
+  // What comes back: the quotes' expected payout for real, the amount in test mode.
   const got = real ? (quote?.usdOut ?? null) : usd;
-  const gotText = got === null ? '…' : `≈ ${got.toFixed(2)} USDC`;
+  const tokens = (n: number) => (into === 'USDC' ? n.toFixed(2) : String(Number(n.toPrecision(4))));
+  const gotAmount = real
+    ? quote
+      ? tokens(quote.amountOut)
+      : null
+    : into === 'USDC'
+      ? tokens(usd)
+      : null;
+  const gotText = gotAmount
+    ? `≈ ${gotAmount} ${into}`
+    : real && !quote
+      ? '…'
+      : `${formatUsd(usd)} of ${into}`;
+  const payoutChain = sellIntoChain(into);
   // Each token's own network pays its swap's fee, in that network's coin.
   const feeCoins = [
     ...new Set(
@@ -76,14 +100,14 @@ function JarSellSheet() {
   ];
   const networks = [...new Set((quote?.swaps ?? []).map(({ swap }) => swap.sell.chain))];
 
-  const review = (amount: number) => {
+  const review = (amount: number, nextInto: SellInto = into) => {
     setUsd(amount);
     setPage('review');
     if (!real) return;
     const n = ++asked.current;
     setQuote(null);
     setQuoting(true);
-    quoteJarSell(live ?? jar, amount, value)
+    quoteJarSell(live ?? jar, amount, value, {}, nextInto)
       .then((q) => {
         if (n === asked.current && mounted.current) setQuote(q);
       })
@@ -153,7 +177,7 @@ function JarSellSheet() {
           header={
             <StrategyCard split jar={jar} picks={jar.picks} name={jar.name} meta="Your jar" />
           }
-          note="Comes back as USDC on Base"
+          note="You pick what you get next"
           cta={(amount) => `Sell ${formatUsd(amount)}`}
           onDone={(amount) => {
             tap();
@@ -183,15 +207,40 @@ function JarSellSheet() {
                   <StatRow
                     label="You get"
                     value={
-                      <View style={styles.inline}>
-                        <TokenIcon symbol="USDC" size={20} ring={c.sheet} />
-                        <Text style={styles.rowValue}>{gotText}</Text>
-                      </View>
+                      // Pick what it's sold for; a new pick asks for new prices.
+                      <MenuDropdown
+                        // Not a token the jar holds: that one is yours already.
+                        options={SELL_INTO.filter(
+                          (s) => s === into || !jar.picks.some((p) => p.symbol === s),
+                        ).map((s) => ({
+                          value: s,
+                          label: `${s} on ${sellIntoChain(s)}`,
+                          leading: <TokenIcon symbol={s} size={20} />,
+                        }))}
+                        value={into}
+                        onChange={(next) => {
+                          if (next === into || selling) return;
+                          tap();
+                          setInto(next);
+                          review(usd, next);
+                        }}
+                        trigger={() => (
+                          <View style={styles.inline}>
+                            <TokenIcon symbol={into} size={20} ring={c.sheet} />
+                            <Text style={styles.rowValue}>{gotText}</Text>
+                            <Icon name="chevronDown" size={11} color={c.textSecondary} />
+                          </View>
+                        )}
+                      />
                     }
                   />
                   <StatRow
                     label="Network"
-                    value={real && networks.length ? `${networks.join(', ')} → Base` : 'Base'}
+                    value={
+                      real && networks.length
+                        ? `${networks.join(', ')} → ${payoutChain}`
+                        : payoutChain
+                    }
                   />
                   <StatRow
                     label="Network cost"
@@ -221,14 +270,14 @@ function JarSellSheet() {
                   compact
                   title={all ? 'Jar sold' : 'Sold'}
                   amount={{
-                    symbol: 'USDC',
-                    text: `${(got ?? usd).toFixed(2)} USDC`,
+                    symbol: into,
+                    text: gotAmount ? `${gotAmount} ${into}` : `${formatUsd(usd)} of ${into}`,
                     usd: formatUsd(got ?? usd),
                   }}
                   rows={[
                     { label: 'From', value: jar.name },
                     { label: 'To', value: 'Your wallet' },
-                    { label: 'Network', value: 'Base' },
+                    { label: 'Network', value: payoutChain },
                     {
                       label: 'Sold',
                       value: real ? 'Just now · arriving in a few minutes' : 'Just now',

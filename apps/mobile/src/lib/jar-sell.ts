@@ -1,5 +1,6 @@
 /**
- * Real jar sells (2026-11-13): each token the jar holds goes back to USDC on Base, one
+ * Real jar sells (2026-11-13): each token the jar holds goes to what you pick (USDC on
+ * Base by default, or ETH on Base, or SOL), one
  * NEAR Intents swap per token, exactly as Swap does it (lib/intents-swap): a verified
  * quote, then the deposit paid with lib/send.ts and the token's own contract. A partial
  * sell sells the same fraction of every token. You confirm once for the whole sell; a
@@ -13,6 +14,7 @@ import {
   prepareSwapPayment,
   quoteSwap,
   type SwapDeps,
+  swapRefForSymbol,
   tokenRef,
   unitsText,
 } from '@/lib/intents-swap';
@@ -23,6 +25,12 @@ import { prepareSend } from '@/lib/send';
 import { type JarSell, type ThesisJar, thesisJars } from '@/lib/thesis';
 
 const USDC_ON_BASE = { symbol: 'USDC', chain: 'Base', assetId: USDC_BASE_ASSET } as const;
+
+/** What a jar can be sold for, and the network each pays out on. */
+export const SELL_INTO = ['USDC', 'ETH', 'SOL'] as const;
+export type SellInto = (typeof SELL_INTO)[number];
+const SELL_INTO_CHAIN: Record<SellInto, string> = { USDC: 'Base', ETH: 'Base', SOL: 'Solana' };
+export const sellIntoChain = (into: SellInto) => SELL_INTO_CHAIN[into];
 const PPM = 1_000_000n;
 
 /** The share of each token to sell for `usd` of a jar worth `value`; 1 sells it all. */
@@ -64,19 +72,27 @@ export type JarSellQuote = {
   jarId: string;
   frac: number;
   swaps: { swap: IntentsSwap; units: bigint }[];
-  /** USDC the swaps expect to pay out, and at least. */
+  /** What it pays out in, and how much of it: expected and at least. */
+  into: SellInto;
+  amountOut: number;
+  amountOutMin: number;
+  /** The same in dollars (1Click's price). */
   usdOut: number;
   usdOutMin: number;
 };
 
-/** One verified NEAR Intents quote per token, to USDC on Base. Nothing is signed. */
+/** One verified NEAR Intents quote per token, to `into` (USDC on Base unless picked). */
 export async function quoteJarSell(
   jar: ThesisJar,
   usd: number,
   value: number,
   deps: Partial<SwapDeps> = {},
+  into: SellInto = 'USDC',
 ): Promise<JarSellQuote> {
   const tokens = await fetchSwapTokens(deps.fetcher, deps.now?.());
+  const buy =
+    into === 'USDC' ? USDC_ON_BASE : swapRefForSymbol(tokens, into, SELL_INTO_CHAIN[into]);
+  if (!buy) throw new Error(`${into} can’t be bought through NEAR Intents right now.`);
   const frac = sellFraction(usd, value);
   const parts = sellUnits(
     jar,
@@ -87,20 +103,39 @@ export async function quoteJarSell(
     parts.map(async ({ leg, units, decimals }) => {
       const token = tokens.find((t) => t.assetId === leg.destinationAsset);
       if (!token) throw new Error(`${leg.symbol} can’t be sold through NEAR Intents right now.`);
+      const sell = tokenRef(token);
+      if (sell.symbol === buy.symbol && sell.chain === buy.chain)
+        throw new Error(`This jar already holds ${into}. Pick something else to get.`);
       const swap = await quoteSwap(
-        { sell: tokenRef(token), buy: USDC_ON_BASE, amount: unitsText(units.toString(), decimals) },
+        { sell, buy, amount: unitsText(units.toString(), decimals) },
         deps,
       );
       return { swap, units };
     }),
   );
-  const usdc = (s: string) => Number(s) / 1e6;
+  const units = (s: string, d: number) => Number(s) / 10 ** d;
+  // Dollars: 1Click prices the minimum; the expected payout scales from it.
+  const usdMin = (x: IntentsSwap) => x.usdOutMin ?? x.usdIn;
+  const usdExpected = (x: IntentsSwap) =>
+    Number(x.minAmountOut) > 0
+      ? usdMin(x) * (Number(x.amountOut) / Number(x.minAmountOut))
+      : usdMin(x);
+  const amountOut = swaps.reduce((s, x) => s + units(x.swap.amountOut, x.swap.buyDecimals ?? 6), 0);
+  const amountOutMin = swaps.reduce(
+    (s, x) => s + units(x.swap.minAmountOut, x.swap.buyDecimals ?? 6),
+    0,
+  );
+  const dollars = into === 'USDC';
   return {
     jarId: jar.id,
     frac,
     swaps,
-    usdOut: swaps.reduce((s, x) => s + usdc(x.swap.amountOut), 0),
-    usdOutMin: swaps.reduce((s, x) => s + usdc(x.swap.minAmountOut), 0),
+    into,
+    amountOut,
+    amountOutMin,
+    // USDC is dollars already; anything else is priced by 1Click.
+    usdOut: dollars ? amountOut : swaps.reduce((s, x) => s + usdExpected(x.swap), 0),
+    usdOutMin: dollars ? amountOutMin : swaps.reduce((s, x) => s + usdMin(x.swap), 0),
   };
 }
 
