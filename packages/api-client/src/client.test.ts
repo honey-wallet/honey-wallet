@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ApiError, createApiClient, isFeatureAvailable } from './client';
+import { ApiError, createApiClient, isFeatureAvailable, parseMinAmountIn } from './client';
 
 function mockFetch(status: number, body: unknown) {
   return vi.fn<typeof fetch>(async () => new Response(JSON.stringify(body), { status }));
@@ -194,6 +194,26 @@ describe('createApiClient', () => {
     );
     expect(new Headers(fetch.mock.calls[0]?.[1]?.headers).get('x-pair-token')).toBe('secret');
     expect(new Headers(fetch.mock.lastCall?.[1]?.headers).get('x-pair-token')).toBe('secret');
+  });
+
+  it("reads a route refusal's minimum as a number, and nothing else as one", async () => {
+    const message =
+      'NEAR Intents needs at least 6.10 USDC for this, and no DEX route could take it.';
+    const fetch = mockFetch(400, {
+      error: { code: 'bad_request', message, minAmountIn: '6102429' },
+    });
+    const api = createApiClient({ baseUrl: 'http://api.test', fetch });
+    const error = await api.health().catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({ status: 400, code: 'bad_request', message });
+    expect((error as ApiError).minAmountIn).toBe(6_102_429n);
+    // Absent, or anything but a positive whole number: null.
+    expect(new ApiError(400, 'bad_request', 'x').minAmountIn).toBeNull();
+    expect(parseMinAmountIn('0')).toBeNull();
+    expect(parseMinAmountIn('6.10')).toBeNull();
+    expect(parseMinAmountIn(6102429)).toBeNull();
+    expect(parseMinAmountIn('-1')).toBeNull();
+    expect(parseMinAmountIn('1'.repeat(41))).toBeNull();
   });
 
   it('falls back when the error body is JSON in another shape', async () => {

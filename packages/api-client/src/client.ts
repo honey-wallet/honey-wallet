@@ -149,6 +149,8 @@ export class ApiError extends Error {
   readonly requestId: string | null;
   readonly traceId: string | null;
   readonly retryAfterMs: number | null;
+  /** The least amount a route would take, atomic units of the token paid (`/routes/best`). */
+  readonly minAmountIn: bigint | null;
 
   constructor(
     status: number,
@@ -157,6 +159,7 @@ export class ApiError extends Error {
     requestId: string | null = null,
     retryAfterMs: number | null = null,
     traceId: string | null = null,
+    minAmountIn: unknown = null,
   ) {
     super(message);
     this.name = 'ApiError';
@@ -165,7 +168,15 @@ export class ApiError extends Error {
     this.requestId = requestId;
     this.traceId = traceId && /^[0-9a-f]{32}$/.test(traceId) ? traceId : null;
     this.retryAfterMs = retryAfterMs;
+    this.minAmountIn = parseMinAmountIn(minAmountIn);
   }
+}
+
+/** A server's `minAmountIn`: a positive whole number of atomic units, else null. */
+export function parseMinAmountIn(raw: unknown): bigint | null {
+  if (typeof raw !== 'string' || !/^[0-9]{1,40}$/.test(raw)) return null;
+  const n = BigInt(raw);
+  return n > 0n ? n : null;
 }
 
 export interface ApiClientOptions {
@@ -198,6 +209,7 @@ export function createApiClient({ baseUrl, fetch: fetchImpl = fetch }: ApiClient
         response.headers.get('x-request-id'),
         parseRetryAfter(response.headers.get('retry-after')),
         response.headers.get('x-trace-id'),
+        body?.error?.minAmountIn,
       );
     }
     return response;

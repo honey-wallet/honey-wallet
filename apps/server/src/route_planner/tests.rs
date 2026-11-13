@@ -382,7 +382,12 @@ async fn private_routes_only_never_falls_back() {
     ask.private_only = true;
     let r = p.best(Uuid::new_v4(), ask).await;
     assert!(
-        matches!(&r, Err(AppError::BadRequest(m)) if m.contains("needs at least 1.00 USDC")),
+        // matches!(&r, Err(AppError::BadRequest(m)) if m.contains("needs at least 1.00 USDC")),
+        matches!(
+            &r,
+            Err(AppError::BelowMinimum { message, min_amount_in })
+                if message.contains("needs at least 1.00 USDC") && min_amount_in == "1000000"
+        ),
         "1Click's own error: {r:?}"
     );
     assert_eq!(p.sources().dex_calls.load(AtomicOrdering::SeqCst), 0);
@@ -408,7 +413,12 @@ async fn with_the_dex_off_only_near_intents_is_quoted() {
     let p = planner(fake);
     let r = p.best(Uuid::new_v4(), jar_leg()).await;
     assert!(
-        matches!(&r, Err(AppError::BadRequest(m)) if m.contains("needs at least 1.00 USDC")),
+        // matches!(&r, Err(AppError::BadRequest(m)) if m.contains("needs at least 1.00 USDC")),
+        matches!(
+            &r,
+            Err(AppError::BelowMinimum { message, min_amount_in })
+                if message.contains("needs at least 1.00 USDC") && min_amount_in == "1000000"
+        ),
         "{r:?}"
     );
     assert_eq!(p.sources().dex_calls.load(AtomicOrdering::SeqCst), 0);
@@ -453,7 +463,12 @@ async fn a_slow_candidate_drops_out() {
     let p = planner(Fake::new(vec![too_low()], vec![(WBTC_ARB, Answer::Slow)]));
     let r = p.best(Uuid::new_v4(), jar_leg()).await;
     assert!(
-        matches!(&r, Err(AppError::BadRequest(m)) if m.contains("needs at least 1.00 USDC")),
+        // matches!(&r, Err(AppError::BadRequest(m)) if m.contains("needs at least 1.00 USDC")),
+        matches!(
+            &r,
+            Err(AppError::BelowMinimum { message, min_amount_in })
+                if message.contains("needs at least 1.00 USDC") && min_amount_in == "1000000"
+        ),
         "{r:?}"
     );
 }
@@ -568,6 +583,42 @@ fn a_1click_minimum_reads_in_the_tokens_own_units() {
         plain_minimum("Amount is too low", None, None, false),
         "NEAR Intents can't do this amount."
     );
+}
+
+#[test]
+fn a_1click_minimum_comes_back_as_a_number_beside_the_words() {
+    match minimum_refusal(
+        "Amount is too low for bridge, try at least 6102429",
+        Some("USDC"),
+        Some(6),
+        true,
+    ) {
+        AppError::BelowMinimum {
+            message,
+            min_amount_in,
+        } => {
+            assert_eq!(
+                message,
+                "NEAR Intents needs at least 6.10 USDC for this, and no DEX route could take it."
+            );
+            assert_eq!(min_amount_in, "6102429");
+        }
+        other => panic!("{other:?}"),
+    }
+    // The paying token unknown: the plain words, and the number still (it's atomic).
+    assert!(matches!(
+        minimum_refusal("try at least 42", None, None, false),
+        AppError::BelowMinimum { min_amount_in, .. } if min_amount_in == "42"
+    ));
+    // No number named: the words alone, as before.
+    assert!(matches!(
+        minimum_refusal("Amount is too low", None, None, false),
+        AppError::BadRequest(m) if m == "NEAR Intents can't do this amount."
+    ));
+    assert!(is_amount_refusal(&AppError::BelowMinimum {
+        message: String::new(),
+        min_amount_in: "1".into()
+    }));
 }
 
 #[test]

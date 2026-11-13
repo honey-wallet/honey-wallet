@@ -32,7 +32,16 @@ import { inviteLabel, MAX_FRIENDS, dollars as plainDollars } from '@/lib/group-j
 import { friendPicks, groupError, startGroup } from '@/lib/group-jars';
 import { tap } from '@/lib/haptics';
 import { REFRESH_FAILED } from '@/lib/intents-quote';
-import { type BuyLeg, JarBuyError, payJarBuy, QuoteRanOut, quoteJarBuy } from '@/lib/jar-buy';
+// import { type BuyLeg, JarBuyError, payJarBuy, QuoteRanOut, quoteJarBuy } from '@/lib/jar-buy';
+import {
+  type BuyLeg,
+  JarBuyError,
+  payJarBuy,
+  QuoteRanOut,
+  quoteJarBuy,
+  usdcByChain,
+} from '@/lib/jar-buy';
+import { belowMinimum, useJarMinimum } from '@/lib/jar-minimum';
 import { blockedRoutes, describeRoute, useRoutes } from '@/lib/jar-routes';
 import { useBasketChart, useTokenChart } from '@/lib/market';
 import { formatUsd } from '@/lib/mock-wallet';
@@ -305,6 +314,27 @@ export default function NewThesisSheet() {
   // A shared wallet buys the jar for its members: the buy is a proposal they approve.
   const multisig = useActiveMultisig();
   const activeWallet = useActiveWallet();
+  // A real buy's least amount, from dry quotes at each leg's share (lib/jar-minimum):
+  // under it, Buy says how much to add instead of failing after the tap.
+  const minimumCheck = useJarMinimum({
+    enabled:
+      step === 'jar' &&
+      !!proposal &&
+      !TEST_MODE &&
+      !proposal.provenance.sample &&
+      order === 'market' &&
+      !multisig &&
+      !friends.length &&
+      !blocked.length &&
+      !activeWallet.watchOnly &&
+      !activeWallet.demo,
+    amount: proposal?.amount ?? 0,
+    routes,
+    slippage: maxSlip / 100,
+    balances: usdcByChain(held),
+    wallet: activeWallet,
+  });
+  const tooSmall = belowMinimum(proposal?.amount ?? 0, minimumCheck.minimum);
   const create = async () => {
     if (!proposal || buying) return;
     tap();
@@ -682,9 +712,16 @@ export default function NewThesisSheet() {
                       ? 'Name your jar'
                       : friends.length
                         ? inviteLabel(friends.length, share)
-                        : `Buy ${formatUsd(proposal.amount)} and launch`
+                        : minimumCheck.checking
+                          ? 'Checking routes…'
+                          : tooSmall
+                            ? tooSmall.label
+                            : `Buy ${formatUsd(proposal.amount)} and launch`
               }
-              disabled={!name.trim() || buying || blocked.length > 0}
+              // disabled={!name.trim() || buying || blocked.length > 0}
+              disabled={
+                !name.trim() || buying || blocked.length > 0 || minimumCheck.checking || !!tooSmall
+              }
               onPress={() => void create()}
             />
             <Gate id="jarLaunchKeysNote">
@@ -852,6 +889,7 @@ export default function NewThesisSheet() {
               />
             ))}
             {liveRoutes ? null : <StatRow label="Routes" value="Sample" />}
+            {tooSmall && !buying ? <Text style={styles.warn}>{tooSmall.line}</Text> : null}
             {warningOn('strategyFeesWarning') &&
             impactUsd + bridgeUsd > proposal.amount * 0.05 &&
             proposal.amount > 0 ? (
