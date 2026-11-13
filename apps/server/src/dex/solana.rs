@@ -406,22 +406,42 @@ struct RouteAccounts {
     destination: usize,
     source_mint: Option<usize>,
     destination_mint: Option<usize>,
+    /// The optional `destination_token_account` (`route` 4, `route_v2` 7): the Jupiter
+    /// program's own id when unused, else where the output goes.
+    optional_destination: Option<usize>,
 }
 
 fn route_accounts(data: &[u8]) -> Option<RouteAccounts> {
     let disc: [u8; 8] = data.get(..8)?.try_into().ok()?;
-    let at = |authority, source, destination, source_mint, destination_mint| RouteAccounts {
-        authority,
-        source,
-        destination,
-        source_mint,
-        destination_mint,
-    };
+    // Replaced (review): the optional destination account is named too.
+    // let at = |authority, source, destination, source_mint, destination_mint| RouteAccounts {
+    //     authority,
+    //     source,
+    //     destination,
+    //     source_mint,
+    //     destination_mint,
+    // };
+    // match disc {
+    //     JUPITER_SHARED_ROUTE_V2 => Some(at(1, 2, 5, Some(6), Some(7))),
+    //     JUPITER_ROUTE_V2 => Some(at(0, 1, 2, Some(3), Some(4))),
+    //     JUPITER_ROUTE => Some(at(1, 2, 3, None, Some(5))),
+    //     JUPITER_SHARED_ROUTE => Some(at(2, 3, 6, Some(7), Some(8))),
+    //     _ => None,
+    // }
+    let at =
+        |authority, source, destination, source_mint, destination_mint, optional| RouteAccounts {
+            authority,
+            source,
+            destination,
+            source_mint,
+            destination_mint,
+            optional_destination: optional,
+        };
     match disc {
-        JUPITER_SHARED_ROUTE_V2 => Some(at(1, 2, 5, Some(6), Some(7))),
-        JUPITER_ROUTE_V2 => Some(at(0, 1, 2, Some(3), Some(4))),
-        JUPITER_ROUTE => Some(at(1, 2, 3, None, Some(5))),
-        JUPITER_SHARED_ROUTE => Some(at(2, 3, 6, Some(7), Some(8))),
+        JUPITER_SHARED_ROUTE_V2 => Some(at(1, 2, 5, Some(6), Some(7), None)),
+        JUPITER_ROUTE_V2 => Some(at(0, 1, 2, Some(3), Some(4), Some(7))),
+        JUPITER_ROUTE => Some(at(1, 2, 3, None, Some(5), Some(4))),
+        JUPITER_SHARED_ROUTE => Some(at(2, 3, 6, Some(7), Some(8), None)),
         _ => None,
     }
 }
@@ -441,6 +461,7 @@ pub fn check_jupiter_accounts(
     let token = decode_key(TOKEN_PROGRAM).ok_or("bad token program")?;
     let source = associated_token_address(taker, sell_mint, &token).ok_or("no source account")?;
     let output = associated_token_address(taker, buy_mint, &token).ok_or("no output account")?;
+    let jupiter = decode_key(JUPITER_V6).ok_or("bad Jupiter program")?;
     let mut routes = 0usize;
     for ix in &msg.instructions {
         let Some(program) = msg.keys.get(ix.program) else {
@@ -458,6 +479,12 @@ pub fn check_jupiter_accounts(
             return Err("the swap sells from another account");
         }
         if key(at.destination) != Some(&output) {
+            return Err("the swap pays another account");
+        }
+        // As the phone checks: unused (the program's id) or the same output account.
+        if let Some(i) = at.optional_destination
+            && !matches!(key(i), Some(k) if *k == jupiter || *k == output)
+        {
             return Err("the swap pays another account");
         }
         let mint_ok = |i: Option<usize>, mint: &[u8; 32]| match i.and_then(|i| ix.accounts.get(i)) {
@@ -708,6 +735,49 @@ mod tests {
         let accounts = find_instruction_accounts(&m, 2);
         moved[accounts + 2] = moved[accounts + 5];
         assert!(check_jupiter_accounts(&moved, &taker, &usdc, &jup).is_err());
+    }
+
+    /// The live shared-accounts route rewritten as `route_v2`, its accounts moved to
+    /// that layout, with `optional` (an index into the message's keys) at position 7.
+    fn as_route_v2(optional: Option<u8>) -> Vec<u8> {
+        let m = message();
+        let accounts = find_instruction_accounts(&m, 2);
+        let data = find_instruction_data(&m, 2);
+        let shared: Vec<u8> = m[accounts..accounts + 8].to_vec();
+        let mut out = m.clone();
+        out[data..data + 8].copy_from_slice(&JUPITER_ROUTE_V2);
+        // authority, source, destination, source mint, destination mint.
+        for (to, from) in [(0, 1), (1, 2), (2, 5), (3, 6), (4, 7)] {
+            out[accounts + to] = shared[from];
+        }
+        // Positions 5 and 6 aren't checked; 7 is the optional destination.
+        let jupiter_at = MessageV0::decode(&m).unwrap().instructions[2].program as u8;
+        out[accounts + 7] = optional.unwrap_or(jupiter_at);
+        out
+    }
+
+    #[test]
+    fn the_optional_destination_is_unused_or_the_takers_own() {
+        let taker = decode_key(TAKER).unwrap();
+        let usdc = decode_key(super::super::chains::USDC_SOLANA).unwrap();
+        let jup = decode_key("JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN").unwrap();
+        let m = message();
+        let shared = find_instruction_accounts(&m, 2);
+        let (output_at, source_at) = (m[shared + 5], m[shared + 2]);
+        // Unused (the program's id) or the same output account: fine.
+        assert_eq!(
+            check_jupiter_accounts(&as_route_v2(None), &taker, &usdc, &jup),
+            Ok(())
+        );
+        assert_eq!(
+            check_jupiter_accounts(&as_route_v2(Some(output_at)), &taker, &usdc, &jup),
+            Ok(())
+        );
+        // Any other account (here the taker's USDC account) would receive the output.
+        assert_eq!(
+            check_jupiter_accounts(&as_route_v2(Some(source_at)), &taker, &usdc, &jup),
+            Err("the swap pays another account")
+        );
     }
 
     #[test]
