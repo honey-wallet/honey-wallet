@@ -52,10 +52,15 @@ it('tells a swap made here once: "Swapped", not a send and a receive', () => {
     txHash: '0xpay',
     destinationTxHashes: ['0xpayout'],
     status: 'SUCCESS',
-  } as unknown as Parameters<typeof toNotifications>[1][number];
+  } as never;
   const out = toNotifications(
     [
-      item({ hash: '0xpay', direction: 'sent', amount: 1, counterparty: swap.depositAddress }),
+      item({
+        hash: '0xpay',
+        direction: 'sent',
+        amount: 1,
+        counterparty: '0xDBDE000000000000000000000000000000009824',
+      }),
       item({ hash: '0xpayout', direction: 'received', symbol: 'USDT0', amount: 0.995 }),
       item({ hash: '0xother', direction: 'received', amount: 3 }),
     ],

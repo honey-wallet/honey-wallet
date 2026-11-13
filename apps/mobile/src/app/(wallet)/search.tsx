@@ -302,6 +302,15 @@ export default function SearchScreen() {
                   onSearching={setPeopleSearching}
                 />
               ) : null}
+              {/* Still asking the server for people: skeleton rows, never a blank page or a
+                  "No matches" that changes its mind (2026-11-14). */}
+              {SOCIAL && peopleSearching && !personFound ? (
+                results.length || site || jarResults.length ? (
+                  <PersonSkeleton />
+                ) : (
+                  <MarketRowsSkeleton count={4} />
+                )
+              ) : null}
               {jarResults.length ? <Text style={styles.group}>Jars</Text> : null}
               {jarResults.length ? <JarList jars={jarResults.slice(0, 8)} /> : null}
               {results.length === 0 &&
