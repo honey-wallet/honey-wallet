@@ -20,7 +20,7 @@ import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle, Defs, LinearGradient, Path, Stop, Text as SvgText } from 'react-native-svg';
 import { Icon } from '@/components/Icon';
-import { ChatRow } from '@/components/jars/ChatRow';
+// import { ChatRow } from '@/components/jars/ChatRow'; (Recent chats, commented out below)
 import { IdeaGrid, PickIcon, StrategyCard } from '@/components/jars/JarParts';
 import { ChatChart } from '@/components/jars/ThesisCharts';
 import { ThesisProgress, Understood } from '@/components/jars/ThesisLive';
@@ -65,13 +65,14 @@ import {
   reply,
   SWING,
 } from '@/lib/thesis-chat';
-import {
-  fetchPastChats,
-  type HistoryRow,
-  hiddenChats,
-  historySections,
-  visibleChats,
-} from '@/lib/thesis-history';
+// Recent chats on the empty state, commented out below:
+// import {
+//   fetchPastChats,
+//   type HistoryRow,
+//   hiddenChats,
+//   historySections,
+//   visibleChats,
+// } from '@/lib/thesis-history';
 import { showToast } from '@/lib/toast';
 import { tokenColor } from '@/lib/token-colors';
 import { Gate } from '@/lib/warnings';
@@ -273,6 +274,7 @@ export default function ThesisChatScreen() {
   };
 
   /** New chat: back to the empty chat, whatever was going on. */
+  // biome-ignore lint/correctness/noUnusedVariables: kept for New chat, off the top bar for now.
   const fresh = () => {
     working.current?.abort();
     working.current = null;
@@ -340,6 +342,7 @@ export default function ThesisChatScreen() {
           <Text style={styles.title}>Thesis agent</Text>
         </View>
         <View style={[styles.side, styles.sideEnd]}>
+          {/* New chat taken off the top bar (2026-11-14, the user's call); History stays.
           <HeaderShortcut
             icon="pencil"
             label="New chat"
@@ -348,6 +351,7 @@ export default function ThesisChatScreen() {
               if (empty) input.current?.focus();
             }}
           />
+          */}
           <HeaderShortcut
             icon="history"
             label="History"
@@ -532,19 +536,20 @@ export default function ThesisChatScreen() {
  */
 function Welcome({ onIdea }: { onIdea: (text: string) => void }) {
   const styles = useStyles();
-  const hidden = hiddenChats.useValue();
-  const [recent, setRecent] = useState<HistoryRow[]>([]);
-  useEffect(() => {
-    let live = true;
-    fetchPastChats()
-      .then(({ chats }) => {
-        if (live) setRecent(historySections(visibleChats(chats, hidden)).flatMap((s) => s.rows));
-      })
-      .catch(() => {});
-    return () => {
-      live = false;
-    };
-  }, [hidden]);
+  // The Recent list is off the empty state (2026-11-14, the user's call); History has them.
+  // const hidden = hiddenChats.useValue();
+  // const [recent, setRecent] = useState<HistoryRow[]>([]);
+  // useEffect(() => {
+  //   let live = true;
+  //   fetchPastChats()
+  //     .then(({ chats }) => {
+  //       if (live) setRecent(historySections(visibleChats(chats, hidden)).flatMap((s) => s.rows));
+  //     })
+  //     .catch(() => {});
+  //   return () => {
+  //     live = false;
+  //   };
+  // }, [hidden]);
   return (
     <ScrollView
       style={styles.flexFill}
@@ -561,6 +566,7 @@ function Welcome({ onIdea }: { onIdea: (text: string) => void }) {
       </View>
       {/* The Jars page's idea cards, each starting the conversation with its idea. */}
       <IdeaGrid onPick={onIdea} />
+      {/* Recent chats, off the empty state (2026-11-14, the user's call).
       {recent.length ? (
         <View style={styles.recent}>
           <View style={styles.recentHead}>
@@ -582,6 +588,7 @@ function Welcome({ onIdea }: { onIdea: (text: string) => void }) {
           ))}
         </View>
       ) : null}
+      */}
     </ScrollView>
   );
 }
