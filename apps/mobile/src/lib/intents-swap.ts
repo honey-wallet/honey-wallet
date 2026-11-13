@@ -153,6 +153,18 @@ export function ownAddressOn(
 export const shownInWallet = (chain: string) => Object.values(PAYABLE).includes(chain as Chain);
 
 /**
+ * What the review says before Confirm when the payout lands at this wallet's own address
+ * on a chain Honey doesn't show (BNB Chain, Avalanche, Optimism, Gnosis…): the funds are
+ * yours, but Home won't list them. Null when the chain is shown or the address was typed.
+ */
+export function hiddenPayoutWarning(
+  swap: Pick<IntentsSwap, 'buy' | 'externalRecipient'>,
+): string | null {
+  if (swap.externalRecipient || shownInWallet(swap.buy.chain)) return null;
+  return `${swap.buy.symbol} goes to your address on ${swap.buy.chain}. Honey doesn’t show ${swap.buy.chain} balances yet: you’ll see it in an explorer or another wallet, not on Home.`;
+}
+
+/**
  * Chains where exchanges often need a memo or tag with the address. A swap can't add one,
  * so paying an exchange deposit address there can lose the funds.
  */

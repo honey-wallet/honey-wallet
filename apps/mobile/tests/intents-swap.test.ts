@@ -30,6 +30,7 @@ const {
   readyToPay,
   refreshSwap,
   FALLBACK_SWAP_TOKENS,
+  hiddenPayoutWarning,
   shownInWallet,
   swapRefForSymbol,
   swapStage,
@@ -843,6 +844,17 @@ describe('payout wording', () => {
     expect(shownInWallet('Arbitrum')).toBe(true);
     expect(shownInWallet('Polygon')).toBe(true);
     expect(shownInWallet('Optimism')).toBe(false);
+  });
+
+  it('warns on the review, before Confirm, when the payout lands on a chain Honey doesn’t show (money audit 4)', () => {
+    const on = (chain: string, externalRecipient = false) =>
+      hiddenPayoutWarning({ buy: { symbol: 'USDT', chain }, externalRecipient });
+    for (const chain of ['BNB Chain', 'Avalanche', 'Optimism', 'Gnosis'])
+      expect(on(chain)).toContain(`Honey doesn’t show ${chain} balances`);
+    expect(on('Base')).toBeNull();
+    expect(on('Solana')).toBeNull();
+    // An address you typed has its own warning.
+    expect(on('BNB Chain', true)).toBeNull();
   });
 
   it('warns about exchange memos on chains that use them', () => {

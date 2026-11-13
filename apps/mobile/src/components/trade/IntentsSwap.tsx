@@ -47,6 +47,7 @@ import {
   canSellRef,
   executeSwapPayment,
   FALLBACK_SWAP_TOKENS,
+  hiddenPayoutWarning,
   intentsSwaps,
   // isFinal (finished swaps left the top of Swap, 14 Nov),
   loadSwapTokens,
@@ -1131,6 +1132,10 @@ function ReviewStep({
           {swap.buy.symbol} goes to the {swap.buy.chain} address you entered, not this wallet. Check
           it: a payout can’t be sent back.
         </Text>
+      ) : null}
+      {/* Said here, before Confirm, not only once the swap is done (money audit 4). */}
+      {hiddenPayoutWarning(swap) ? (
+        <Text style={[styles.small, styles.warn]}>{hiddenPayoutWarning(swap)}</Text>
       ) : null}
       {plan?.note ? <Text style={styles.small}>{plan.note}</Text> : null}
       {flash ? <Text style={styles.small}>{flash}</Text> : null}
