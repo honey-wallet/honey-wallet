@@ -144,8 +144,10 @@ export default function NewThesisSheet() {
   const [spend, setSpend] = useState(() =>
     fromChat && fromChat.amount > 0 ? fromChat.amount : settings.get().copyAmount,
   );
+  // A hand-built jar starts unnamed: its "thesis" is only the token list, which made a
+  // poor name ("cbBTC, SOL, AAVE, PEPE") and a worse post.
   const [name, setName] = useState(
-    copied ? copied.name : named ? named : fromChat ? shortName(fromChat.thesis) : '',
+    copied ? copied.name : named ? named : fromChat && !manual ? shortName(fromChat.thesis) : '',
   );
   // A copy whose jar loaded after this opened (a cold start from a link): start on it now.
   useEffect(() => {
@@ -385,6 +387,10 @@ export default function NewThesisSheet() {
     const id = createThesisJar(proposal, { ...options, buy });
     showToast(toast);
     openJar(id);
+    // A jar others can see is a post: once it's bought, ask for the words it leads with
+    // (on top of the new jar, after the sheets have closed).
+    if (!copied && visibility !== 'members')
+      setTimeout(() => router.push({ pathname: '/jar-post', params: { id } }), SHEET_EXIT + 250);
   };
 
   if (step === 'working')
@@ -574,9 +580,11 @@ export default function NewThesisSheet() {
                     : 'Paying…'
                   : multisig
                     ? `Propose to ${activeWallet.label}`
-                    : friends.length
-                      ? inviteLabel(friends.length, share)
-                      : `Buy ${formatUsd(proposal.amount)} and launch`
+                    : !name.trim()
+                      ? 'Name your jar'
+                      : friends.length
+                        ? inviteLabel(friends.length, share)
+                        : `Buy ${formatUsd(proposal.amount)} and launch`
               }
               disabled={!name.trim() || buying || blocked.length > 0}
               onPress={() => void create()}
