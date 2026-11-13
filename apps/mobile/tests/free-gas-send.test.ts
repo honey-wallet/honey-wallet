@@ -400,6 +400,53 @@ describe('NEAR: Honey’s relayer', () => {
   });
 });
 
+describe('NEAR: what a relay failure means (money audit 9)', () => {
+  const send = (nearRelay: () => Promise<never>, keys: unknown = keyOf) => {
+    const sendNearCall = vi.fn(async (..._args: unknown[]) => 'own-hash');
+    const confirmFallback = vi.fn(async () => true);
+    return {
+      sendNearCall,
+      confirmFallback,
+      plan: prepareSend(
+        wallet,
+        { chain: 'NEAR', symbol: 'USDC', to: 'bob.near', amount: '1' },
+        {
+          nearRpc: (() => nearRpc({ nonce: () => 41 })) as never,
+          keyOf: keys as never,
+          confirm: async () => true,
+          confirmFallback,
+          sendNearCall,
+          nearClient: (() => ({
+            balance: async () => ({ amount: 10n ** 24n, available: 10n ** 24n, exists: true }),
+          })) as never,
+          freeGas: { allowance: async () => allowance(), solanaSponsor: vi.fn(), nearRelay },
+        },
+      ),
+    };
+  };
+
+  it('says nothing was sent when NEAR ran it and it failed (the relay’s 409)', async () => {
+    const s = send(async () => {
+      throw new ApiError(409, 'conflict', "NEAR didn't run that. Try again in a moment.");
+    });
+    await expect((await s.plan).execute(() => true)).rejects.toThrow(
+      'NEAR didn’t run that, so nothing was sent',
+    );
+    expect(s.confirmFallback).not.toHaveBeenCalled();
+    expect(s.sendNearCall).not.toHaveBeenCalled();
+  });
+
+  it('lets a signing error through instead of falling back', async () => {
+    const nearRelay = vi.fn();
+    const s = send(nearRelay as never, async () => {
+      throw new Error('The key couldn’t be read');
+    });
+    await expect((await s.plan).execute(() => true)).rejects.toThrow('The key couldn’t be read');
+    expect(nearRelay).not.toHaveBeenCalled();
+    expect(s.confirmFallback).not.toHaveBeenCalled();
+  });
+});
+
 describe('free gas helpers', () => {
   it('covers a fee only within the allowance, the day and the account cap', () => {
     expect(covers(allowance(), 'solana', 10_000n, 9)).toBeTruthy();
