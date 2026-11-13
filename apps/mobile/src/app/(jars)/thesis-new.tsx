@@ -19,9 +19,11 @@ import { SegmentedTabs } from '@/components/motion/SegmentedTabs';
 import { PillButton } from '@/components/onboarding/PillButton';
 import { KeyboardFooter } from '@/components/sheets/KeyboardFooter';
 import { SHEET, SheetScreen, StatRow } from '@/components/sheets/Sheet';
-import { Trend } from '@/components/social/parts';
+import { SocialAvatar, Trend } from '@/components/social/parts';
 import { Chip } from '@/components/wallet/Chip';
 import { EmptyState } from '@/components/wallet/parts';
+import { inviteLabel, MAX_FRIENDS, dollars as plainDollars } from '@/lib/group-jar-core';
+import { friendPicks, groupError, startGroup } from '@/lib/group-jars';
 import { tap } from '@/lib/haptics';
 import { type BuyLeg, payJarBuy, quoteJarBuy } from '@/lib/jar-buy';
 import { blockedRoutes, describeRoute, useRoutes } from '@/lib/jar-routes';
@@ -53,6 +55,7 @@ import {
 } from '@/lib/thesis';
 import { chatDraft } from '@/lib/thesis-chat';
 import { showErrorToast, showToast } from '@/lib/toast';
+import { requireSignIn } from '@/lib/wallet-gate';
 import { useActiveWallet } from '@/lib/wallets';
 import { Gate, warningOn } from '@/lib/warnings';
 import { makeStyles, radius, useTheme } from '@/theme';
@@ -60,16 +63,6 @@ import { DURATION } from '@/theme/motion';
 
 type Step = 'idea' | 'working' | 'proposal' | 'jar';
 const AMOUNTS = [100, 500, 1000];
-
-/** Friends typed as "a, b c": names, addresses or handles, without repeats. */
-const friendList = (text: string) => [
-  ...new Set(
-    text
-      .split(/[,\s]+/)
-      .map((f) => f.trim())
-      .filter(Boolean),
-  ),
-];
 
 /** A jar name from the idea: whole words, up to 32 characters. */
 function shortName(text: string) {
@@ -92,9 +85,12 @@ export default function NewThesisSheet() {
     step: openAt,
     copy,
     manual,
+    name: named,
   } = useLocalSearchParams<{
     idea?: string;
     step?: 'proposal' | 'jar';
+    /** The jar's name to start with (a group jar's, when its creator invests alone). */
+    name?: string;
     /** Copying this jar (its id): the creator's picks and split, at your amount. */
     copy?: string;
     /** Built by hand (jar-build, a post's tokens): chatDraft holds the tokens picked. */
@@ -148,7 +144,7 @@ export default function NewThesisSheet() {
     fromChat && fromChat.amount > 0 ? fromChat.amount : settings.get().copyAmount,
   );
   const [name, setName] = useState(
-    copied ? copied.name : fromChat ? shortName(fromChat.thesis) : '',
+    copied ? copied.name : named ? named : fromChat ? shortName(fromChat.thesis) : '',
   );
   // A copy whose jar loaded after this opened (a cold start from a link): start on it now.
   useEffect(() => {
@@ -161,7 +157,12 @@ export default function NewThesisSheet() {
     setStep(openAt);
   }, [copied, proposal, openAt]);
   const [visibility, setVisibility] = useState<Visibility>(() => settings.get().jarVisibility);
-  const [friends, setFriends] = useState('');
+  // Friends picked in the "Add friends" tray; a fresh launch starts with just you.
+  const friends = friendPicks.useValue();
+  useEffect(() => {
+    friendPicks.set([]);
+    return () => friendPicks.set([]);
+  }, []);
   const [copyFee, setCopyFee] = useState(() => settings.get().jarCopyFee);
   // Limit orders are off for now, so every buy is a market order.
   const [order] = useState<OrderKind>('market');
@@ -308,19 +309,41 @@ export default function NewThesisSheet() {
       openJar(id);
       return;
     }
+    // With friends: a group jar. Nothing is bought yet: the group is created and friends
+    // are invited; money moves once they've joined (the group's page takes it from here).
+    if (friends.length) {
+      if (!requireSignIn('invite friends')) return;
+      setBuying(true);
+      try {
+        const group = await startGroup(proposal, {
+          name: name.trim() || 'My jar',
+          friends,
+          visibility,
+          copyFee: copied || visibility !== 'public' ? 0 : copyFee,
+        });
+        showToast(`Invited ${friends.length} ${friends.length === 1 ? 'friend' : 'friends'}`);
+        if (router.canDismiss()) router.dismissAll();
+        router.push({ pathname: '/group/[id]', params: { id: group.id } });
+      } catch (error) {
+        showErrorToast(groupError(error));
+      } finally {
+        setBuying(false);
+      }
+      return;
+    }
     const options = {
       name: name.trim() || 'My jar',
       visibility,
-      friends: friendList(friends),
+      friends: [],
       copyFee: copied || visibility !== 'public' ? 0 : copyFee,
       order,
       copiedFrom,
     };
     // Real buys: on your own, at market, outside test mode. Everything else is saved
-    // as a plan (shared and limit buys aren't live yet).
+    // as a plan (limit buys aren't live yet).
     // A sample strategy (the live agent didn't answer) is never bought with real money.
     const sample = proposal.provenance.sample;
-    const real = !TEST_MODE && !sample && order === 'market' && !options.friends.length;
+    const real = !TEST_MODE && !sample && order === 'market';
     let buy: BuyLeg[] | undefined;
     let toast =
       sample && !TEST_MODE
@@ -522,8 +545,8 @@ export default function NewThesisSheet() {
   }
 
   if (step === 'jar' && proposal) {
-    const people = friendList(friends);
-    const share = proposal.amount / (people.length + 1);
+    // Equal shares: the amount on "How much?" is what each person puts in.
+    const share = proposal.amount;
     // A copy can't be resold for a cut of someone else's idea, and only Everyone's jars
     // show the picks a copy buys.
     const copyable = !copied && visibility === 'public';
@@ -539,11 +562,13 @@ export default function NewThesisSheet() {
             <PillButton
               label={
                 buying
-                  ? 'Paying…'
+                  ? friends.length
+                    ? 'Inviting…'
+                    : 'Paying…'
                   : multisig
                     ? `Propose to ${activeWallet.label}`
-                    : people.length
-                      ? `Invite and buy ${formatUsd(share)}`
+                    : friends.length
+                      ? inviteLabel(friends.length, share)
                       : `Buy ${formatUsd(proposal.amount)} and launch`
               }
               disabled={!name.trim() || buying || blocked.length > 0}
@@ -597,36 +622,57 @@ export default function NewThesisSheet() {
               </Text>
             </View>
           ) : (
+            // You, then the friends you add by @handle (up to 4). Each puts in the same
+            // amount; nobody's in until they accept.
             <View style={styles.card}>
               <View style={styles.memberRow}>
                 <People
-                  names={[{ id: 'me', name: 'You' }, ...people.map((n) => ({ id: n, name: n }))]}
+                  names={[
+                    { id: 'me', name: 'You' },
+                    ...friends.map((f) => ({ id: f.avatarSeed || f.handle, name: f.displayName })),
+                  ]}
                   size={28}
                 />
                 <Text style={[styles.pickName, styles.flex]}>
-                  {people.length
-                    ? `You and ${people.length} ${people.length === 1 ? 'friend' : 'friends'}`
+                  {friends.length
+                    ? `You and ${friends.length} ${friends.length === 1 ? 'friend' : 'friends'}`
                     : 'Just you'}
                 </Text>
-                {people.length ? (
-                  <Text style={styles.pickReason}>{formatUsd(share)} each</Text>
+                {friends.length ? (
+                  <Text style={styles.pickReason}>{plainDollars(share)} each</Text>
                 ) : null}
               </View>
-              <View style={[styles.field, styles.inviteField]}>
-                <Icon name="person" size={16} color={c.textSecondary} />
-                <TextInput
-                  value={friends}
-                  onChangeText={setFriends}
-                  placeholder="Add friends: name.near, 0x…, @handle"
-                  placeholderTextColor={c.placeholder}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  style={[styles.input, styles.flex, styles.smallInput]}
-                  accessibilityLabel="Friends to invite"
-                />
-              </View>
-              {people.length ? (
-                <Text style={styles.pickReason}>Each friend is invited to put in their share.</Text>
+              {friends.length ? (
+                <View style={styles.chips}>
+                  {friends.map((f) => (
+                    <Chip
+                      key={f.handle}
+                      variant="filled"
+                      leading={<SocialAvatar who={f} size={20} />}
+                      label={`@${f.handle}`}
+                      trailing={<Icon name="close" size={11} color={c.textSecondary} />}
+                      accessibilityLabel={`Remove @${f.handle}`}
+                      onPress={() => friendPicks.set(friends.filter((x) => x.handle !== f.handle))}
+                    />
+                  ))}
+                </View>
+              ) : null}
+              {friends.length < MAX_FRIENDS ? (
+                <PressableScale
+                  accessibilityRole="button"
+                  scaleTo={0.98}
+                  onPress={() => {
+                    tap();
+                    router.push('/group-friends');
+                  }}
+                  style={styles.memberRow}
+                >
+                  <View style={styles.addWell}>
+                    <Icon name="plus" size={14} color={c.accentText} />
+                  </View>
+                  <Text style={[styles.pickName, styles.flex]}>Add friends</Text>
+                  <Icon name="chevronRight" size={13} color={c.textSecondary} />
+                </PressableScale>
               ) : null}
             </View>
           )}
@@ -858,15 +904,15 @@ const useStyles = makeStyles((c) => ({
   footer: { gap: 8 },
   footnote: { color: c.textSecondary, fontSize: 13, textAlign: 'center' },
   memberRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  inviteField: {
-    flexDirection: 'row',
+  // "Add friends": a round well as the faces are wide, honey-tinted like every icon well.
+  addWell: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     alignItems: 'center',
-    gap: 10,
-    justifyContent: 'flex-start',
-    minHeight: 44,
-    backgroundColor: c.canvas,
+    justifyContent: 'center',
+    backgroundColor: c.accentSurface,
   },
-  smallInput: { fontSize: 15 },
   feeRow: { flexDirection: 'row', gap: 8 },
   choiceRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12 },
   choiceBorder: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: c.divider },

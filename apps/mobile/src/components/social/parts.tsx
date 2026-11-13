@@ -26,6 +26,7 @@ import { TextSwap } from '@/components/motion/TextSwap';
 import { PILL_HEIGHT, PillButton, usePillLabel } from '@/components/onboarding/PillButton';
 import { HEADER_BUTTON, HeaderIconButton, Sparkline, TokenIcon } from '@/components/wallet/parts';
 import { equalWeights } from '@/lib/compose';
+import { othersLabel } from '@/lib/group-jar-core';
 import { limit, success, tap } from '@/lib/haptics';
 import { livePrices, useLivePrices, useTokenChart } from '@/lib/market';
 import type { Chain } from '@/lib/mock-wallet';
@@ -88,6 +89,46 @@ const openJar = (jar: SocialJar) => {
 
 export function SocialAvatar({ who, size }: { who: SocialProfileCard; size: number }) {
   return <Avatar name={who.displayName} size={size} seed={who.avatarSeed || who.handle} />;
+}
+
+/**
+ * A collab jar's people in one face's room, like Instagram's collaborators: the first
+ * two faces overlapping corner to corner, the front one ringed in the page colour.
+ */
+export function CollabFaces({ people, size }: { people: SocialProfileCard[]; size: number }) {
+  const c = useTheme();
+  const [first, second] = people;
+  if (!first) return null;
+  if (!second) return <SocialAvatar who={first} size={size} />;
+  const face = Math.round(size * 0.72);
+  return (
+    <View style={{ width: size, height: size }}>
+      <SocialAvatar who={first} size={face} />
+      <View
+        style={{
+          position: 'absolute',
+          right: -2,
+          bottom: -2,
+          borderRadius: face,
+          borderWidth: 2,
+          borderColor: c.canvas,
+        }}
+      >
+        <SocialAvatar who={second} size={face} />
+      </View>
+    </View>
+  );
+}
+
+/** A group jar's people, `lead` first, when there's more than one; else null. */
+function collabOf(jar: SocialJar | null | undefined, lead?: SocialProfileCard) {
+  if (!jar?.members?.length || (jar.memberCount ?? 0) < 2) return null;
+  const first = lead ?? jar.members[0];
+  if (!first) return null;
+  return {
+    people: [first, ...jar.members.filter((m) => m.handle !== first.handle)],
+    name: othersLabel(first.displayName, jar.memberCount),
+  };
 }
 
 /** A hex colour at `alpha` (0–1), for tinted pills: `#3FD07E` → `#3FD07E26`. */
@@ -922,6 +963,8 @@ export function FeedCard({
   // say it (copying someone else's jar). A milestone's "Up 25%" fought the card's live
   // return, so the card alone carries the number (2026-11-13).
   const kind = item.kind === 'jar_copied' ? KIND[item.kind] : null;
+  // A group jar's launch: "Nina Osei and 2 others", with their faces.
+  const collab = item.kind === 'jar_published' ? collabOf(jar, item.actor) : null;
   return (
     <Animated.View
       entering={cardEntering(index, reduced)}
@@ -936,7 +979,11 @@ export function FeedCard({
           scaleTo={0.94}
           onPress={() => openProfile(item.actor.handle)}
         >
-          <SocialAvatar who={item.actor} size={40} />
+          {collab ? (
+            <CollabFaces people={collab.people} size={40} />
+          ) : (
+            <SocialAvatar who={item.actor} size={40} />
+          )}
         </PressableScale>
         <View style={styles.flex}>
           <View style={styles.rowHead}>
@@ -946,7 +993,7 @@ export function FeedCard({
               onPress={() => openProfile(item.actor.handle)}
               suppressHighlighting
             >
-              {item.actor.displayName}
+              {collab ? collab.name : item.actor.displayName}
             </Text>
             {/* Name and when on one line, the @handle under it (2026-11-13). */}
             <Text style={styles.rowTime} numberOfLines={1}>
@@ -1088,8 +1135,24 @@ export function JarAttachment({
     );
   // On its own (a profile's Jars, Saved): the feed's well, so a jar looks the same
   // everywhere: tinted by its return, the idea, the split, and Copy.
+  const collab = collabOf(jar);
   return (
     <View style={[styles.move, { backgroundColor: moveTone(jar.returnSincePublish, c) }]}>
+      {/* A group jar: who made it together, as a post's byline. */}
+      {collab ? (
+        <PressableScale
+          accessibilityRole="button"
+          accessibilityLabel={`${collab.name}, open profile`}
+          scaleTo={0.98}
+          onPress={() => collab.people[0] && openProfile(collab.people[0].handle)}
+          style={styles.moveRow}
+        >
+          <CollabFaces people={collab.people} size={28} />
+          <Text style={[styles.rowName, styles.flex]} numberOfLines={1}>
+            {collab.name}
+          </Text>
+        </PressableScale>
+      ) : null}
       {/* The idea and the strategy both open the jar; Copy below stays its own buttons. */}
       {jar.thesis && !hideThesis ? (
         <PressableScale

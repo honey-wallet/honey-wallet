@@ -1,4 +1,5 @@
 import type { ChainActivityItem } from '@honey-wallet/api-client';
+import { useInboxUnread } from '@/lib/inbox';
 import { useNeedsMyApproval } from '@/lib/multisig';
 import { useSeenAt, useTestUnread } from '@/lib/notifications';
 import { formatAmount, isLikelySpam, toActivity, usePortfolio } from '@/lib/portfolio';
@@ -80,8 +81,11 @@ export function useUnreadNotifications() {
   const seenAt = useSeenAt();
   const waiting = useNeedsMyApproval();
   const { items } = useWalletNotifications();
-  if (TEST_MODE) return testUnread || waiting.length > 0;
+  // Group jars' news counts like any other notification.
+  const groupUnread = useInboxUnread();
+  if (TEST_MODE) return testUnread || waiting.length > 0 || groupUnread > 0;
   return (
+    groupUnread > 0 ||
     waiting.some((p) => p.createdAt > seenAt) ||
     items.some((n) => n.kind === 'received' && n.at > seenAt)
   );

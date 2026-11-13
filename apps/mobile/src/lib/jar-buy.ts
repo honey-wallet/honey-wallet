@@ -82,6 +82,9 @@ function payer() {
   return { id: wallet.id, addresses: wallet.addresses };
 }
 
+/** The paying wallet's Base address (where a swap refunds); throws when it can't pay. */
+export const payerEvm = () => payer().addresses.evm as string;
+
 /** Live quotes for every routed leg. Nothing is signed yet. */
 /** Routes with money on them that can't be paid in full: any one stops the whole buy. */
 export const unpayable = (routes: Route[]) =>
@@ -222,14 +225,22 @@ export async function verifyWithOneClick(
  * you confirm. Returns each leg with its transaction hash; a leg that fails to send
  * stops the rest, and already-sent legs still complete or refund on their own.
  */
-export async function payJarBuy(legs: BuyLeg[], onLeg?: (legs: BuyLeg[]) => void) {
+export async function payJarBuy(
+  legs: BuyLeg[],
+  onLeg?: (legs: BuyLeg[]) => void,
+  /** What the confirm prompt says, when it isn't a jar's buy (a group share). */
+  reason?: string,
+) {
   const { id, addresses } = payer();
   const from = addresses.evm as Hex;
   const total = legs.reduce((s, l) => s + BigInt(l.amountIn), 0n);
   if (total > toMicro(MAX_BUY_USD)) throw new Error(`Buys are capped at $${MAX_BUY_USD}.`);
   for (const l of legs) checkDeadline(l.deadline);
   if (
-    !(await confirmOwner(`Buy $${fromMicro(total).toFixed(2)} across ${legs.length} swaps`, true))
+    !(await confirmOwner(
+      reason ?? `Buy $${fromMicro(total).toFixed(2)} across ${legs.length} swaps`,
+      true,
+    ))
   )
     throw new Error('Buy cancelled.');
   const network = evmNetwork(BASE_CHAIN_ID);

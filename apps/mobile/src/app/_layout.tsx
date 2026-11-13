@@ -24,7 +24,7 @@ import { appLock } from '@/lib/app-lock';
 import { useInFlightWatcher } from '@/lib/in-flight';
 import { createMultisig, reject, startDemoRequests } from '@/lib/multisig';
 import { ACTION_REJECT, setUpNotifications } from '@/lib/push';
-import { EXTENSION, hiddenHere, WALLET } from '@/lib/surface';
+import { EXTENSION, hiddenHere, SHARED_WALLETS, WALLET } from '@/lib/surface';
 import { showToast } from '@/lib/toast';
 import { walletConnect } from '@/lib/walletconnect';
 import { useTheme } from '@/theme';
@@ -53,7 +53,9 @@ function useNotificationResponses() {
   useEffect(() => {
     let mounted = true;
     setUpNotifications();
-    startDemoRequests();
+    // Shared wallets are off for now (2026-11-13): group jars replace them, so the demo
+    // no longer invents requests from a sample shared wallet's members.
+    if (SHARED_WALLETS) startDemoRequests();
     // Opened from a notification while closed, or tapped while running.
     Notifications.getLastNotificationResponseAsync()
       .then((last) => mounted && last && handleResponse(last))
@@ -229,6 +231,10 @@ export default function RootLayout() {
               <Stack.Screen name="(jars)/jar-create" options={tray()} />
               <Stack.Screen name="(jars)/thesis-chat" />
               <Stack.Screen name="(jars)/jar/[id]" />
+              {/* Group jars: the group's page, its invite and Launch's friend picker */}
+              <Stack.Screen name="(jars)/group/[id]" />
+              <Stack.Screen name="(jars)/group-invite" options={tray()} />
+              <Stack.Screen name="(jars)/group-friends" options={tray()} />
               {/* Social: public profiles, claiming a handle, followers */}
               <Stack.Screen name="(social)/u/[handle]" />
               <Stack.Screen name="(social)/claim-handle" options={tray()} />

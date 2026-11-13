@@ -26,7 +26,12 @@ import { Copyable } from '@/components/sheets/Details';
 import { closeSheet, SheetScreen, StatRow } from '@/components/sheets/Sheet';
 import { HeaderShortcut } from '@/components/wallet/HeaderShortcut';
 import { MoreDetails } from '@/components/wallet/MoreDetails';
-import { MemberAvatar, NetworkBadge } from '@/components/wallet/MultisigParts';
+import {
+  MemberAvatar,
+  NetworkBadge,
+  SharedWalletsOff,
+  useSharedWalletOpen,
+} from '@/components/wallet/MultisigParts';
 import { EmptyState, TokenIcon } from '@/components/wallet/parts';
 import { failure, success, tap } from '@/lib/haptics';
 import { useDaoJar, useMintCheck } from '@/lib/jar-dao';
@@ -72,6 +77,14 @@ const badgeIn = lazy(() =>
  */
 export default function ProposalSheet() {
   const { id = '' } = useLocalSearchParams<{ id: string }>();
+  // Shared wallets are off for now (2026-11-13): group jars replace them.
+  // Group jars' approvals open here too, as do the shared wallet in use's.
+  const proposal = useProposal(id);
+  const open = useSharedWalletOpen(proposal?.walletId);
+  return !proposal || open ? <ProposalPage id={id} /> : <SharedWalletsOff />;
+}
+
+function ProposalPage({ id }: { id: string }) {
   const styles = useStyles();
   const c = useTheme();
   const proposal = useProposal(id);

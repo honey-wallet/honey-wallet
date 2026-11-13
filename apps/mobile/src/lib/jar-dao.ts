@@ -8,6 +8,8 @@
 
 import type { JarDaoProposal, JarDaoState } from '@honey-wallet/api-client';
 import {
+  addProposalCall,
+  buyKind,
   createNearRpc,
   type DepositFact,
   type FunctionCall,
@@ -19,6 +21,7 @@ import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import { confirmOwner } from '@/lib/auth';
 import { backendSessionToken } from '@/lib/backend-session';
+import { type Balance, payoutLegs } from '@/lib/group-jar-core';
 import {
   buyExpired,
   buyProposalTx,
@@ -237,6 +240,23 @@ export function useDaoJar(walletId: string | undefined) {
 
 // ---------- Writing ----------
 
+/** Signs and sends the DAO's create from this device; you are its first member. */
+async function createDao(
+  input: { name: string; members: string[]; threshold: number },
+  reason: string,
+) {
+  const me = member();
+  const members = [me.account, ...input.members.filter((m) => m !== me.account)];
+  const tx = createJarTx({
+    name: input.name,
+    purpose: 'Honey shared jar',
+    members,
+    threshold: input.threshold,
+  });
+  await send(reason, tx.receiverId, tx.actions);
+  return { dao: tx.dao, members };
+}
+
 /**
  * Creates the jar's DAO. The creator pays ~0.1 NEAR directly (USDC→NEAR conversion is
  * not built yet); members must already have funded implicit accounts to vote.
@@ -246,24 +266,16 @@ export async function createSharedJar(input: {
   members: string[];
   threshold: number;
 }) {
-  const me = member();
-  const members = [me.account, ...input.members.filter((m) => m !== me.account)];
-  const tx = createJarTx({
-    name: input.name,
-    purpose: 'Honey shared jar',
-    members,
-    threshold: input.threshold,
-  });
-  await send('Create shared jar (≈0.1 NEAR)', tx.receiverId, tx.actions);
+  const { dao, members } = await createDao(input, 'Create shared jar (≈0.1 NEAR)');
   const walletId = addWallet({
     kind: 'multisig',
     label: input.name,
-    address: tx.dao,
+    address: dao,
     usd: 0,
     threshold: [input.threshold, members.length],
   });
-  await refreshJar(walletId, tx.dao, input.name);
-  return { walletId, dao: tx.dao };
+  await refreshJar(walletId, dao, input.name);
+  return { walletId, dao };
 }
 
 /** Sends an add_proposal, then approves it as its proposer (Sputnik doesn't auto-vote). */
@@ -385,7 +397,12 @@ async function proposeOnChain(m: Multisig, action: ProposalAction) {
 }
 
 async function voteOnChain(m: Multisig, p: Proposal, kind: 'approve' | 'reject') {
-  const ref = parseProposalId(p.id);
+  await voteById(m, p.id, kind);
+}
+
+/** Votes on a DAO proposal (`<dao>#<n>`) after the approve gate checks what it does. */
+async function voteById(m: Multisig, id: string, kind: 'approve' | 'reject', remaining?: string[]) {
+  const ref = parseProposalId(id);
   if (!ref) throw new Error('Unknown jar proposal');
   const view = await refreshJar(m.walletId, ref.dao, walletName(m.walletId));
   const raw = view.raw.proposals.find((x) => x.id === ref.id);
@@ -401,11 +418,139 @@ async function voteOnChain(m: Multisig, p: Proposal, kind: 'approve' | 'reject')
       totalUnits: view.ledger.total,
       unitsOf: (m) => view.ledger.units.get(m) ?? 0n,
       fetcher: fetch,
+      memberAccounts: view.raw.members,
+      payout: remaining && { remaining, balances: view.raw.balances as Balance[] },
     });
   const action = kind === 'approve' ? 'VoteApprove' : 'VoteReject';
   const tx = voteTx(ref.dao, ref.id, action, raw.kind as never);
   await send(kind === 'approve' ? 'Approve' : 'Reject', tx.receiverId, tx.actions);
   await refreshJar(m.walletId, ref.dao, walletName(m.walletId));
+}
+
+// ---------- Group jars ----------
+// A group jar is a shared jar whose DAO is kept as a quiet shared wallet on each
+// member's phone (never made the active wallet, so your own wallet still pays), and the
+// same chain reads, buy, votes and approval checks carry it. These resolve with the
+// chain's proposal number, which the group's server record needs.
+
+/** This device's NEAR implicit account: your account in a group jar. */
+export const myNearAccount = () => member().account;
+
+/** The group's DAO as a shared wallet on this phone, added once, never switched to. */
+export function trackGroupDao(input: {
+  dao: string;
+  label: string;
+  threshold: number;
+  people: number;
+}) {
+  const known = wallets.get().added.find((w) => w.kind === 'multisig' && w.address === input.dao);
+  if (known) return known.id;
+  const id = `added-${Date.now()}`;
+  wallets.set((prev) => ({
+    ...prev,
+    added: [
+      ...prev.added,
+      {
+        id,
+        kind: 'multisig' as const,
+        label: input.label,
+        address: input.dao,
+        usd: 0,
+        threshold: [input.threshold, input.people] as [number, number],
+      },
+    ],
+  }));
+  void refreshJar(id, input.dao, input.label).catch(() => {});
+  return id;
+}
+
+/** Creates a group's DAO with the members who joined and the majority rule. */
+export async function createGroupDao(input: {
+  name: string;
+  label: string;
+  members: string[];
+  threshold: number;
+}) {
+  const { dao, members } = await createDao(input, 'Create the group (≈0.1 NEAR)');
+  const walletId = trackGroupDao({
+    dao,
+    label: input.label,
+    threshold: input.threshold,
+    people: members.length,
+  });
+  return { walletId, dao };
+}
+
+/** Your share in one transaction from USDC on NEAR: ft_transfer_call to intents.near, msg = dao. */
+export async function payShareFromNear(dao: string, usd: number) {
+  const me = member();
+  const amount = toAtomic(usd);
+  if (amount > (await viewFtBalance(rpc, USDC_NEAR, me.account)))
+    throw new Error('You have less USDC on NEAR than your share.');
+  const d = depositTx(dao, amount, me.account);
+  return send(`Add your $${usd.toFixed(2)}`, d.receiverId, d.actions);
+}
+
+const chainNumber = (id: string | undefined) => {
+  const ref = id ? parseProposalId(id) : null;
+  if (!ref) throw new Error('The vote didn’t reach NEAR. Try again.');
+  return ref.id;
+};
+
+/** Proposes (and approves) the group's buy from the jar's Intents USDC. */
+export async function proposeGroupBuy(
+  walletId: string,
+  dao: string,
+  jar: { name: string; legs: { destinationAsset: string; usd: number }[] },
+) {
+  const view = await refreshJar(walletId, dao, walletName(walletId));
+  return chainNumber(
+    await buy(view.multisig, {
+      type: 'jarBuy',
+      jarId: '',
+      jar: jar.name,
+      picks: [],
+      usd: jar.legs.reduce((s, l) => s + l.usd, 0),
+      legs: jar.legs,
+    }),
+  );
+}
+
+/**
+ * Proposes (and approves) a payout in kind, see group-jar-core `payoutLegs`: leaving
+ * pays you your slice of every token; cashing out pays every remaining member theirs.
+ */
+export async function proposeGroupPayout(
+  walletId: string,
+  dao: string,
+  input: { kind: 'leave' | 'cashout'; to: string[]; remaining: number; name: string },
+) {
+  const view = await refreshJar(walletId, dao, walletName(walletId));
+  const legs = payoutLegs(input.kind, view.raw.balances, input.to, input.remaining);
+  const kind = buyKind(
+    legs.map((l) => ({ depositAddress: l.receiver, tokenId: l.tokenId, amount: l.amount })),
+  );
+  const title = input.kind === 'leave' ? `Leave ${input.name}` : `Cash out ${input.name}`;
+  const tx = {
+    receiverId: dao,
+    actions: [addProposalCall(`honey-group:${input.kind}\n${title}`, kind)],
+  };
+  const reason = input.kind === 'leave' ? 'Propose leaving' : 'Propose cashing out';
+  return chainNumber(await proposeAndApprove(view.multisig, tx, reason));
+}
+
+/**
+ * Approves one of the group's votes: a buy is checked with 1Click, a leave or cash-out
+ * against the members still in (`remaining`) and what the jar holds now.
+ */
+export async function approveGroupProposal(
+  walletId: string,
+  dao: string,
+  proposal: number,
+  remaining: string[],
+) {
+  const view = await refreshJar(walletId, dao, walletName(walletId));
+  await voteById(view.multisig, proposalId(dao, proposal), 'approve', remaining);
 }
 
 setDaoBackend({ propose: proposeOnChain, vote: voteOnChain });

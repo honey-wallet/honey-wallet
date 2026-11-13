@@ -32,6 +32,7 @@ import { type Profile, useProfile } from '@/lib/profile';
 import { receiveAddresses } from '@/lib/receive';
 import { HIDDEN_AMOUNT, useSettings } from '@/lib/settings';
 import { useSocialMe } from '@/lib/social';
+import { SHARED_WALLETS } from '@/lib/surface';
 import { showToast } from '@/lib/toast';
 import {
   type AddedWallet,
@@ -156,6 +157,12 @@ export default function WalletsSheet() {
   const sharedRows = [...groups.values()].map(
     (list) => list.find((w) => w.id === active.id) ?? list[0],
   );
+  // Shared wallets are off for now (2026-11-13): group jars replace them. One that's
+  // already in use is listed with your wallets, so you can switch away from it.
+  const ownRows = wallets.filter((w) => w.kind === 'wallet');
+  const walletRows = SHARED_WALLETS
+    ? ownRows
+    : [...ownRows, ...sharedRows.filter((w) => groupOf(w).some((x) => x.id === active.id))];
 
   const row = (w: AddedWallet) => {
     // Shared wallets show their live rule and how much is waiting for you.
@@ -260,26 +267,28 @@ export default function WalletsSheet() {
 
       <SheetSection title="Wallets" />
       {/* {wallets.filter((w) => w.kind === 'wallet').map(row)} */}
-      {group(
-        'wallets',
-        wallets.filter((w) => w.kind === 'wallet'),
-      )}
+      {group('wallets', walletRows)}
 
-      <SheetSection title="Shared wallets" />
-      {/* {wallets.filter((w) => w.kind === 'multisig').map(row)} */}
-      {group('multisig', sharedRows)}
-      <SheetRow
-        leading={
-          <View style={styles.iconCircle}>
-            <Icon name="multisig" size={17} color={c.textSecondary} />
-          </View>
-        }
-        title="New shared wallet"
-        onPress={() => {
-          tap();
-          leaveSheetTo('/multisig-new');
-        }}
-      />
+      {/* Shared wallets are off for now (2026-11-13): group jars replace them. */}
+      {SHARED_WALLETS && (
+        <>
+          <SheetSection title="Shared wallets" />
+          {/* {wallets.filter((w) => w.kind === 'multisig').map(row)} */}
+          {group('multisig', sharedRows)}
+          <SheetRow
+            leading={
+              <View style={styles.iconCircle}>
+                <Icon name="multisig" size={17} color={c.textSecondary} />
+              </View>
+            }
+            title="New shared wallet"
+            onPress={() => {
+              tap();
+              leaveSheetTo('/multisig-new');
+            }}
+          />
+        </>
+      )}
 
       {/* Hardware wallets connect over Bluetooth or the camera: phone only for now. */}
       {isWeb ? null : (

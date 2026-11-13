@@ -19,6 +19,14 @@ export const EXTENSION = isWeb || process.env.EXPO_PUBLIC_TARGET === 'extension'
  */
 export const EXTENSION_OFFERED = false;
 
+/**
+ * Shared wallets are off for now (2026-11-13): group jars replace them. Nothing offers
+ * one any more (no "New shared wallet", no approvals nudge); a shared wallet that's
+ * already the one in use keeps its pages so its funds can still move. The multisig
+ * libraries stay: group jars are built on them.
+ */
+export const SHARED_WALLETS = false;
+
 /** Social and Jars: the phone only. */
 export const SOCIAL = !EXTENSION;
 
@@ -35,6 +43,9 @@ const PHONE_ONLY = [
   '/jar',
   '/jar-amount',
   '/jar-build',
+  '/group',
+  '/group-invite',
+  '/group-friends',
   '/thesis-chat',
   '/thesis-new',
   '/u/',

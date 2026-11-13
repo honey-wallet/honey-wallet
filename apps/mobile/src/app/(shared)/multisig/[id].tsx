@@ -13,6 +13,8 @@ import {
   networkLabel,
   ProposalRow,
   ProposalRowSkeleton,
+  SharedWalletsOff,
+  useSharedWalletOpen,
 } from '@/components/wallet/MultisigParts';
 import { EmptyState, PushedScreen, TokenIcon } from '@/components/wallet/parts';
 import { useCopy } from '@/lib/copy';
@@ -44,6 +46,13 @@ const SAFE_PREFIX: Record<number, string> = { 1: 'eth', 8453: 'base', 10: 'oeth'
  */
 export default function MultisigScreen() {
   const { id = '' } = useLocalSearchParams<{ id: string }>();
+  // Shared wallets are off for now (2026-11-13): group jars replace them.
+  // The one in use (or a group jar's) stays readable so its funds aren't stranded.
+  const open = useSharedWalletOpen(id);
+  return open ? <MultisigPage id={id} /> : <SharedWalletsOff pushed />;
+}
+
+function MultisigPage({ id }: { id: string }) {
   const styles = useStyles();
   const c = useTheme();
   const { name } = useProfile();

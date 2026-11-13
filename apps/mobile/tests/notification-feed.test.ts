@@ -2,6 +2,7 @@ import { expect, it, vi } from 'vitest';
 
 vi.mock('@/lib/api', () => ({ api: {} }));
 vi.mock('@/lib/multisig', () => ({ useNeedsMyApproval: () => [] }));
+vi.mock('@/lib/inbox', () => ({ useInboxUnread: () => 0 }));
 vi.mock('@/lib/notifications', () => ({ useSeenAt: () => 0, useTestUnread: () => false }));
 vi.mock('@/lib/wallets', () => ({ useActiveWallet: () => ({ id: 'w' }) }));
 vi.mock('@/lib/test-mode', () => ({ TEST_MODE: false }));

@@ -64,7 +64,7 @@ import { useMultisig } from '@/lib/multisig';
 import { setupComplete, useOnboarding } from '@/lib/onboarding';
 import { isWeb } from '@/lib/platform';
 import { HIDDEN_AMOUNT, updateSettings, useSettings } from '@/lib/settings';
-import { EXTENSION, SOCIAL, WALLET } from '@/lib/surface';
+import { EXTENSION, SHARED_WALLETS, SOCIAL, WALLET } from '@/lib/surface';
 import { useTabReselect } from '@/lib/tab-reselect';
 import { useThesisJars } from '@/lib/thesis';
 import { showToast } from '@/lib/toast';
@@ -191,7 +191,9 @@ function HomeScreen() {
   // wallet is empty, and the wrong card would show and then swap.
   const cards = (
     [
-      (multisig || nudgeShown) && 'approvals',
+      // Shared wallets are off for now (2026-11-13): group jars replace them. The one in
+      // use keeps its card; no nudge about others.
+      (multisig || (SHARED_WALLETS && nudgeShown)) && 'approvals',
       !loading && (empty || (isMain && !setupComplete(onboarding))) && 'activation',
       // review: no Savings in the extension, so no Earn promo there.
       // earnPromo && !loading && !ratesLoading && !empty && 'earn',
@@ -358,12 +360,12 @@ function HomeScreen() {
                 <SharedWalletCard multisig={multisig} />
               </Rise>
             )
-          ) : (
+          ) : SHARED_WALLETS ? (
             // Mounted while closed, so it opens in once what's waiting has loaded.
             <View style={styles.gutterMargin}>
               <ApprovalsNudge open={cards.includes('approvals')} />
             </View>
-          )}
+          ) : null}
 
           {/* Activation: an empty wallet is all about the first deposit; once there's
               money, finishing setup earns a fee credit. Gone when both are done. */}

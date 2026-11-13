@@ -25,6 +25,11 @@
 //! and paid from (or to) one of the caller's signed-in wallets, and takes the amounts
 //! from 1Click.
 //! Response shapes are mirrored in `packages/api-client/src/types.ts` (`Social*`).
+//!
+//! Group jars (`groups`): friends buy one jar together; a published group jar carries
+//! its members, and shows on every member's profile.
+
+mod groups;
 
 use std::{
     collections::HashMap,
@@ -47,6 +52,7 @@ use uuid::Uuid;
 use crate::{
     error::AppError,
     identity::{Identity, unavailable},
+    jar_dao::JarDao,
     json_rpc::ONE_CLICK_ORIGIN,
     market_data::{MarketData, MarketListToken, OneClickToken, market_list, oneclick_chain_label},
 };
@@ -118,6 +124,8 @@ struct SocialState {
     one_click: String,
     client: reqwest::Client,
     lists: ListCache,
+    /// NEAR chain reads for group jars (their DAOs); None turns group chain steps off.
+    dao: Option<Arc<JarDao>>,
 }
 
 /// A jar as its owner sees it, with what's needed to serve it to anyone else: always
@@ -128,17 +136,33 @@ struct Listed {
     client_id: String,
     exposure: Exposure,
     jar: PublicJar,
+    /// A group jar's current members (creator first): user, public profile, card.
+    group: Option<Vec<(Uuid, bool, ProfileCard)>>,
 }
 
-pub fn router(identity: Option<Identity>, market: Option<Arc<MarketData>>) -> Router {
-    router_with_one_click(identity, market, ONE_CLICK_ORIGIN.to_string())
+pub fn router(
+    identity: Option<Identity>,
+    market: Option<Arc<MarketData>>,
+    dao: Option<Arc<JarDao>>,
+) -> Router {
+    router_with(identity, market, ONE_CLICK_ORIGIN.to_string(), dao)
 }
 
-/// `router` with 1Click's status API somewhere else (tests).
+/// `router` with 1Click's status API somewhere else and no chain reads (tests).
 pub fn router_with_one_click(
     identity: Option<Identity>,
     market: Option<Arc<MarketData>>,
     one_click: String,
+) -> Router {
+    router_with(identity, market, one_click, None)
+}
+
+/// `router` with 1Click and NEAR RPC wherever the caller says (tests).
+pub fn router_with(
+    identity: Option<Identity>,
+    market: Option<Arc<MarketData>>,
+    one_click: String,
+    dao: Option<Arc<JarDao>>,
 ) -> Router {
     let client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(3))
@@ -167,12 +191,14 @@ pub fn router_with_one_click(
         .route("/social/leaderboard", get(leaderboard))
         .route("/social/trades", post(record_trade))
         .route("/social/holders", get(holders))
+        .merge(groups::routes())
         .with_state(SocialState {
             identity,
             market,
             one_click,
             client,
             lists: Arc::default(),
+            dao,
         })
 }
 
@@ -252,6 +278,16 @@ pub struct PublicJar {
     /// Whether other people may copy it (off when the owner turned copying off or hides
     /// the picks, which a copy needs).
     pub copyable: bool,
+    /// A group jar: its group (only on group jars).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group_id: Option<Uuid>,
+    /// A group jar's members the viewer may see, creator first: someone with a private
+    /// profile is left out for everyone outside the group (only on group jars).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub members: Option<Vec<ProfileCard>>,
+    /// Everyone in the group, the creator and hidden members included.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub member_count: Option<i64>,
 }
 
 /// `SocialPrivacy`: what other people may see of you. All on by default.
@@ -830,7 +866,8 @@ const JAR_SELECT: &str = "SELECT j.id, j.owner, j.client_id, j.name, j.thesis, j
     j.base_value, (extract(epoch FROM j.published_at) * 1000)::bigint,
     p.handle, p.display_name, p.avatar_seed,
     jsonb_build_object('publicProfile', p.public_profile, 'showHoldings', p.show_holdings,
-      'showReturns', p.show_returns, 'allowCopy', p.allow_copy, 'hidePicks', j.hide_picks)::text
+      'showReturns', p.show_returns, 'allowCopy', p.allow_copy, 'hidePicks', j.hide_picks)::text,
+    j.group_id
     FROM social_jars j JOIN social_profiles p ON p.user_id = j.owner";
 
 type JarRow = (
@@ -849,6 +886,7 @@ type JarRow = (
     String,
     String,
     String,
+    Option<Uuid>,
 );
 
 /// A jar's value index now (1.0 at first publish): its base carried over from earlier
@@ -898,6 +936,7 @@ async fn present_jars(
     for (id, value) in marks {
         by_jar.entry(id).or_default().push(value);
     }
+    let mut groups = groups::jar_members(pool, &rows).await?;
 
     let mut out = Vec::with_capacity(rows.len());
     for row in rows {
@@ -917,6 +956,7 @@ async fn present_jars(
             display_name,
             avatar_seed,
             exposure,
+            group_id,
         ) = row;
         // Unreadable privacy fails closed: hidden from everyone but the owner.
         let exposure: Exposure = serde_json::from_str(&exposure).unwrap_or(Exposure {
@@ -943,6 +983,7 @@ async fn present_jars(
             owner,
             client_id: client_id.clone(),
             exposure,
+            group: group_id.map(|g| groups.remove(&g).unwrap_or_default()),
             jar: PublicJar {
                 id,
                 name,
@@ -960,6 +1001,9 @@ async fn present_jars(
                 holdings_hidden: false,
                 returns_hidden: false,
                 copyable: exposure.copyable(),
+                group_id,
+                members: None,
+                member_count: None,
             },
         });
     }
@@ -967,9 +1011,19 @@ async fn present_jars(
 }
 
 impl Listed {
-    /// Whether `viewer` may see this jar at all (a private account's jars are its own).
+    /// Whether `viewer` is in this jar's group.
+    fn in_group(&self, viewer: Option<Uuid>) -> bool {
+        viewer.is_some_and(|v| {
+            self.group
+                .as_ref()
+                .is_some_and(|m| m.iter().any(|(u, _, _)| *u == v))
+        })
+    }
+
+    /// Whether `viewer` may see this jar at all (a private account's jars are its own,
+    /// and its group's).
     fn visible_to(&self, viewer: Option<Uuid>) -> bool {
-        self.exposure.privacy.public_profile || viewer == Some(self.owner)
+        self.exposure.privacy.public_profile || viewer == Some(self.owner) || self.in_group(viewer)
     }
 }
 
@@ -981,6 +1035,18 @@ fn for_viewer(listed: &Listed, viewer: Option<Uuid>) -> PublicJar {
     jar.client_id = jar.mine.then(|| listed.client_id.clone());
     if !jar.mine {
         redact(&mut jar, &listed.exposure);
+    }
+    if let Some(members) = &listed.group {
+        // Inside the group everyone sees everyone; outside, private profiles stay out.
+        let inside = listed.in_group(viewer);
+        jar.members = Some(
+            members
+                .iter()
+                .filter(|(_, public, _)| *public || inside)
+                .map(|(_, _, card)| card.clone())
+                .collect(),
+        );
+        jar.member_count = Some(members.len() as i64);
     }
     jar
 }
@@ -1393,9 +1459,14 @@ async fn load_profile(
         });
     }
     let now = prices(state.market.as_ref()).await;
+    // Their own jars and the group jars they're in.
     let sql = format!(
-        "{JAR_SELECT} WHERE j.unpublished_at IS NULL AND j.owner = $1
-         ORDER BY j.published_at DESC LIMIT {MAX_LIVE_JARS}"
+        "{JAR_SELECT} WHERE j.unpublished_at IS NULL AND (j.owner = $1
+           OR EXISTS (SELECT 1 FROM social_group_members gm
+                      WHERE gm.group_id = j.group_id AND gm.user_id = $1
+                        AND gm.state = 'accepted'))
+         ORDER BY j.published_at DESC LIMIT {}",
+        MAX_LIVE_JARS * 2
     );
     let rows: Vec<JarRow> = sqlx::query_as(&sql)
         .bind(user)
@@ -1636,6 +1707,23 @@ async fn publish_jar(
     let me = writer(&state, &headers).await?;
     let pool = pool(&state)?;
     has_profile(pool, me).await?;
+    let (id, now) = publish_as(&state, me, &body, None).await?;
+    let rows = jar_rows_by_id(pool, &[id]).await?;
+    visible_jars(&present_jars(pool, Some(&now), rows, None).await?, Some(me))
+        .pop()
+        .map(Json)
+        .ok_or(AppError::NotFound)
+}
+
+/// Publishes (or updates) `me`'s jar `body.client_id`, as a group's jar when `group` is
+/// given (a later plain publish keeps the group). Returns its id and the prices used.
+async fn publish_as(
+    state: &SocialState,
+    me: Uuid,
+    body: &PublishRequest,
+    group: Option<Uuid>,
+) -> Result<(Uuid, HashMap<String, f64>), AppError> {
+    let pool = pool(state)?;
     let name = body.name.trim();
     let thesis = body.thesis.trim();
     if name.is_empty()
@@ -1699,8 +1787,9 @@ async fn publish_jar(
         // continues as an update of the row the other request created.
         let inserted: Option<Uuid> = sqlx::query_scalar(
             "INSERT INTO social_jars
-               (id, owner, client_id, name, thesis, picks, start_prices, copy_fee, hide_picks)
-             VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9)
+               (id, owner, client_id, name, thesis, picks, start_prices, copy_fee, hide_picks,
+                group_id)
+             VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9, $10)
              ON CONFLICT (owner, client_id) DO NOTHING RETURNING id",
         )
         .bind(id)
@@ -1712,6 +1801,7 @@ async fn publish_jar(
         .bind(&start_json)
         .bind(body.copy_fee)
         .bind(body.hide_picks)
+        .bind(group)
         .fetch_optional(&mut *tx)
         .await
         .map_err(unavailable)?;
@@ -1779,7 +1869,8 @@ async fn publish_jar(
                 "UPDATE social_jars SET name = $2, thesis = $3, copy_fee = $4,
                    picks = CASE WHEN $5 THEN $6::jsonb ELSE picks END,
                    start_prices = CASE WHEN $5 THEN $7::jsonb ELSE start_prices END,
-                   base_value = $8, hide_picks = $9, unpublished_at = NULL
+                   base_value = $8, hide_picks = $9, unpublished_at = NULL,
+                   group_id = COALESCE($10, group_id)
                  WHERE id = $1",
             )
             .bind(id)
@@ -1791,6 +1882,7 @@ async fn publish_jar(
             .bind(&start_json)
             .bind(base)
             .bind(body.hide_picks)
+            .bind(group)
             .execute(&mut *tx)
             .await
             .map_err(unavailable)?;
@@ -1810,11 +1902,7 @@ async fn publish_jar(
     };
     tx.commit().await.map_err(unavailable)?;
     state.forget_lists().await;
-    let rows = jar_rows_by_id(pool, &[id]).await?;
-    visible_jars(&present_jars(pool, Some(&now), rows, None).await?, Some(me))
-        .pop()
-        .map(Json)
-        .ok_or(AppError::NotFound)
+    Ok((id, now))
 }
 
 async fn unpublish_jar(
@@ -2641,6 +2729,9 @@ mod tests {
             holdings_hidden: false,
             returns_hidden: false,
             copyable: true,
+            group_id: None,
+            members: None,
+            member_count: None,
         }
     }
 

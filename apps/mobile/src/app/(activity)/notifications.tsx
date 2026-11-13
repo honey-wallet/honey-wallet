@@ -1,3 +1,4 @@
+import type { SocialInboxItem } from '@honey-wallet/api-client';
 import { router } from 'expo-router';
 import { type ReactNode, useEffect } from 'react';
 import { Linking, Text, View } from 'react-native';
@@ -16,7 +17,9 @@ import { Sticky } from '@/components/motion/Sticky';
 import { useHasMounted } from '@/components/motion/useHasMounted';
 import { MemberAvatar, NetworkBadge } from '@/components/wallet/MultisigParts';
 import { EmptyState, PushedScreen, TokenIcon } from '@/components/wallet/parts';
+import { groups } from '@/lib/group-jars';
 import { tap } from '@/lib/haptics';
+import { markInboxRead, useInbox, useInboxPolling } from '@/lib/inbox';
 import { LOADS } from '@/lib/loads';
 import {
   describe,
@@ -66,10 +69,20 @@ export default function NotificationsScreen() {
   const firstLoad = useFirstLoad(LOADS.notifications);
   const wallet = useWalletNotifications();
   const loading = TEST_MODE ? firstLoad : wallet.loading;
+  // Group jars' news (invites, "add your share", votes) from Honey, kept fresh while here.
+  useInboxPolling();
+  const group = useInbox();
+  // Seen once they're on screen, as opening the screen clears the bell's dot.
+  const unread = group.items.filter((i) => !i.read).map((i) => i.id);
+  const unreadKey = unread.join();
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the joined ids stand for the list.
+  useEffect(() => markInboxRead(unread), [unreadKey]);
 
-  // One timeline: shared-wallet events and this wallet's payments, newest first.
+  // One timeline: shared-wallet events, group jars' news and this wallet's payments,
+  // newest first.
   const timeline: Entry[] = [
     ...events.map((e): Entry => ({ type: 'event', at: e.at, event: e })),
+    ...group.items.map((n): Entry => ({ type: 'group', at: n.at, item: n })),
     ...wallet.items.map((n): Entry => ({ type: 'wallet', at: n.at, item: n })),
   ].sort((a, b) => b.at - a.at);
   const today = timeline.filter((e) => Date.now() - e.at < DAY);
@@ -82,6 +95,12 @@ export default function NotificationsScreen() {
   };
   const feed = (list: Entry[]) =>
     list.map((entry) => {
+      if (entry.type === 'group')
+        return (
+          <Animated.View key={entry.item.id} {...motion}>
+            <GroupRow item={entry.item} />
+          </Animated.View>
+        );
       if (entry.type === 'wallet')
         return (
           <Animated.View key={entry.item.id} {...motion}>
@@ -160,7 +179,58 @@ export default function NotificationsScreen() {
 
 type Entry =
   | { type: 'event'; at: number; event: MultisigEvent }
+  | { type: 'group'; at: number; item: SocialInboxItem }
   | { type: 'wallet'; at: number; item: WalletNotification };
+
+const GROUP_BADGE: Record<SocialInboxItem['kind'], IconName> = {
+  group_invite: 'plus',
+  group_ready: 'arrowDown',
+  group_vote: 'check',
+  group_update: 'check',
+};
+
+/**
+ * Group jar news, as a row like the others: an invite opens the invite to answer it;
+ * the rest open the group's jar.
+ */
+function GroupRow({ item }: { item: SocialInboxItem }) {
+  const styles = useStyles();
+  const c = useTheme();
+  const name = item.groupId ? groups.get()[item.groupId]?.name : undefined;
+  return (
+    <PressableRow
+      accessibilityRole="button"
+      accessibilityLabel={item.text}
+      disabled={!item.groupId}
+      onPress={() => {
+        if (!item.groupId) return;
+        tap();
+        if (item.kind === 'group_invite')
+          router.push({ pathname: '/group-invite', params: { id: item.groupId } });
+        else router.push({ pathname: '/group/[id]', params: { id: item.groupId } });
+      }}
+      style={styles.row}
+    >
+      <Lead
+        face={
+          <View style={styles.well}>
+            <Icon name="jar" size={22} color={c.accentText} />
+          </View>
+        }
+        badge={{ icon: GROUP_BADGE[item.kind], color: c.success }}
+      />
+      <View style={styles.flex}>
+        <View style={styles.head}>
+          <Text style={styles.title} numberOfLines={1}>
+            {name ?? 'Group jar'}
+          </Text>
+          <Text style={styles.date}>{when(item.at)}</Text>
+        </View>
+        <Text style={styles.detail}>{item.text}</Text>
+      </View>
+    </PressableRow>
+  );
+}
 
 const WALLET_BADGE: Record<WalletNotification['kind'], IconName> = {
   received: 'arrowDown',
@@ -329,6 +399,15 @@ const useStyles = makeStyles((c) => ({
   },
   flex: {
     flex: 1,
+  },
+  // A round honey well, the size of the other rows' faces.
+  well: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: c.accentSurface,
   },
   // Sections sit close: a row's own padding already spaces it from the next label.
   group: {

@@ -18,12 +18,18 @@ import { HeaderShortcut } from '@/components/wallet/HeaderShortcut';
 import { WalletButton } from '@/components/wallet/WalletButton';
 import { useCopy } from '@/lib/copy';
 import { tap } from '@/lib/haptics';
-import { useMultisig, useMultisigDeployments, useNeedsMyApproval } from '@/lib/multisig';
+import { useInboxPolling } from '@/lib/inbox';
+import {
+  useMultisig,
+  useMultisigDeployments,
+  useMultisigState,
+  useNeedsMyApproval,
+} from '@/lib/multisig';
 import { useUnreadNotifications } from '@/lib/notification-feed';
 import { isWeb } from '@/lib/platform';
 import { useProfile } from '@/lib/profile';
 import { receiveAddresses } from '@/lib/receive';
-import { EXTENSION } from '@/lib/surface';
+import { EXTENSION, SHARED_WALLETS } from '@/lib/surface';
 import { useHasWallet } from '@/lib/wallet-gate';
 import { isMainWallet, useActiveWallet } from '@/lib/wallets';
 import { makeStyles, useTheme } from '@/theme';
@@ -99,12 +105,19 @@ function FullHeader({
   const styles = useStyles();
   const c = useTheme();
   const profile = useProfile();
+  // Group jars' news reaches the bell by polling (no remote push yet).
+  useInboxPolling();
   const unread = useUnreadNotifications();
   const wallet = useActiveWallet();
   const isMain = isMainWallet(wallet);
   const multisig = useMultisig(wallet.id);
   // The bell also lights up while a shared wallet is waiting for your approval.
-  const needsMe = useNeedsMyApproval();
+  // Shared wallets are off for now (2026-11-13): group jars replace them. Only a group
+  // jar's approvals, or the shared wallet in use's, light it.
+  const { multisigs } = useMultisigState();
+  const needsMe = useNeedsMyApproval().filter(
+    (p) => SHARED_WALLETS || !!multisigs[p.walletId]?.dao || p.walletId === wallet.id,
+  );
   // The chains this wallet has addresses on, as icons under its name: one copies
   // straight away; several open Copy address to pick which.
   const addresses = receiveAddresses(wallet);

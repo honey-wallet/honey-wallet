@@ -205,10 +205,19 @@ const HANDLE = /^@?([a-z0-9_]{3,20})$/;
 export function PersonResult({
   query,
   onFound,
+  onPick,
+  picked,
+  exclude,
 }: {
   query: string;
   /** Told whether the handle exists, so the page can drop its "No matches". */
   onFound?: (found: boolean) => void;
+  /** A picker (Launch's "Add friends"): rows pick instead of opening the profile. */
+  onPick?: (who: SocialProfileCard) => void;
+  /** Handles already picked: their rows show a check. */
+  picked?: string[];
+  /** Handles never listed (you). */
+  exclude?: string[];
 }) {
   const handle = HANDLE.exec(query.trim().toLowerCase())?.[1];
   const [found, setFound] = useState<SocialProfileCard | null>(null);
@@ -231,27 +240,43 @@ export function PersonResult({
       clearTimeout(timer);
     };
   }, [handle]);
-  const people = found && !known.some((p) => p.handle === found.handle) ? [found, ...known] : known;
+  const people = (
+    found && !known.some((p) => p.handle === found.handle) ? [found, ...known] : known
+  ).filter((p) => !exclude?.includes(p.handle));
   const any = people.length > 0;
   useEffect(() => onFound?.(any), [any, onFound]);
   if (!any) return null;
   return (
     <>
       {people.map((p) => (
-        <PersonRow key={p.handle} who={p} />
+        <PersonRow
+          key={p.handle}
+          who={p}
+          onPick={onPick}
+          picked={picked ? picked.includes(p.handle) : undefined}
+        />
       ))}
     </>
   );
 }
 
-function PersonRow({ who: found }: { who: SocialProfileCard }) {
+function PersonRow({
+  who: found,
+  onPick,
+  picked,
+}: {
+  who: SocialProfileCard;
+  onPick?: (who: SocialProfileCard) => void;
+  picked?: boolean;
+}) {
   const styles = useStyles();
   const c = useTheme();
   return (
     <PressableRow
-      accessibilityRole="button"
+      accessibilityRole={onPick ? 'checkbox' : 'button'}
+      accessibilityState={onPick ? { checked: !!picked } : undefined}
       accessibilityLabel={`${found.displayName}, @${found.handle}`}
-      onPress={() => openProfile(found.handle)}
+      onPress={() => (onPick ? onPick(found) : openProfile(found.handle))}
       style={styles.person}
     >
       <SocialAvatar who={found} size={40} />
@@ -263,7 +288,13 @@ function PersonRow({ who: found }: { who: SocialProfileCard }) {
           @{found.handle}
         </Text>
       </View>
-      <Icon name="chevronRight" size={13} color={c.textSecondary} />
+      {onPick ? (
+        picked ? (
+          <Icon name="check" size={18} color={c.accentText} />
+        ) : null
+      ) : (
+        <Icon name="chevronRight" size={13} color={c.textSecondary} />
+      )}
     </PressableRow>
   );
 }

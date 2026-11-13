@@ -342,14 +342,19 @@ export function TokenStack({
 export function People({
   names,
   size = 24,
+  ring,
 }: {
+  /** `id` is the face's seed (a social avatar seed or handle); 'me' is your own face. */
   names: { id: string; name: string }[];
   size?: number;
+  /** The colour behind the stack, for each face's ring (a card by default). */
+  ring?: string;
 }) {
   const c = useTheme();
   // You show as your own face, as on Home.
   const profile = useProfile();
   const shown = names.slice(0, 4);
+  const ringColor = ring ?? c.card;
   return (
     <View style={{ flexDirection: 'row' }}>
       {shown.map((m, i) => (
@@ -359,7 +364,7 @@ export function People({
             marginLeft: i ? -size * 0.3 : 0,
             borderRadius: size,
             borderWidth: 2,
-            borderColor: c.card,
+            borderColor: ringColor,
             zIndex: shown.length - i,
           }}
         >
@@ -381,7 +386,7 @@ export function People({
             justifyContent: 'center',
             backgroundColor: c.raised,
             borderWidth: 2,
-            borderColor: c.card,
+            borderColor: ringColor,
           }}
         >
           <Text style={{ color: c.text, fontSize: 11, fontWeight: '700' }}>

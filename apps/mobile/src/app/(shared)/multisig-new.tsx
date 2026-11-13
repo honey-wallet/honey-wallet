@@ -24,6 +24,7 @@ import {
   MEMBER_KIND_LABEL,
   MemberAvatar,
   NetworkBadge,
+  SharedWalletsOff,
   ThresholdStepper,
 } from '@/components/wallet/MultisigParts';
 import { EmptyState } from '@/components/wallet/parts';
@@ -51,6 +52,7 @@ import { followFix, useFailure } from '@/lib/outcomes';
 import { isWeb } from '@/lib/platform';
 import { useProfile } from '@/lib/profile';
 import { askForNotifications } from '@/lib/push';
+import { SHARED_WALLETS } from '@/lib/surface';
 import { NOT_AVAILABLE, TEST_MODE } from '@/lib/test-mode';
 import { showToast } from '@/lib/toast';
 import { demoAddress, isEvmAddress } from '@/lib/wallets';
@@ -120,6 +122,11 @@ const isSolanaAddress = (v: string) => /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(v.tr
  * approve. Each step is a page of this one sheet.
  */
 export default function NewMultisigSheet() {
+  // Shared wallets are off for now (2026-11-13): group jars replace them.
+  return SHARED_WALLETS ? <NewMultisig /> : <SharedWalletsOff />;
+}
+
+function NewMultisig() {
   const styles = useStyles();
   const c = useTheme();
   const profile = useProfile();

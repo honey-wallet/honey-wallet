@@ -10,7 +10,9 @@ import { closeSheet, SHEET, SheetScreen, SheetText } from '@/components/sheets/S
 import {
   MEMBER_KIND_LABEL,
   ProposedPage,
+  SharedWalletsOff,
   ThresholdStepper,
+  useSharedWalletOpen,
 } from '@/components/wallet/MultisigParts';
 import { EmptyState } from '@/components/wallet/parts';
 import { tap } from '@/lib/haptics';
@@ -44,6 +46,12 @@ const TITLES: Record<Kind, string> = {
  */
 export default function MultisigEditSheet() {
   const { id = '', kind = 'rule' } = useLocalSearchParams<{ id: string; kind?: Kind }>();
+  // Shared wallets are off for now (2026-11-13): group jars replace them.
+  const open = useSharedWalletOpen(id);
+  return open ? <MultisigEdit id={id} kind={kind} /> : <SharedWalletsOff />;
+}
+
+function MultisigEdit({ id, kind }: { id: string; kind: Kind }) {
   const styles = useStyles();
   const c = useTheme();
   const multisig = useMultisig(id);

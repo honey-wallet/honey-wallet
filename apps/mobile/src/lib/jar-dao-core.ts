@@ -44,6 +44,7 @@ import {
   withdrawKind,
   withdrawOf,
 } from '@honey-wallet/keyring';
+import { type Balance, checkPayout, paysMembers } from '@/lib/group-jar-core';
 import type { Member, Multisig, Proposal, ProposalAction } from '@/lib/multisig';
 
 export type Rpc = (method: string, params: unknown) => Promise<unknown>;
@@ -326,6 +327,13 @@ export async function checkApproval(
     unitsOf: (member: string) => bigint;
     fetcher: Fetch;
     now?: number;
+    /** The DAO's member accounts: a transfer to them is a group payout, not a buy. */
+    memberAccounts?: string[];
+    /**
+     * A group jar's members still in and what the jar holds, to check a leave or
+     * cash-out against (group-jar-core `checkPayout`). Without it a payout is refused.
+     */
+    payout?: { remaining: string[]; balances: Balance[] };
   },
 ): Promise<void> {
   const kind = raw.kind;
@@ -348,6 +356,11 @@ export async function checkApproval(
   switch (keys[0]) {
     case 'FunctionCall': {
       const legs = buyLegsOf(kind);
+      if (legs && ctx.memberAccounts && paysMembers(kind, ctx.memberAccounts)) {
+        if (!ctx.payout) throw new Error('Open its group jar to approve this.');
+        checkPayout(kind, { proposer: raw.proposer, ...ctx.payout });
+        return;
+      }
       if (legs) {
         await verifyBuyWith1Click(ctx.fetcher, ctx.dao, legs, ctx.now);
         return;

@@ -63,6 +63,8 @@ import type {
   JarBuyStatus,
   JarDaoBuyRequest,
   JarDaoDepositCheck,
+  JarDaoSponsorRequest,
+  JarDaoSponsorResult,
   JarDaoState,
   MorphoIntent,
   NewPool,
@@ -72,8 +74,14 @@ import type {
   PortfolioAddresses,
   SocialFeed,
   SocialFeedScope,
+  SocialGroup,
+  SocialGroupCreatedRequest,
+  SocialGroupPaidRequest,
+  SocialGroupProposalRequest,
+  SocialGroupRequest,
   SocialHandleStatus,
   SocialHolders,
+  SocialInboxItem,
   SocialJar,
   SocialJarSort,
   SocialLeaderboardWindow,
@@ -212,6 +220,7 @@ export function createApiClient({ baseUrl, fetch: fetchImpl = fetch }: ApiClient
   function maybeAuthorized(token: string | null | undefined, init?: RequestInit): RequestInit {
     return token ? authorized(token, init) : { ...init, credentials: 'omit' };
   }
+  const groupPath = (id: string) => `/api/v1/social/groups/${encodeURIComponent(id)}`;
   const handlePath = (handle: string) =>
     `/api/v1/social/profiles/${encodeURIComponent(handle.replace(/^@/, '').toLowerCase())}`;
 
@@ -331,6 +340,22 @@ export function createApiClient({ baseUrl, fetch: fetchImpl = fetch }: ApiClient
       ),
     jarDaoBuyQuote: (token: string, input: JarDaoBuyRequest, init?: RequestInit) =>
       request<JarBuyQuote>('/api/v1/jar-dao/buy-quote', authorizedJson(token, input, init)),
+    /**
+     * Asks Honey to pay a group member's NEAR network fees (a small top-up to their
+     * implicit account, once per person and group). Null while Honey isn't paying fees
+     * (503): the member pays their own. 409 when already paid for this group.
+     */
+    jarDaoSponsor: async (token: string, input: JarDaoSponsorRequest, init?: RequestInit) => {
+      try {
+        return await request<JarDaoSponsorResult>(
+          '/api/v1/jar-dao/sponsor',
+          authorizedJson(token, { account: input.account, groupId: input.groupId }, init),
+        );
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 503) return null;
+        throw error;
+      }
+    },
     startThesis: (token: string, input: StartThesis, init?: RequestInit) =>
       validated('/api/v1/theses', isThesisStarted, authorizedJson(token, input, init)),
     thesis: (token: string, runId: string, init?: RequestInit) =>
@@ -787,6 +812,53 @@ export function createApiClient({ baseUrl, fetch: fetchImpl = fetch }: ApiClient
       request<SocialPost[]>(
         `/api/v1/social/posts?symbol=${encodeURIComponent(symbol)}`,
         maybeAuthorized(accessToken),
+      ),
+    /** Starts a group jar: invites 1–4 friends by handle (no money moves yet). */
+    socialCreateGroup: (accessToken: string, group: SocialGroupRequest) =>
+      request<SocialGroup>('/api/v1/social/groups', authorizedJson(accessToken, group)),
+    /** A group you're in or invited to (404 for anyone else). */
+    socialGroup: (accessToken: string, id: string) =>
+      request<SocialGroup>(groupPath(id), authorized(accessToken)),
+    /** Every group you created or were invited to, newest first. */
+    socialMyGroups: (accessToken: string) =>
+      request<SocialGroup[]>('/api/v1/social/me/groups', authorized(accessToken)),
+    /** Joins with your NEAR account (409 once the invite lapsed or the group moved on). */
+    socialAcceptGroup: (accessToken: string, id: string, nearAccount: string) =>
+      request<SocialGroup>(`${groupPath(id)}/accept`, authorizedJson(accessToken, { nearAccount })),
+    socialDeclineGroup: (accessToken: string, id: string) =>
+      request<SocialGroup>(`${groupPath(id)}/decline`, authorizedJson(accessToken, {})),
+    /**
+     * Creator: go ahead with whoever accepted (pending invites end), or invest alone
+     * (`solo`, or nobody accepted): the group becomes `solo`.
+     */
+    socialGroupGoAhead: (accessToken: string, id: string, options: { solo?: boolean } = {}) =>
+      request<SocialGroup>(
+        `${groupPath(id)}/go-ahead`,
+        authorizedJson(accessToken, { solo: options.solo === true }),
+      ),
+    /** Creator: the DAO is created; the server checks its members and threshold on NEAR. */
+    socialGroupCreated: (accessToken: string, id: string, input: SocialGroupCreatedRequest) =>
+      request<SocialGroup>(`${groupPath(id)}/created`, authorizedJson(accessToken, input)),
+    /** Your share is in; verified on chain. Idempotent. */
+    socialGroupPaid: (accessToken: string, id: string, proof: SocialGroupPaidRequest) =>
+      request<SocialGroup>(`${groupPath(id)}/paid`, authorizedJson(accessToken, proof)),
+    /** Records a vote you opened on the DAO (checked on chain) and asks the others. */
+    socialGroupProposal: (accessToken: string, id: string, input: SocialGroupProposalRequest) =>
+      request<SocialGroup>(
+        `${groupPath(id)}/proposal`,
+        authorizedJson(accessToken, { kind: input.kind, proposalId: input.proposalId }),
+      ),
+    /** Re-reads the DAO's votes (buy → active, leave → left, cash out → closed). */
+    socialSyncGroup: (accessToken: string, id: string) =>
+      request<SocialGroup>(`${groupPath(id)}/sync`, authorizedJson(accessToken, {})),
+    /** Your inbox (the bell), newest first. */
+    socialInbox: (accessToken: string) =>
+      request<SocialInboxItem[]>('/api/v1/social/me/inbox', authorized(accessToken)),
+    /** Marks inbox items read; returns how many changed. */
+    socialReadInbox: (accessToken: string, ids: string[]) =>
+      request<{ read: number }>(
+        '/api/v1/social/me/inbox/read',
+        authorizedJson(accessToken, { ids }),
       ),
     /** People you follow who hold this token (public jars or shared buys). */
     socialHolders: (symbol: string, accessToken?: string | null) =>

@@ -4,6 +4,12 @@ import { Text, useWindowDimensions, View } from 'react-native';
 import { Avatar } from '@/components/Avatar';
 import { PriceChart } from '@/components/charts/PriceChart';
 import { Icon, type IconName } from '@/components/Icon';
+import {
+  GroupJarFooter,
+  GroupJarSection,
+  type GroupJarState,
+  useGroupJar,
+} from '@/components/jars/GroupJar';
 import { JarHoldingRow, JarIcon, layersOf, Mix, Owners } from '@/components/jars/JarParts';
 import { ActionMenu } from '@/components/motion/ActionMenu';
 import { NumberPopIn } from '@/components/motion/NumberPopIn';
@@ -77,7 +83,7 @@ import {
 } from '@/lib/social';
 import { SOCIAL } from '@/lib/surface';
 import { TEST_MODE } from '@/lib/test-mode';
-import { jarReturn, jarValue, type ThesisJar, updateJarBuy, useThesisJars } from '@/lib/thesis';
+import { jarReturn, jarValue, ME, type ThesisJar, updateJarBuy, useThesisJars } from '@/lib/thesis';
 import { showErrorToast } from '@/lib/toast';
 import { requireSignIn } from '@/lib/wallet-gate';
 import { Gate } from '@/lib/warnings';
@@ -219,6 +225,8 @@ function JarPage({ jar, id }: { jar: ThesisJar | undefined; id: string }) {
   // A thesis previewed as a jar: its post, for the heart and Share.
   const preview = jar ? previewPostOf(jar.id) : undefined;
   const personLoading = !!ownerHandle && !owner && !ownerFailed;
+  // A group jar: its group, votes, Leave and Cash out.
+  const group = useGroupJar(jar?.groupId);
   // The header centres its title between equal sides: keep it clear of the widest side
   // (Save and •••) on both, so a long name ends in "…" and stays centred.
   const { width: screenWidth } = useWindowDimensions();
@@ -266,7 +274,11 @@ function JarPage({ jar, id }: { jar: ThesisJar | undefined; id: string }) {
         ) : undefined
       }
       footer={
-        !copyable ? null : jar?.copyOff ? (
+        group?.approve ? (
+          <View style={styles.footer}>
+            <GroupJarFooter state={group} />
+          </View>
+        ) : !copyable ? null : jar?.copyOff ? (
           // Its owner doesn't let people copy it (or hides what it holds).
           <View style={styles.footer}>
             <CopyOff primary />
@@ -297,7 +309,7 @@ function JarPage({ jar, id }: { jar: ThesisJar | undefined; id: string }) {
       }
     >
       <SkeletonReveal loading={!jar} skeleton={<PageSkeleton />}>
-        {jar ? <JarBody jar={jar} serverId={serverId} person={person} /> : null}
+        {jar ? <JarBody jar={jar} serverId={serverId} person={person} group={group} /> : null}
       </SkeletonReveal>
     </PushedScreen>
   );
@@ -413,6 +425,9 @@ function personOf(
       handle: ownerHandle,
       seed: owner?.avatarSeed || ownerHandle,
     };
+  // A group jar someone else started: they're who's behind it.
+  if (jar.groupId && jar.creator !== ME)
+    return { name: jar.creator, handle: jar.creator, seed: jar.creator };
   if (jar.mine)
     return {
       name: me?.displayName || 'You',
@@ -426,10 +441,12 @@ function JarBody({
   jar,
   serverId,
   person,
+  group,
 }: {
   jar: ThesisJar;
   serverId: string | null;
   person: Person | null;
+  group: GroupJarState | null;
 }) {
   const styles = useStyles();
   const c = useTheme();
@@ -499,7 +516,6 @@ function JarBody({
   const shown = last > 0 ? jarValue(jar) * (point / last) : jarValue(jar);
   const prices = useLivePrices();
   const layers = layersOf(jar);
-  const invited = jar.members.filter((m) => m.invited);
   const period = active === 'All' ? 'since launch' : RANGE_LABEL[active];
   // The date under the finger: the line's points are spread evenly up to now.
   const dateAt = (i: number) =>
@@ -601,6 +617,13 @@ function JarBody({
         )}
       </View>
 
+      {/* A group jar: who's in, your slice, votes, Leave and Cash out. */}
+      {group ? (
+        <View style={[styles.section, styles.gutter]}>
+          <GroupJarSection state={group} />
+        </View>
+      ) : null}
+
       {/* Your public jar: say why in a thesis, which posts to the feed with the jar. */}
       {jar.mine && serverId && SOCIAL ? (
         <View style={styles.gutter}>
@@ -623,11 +646,10 @@ function JarBody({
         </View>
       ) : null}
 
-      {/* Anything still waiting (an approval, a limit order, friends' shares), as the
-          app's rows: an icon, a title over one line, a chevron when it opens something. */}
-      {(jar.sharedWallet && approval && approval.status !== 'executed') ||
-      jar.openOrder ||
-      invited.length ? (
+      {/* Anything still waiting (an approval, a limit order), as the app's rows: an
+          icon, a title over one line, a chevron when it opens something. Friends are
+          invited only through a real group (group jars), never as a note here. */}
+      {(jar.sharedWallet && approval && approval.status !== 'executed') || jar.openOrder ? (
         <View style={[styles.section, styles.gutter]}>
           {jar.sharedWallet && approval && approval.status !== 'executed' ? (
             <SheetRow
@@ -651,13 +673,6 @@ function JarBody({
               icon="clock"
               title={`Limit order open · ${formatUsd(jar.openOrder.amount)}`}
               subtitle="Buys 1% under today's price, for up to 24 hours."
-            />
-          ) : null}
-          {invited.length ? (
-            <SheetRow
-              icon="personOutline"
-              title={`Waiting on ${invited.length} friend${invited.length === 1 ? '' : 's'}`}
-              subtitle={`Invites sent for ${formatUsd(invited[0]?.asked ?? 0)} each.`}
             />
           ) : null}
         </View>
@@ -777,7 +792,7 @@ function JarBody({
         </View>
       ) : null}
 
-      {jar.mine && jar.members.length > 1 ? (
+      {jar.mine && jar.members.length > 1 && !jar.groupId ? (
         <View style={[styles.section, styles.gutter]}>
           <Text style={styles.heading}>Who owns what</Text>
           <Owners jar={jar} />

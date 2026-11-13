@@ -6,8 +6,9 @@ import { PressableRow } from '@/components/motion/PressableRow';
 import { PressableScale } from '@/components/motion/PressableScale';
 import { SkeletonBar, SkeletonGroup } from '@/components/motion/Skeleton';
 import { TextSwap } from '@/components/motion/TextSwap';
+import { closeSheet, SheetScreen } from '@/components/sheets/Sheet';
 import { SuccessPage } from '@/components/sheets/SuccessPage';
-import { TokenIcon } from '@/components/wallet/parts';
+import { EmptyState, PushedScreen, TokenIcon } from '@/components/wallet/parts';
 import type { EvmChain } from '@/lib/evm-chains';
 import { tap } from '@/lib/haptics';
 import { shortAddress } from '@/lib/mock-wallet';
@@ -26,7 +27,37 @@ import {
   useMultisig,
   useProposal,
 } from '@/lib/multisig';
+import { SHARED_WALLETS } from '@/lib/surface';
+import { useActiveWallet } from '@/lib/wallets';
 import { makeStyles, useTheme } from '@/theme';
+
+/**
+ * Whether a shared wallet's pages open. Shared wallets are off for now (2026-11-13): group
+ * jars replace them. A group jar's own wallet (on chain, `dao`) still opens, and so does
+ * a shared wallet that's already the one in use, so its funds aren't stranded.
+ */
+export function useSharedWalletOpen(walletId: string | undefined) {
+  const active = useActiveWallet();
+  const multisig = useMultisig(walletId);
+  return SHARED_WALLETS || !!multisig?.dao || (!!walletId && walletId === active.id);
+}
+
+/** What a link into a shared wallet shows while they're off: a sheet, or a pushed page. */
+export function SharedWalletsOff({ pushed }: { pushed?: boolean }) {
+  const empty = (
+    <EmptyState
+      icon="multisig"
+      title="Not available yet"
+      hint="Shared wallets aren't in Honey for now. Group jars are coming instead."
+      action={{ label: 'Close', onPress: closeSheet }}
+    />
+  );
+  return pushed ? (
+    <PushedScreen title="Shared wallet">{empty}</PushedScreen>
+  ) : (
+    <SheetScreen>{empty}</SheetScreen>
+  );
+}
 
 /** Networks with a coin logo of their own; the rest get a lettered badge. */
 const NETWORK_LOGO: Record<string, string> = {

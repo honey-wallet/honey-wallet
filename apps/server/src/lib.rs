@@ -31,6 +31,7 @@ pub mod market_data;
 pub mod markets;
 pub mod metrics;
 pub mod morpho_service;
+pub mod near_relayer;
 pub mod operation_history;
 pub mod pairing_store;
 pub mod portfolio;
@@ -207,6 +208,11 @@ fn router(config: &Config, health: runtime::RuntimeHealth, services: RouterServi
         public_markets
     };
 
+    // Shared jar DAO chain reads, used by the jar-dao routes and group jars.
+    let jar_dao = jar_dao::JarDao::from_env()
+        .map(|dao| std::sync::Arc::new(dao.with_market(market.clone())))
+        .map_err(|error| tracing::error!(%error, "jar DAOs disabled"))
+        .ok();
     let market_data_router = market
         .clone()
         .map(routes::market::router)
@@ -271,11 +277,16 @@ fn router(config: &Config, health: runtime::RuntimeHealth, services: RouterServi
             identity.clone(),
             market.clone(),
             redis.clone(),
+            jar_dao.clone(),
         ))
         .merge(routes::aave::router(identity.clone(), aave))
         .merge(routes::morpho::router(identity.clone(), morpho))
         .merge(routes::hyperliquid::router(identity.clone(), redis.clone()))
-        .merge(routes::social::router(identity.clone(), market.clone()))
+        .merge(routes::social::router(
+            identity.clone(),
+            market.clone(),
+            jar_dao,
+        ))
         .merge(routes::stealth_jars::router(
             identity.clone(),
             redis.clone(),
@@ -353,6 +364,7 @@ fn jar_buys_router(
     identity: Option<identity::Identity>,
     market: Option<std::sync::Arc<market_data::MarketData>>,
     redis: Option<redis_store::RedisStore>,
+    jar_dao: Option<std::sync::Arc<jar_dao::JarDao>>,
 ) -> Router {
     let buys = market
         .clone()
@@ -368,16 +380,15 @@ fn jar_buys_router(
         None => Router::new(),
     };
     // Shared jar DAOs: chain reads and INTENTS quotes; works without market data for reads.
-    match jar_dao::JarDao::from_env() {
-        Ok(dao) => router.merge(routes::jar_dao::router(
-            identity,
-            std::sync::Arc::new(dao.with_market(market)),
-            buys,
-        )),
-        Err(error) => {
-            tracing::error!(%error, "jar DAOs disabled");
-            router
-        }
+    // Honey's gas relayer (group jar fee top-ups) is off unless its key is configured.
+    let relayer = near_relayer::Relayer::from_env()
+        .map_err(|error| tracing::error!(%error, "NEAR relayer disabled"))
+        .ok()
+        .flatten()
+        .map(std::sync::Arc::new);
+    match jar_dao {
+        Some(dao) => router.merge(routes::jar_dao::router(identity, dao, buys, relayer)),
+        None => router,
     }
 }
 

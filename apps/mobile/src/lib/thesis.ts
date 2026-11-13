@@ -90,6 +90,8 @@ export type ThesisJar = {
   wholeLife?: boolean;
   /** Set when a shared wallet owns the jar: its buy is a proposal members approve. */
   sharedWallet?: { walletId: string; label: string; proposalId: string };
+  /** A group jar's group (lib/group-jars): its page adds your slice, votes, Leave and Cash out. */
+  groupId?: string;
   /** The real NEAR Intents swaps that bought this jar, one per asset and chain. */
   buy?: import('@/lib/jar-buy').BuyLeg[];
   /** A resting limit order still waiting to fill, if the jar was bought that way. */

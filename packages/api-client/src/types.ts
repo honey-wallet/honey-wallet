@@ -847,6 +847,21 @@ export interface JarBuyRequest {
   intents?: boolean;
 }
 
+/** `POST /api/v1/jar-dao/sponsor`: Honey pays a group member's NEAR network fees. */
+export interface JarDaoSponsorRequest {
+  /** The member's NEAR implicit account (64 hex characters). */
+  account: string;
+  groupId: string;
+}
+
+export interface JarDaoSponsorResult {
+  /** `not_needed`: the account already holds enough NEAR (nothing sent). */
+  status: 'sent' | 'not_needed';
+  /** yoctoNEAR sent: 0.03 NEAR, or 0.12 NEAR to the creator before the DAO exists. */
+  amount: string;
+  txHash: string | null;
+}
+
 /** A shared jar's Sputnik DAO, read from NEAR (`GET /api/v1/jar-dao/state`). */
 export interface JarDaoState {
   dao: string;
@@ -1105,6 +1120,15 @@ export interface SocialJar {
    * Absent means copyable: only `false` turns Copy off.
    */
   copyable?: boolean;
+  /** A group jar's group (absent on solo jars). */
+  groupId?: string;
+  /**
+   * A group jar's members you may see, creator first (the owner is one of them). Someone
+   * with a private profile is left out for everyone outside the group. Absent on solo jars.
+   */
+  members?: SocialProfileCard[];
+  /** Everyone in the group, hidden members included ("Nina and 2 others" = count - 1). */
+  memberCount?: number;
 }
 
 /** What other people may see of you. All on by default. */
@@ -1256,3 +1280,129 @@ export interface SocialHolders {
 export type SocialFeedScope = 'following' | 'everyone';
 export type SocialJarSort = 'trending' | 'top' | 'new';
 export type SocialLeaderboardWindow = '7d' | '30d' | 'all';
+
+// Group jars: mirrors `apps/server/src/routes/social/groups.rs`.
+
+/**
+ * inviting → creating (creator signs the DAO create) → funding (members add their share)
+ * → buying (buy vote open) → active → closed. `solo`: the creator invests alone.
+ */
+export type SocialGroupStatus =
+  | 'inviting'
+  | 'creating'
+  | 'funding'
+  | 'buying'
+  | 'active'
+  | 'closed'
+  | 'solo';
+/** An invite reads `lapsed` 7 days after it was sent, or when the creator went ahead. */
+export type SocialGroupMemberState = 'invited' | 'accepted' | 'declined' | 'lapsed' | 'left';
+export type SocialGroupProposalKind = 'buy' | 'leave' | 'cashout';
+
+export interface SocialGroupMember extends SocialProfileCard {
+  state: SocialGroupMemberState;
+  /** Their share is in the DAO (verified on chain). */
+  paid: boolean;
+  /** Their NEAR account, given when they accepted. */
+  nearAccount: string | null;
+  isCreator: boolean;
+  isMe: boolean;
+}
+
+/** A vote opened on the group's DAO. */
+export interface SocialGroupProposal {
+  /** The Sputnik proposal id. */
+  proposalId: number;
+  kind: SocialGroupProposalKind;
+  status: 'open' | 'executed' | 'failed';
+  proposer: SocialProfileCard;
+  /** Unix milliseconds. */
+  at: number;
+}
+
+/** A group jar, as one of its members (or invitees) sees it. */
+export interface SocialGroup {
+  id: string;
+  name: string;
+  thesis: string;
+  picks: SocialPick[];
+  /** Each person's share in dollars; total = shareUsd × people. */
+  shareUsd: number;
+  copyFee: number;
+  hidePicks: boolean;
+  /** Publish the jar with its members once the buy executes. */
+  publish: boolean;
+  status: SocialGroupStatus;
+  creator: SocialProfileCard;
+  isCreator: boolean;
+  /** The jar's id on the creator's phone; only for the creator. */
+  clientJarId: string | null;
+  /** Creator first, then in invite order. */
+  members: SocialGroupMember[];
+  /** People counted now: while inviting, everyone invited or in; after, those in. */
+  people: number;
+  /** Approvals a vote needs: a majority of `people` (2 of 2, 2 of 3, 3 of 4, 3 of 5). */
+  threshold: number;
+  /** `<name>.sputnik-dao.near`, once created and checked on chain. */
+  dao: string | null;
+  /** The published social jar, once live and published. */
+  jarId: string | null;
+  /** Newest first. */
+  proposals: SocialGroupProposal[];
+  myState: SocialGroupMemberState;
+  /** Unix milliseconds. */
+  createdAt: number;
+  /** When the invites lapse (unix ms). */
+  invitesExpireAt: number;
+}
+
+/** `POST /api/v1/social/groups`. */
+export interface SocialGroupRequest {
+  name: string;
+  thesis?: string;
+  picks: SocialPick[];
+  /** Each person's share in dollars ($1 to $1,000, whole cents). */
+  shareUsd: number;
+  /** Friends' handles, 1 to 4 (5 people in all). */
+  members: string[];
+  clientJarId: string;
+  copyFee?: number;
+  hidePicks?: boolean;
+  publish?: boolean;
+  /** Your NEAR account now, or later with `socialGroupCreated`. */
+  nearAccount?: string;
+}
+
+/**
+ * Proof of your share, checked on chain: the NEAR `ft_transfer_call` of USDC to
+ * intents.near with `msg` = the DAO (`txHash`), or the 1Click deposit address of a swap
+ * that delivered at least the share in NEAR USDC to the DAO's Intents account
+ * (`recipientType` INTENTS) and refunds to a wallet you signed in with. A 1Click payment
+ * must deliver the full share (quote EXACT_OUTPUT or add a margin for fees).
+ */
+export type SocialGroupPaidRequest = { txHash: string } | { depositAddress: string };
+
+export interface SocialGroupCreatedRequest {
+  dao: string;
+  /** Your NEAR account, if you didn't give it when creating the group. */
+  nearAccount?: string;
+}
+
+export interface SocialGroupProposalRequest {
+  kind: SocialGroupProposalKind;
+  /** The Sputnik proposal id you opened (and approved) on the DAO. */
+  proposalId: number;
+}
+
+export type SocialInboxKind = 'group_invite' | 'group_ready' | 'group_vote' | 'group_update';
+
+/** One line on the bell. Newest first; at most 100. */
+export interface SocialInboxItem {
+  id: string;
+  kind: SocialInboxKind;
+  groupId: string | null;
+  text: string;
+  /** Unix milliseconds. */
+  at: number;
+  read: boolean;
+}

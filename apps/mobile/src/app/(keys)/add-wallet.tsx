@@ -6,7 +6,6 @@ import { ContentSwap } from '@/components/motion/ContentSwap';
 import { closeSheet, SheetHeader, SheetRow, SheetScreen } from '@/components/sheets/Sheet';
 import { CLOUD_NAMES } from '@/lib/cloud-backup';
 import { tap } from '@/lib/haptics';
-import { leaveSheetTo } from '@/lib/navigation';
 import { HERE, isWeb } from '@/lib/platform';
 import { getProfile } from '@/lib/profile';
 import { showErrorToast, showToast } from '@/lib/toast';
@@ -56,12 +55,13 @@ export default function AddWalletSheet() {
           hint: `A new wallet on ${HERE}`,
           onPress: create,
         },
-        {
-          icon: 'multisig',
-          title: 'Create shared wallet',
-          hint: 'Needs more than one approval to spend',
-          onPress: () => leaveSheetTo('/multisig-new'),
-        },
+        // Shared wallets are off for now (2026-11-13): group jars replace them.
+        // {
+        //   icon: 'multisig',
+        //   title: 'Create shared wallet',
+        //   hint: 'Needs more than one approval to spend',
+        //   onPress: () => leaveSheetTo('/multisig-new'),
+        // },
         {
           icon: 'flame',
           title: 'Create burner wallet',
