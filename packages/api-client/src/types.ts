@@ -102,6 +102,11 @@ export interface ApiErrorBody {
   error: {
     code: string;
     message: string;
+    /**
+     * `POST /routes/best` refusing an amount that's too small: the least that would go,
+     * in atomic units of the token paid (absent everywhere else).
+     */
+    minAmountIn?: string;
   };
 }
 
