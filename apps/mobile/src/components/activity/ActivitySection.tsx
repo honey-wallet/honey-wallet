@@ -92,23 +92,28 @@ export function ActivitySection() {
     router.push({ pathname: '/proposal/[id]', params: { id } });
   };
 
+  // The Activity tab's settings: what's shown (the filter's word) and what's hidden.
+  const filter = (
+    <PressableRow
+      accessibilityRole="button"
+      onPress={() => {
+        tap();
+        router.push({ pathname: '/section-settings', params: { section: 'activity' } });
+      }}
+      style={styles.filters}
+    >
+      <Text style={styles.filtersText}>
+        {activityFilter === 'All' ? 'All activity' : activityFilter}
+        {activityHideApprovals ? ' · approvals hidden' : ''}
+      </Text>
+      <Icon name="chevronDown" size={12} color={styles.filtersText.color} />
+    </PressableRow>
+  );
+
   return (
     <View>
-      {/* The Activity tab's settings gear, now that history lives inside Wallet. */}
-      <PressableRow
-        accessibilityRole="button"
-        onPress={() => {
-          tap();
-          router.push({ pathname: '/section-settings', params: { section: 'activity' } });
-        }}
-        style={styles.filters}
-      >
-        <Text style={styles.filtersText}>
-          {activityFilter === 'All' ? 'All activity' : activityFilter}
-          {activityHideApprovals ? ' · approvals hidden' : ''}
-        </Text>
-        <Icon name="chevronDown" size={12} color={styles.filtersText.color} />
-      </PressableRow>
+      {/* With months to list, the filter sits at the right of the first month's row. */}
+      {!multisig && months.length > 0 ? null : filter}
       <SkeletonReveal
         loading={loading}
         skeleton={multisig ? <ProposalsSkeleton /> : <ActivitySkeleton />}
@@ -158,10 +163,13 @@ export function ActivitySection() {
             </View>
           )}
           {!multisig &&
-            months.map((month) => (
+            months.map((month, i) => (
               <View key={month} style={styles.month}>
                 <Sticky id={`month-${month}`}>
-                  <Text style={styles.monthLabel}>{month}</Text>
+                  <View style={styles.monthRow}>
+                    <Text style={[styles.monthLabel, styles.flex]}>{monthTitle(month)}</Text>
+                    {i === 0 ? filter : null}
+                  </View>
                 </Sticky>
                 {shown
                   .filter((a) => a.month === month)
@@ -348,8 +356,7 @@ const useStyles = makeStyles((c) => ({
     alignItems: 'center',
     alignSelf: 'flex-end',
     gap: 6,
-    paddingVertical: 8,
-    marginBottom: 4,
+    paddingVertical: 4,
   },
   filtersText: {
     color: c.textSecondary,
@@ -364,6 +371,10 @@ const useStyles = makeStyles((c) => ({
   },
   month: {
     marginBottom: 12,
+  },
+  monthRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   monthLabel: {
     paddingVertical: 4,
@@ -430,3 +441,11 @@ const useStyles = makeStyles((c) => ({
     paddingTop: 2,
   },
 }));
+
+/** "This month" and "Last month" for the two newest months; the rest by name. */
+function monthTitle(label: string, now = new Date()) {
+  const name = (d: Date) => d.toLocaleString('en-US', { month: 'long' });
+  if (label === name(now)) return 'This month';
+  if (label === name(new Date(now.getFullYear(), now.getMonth() - 1, 1))) return 'Last month';
+  return label;
+}

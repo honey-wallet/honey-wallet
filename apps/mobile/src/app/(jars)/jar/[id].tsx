@@ -312,6 +312,19 @@ function JarPage({ jar, id }: { jar: ThesisJar | undefined; id: string }) {
           <View style={styles.footer}>
             <GroupJarFooter state={group} />
           </View>
+        ) : jar?.mine && !jar.groupId && !jar.sharedWallet ? (
+          // Your own jar: what you do after looking at a position is sell (some of) it.
+          <View style={styles.footer}>
+            <PillButton
+              label="Sell"
+              variant="secondary"
+              style={styles.flex}
+              onPress={() => {
+                tap();
+                router.push({ pathname: '/jar-sell', params: { id: jar.id } });
+              }}
+            />
+          </View>
         ) : !copyable ? null : jar?.copyOff ? (
           // Its owner doesn't let people copy it (or hides what it holds).
           <View style={styles.footer}>

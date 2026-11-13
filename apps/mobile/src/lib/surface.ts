@@ -47,6 +47,7 @@ const PHONE_ONLY = [
   '/group-invite',
   '/group-pay',
   '/jar-post',
+  '/jar-sell',
   '/group-friends',
   '/thesis-chat',
   '/thesis-new',
