@@ -2,6 +2,7 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
 import { Text, useWindowDimensions, View } from 'react-native';
 import { Avatar } from '@/components/Avatar';
+import { ConvergeChart, useConverge, useConvergeOnce } from '@/components/charts/ConvergeChart';
 import { PriceChart } from '@/components/charts/PriceChart';
 import { Icon, type IconName } from '@/components/Icon';
 import {
@@ -534,7 +535,31 @@ function JarBody({
   // weights. All uses the shortest chart that covers its life, cut at launch.
   const chartRange = chartRangeOf(active, ageMs);
   const top = [...jar.picks].sort((x, y) => y.weight - x.weight).slice(0, 3);
-  const live = !TEST_MODE;
+  const ret = jarReturn(jar);
+  // How much time the line covers: the range, or the jar's life when that's shorter.
+  const spanMs = lineSpanMs(active, ageMs);
+  // Someone's jar whose owner hides returns: a dash and no line, never a flat "+0.0%".
+  const noReturns = !jar.mine && !!jar.returnsHidden;
+  const layers = layersOf(jar);
+  // Whatever it holds, when it can be shown: each token's line merging into the jar's
+  // (ConvergeChart), the first time this session; after that, straight to the jar's line.
+  // Prices stay live in test mode, so it plays there too.
+  const converges = !!layers && jar.picks.length > 0 && !noReturns;
+  const once = useConvergeOnce(jar.id);
+  const convergePicks = useMemo(
+    () =>
+      jar.picks.map((p, i) => ({
+        symbol: p.symbol,
+        weight: p.weight,
+        color: tokenColor(p.symbol, i),
+      })),
+    [jar.picks],
+  );
+  const converge = useConverge(convergePicks, chartRange, {
+    start: openedAt - spanMs,
+    enabled: converges,
+  });
+  const live = !TEST_MODE && !converges;
   const blended = useBlendedSince(
     top.map((p) => p.symbol),
     undefined,
@@ -544,30 +569,36 @@ function JarBody({
   );
   const lead = useTokenChart(top[0]?.symbol ?? '', chartRange, live && !!top[0]);
   const dense = blended.length >= 3;
-  const chartLoading = live && !dense && lead.loading;
-  const ret = jarReturn(jar);
-  // How much time the line covers: the range, or the jar's life when that's shorter.
-  const spanMs = lineSpanMs(active, ageMs);
-  // Only since launch, so a jar opened today is a flat line at its value. On All the
-  // tokens' prices give its shape and a linear ramp moves its end onto the jar's own
-  // return (as the feed's Trend does), so the line and the % above it always agree;
-  // on the other ranges the % is the line's own move.
+  const chartLoading = converges ? converge.loading : live && !dense && lead.loading;
+  // The converge chart's line is its tokens' real weighted prices, never bent onto the
+  // jar's own return (2026-11-14: falling tokens merged into a rising line).
+  const basket = converge.model?.basket;
+  // Without it: only since launch, so a jar opened today is a flat line at its value. On
+  // All the tokens' prices give its shape and a linear ramp moves its end onto the jar's
+  // own return (as the feed's Trend does); on the other ranges the % is the line's own move.
   const data = useMemo(() => {
     const target = active === 'All' ? ret : undefined;
+    // The jar's line on the converge chart: the hero follows the same points.
+    if (basket) return basket;
     if (dense) return jarLine(blended, JAR_RANGE_MS[chartRange], ageMs, target);
     // No token charts (samples, offline): the jar's own marks, all of them in the range.
     const marks = active === 'All' ? jar.history : jar.history.slice(-RANGE_POINTS[active]);
     return jarLine(marks, ageMs, ageMs, target);
-  }, [dense, blended, chartRange, ageMs, active, ret, jar.history]);
+  }, [basket, dense, blended, chartRange, ageMs, active, ret, jar.history]);
   const first = data[0] ?? 0;
   const last = data.at(-1) ?? 0;
   const point = scrub === null ? last : (data[scrub] ?? last);
-  // The move over the range up to the point under the finger, as a fraction.
-  const change = first > 0 ? (point - first) / first : 0;
+  // The move over the range up to the point under the finger, as a fraction. On All at
+  // rest it's the jar's own return since launch, which the honest line may not match.
+  const ownReturn = !!basket && active === 'All' && scrub === null;
+  const change = ownReturn ? ret : first > 0 ? (point - first) / first : 0;
+  // When the tokens' prices and the jar's own return disagree, the chart says what it is
+  // and the since-launch number stays in the header only.
+  const pricesOnly =
+    !!converge.model && active === 'All' && Math.abs(converge.model.change - ret) > 0.01;
   // Your jar's value at that point: today's value carried back along the line.
   const shown = last > 0 ? jarValue(jar) * (point / last) : jarValue(jar);
   const prices = useLivePrices();
-  const layers = layersOf(jar);
   const period = active === 'All' ? 'since launch' : RANGE_LABEL[active];
   // The date under the finger: the line's points are spread evenly up to now.
   const dateAt = (i: number) =>
@@ -582,8 +613,13 @@ function JarBody({
 
   const handle = person?.handle;
   const preview = jar.id.startsWith(POST_PREFIX);
-  // Someone's jar whose owner hides returns: a dash and no line, never a flat "+0.0%".
-  const noReturns = !jar.mine && !!jar.returnsHidden;
+  // A young jar has only All: one tab is no choice, so no tabs.
+  const rangeTabs =
+    ranges.length > 1 ? (
+      <View style={styles.ranges}>
+        <SegmentedTabs<JarRange> bare options={ranges} value={active} onChange={setRange} />
+      </View>
+    ) : null;
   const flat =
     data.length < 2 ||
     Math.max(...data) - Math.min(...data) <= Math.max(Math.abs(data[0] ?? 0), 1) * 0.0005;
@@ -633,7 +669,23 @@ function JarBody({
 
       {/* A jar that hasn't moved yet (new, or every point the same) skips the chart: a
           flat line under half a screen of empty grid said nothing (review 2026-11-13). */}
-      {noReturns || (!chartLoading && flat) ? null : (
+      {noReturns || (!chartLoading && flat) ? null : converges && converge.model ? (
+        // "$100 → $X": what $100 (your own: what you put in) did along these prices.
+        <ConvergeChart
+          picks={convergePicks}
+          model={converge.model}
+          amount={jar.mine && jar.invested > 0 ? jar.invested : 100}
+          range={chartRange}
+          period={active === 'All' ? 'since launch' : `over ${active}`}
+          title={pricesOnly ? 'Past prices of what it holds' : undefined}
+          play={once.play}
+          onDone={once.markPlayed}
+          onScrub={setScrub}
+          gutter={SCREEN.gutter}
+          height={CHART_HEIGHT}
+          footer={rangeTabs}
+        />
+      ) : (
         <>
           <View onLayout={(e) => setWidth(e.nativeEvent.layout.width)}>
             <SkeletonReveal
@@ -643,12 +695,7 @@ function JarBody({
               <PriceChart data={data} width={width} height={CHART_HEIGHT} onScrub={setScrub} />
             </SkeletonReveal>
           </View>
-          {/* A young jar has only All: one tab is no choice, so no tabs. */}
-          {ranges.length > 1 ? (
-            <View style={styles.ranges}>
-              <SegmentedTabs<JarRange> bare options={ranges} value={active} onChange={setRange} />
-            </View>
-          ) : null}
+          {rangeTabs}
         </>
       )}
 

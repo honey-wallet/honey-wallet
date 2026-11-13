@@ -30,13 +30,15 @@ import { useMoney } from '@/lib/fx';
 import { inviteLabel, MAX_FRIENDS, dollars as plainDollars } from '@/lib/group-jar-core';
 import { friendPicks, groupError, startGroup } from '@/lib/group-jars';
 import { tap } from '@/lib/haptics';
-import { type BuyLeg, payJarBuy, quoteJarBuy } from '@/lib/jar-buy';
+import { REFRESH_FAILED } from '@/lib/intents-quote';
+import { type BuyLeg, payJarBuy, QuoteRanOut, quoteJarBuy } from '@/lib/jar-buy';
 import { blockedRoutes, describeRoute, useRoutes } from '@/lib/jar-routes';
 import { useBasketChart, useTokenChart } from '@/lib/market';
 import { formatUsd } from '@/lib/mock-wallet';
 import { memberName, propose, useActiveMultisig } from '@/lib/multisig';
 import { SHEET_EXIT } from '@/lib/navigation';
 import { jarPayWith } from '@/lib/pay-with';
+import { refreshAfterChange } from '@/lib/portfolio';
 import { useProfile } from '@/lib/profile';
 import { JAR_VISIBILITY, settings, useSettings } from '@/lib/settings';
 import { COPY_FEES } from '@/lib/surface';
@@ -380,10 +382,22 @@ export default function NewThesisSheet() {
       let sent: BuyLeg[] = [];
       let legCount = 0;
       try {
-        const quoted = await quoteJarBuy(routes, maxSlip / 100, {}, jarPayWith.get());
-        legCount = quoted.legs.length;
-        buy = await payJarBuy(quoted.legs, (legs) => {
-          sent = legs.filter((l) => l.txHash);
+        const quoteAndPay = async (again: boolean) => {
+          const quoted = await quoteJarBuy(routes, maxSlip / 100, {}, jarPayWith.get()).catch(
+            (e: unknown) => {
+              throw again ? new Error(REFRESH_FAILED) : e;
+            },
+          );
+          legCount = quoted.legs.length;
+          return payJarBuy(quoted.legs, (legs) => {
+            sent = legs.filter((l) => l.txHash);
+          });
+        };
+        // A quote that ran out before anything was paid (the confirm prompt sat open):
+        // quoted once more, and confirmed again.
+        buy = await quoteAndPay(false).catch((e: unknown) => {
+          if (e instanceof QuoteRanOut) return quoteAndPay(true);
+          throw e;
         });
         toast = 'Paid. Swaps are on their way';
       } catch (error) {
@@ -399,6 +413,8 @@ export default function NewThesisSheet() {
         toast = `Paid ${sent.length} of ${legCount} swaps. ${text}`;
       }
       setBuying(false);
+      // The payment leaves now; the tokens follow as each swap settles (lib/in-flight).
+      refreshAfterChange(activeWallet);
     }
     const id = createThesisJar(proposal, { ...options, buy });
     showToast(toast);

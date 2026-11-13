@@ -43,9 +43,13 @@ import {
   checkDeadline,
   checkOneClickRecord,
   checkOneClickTerms,
+  DEADLINE_MARGIN_MS,
   MAX_SLIPPAGE_BPS,
   MIN_VALUE_KEPT,
   minWithinSlippage,
+  msLeft,
+  QuoteRanOut,
+  REQUOTE_BELOW_MS,
   recipientOn,
   sameAddress,
 } from '@/lib/intents-quote';
@@ -100,7 +104,7 @@ export type PayToken = {
   contract: string | null;
 };
 
-export { checkDeadline, MAX_SLIPPAGE_BPS };
+export { checkDeadline, MAX_SLIPPAGE_BPS, QuoteRanOut };
 /**
  * Hard client-side ceiling, whatever cap the server reports. Like Swap's
  * (lib/intents-swap `MAX_SWAP_USD`), `EXPO_PUBLIC_MAX_SWAP_USD` can only lower it for a
@@ -684,11 +688,18 @@ export async function payJarBuy(
   const from = wallet.addresses.evm as Hex;
   const total = legs.reduce((s, l) => s + legMicro(l), 0n);
   if (total > toMicro(MAX_BUY_USD)) throw new Error(`Buys are capped at $${MAX_BUY_USD}.`);
+  // Deadlines on the server's clock (lib/server-clock.ts). A quote about to run out is
+  // quoted again by the caller (QuoteRanOut) rather than signed.
+  const runningOut = (margin: number) => legs.some((l) => !(msLeft(l.deadline) >= margin));
+  if (runningOut(REQUOTE_BELOW_MS)) throw new QuoteRanOut();
   for (const l of legs) checkDeadline(l.deadline);
   if (
     !(await d.confirm(reason ?? `Buy $${fromMicro(total).toFixed(2)} across ${legs.length} swaps`))
   )
     throw new Error('Buy cancelled.');
+  // The prompt may have sat open: check every leg before paying any, so a buy never
+  // stops halfway on a quote that ran out.
+  if (runningOut(DEADLINE_MARGIN_MS)) throw new QuoteRanOut();
   const out = legs.map((l) => ({ ...l }));
   const onBase = out.some((l) => (l.origin ?? 'Base') === 'Base');
   const network = evmNetwork(BASE_CHAIN_ID);

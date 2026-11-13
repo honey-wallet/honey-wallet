@@ -34,6 +34,7 @@ import {
   isTokenInfo,
   isTokenLogos,
   isTokenMarket,
+  type PortfolioReadOptions,
   portfolioQuery,
 } from './portfolio';
 import { isPriceSnapshot, type PriceStreamOptions, subscribePrices } from './prices';
@@ -315,11 +316,27 @@ export function createApiClient({ baseUrl, fetch: fetchImpl = fetch }: ApiClient
         init,
       ),
     /** Balances on every supported chain for these public addresses, priced in USD. Public. */
-    portfolioBalances: (addresses: PortfolioAddresses, init?: RequestInit) =>
-      validated(`/api/v1/portfolio/balances?${portfolioQuery(addresses)}`, isPortfolio, init),
+    portfolioBalances: (
+      addresses: PortfolioAddresses,
+      init?: RequestInit,
+      options?: PortfolioReadOptions,
+    ) =>
+      validated(
+        `/api/v1/portfolio/balances?${portfolioQuery(addresses, options)}`,
+        isPortfolio,
+        init,
+      ),
     /** Recent on-chain transactions for these public addresses, newest first. Public. */
-    portfolioActivity: (addresses: PortfolioAddresses, init?: RequestInit) =>
-      validated(`/api/v1/portfolio/activity?${portfolioQuery(addresses)}`, isChainActivity, init),
+    portfolioActivity: (
+      addresses: PortfolioAddresses,
+      init?: RequestInit,
+      options?: PortfolioReadOptions,
+    ) =>
+      validated(
+        `/api/v1/portfolio/activity?${portfolioQuery(addresses, options)}`,
+        isChainActivity,
+        init,
+      ),
     /** Up to 90 daily closes for one pool. Public. */
     poolHistory: (chain: string, pool: string, init?: RequestInit) =>
       request<{ closes: number[] }>(

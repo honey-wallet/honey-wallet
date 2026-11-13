@@ -10,7 +10,9 @@ import { dollars } from '@/lib/group-jar-core';
 import { groupError, payShare, useGroup } from '@/lib/group-jars';
 import { success, tap } from '@/lib/haptics';
 import { useMyNearUsdc } from '@/lib/jar-dao';
+import { refreshAfterChange } from '@/lib/portfolio';
 import { showErrorToast } from '@/lib/toast';
+import { useActiveWallet } from '@/lib/wallets';
 import { makeStyles, useTheme } from '@/theme';
 
 const PAGES = ['review', 'done'] as const;
@@ -28,6 +30,7 @@ export default function GroupPayTray() {
   const [page, setPage] = useState<(typeof PAGES)[number]>('review');
   const [sending, setSending] = useState(false);
   const nearUsdc = useMyNearUsdc(!!g);
+  const wallet = useActiveWallet();
   if (!g) return null;
   const share = dollars(g.shareUsd);
   const fromNear = nearUsdc !== null && nearUsdc >= g.shareUsd;
@@ -38,10 +41,14 @@ export default function GroupPayTray() {
     try {
       await payShare(g, nearUsdc);
       success();
+      refreshAfterChange(wallet);
       setPage('done');
     } catch (error) {
-      if (!(error instanceof Error && /cancel/i.test(error.message)))
+      if (!(error instanceof Error && /cancel/i.test(error.message))) {
         showErrorToast(groupError(error));
+        // It may have been paid before Honey heard back.
+        refreshAfterChange(wallet);
+      }
     } finally {
       setSending(false);
     }

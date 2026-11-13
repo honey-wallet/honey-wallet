@@ -41,6 +41,7 @@ import { shortAddress } from '@/lib/mock-wallet';
 import { hostOf, multisigOf, propose, useMultisigState } from '@/lib/multisig';
 import { goBackOr } from '@/lib/navigation';
 import { isWeb } from '@/lib/platform';
+import { refreshAfterChange } from '@/lib/portfolio';
 import { useProfile } from '@/lib/profile';
 import { LANDING } from '@/lib/surface';
 import {
@@ -313,6 +314,9 @@ function Request({ approval, onAnswered }: { approval: Approval; onAnswered: () 
             ? evmSendPreparation.prepared
             : undefined;
         await send(await performApproval(approval, signer?.wallet.id ?? '', prepared));
+        // A site's transaction moved money: show it in the balance and Activity.
+        if (signer && (approval.kind === 'evmSend' || approval.kind === 'solanaSend'))
+          refreshAfterChange(signer.wallet);
       }
       success();
     } catch (e) {

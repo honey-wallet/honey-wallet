@@ -263,6 +263,35 @@ export function useHoldingsChart(
   return { history, loading, charted };
 }
 
+/**
+ * Several tokens' charts over `range` with their times, for lining them up (the converge
+ * chart and the jar builder's preview). `series` has an entry per symbol whose chart has
+ * loaded; `loading` is true until every one has answered (a failure counts as answered).
+ * `series` keeps its identity until a chart changes, so lines aren't rebuilt per render.
+ */
+export function useChartSeries(symbols: string[], range: ChartRangeId, enabled = true) {
+  const all = charts.useValue();
+  const key = symbols.filter(Boolean).join(',');
+  useEffect(() => {
+    if (!enabled) return;
+    for (const s of key.split(',').filter(Boolean)) void loadChart(s, range);
+  }, [key, range, enabled]);
+  const list = key ? key.split(',') : [];
+  const entries = list.map((s) => all[`${s}:${range}`]);
+  const loading = enabled && entries.some((e) => !e || (e.loading && !e.prices));
+  const loaded = entries.map((e) => `${e?.at ?? 0}:${e?.prices?.length ?? 0}`).join(',');
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `key` and `loaded` stand for the inputs.
+  const series = useMemo(() => {
+    const out: Record<string, PriceSeries> = {};
+    list.forEach((s, i) => {
+      const e = entries[i];
+      if (e?.prices && e.times) out[s] = { times: e.times, prices: e.prices };
+    });
+    return out;
+  }, [key, range, loaded]);
+  return { series, loading };
+}
+
 /** Points in a basket's combined series. */
 const BASKET_POINTS = 32;
 

@@ -4,15 +4,20 @@
  * where money goes: these run on the device before anything is signed.
  */
 import type { OneClickStatus } from '@honey-wallet/api-client';
+import { serverNow } from '@/lib/server-clock';
 
 /** Highest slippage the app ever asks for or accepts, matching the server. */
 export const MAX_SLIPPAGE_BPS = 300;
 /** A swap or jar-buy leg whose guaranteed minimum keeps less than this share of the value is refused. */
 export const MIN_VALUE_KEPT = 0.5;
 /** A quote must leave at least this long to sign and land the deposit. */
-const DEADLINE_MARGIN_MS = 60_000;
+export const DEADLINE_MARGIN_MS = 60_000;
+/** Under this long left at Confirm, a fresh quote is fetched before signing. */
+export const REQUOTE_BELOW_MS = 90_000;
 /** The server asks for 15-minute quotes; anything far longer was not ours. */
 const MAX_DEADLINE_MS = 30 * 60_000;
+/** What a failed re-quote says: never "expired", which only sent people round again. */
+export const REFRESH_FAILED = 'Couldn’t refresh the price. Try again.';
 
 /** A positive-or-zero integer amount in atomic units, or null when it isn't one. */
 export const atomic = (s: unknown) =>
@@ -25,6 +30,13 @@ export const sameAddress = (a: unknown, b: string) =>
 
 export const quoteChanged = () => new Error('The quote changed. Review again.');
 
+/** The quote ran out (or nearly) before it was signed, while a prompt sat open: nothing was paid. */
+export class QuoteRanOut extends Error {
+  constructor() {
+    super('The price ran out before you confirmed. Nothing was sent.');
+  }
+}
+
 /** Your address on a chain: Solana and NEAR have their own, every EVM chain shares one. */
 export function recipientOn(
   chain: string,
@@ -35,10 +47,17 @@ export function recipientOn(
   return addresses.evm;
 }
 
-/** Throws unless the deadline leaves time to pay and is not implausibly far off. */
-export function checkDeadline(deadline: string, now = Date.now()) {
-  const at = Date.parse(deadline);
-  if (!Number.isFinite(at) || at < now + DEADLINE_MARGIN_MS || at > now + MAX_DEADLINE_MS)
+/** Milliseconds a deadline leaves, on the server's clock (NaN when it isn't a time). */
+export const msLeft = (deadline: string, now = serverNow()) => Date.parse(deadline) - now;
+
+/**
+ * Throws unless the deadline leaves time to pay and is not implausibly far off. `now` is
+ * the server's clock (lib/server-clock.ts): a phone running minutes fast or slow must not
+ * see a fresh quote as expired, or an old one as fresh.
+ */
+export function checkDeadline(deadline: string, now = serverNow()) {
+  const left = msLeft(deadline, now);
+  if (!Number.isFinite(left) || left < DEADLINE_MARGIN_MS || left > MAX_DEADLINE_MS)
     throw new Error('The quote expired. Review again.');
 }
 

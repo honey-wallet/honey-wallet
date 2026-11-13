@@ -26,10 +26,12 @@ import {
   sellIntoChain,
 } from '@/lib/jar-sell';
 import { formatUsd, nativeCoinOf } from '@/lib/mock-wallet';
+import { refreshAfterChange } from '@/lib/portfolio';
 import { SOON } from '@/lib/surface';
 import { TEST_MODE } from '@/lib/test-mode';
 import { jarValue, thesisJars, useThesisJars } from '@/lib/thesis';
 import { showErrorToast } from '@/lib/toast';
+import { useActiveWallet } from '@/lib/wallets';
 import { makeStyles, useTheme } from '@/theme';
 
 const TRAY_PAGES = ['review', 'sold'] as const;
@@ -52,6 +54,7 @@ export default function JarSellRoute() {
 function JarSellSheet() {
   const { id = '' } = useLocalSearchParams<{ id?: string }>();
   const live = useThesisJars().find((j) => j.id === id);
+  const wallet = useActiveWallet();
   // Kept from when the screen opened: selling all of it removes the jar.
   const [jar] = useState(live);
   const styles = useStyles();
@@ -136,6 +139,7 @@ function JarSellSheet() {
         // One Face ID for every swap, inside executeJarSell; each token goes out in turn.
         await executeJarSell(live ?? jar, quote, () => mounted.current);
         success();
+        refreshAfterChange(wallet);
         setPage('sold');
         return;
       }
@@ -160,8 +164,11 @@ function JarSellSheet() {
       success();
       setPage('sold');
     } catch (error) {
-      if (!(error instanceof Error && /cancel/i.test(error.message)))
+      if (!(error instanceof Error && /cancel/i.test(error.message))) {
         showErrorToast(error instanceof Error ? error.message : 'Couldn’t sell');
+        // Part of it may have gone out before the failure.
+        if (real) refreshAfterChange(wallet);
+      }
     } finally {
       setSelling(false);
     }
