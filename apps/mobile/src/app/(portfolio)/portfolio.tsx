@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
 import { Avatar } from '@/components/Avatar';
+import { ActivitySection } from '@/components/activity/ActivitySection';
 import { DonutChart } from '@/components/charts/DonutChart';
 import { ChartEmpty, PriceChart } from '@/components/charts/PriceChart';
 import { Icon } from '@/components/Icon';
@@ -21,7 +22,7 @@ import { TextSoftSwap } from '@/components/motion/TextSoftSwap';
 import { TextSwap } from '@/components/motion/TextSwap';
 import { PillButton } from '@/components/onboarding/PillButton';
 import { ActionFooter } from '@/components/sheets/ActionFooter';
-import { PushedScreen, TokenIcon } from '@/components/wallet/parts';
+import { EmptyState, PushedScreen, TokenIcon } from '@/components/wallet/parts';
 import { SHOW_DEMO_LABELS } from '@/lib/demo-money-copy';
 import { LOADS } from '@/lib/loads';
 import { useHoldingsChart } from '@/lib/market';
@@ -40,7 +41,7 @@ import {
   TOKENS,
 } from '@/lib/mock-wallet';
 import { isWeb } from '@/lib/platform';
-import { addressesOf, refreshBalances } from '@/lib/portfolio';
+import { addressesOf, refreshBalances, usePortfolio } from '@/lib/portfolio';
 import { useProfile } from '@/lib/profile';
 import { showErrorToast, showToast } from '@/lib/toast';
 import { tokenColor } from '@/lib/token-colors';
@@ -113,6 +114,9 @@ export default function PortfolioScreen() {
   // priced along each token's chart (portfolio-history.ts), said so under the chart. There's
   // no cost basis, so Performance is each holding's move over the range, not returns.
   const live = 'live' in view;
+  // Emptied out (it had money before): its history still shows, under the empty state.
+  const pastActivity = usePortfolio(wallet, live && empty).activity ?? [];
+  const hadMoney = live && empty && pastActivity.length > 0;
   const holdingsChart = useHoldingsChart(live ? view.tokens : [], range, live && !empty);
   const history = live ? holdingsChart.history : null;
   const chartLoading = loading || (live && holdingsChart.loading);
@@ -235,17 +239,30 @@ export default function PortfolioScreen() {
         </View>
       )}
 
-      {/* A real wallet with nothing in it has no history at all: no chart and no ranges. */}
-      {live && empty ? null : (
+      {/* Nothing in it: no chart, ranges or returns to show, so say what fills this page
+          (Deposit stays the footer's one button), then any past activity. */}
+      {empty ? (
+        <>
+          <EmptyState
+            icon="wallet"
+            title="No money here yet"
+            hint="Deposit or receive crypto to see your balance, chart and tokens"
+          />
+          {hadMoney ? (
+            <View style={[styles.section, styles.gutter]}>
+              <Text style={styles.heading}>Activity</Text>
+              <ActivitySection />
+            </View>
+          ) : null}
+        </>
+      ) : (
         <>
           <View style={styles.chart}>
             <SkeletonReveal
               loading={chartLoading}
               skeleton={<SkeletonChart height={CHART_HEIGHT} />}
             >
-              {empty ? (
-                <ChartEmpty height={CHART_HEIGHT} text="Your balance over time shows up here" />
-              ) : live && !history ? (
+              {live && !history ? (
                 // No token has a chart for this range: never a line drawn in.
                 <ChartEmpty height={CHART_HEIGHT} />
               ) : (
@@ -298,7 +315,7 @@ export default function PortfolioScreen() {
       ) : null}
 
       {/* Returns need a cost basis, which only the sample data has. */}
-      {live ? null : (
+      {live || empty ? null : (
         <View style={[styles.section, styles.gutter]}>
           <View style={styles.sectionHeader}>
             <Text style={styles.heading}>Performance</Text>

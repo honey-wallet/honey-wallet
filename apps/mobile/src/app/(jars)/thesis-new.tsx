@@ -26,6 +26,7 @@ import { AddFace, FACE, FaceRow, FaceTile } from '@/components/social/FaceTile';
 import { SocialAvatar, Trend } from '@/components/social/parts';
 import { Chip } from '@/components/wallet/Chip';
 import { EmptyState } from '@/components/wallet/parts';
+import { useMoney } from '@/lib/fx';
 import { inviteLabel, MAX_FRIENDS, dollars as plainDollars } from '@/lib/group-jar-core';
 import { friendPicks, groupError, startGroup } from '@/lib/group-jars';
 import { tap } from '@/lib/haptics';
@@ -995,9 +996,6 @@ const useStyles = makeStyles((c) => ({
   routeText: { color: c.textSecondary, fontSize: 13, lineHeight: 18 },
 }));
 
-/** A dollar amount without empty cents: $5, $12.50. */
-const dollars = (usd: number) => formatUsd(usd).replace(/\.00$/, '');
-
 /**
  * A token of the split that can't be bought right now: logo and symbol, its week's move
  * in the feed's pill, its dollars and share, then why, and its fixes (a stand-in to use
@@ -1021,6 +1019,8 @@ function SplitRow({
 }) {
   const styles = useStyles();
   const c = useTheme();
+  // In the currency the amount above is typed in, without empty cents: $5, ₹420.
+  const money = useMoney();
   const chart = useTokenChart(pick.symbol, '1W');
   const prices = chart.prices;
   const first = prices[0] ?? 0;
@@ -1043,7 +1043,7 @@ function SplitRow({
           </View>
         </View>
         <View style={[styles.splitShare, styles.splitShareEnd]}>
-          <Text style={styles.splitPct}>{dollars(usd)}</Text>
+          <Text style={styles.splitPct}>{money.format(usd).replace(/\.00$/, '')}</Text>
           <Text style={styles.splitUsd}>{pick.weight}%</Text>
         </View>
       </View>

@@ -99,6 +99,7 @@ import type {
   SocialJar,
   SocialJarSort,
   SocialLeaderboardWindow,
+  SocialPerson,
   SocialPost,
   SocialPostRequest,
   SocialPrivacy,
@@ -887,6 +888,27 @@ export function createApiClient({ baseUrl, fetch: fetchImpl = fetch }: ApiClient
         ...authorizedJson(accessToken, privacy),
         method: 'PUT',
       }),
+    /**
+     * People whose handle starts with `query`, or whose name (or a word in it) does:
+     * the exact handle first, then handles, then names, most followers first. Public;
+     * signed in adds `followedByMe`. 400 under 2 characters (after a leading @), 429
+     * when searched too often.
+     */
+    socialPeople: (
+      query: string,
+      {
+        accessToken,
+        limit,
+        signal,
+      }: { accessToken?: string | null; limit?: number; signal?: AbortSignal } = {},
+    ) => {
+      const params = new URLSearchParams({ q: query.trim() });
+      if (limit != null) params.set('limit', String(limit));
+      return request<SocialPerson[]>(
+        `/api/v1/social/people?${params.toString()}`,
+        maybeAuthorized(accessToken, signal ? { signal } : undefined),
+      );
+    },
     socialProfile: (handle: string, accessToken?: string | null) =>
       request<SocialProfile>(handlePath(handle), maybeAuthorized(accessToken)),
     socialFollow: (accessToken: string, handle: string) =>

@@ -17,7 +17,7 @@ export type ReceiveAddress = {
 
 const FAMILIES: Record<ChainFamily, Omit<ReceiveAddress, 'family' | 'address' | 'uri'>> = {
   evm: {
-    title: 'Ethereum & Base',
+    title: 'Ethereum, Base, Arbitrum or Polygon',
     name: 'Ethereum, Base, Arbitrum and Polygon',
     symbol: 'ETH',
   },

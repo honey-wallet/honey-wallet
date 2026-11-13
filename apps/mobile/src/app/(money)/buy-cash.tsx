@@ -19,13 +19,15 @@ import { FailurePage } from '@/components/sheets/FailurePage';
 import { closeSheet, SHEET, SheetScreen, StatRow } from '@/components/sheets/Sheet';
 import { finishDemo, SuccessPage } from '@/components/sheets/SuccessPage';
 import { FlowTray, InlineTray } from '@/components/sheets/Tray';
-import { applyKey, Keypad, TypedAmount } from '@/components/wallet/Keypad';
+import { applyKey, Keypad, TypedAmount, trimNumber } from '@/components/wallet/Keypad';
 import { LiveProposedPage } from '@/components/wallet/MultisigParts';
 import { EmptyState, TokenIcon } from '@/components/wallet/parts';
 import { demoLabel } from '@/lib/demo-money-copy';
+import { useMoney } from '@/lib/fx';
 import { success, tap } from '@/lib/haptics';
 import { LOADS } from '@/lib/loads';
-import { formatBalance, formatPrice, formatUsd, MARKET, marketOf } from '@/lib/mock-wallet';
+import { formatBalance, formatPrice, MARKET, marketOf } from '@/lib/mock-wallet';
+import { type Money, quickAmount } from '@/lib/money';
 import { type ProposalAction, propose, useSigner } from '@/lib/multisig';
 import { leaveSheetTo } from '@/lib/navigation';
 import { markDemoFunded, useOnboarding } from '@/lib/onboarding';
@@ -79,6 +81,8 @@ function DemoBuyCashSheet() {
   const selling = mode === 'sell';
   const styles = useStyles();
   const c = useTheme();
+  // Cash is typed and shown in Settings' Local currency (lib/fx); `value` is its dollars.
+  const money = useMoney();
 
   // Buy anything on the market; sell only what you hold (a shared wallet, its own).
   const signer = useSigner();
@@ -95,20 +99,22 @@ function DemoBuyCashSheet() {
     initial && symbols.includes(initial) ? initial : selling ? symbols[0] : 'ETH',
   );
   // A preset amount (Home's $25 / $50 / $100) goes straight to the review.
-  const [amount, setAmount] = useState(preset ?? '');
+  const [amount, setAmount] = useState(() =>
+    preset ? trimNumber(money.fromUsd(Number(preset) || 0), money.decimals) : '',
+  );
   const [method, setMethod] = useState<Method>('card');
   const [picking, setPicking] = useState(false);
   const [page, setPage] = useState<Page>(preset ? 'review' : 'amount');
 
   const price = marketOf(symbol)?.price ?? 1;
   const held = owned.find((t) => t.symbol === symbol);
-  const value = Number(amount) || 0;
+  const value = money.toUsd(Number(amount) || 0);
   const onboarding = useOnboarding();
   const tokenValue = value / price;
   const fee = value * METHODS[method].fee;
   // Value holdings at the same price as the quote, so Max always fits.
   const heldUsd = (held?.amount ?? 0) * price;
-  const insufficient = selling && value > heldUsd + 1e-9;
+  const insufficient = selling && value > heldUsd + money.toUsd(0.5 / 10 ** money.decimals);
   const ready = value > 0 && !insufficient;
   const label = !value ? 'Enter an amount' : insufficient ? 'Insufficient balance' : 'Continue';
   // Selling past what you hold shakes the amount once, with the error haptic.
@@ -153,8 +159,8 @@ function DemoBuyCashSheet() {
   };
 
   const quick = selling
-    ? [...QUICK.map((q) => ({ label: `$${q}`, value: String(q) })), maxChip(heldUsd)]
-    : QUICK.map((q) => ({ label: `$${q}`, value: String(q) }));
+    ? [...QUICK.map((q) => quickChip(money, q)), maxChip(money, heldUsd)]
+    : QUICK.map((q) => quickChip(money, q));
 
   // Nothing held means nothing to sell: offer buying instead of an empty token list.
   if (selling && symbols.length === 0) {
@@ -220,7 +226,7 @@ function DemoBuyCashSheet() {
               </Accordion>
             </View>
             <Animated.View style={shaken}>
-              <TypedAmount value={amount} prefix="$" size={amount.length > 8 ? 44 : 60} />
+              <TypedAmount value={amount} prefix={money.sign} size={amount.length > 8 ? 44 : 60} />
             </Animated.View>
             {loading ? (
               <View style={styles.convertLine}>
@@ -235,7 +241,7 @@ function DemoBuyCashSheet() {
               <SkeletonBar width={170} height={12} />
             ) : selling && held ? (
               <Text style={styles.held}>
-                You have {formatBalance(held.amount)} {symbol} ({formatUsd(heldUsd)})
+                You have {formatBalance(held.amount)} {symbol} ({money.format(heldUsd)})
               </Text>
             ) : null}
             <View style={styles.quick}>
@@ -274,7 +280,7 @@ function DemoBuyCashSheet() {
             <Icon name="chevronRight" size={14} color={c.textSecondary} />
           </PressableRow>
 
-          <Keypad onKey={(key) => setAmount((a) => applyKey(a, key, 2))} />
+          <Keypad onKey={(key) => setAmount((a) => applyKey(a, key, money.decimals))} />
         </View>
         <PillButton
           label={label}
@@ -297,7 +303,7 @@ function DemoBuyCashSheet() {
                     rows={[
                       {
                         label: selling ? 'Selling' : 'Buying',
-                        value: `${formatUsd(value)} of ${symbol}`,
+                        value: `${money.format(value)} of ${symbol}`,
                       },
                       { label: selling ? 'To' : 'With', value: METHODS[method].label },
                     ]}
@@ -337,9 +343,9 @@ function DemoBuyCashSheet() {
                     rows={[
                       {
                         label: selling ? 'You get' : 'You paid',
-                        value: formatUsd(selling ? value - fee : value),
+                        value: money.format(selling ? value - fee : value),
                       },
-                      { label: 'Fee', value: formatUsd(fee) },
+                      { label: 'Fee', value: money.format(fee) },
                       { label: selling ? 'To' : 'With', value: METHODS[method].label },
                       {
                         // The provider's order id, to quote to support.
@@ -369,7 +375,10 @@ function DemoBuyCashSheet() {
                   </View>
                   <View style={styles.rule} />
                   <View style={styles.rows}>
-                    <StatRow label="Rate" value={`1 ${symbol} = ${formatPrice(price)}`} />
+                    <StatRow
+                      label="Rate"
+                      value={`1 ${symbol} = ${money.code === 'USD' ? formatPrice(price) : money.format(price)}`}
+                    />
                     <StatRow
                       label={selling ? 'Receive to' : 'Pay with'}
                       value={
@@ -381,7 +390,7 @@ function DemoBuyCashSheet() {
                     />
                     <StatRow
                       label={`Provider fee (${(METHODS[method].fee * 100).toFixed(2)}%)`}
-                      value={formatUsd(fee)}
+                      value={money.format(fee)}
                     />
                     <StatRow label="Network cost" value="<$0.01" />
                     {selling && signer.rule(sellAction) ? (
@@ -390,7 +399,9 @@ function DemoBuyCashSheet() {
                     <StatRow
                       label={selling ? 'You receive' : 'Total'}
                       value={
-                        <Text style={styles.total}>{formatUsd(selling ? value - fee : value)}</Text>
+                        <Text style={styles.total}>
+                          {money.format(selling ? value - fee : value)}
+                        </Text>
                       }
                     />
                   </View>
@@ -413,10 +424,16 @@ function DemoBuyCashSheet() {
   );
 }
 
-function maxChip(usd: number) {
-  // Round down to the cent so Max never asks for more than you hold.
-  const cents = Math.floor(usd * 100) / 100;
-  return { label: 'Max', value: String(cents) };
+function maxChip(money: Money, usd: number) {
+  // Round down to the cent (the unit) so Max never asks for more than you hold.
+  const unit = 10 ** money.decimals;
+  return { label: 'Max', value: String(Math.floor(money.fromUsd(usd) * unit) / unit) };
+}
+
+/** A quick amount in the Local currency: $50, or ₹4,300 in rupees. */
+function quickChip(money: Money, usd: number) {
+  const v = quickAmount(money, usd);
+  return { label: money.format(money.toUsd(v)).replace(/\.0+$/, ''), value: String(v) };
 }
 
 const useStyles = makeStyles((c) => ({

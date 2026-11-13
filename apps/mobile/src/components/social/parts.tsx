@@ -555,6 +555,8 @@ export function CopyStepper({
   onCopy,
   primary,
   verb = 'Copy',
+  start: startAmount,
+  onAmount,
 }: {
   /** The word before the amount: Copy for someone's jar, Create jar for your own idea. */
   verb?: string;
@@ -562,6 +564,10 @@ export function CopyStepper({
   onCopy: (amount: number) => void;
   /** The page's main action (a jar's footer): Copy in honey at full size, − and + grey. */
   primary?: boolean;
+  /** Starts (and stays) at this amount's step instead of the Settings default. */
+  start?: number;
+  /** Told the amount whenever − or + changes it. */
+  onAmount?: (amount: number) => void;
 }) {
   const styles = useStyles();
   const c = useTheme();
@@ -573,13 +579,14 @@ export function CopyStepper({
   const reduced = useReducedMotion();
   // Starts at the amount chosen in Settings › Default copy amount (5 USDC unless changed).
   const { copyAmount } = useSettings();
-  const start = Math.max(0, (COPY_STEPS as readonly number[]).indexOf(copyAmount));
+  const start = Math.max(0, (COPY_STEPS as readonly number[]).indexOf(startAmount ?? copyAmount));
   const [at, setAt] = useState(start);
-  // A new default applies to steppers that haven't been touched yet.
+  // A new default applies to steppers that haven't been touched yet; a given start always.
   const [touched, setTouched] = useState(false);
+  const pinned = startAmount !== undefined;
   useEffect(() => {
-    if (!touched) setAt(start);
-  }, [start, touched]);
+    if (!touched || pinned) setAt(start);
+  }, [start, touched, pinned]);
   const [direction, setDirection] = useState<'up' | 'down'>('up');
   const nudge = useSharedValue(0);
   const amount = COPY_STEPS[at] ?? COPY_STEPS[0] ?? 5;
@@ -603,6 +610,7 @@ export function CopyStepper({
     setDirection(by > 0 ? 'up' : 'down');
     setTouched(true);
     setAt(next);
+    onAmount?.(COPY_STEPS[next] ?? amount);
   };
   const nudged = useAnimatedStyle(() => ({ transform: [{ translateX: nudge.get() }] }));
   const glide = reduced ? undefined : AMOUNT_GLIDE;

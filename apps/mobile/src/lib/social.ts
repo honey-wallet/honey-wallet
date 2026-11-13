@@ -5,6 +5,7 @@ import {
   type SocialHolders,
   type SocialJar,
   type SocialLeaderboardWindow,
+  type SocialPerson,
   type SocialPost,
   type SocialPrivacy,
   type SocialPrivacyRequest,
@@ -303,15 +304,16 @@ export async function loadProfile(handle: string) {
 
 /**
  * Follows or unfollows at once on screen (count and button), then confirms with the
- * server; a failure puts it back.
+ * server; a failure puts it back. `followingNow` is what the button showed when this
+ * person's profile isn't loaded (a search result says whether you follow them).
  */
-export async function toggleFollow(handle: string) {
+export async function toggleFollow(handle: string, followingNow?: boolean) {
   const token = backendSessionToken();
   if (!token) throw new ApiError(401, 'unauthorized', 'Sign in to continue');
   const state = social.get();
   if (state.pendingFollow[handle]) return;
   const before = state.profiles[handle];
-  const following = before?.followedByMe ?? false;
+  const following = before?.followedByMe ?? followingNow ?? false;
   social.set((s) => ({
     ...s,
     pendingFollow: { ...s.pendingFollow, [handle]: true },
@@ -721,7 +723,14 @@ export function amountText(amount: number) {
   return String(Number(amount.toPrecision(2)));
 }
 
-export type { SocialFeedItem, SocialJar, SocialPost, SocialProfile, SocialProfileCard };
+export type {
+  SocialFeedItem,
+  SocialJar,
+  SocialPerson,
+  SocialPost,
+  SocialProfile,
+  SocialProfileCard,
+};
 
 /**
  * People the phone already knows (feed authors, leaderboard owners, profiles opened)
@@ -749,6 +758,133 @@ export function knownPeople(state: SocialState, query: string, limit = 5): Socia
           .some((word) => word.startsWith(q)),
     )
     .slice(0, limit);
+}
+
+// ---------------------------------------------------------------------------
+// People search (Search's People section; server: GET /social/people)
+
+/** Search asks the server once typing has paused this long. */
+export const PEOPLE_DEBOUNCE_MS = 250;
+/** Shorter searches aren't sent (the server refuses them). */
+export const PEOPLE_MIN_CHARS = 2;
+const HANDLE = /^[a-z0-9_]{3,20}$/;
+
+/** A people search as sent: trimmed, a leading @ dropped, lowercased; null when too short. */
+export function peopleQuery(raw: string): string | null {
+  const q = raw.trim().replace(/^@/, '').trim().toLowerCase();
+  return [...q].length >= PEOPLE_MIN_CHARS ? q : null;
+}
+
+/** A row in the People section: the card, and whether you follow them when known. */
+export type PersonHit = SocialProfileCard & { followedByMe?: boolean; isMe?: boolean };
+
+const personOf = (p: SocialProfile): SocialPerson => ({
+  handle: p.handle,
+  displayName: p.displayName,
+  avatarSeed: p.avatarSeed,
+  followers: p.followers,
+  followedByMe: p.followedByMe,
+  isMe: p.isMe,
+});
+
+/**
+ * People whose handle or name starts with `query` (the server ranks them). A server
+ * without people search yet (404) still finds an exact @handle, as Search did before.
+ */
+export async function findPeople(query: string, signal?: AbortSignal): Promise<SocialPerson[]> {
+  const accessToken = backendSessionToken();
+  try {
+    return await api.socialPeople(query, { accessToken, signal });
+  } catch (error) {
+    if (!isNotFound(error) || !HANDLE.test(query)) throw error;
+    try {
+      return [personOf(await loadProfile(query))];
+    } catch (missing) {
+      if (isNotFound(missing)) return [];
+      throw missing;
+    }
+  }
+}
+
+/**
+ * Searches as you type: waits for a `delay` pause and at least two characters, drops an
+ * answer that arrives after the query moved on, and aborts the request it replaces.
+ * `onResult` gets null when the search failed.
+ */
+export function peopleSearcher(
+  onResult: (query: string, people: SocialPerson[] | null) => void,
+  { search = findPeople, delay = PEOPLE_DEBOUNCE_MS } = {},
+) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let inFlight: AbortController | null = null;
+  let current: string | null = null;
+  const stop = () => {
+    clearTimeout(timer);
+    inFlight?.abort();
+    inFlight = null;
+  };
+  return {
+    update(raw: string) {
+      const q = peopleQuery(raw);
+      if (q === current) return;
+      stop();
+      current = q;
+      if (!q) return;
+      timer = setTimeout(() => {
+        const controller = new AbortController();
+        inFlight = controller;
+        const settle = (people: SocialPerson[] | null) => {
+          if (controller.signal.aborted || current !== q) return;
+          inFlight = null;
+          onResult(q, people);
+        };
+        search(q, controller.signal).then(settle, () => settle(null));
+      }, delay);
+    },
+    stop() {
+      stop();
+      current = null;
+    },
+  };
+}
+
+/**
+ * The server's people for `query` (undefined until it answers, null if it failed), so
+ * Search can show what it already knows meanwhile.
+ */
+export function usePeopleSearch(query: string): SocialPerson[] | null | undefined {
+  const [answer, setAnswer] = useState<{ query: string; people: SocialPerson[] | null }>();
+  const [searcher] = useState(() => peopleSearcher((q, people) => setAnswer({ query: q, people })));
+  useEffect(() => () => searcher.stop(), [searcher]);
+  useEffect(() => searcher.update(query), [searcher, query]);
+  const q = peopleQuery(query);
+  return q && answer?.query === q ? answer.people : undefined;
+}
+
+/**
+ * The People section's rows: the server's answer once it's in (its order: the exact
+ * @handle, other handles, then names), else the people the phone already knows. The
+ * exact @handle always leads; `exclude` (you, in a picker) never shows.
+ */
+export function peopleResults(
+  query: string,
+  server: SocialPerson[] | null | undefined,
+  known: SocialProfileCard[],
+  exclude: readonly string[] = [],
+): PersonHit[] {
+  const q = peopleQuery(query);
+  if (!q) return [];
+  // Test mode's sample friends live only on the phone.
+  const rows: PersonHit[] = server ? (TEST_MODE ? [...server, ...known] : server) : known;
+  const seen = new Set<string>();
+  const out = rows.filter((p) => {
+    if (seen.has(p.handle) || exclude.includes(p.handle)) return false;
+    seen.add(p.handle);
+    return true;
+  });
+  const exact = out.findIndex((p) => p.handle === q);
+  if (exact > 0) out.unshift(...out.splice(exact, 1));
+  return out;
 }
 
 // ---------------------------------------------------------------------------

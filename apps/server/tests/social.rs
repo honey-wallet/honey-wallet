@@ -3605,3 +3605,184 @@ async fn push_tokens_register_and_inbox_events_are_pushed_once() {
 
     db.close().await;
 }
+
+/// A people search from `ip` (the connecting peer), signed in with `token` if given.
+async fn search_people(
+    app: &Router,
+    query: &str,
+    token: Option<&str>,
+    ip: [u8; 4],
+) -> (StatusCode, Value) {
+    let mut request = Request::builder().uri(format!("/social/people?{query}"));
+    if let Some(token) = token {
+        request = request.header("authorization", format!("Bearer {token}"));
+    }
+    let mut request = request.body(Body::empty()).unwrap();
+    request
+        .extensions_mut()
+        .insert(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+            ip, 40000,
+        ))));
+    let response = app.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+fn handles(found: &Value) -> Vec<&str> {
+    found
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["handle"].as_str().unwrap())
+        .collect()
+}
+
+#[tokio::test]
+#[ignore = "requires isolated TEST_DATABASE_URL"]
+async fn people_search_matches_ranks_keeps_to_cards_and_is_rate_limited() {
+    let db = TestDatabase::new().await;
+    let identity = identity(&db);
+    let app = routes::social::router_with_one_click(
+        Some(identity.clone()),
+        None,
+        "http://127.0.0.1:9".into(),
+    );
+    // handle, name, signing key.
+    let people = [
+        ("kai", "Kai Smith", 41),
+        ("kaito", "Kaito", 42),
+        ("kai_lee", "Lee", 43),
+        ("zed", "Mika Kailani", 44),
+        ("nina", "Kaiser Nina", 45),
+        // "kai" inside the handle and a name word, never at a start: not a match.
+        ("okai", "Ok Ai", 46),
+    ];
+    let mut tokens = HashMap::new();
+    for (handle, name, key_byte) in people {
+        let token = bearer(&identity, key_byte).await;
+        let (status, _) = call(
+            &app,
+            "PUT",
+            "/social/me",
+            Some(&token),
+            Some(json!({ "handle": handle, "displayName": name, "bio": "secret bio" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{handle}");
+        tokens.insert(handle, token);
+    }
+    // Signed in without a handle: nothing to find, and searching still works.
+    let lurker = bearer(&identity, 47).await;
+    // kai_lee has 2 followers, nina 1, the rest none.
+    for (who, whom) in [("kai", "kai_lee"), ("kaito", "kai_lee"), ("kai", "nina")] {
+        let (status, _) = call(
+            &app,
+            "POST",
+            &format!("/social/profiles/{whom}/follow"),
+            Some(&tokens[who]),
+            Some(json!({})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+    // Private accounts keep their card, so search still finds them by it.
+    let (status, _) = call(
+        &app,
+        "PUT",
+        "/social/me/privacy",
+        Some(&tokens["nina"]),
+        Some(json!({ "publicProfile": false })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let ip = [198, 51, 100, 7];
+    // The exact handle, then handle prefixes, then names; most followers first in each.
+    let (status, found) = search_people(&app, "q=kai", None, ip).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(handles(&found), ["kai", "kai_lee", "kaito", "nina", "zed"]);
+    // A leading @ and any case; a name matches from any word's start.
+    let (_, found) = search_people(&app, "q=%40KAI", None, ip).await;
+    assert_eq!(handles(&found)[0], "kai");
+    let (_, found) = search_people(&app, "q=MiKa", None, ip).await;
+    assert_eq!(handles(&found), ["zed"]);
+    let (_, found) = search_people(&app, "q=smith", None, ip).await;
+    assert_eq!(handles(&found), ["kai"]);
+    let (_, found) = search_people(&app, "q=kai%20sm", None, ip).await;
+    assert_eq!(handles(&found), ["kai"]);
+    // An underscore is a character, not LIKE's wildcard; `%` likewise.
+    let (_, found) = search_people(&app, "q=kai_", None, ip).await;
+    assert_eq!(handles(&found), ["kai_lee"]);
+    let (_, found) = search_people(&app, "q=k%25", None, ip).await;
+    assert_eq!(handles(&found), Vec::<&str>::new());
+    let (_, found) = search_people(&app, "q=kai&limit=2", None, ip).await;
+    assert_eq!(handles(&found), ["kai", "kai_lee"]);
+    let (_, found) = search_people(&app, "q=kai&limit=500", None, ip).await;
+    assert_eq!(found.as_array().unwrap().len(), 5);
+
+    // Cards only: the private account's bio and everything else stay out.
+    let (_, found) = search_people(&app, "q=nina", None, ip).await;
+    assert_eq!(
+        found,
+        json!([{ "handle": "nina", "displayName": "Kaiser Nina", "avatarSeed": "",
+                 "followers": 1, "followedByMe": false, "isMe": false }])
+    );
+    // Signed in: who you follow, and you.
+    let (_, found) = search_people(&app, "q=kai", Some(&tokens["kai"]), ip).await;
+    let by: HashMap<&str, &Value> = found
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| (p["handle"].as_str().unwrap(), p))
+        .collect();
+    assert_eq!(by["kai"]["isMe"], true);
+    assert_eq!(by["kai_lee"]["followedByMe"], true);
+    assert_eq!(by["kai_lee"]["followers"], 2);
+    assert_eq!(by["nina"]["followedByMe"], true);
+    assert_eq!(by["kaito"]["followedByMe"], false);
+    let (status, found) = search_people(&app, "q=kai", Some(&lurker), ip).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(found.as_array().unwrap().len(), 5);
+
+    // Too short (after the @), missing or unreadable: refused before any lookup.
+    for query in ["q=k", "q=%40k", "q=%20%20", "", "q=ab%E2%80%8B"] {
+        let (status, _) = search_people(&app, query, None, ip).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{query}");
+    }
+    // A bad session is an error, not a signed-out search.
+    let (status, _) = search_people(&app, "q=kai", Some("not-a-token"), ip).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    // Per address signed out: one address runs out, another doesn't.
+    let flood = [203, 0, 113, 9];
+    let mut limited = false;
+    for _ in 0..=(2 * routes::social::PEOPLE_PER_MINUTE) {
+        let (status, _) = search_people(&app, "q=kai", None, flood).await;
+        if status == StatusCode::TOO_MANY_REQUESTS {
+            limited = true;
+            break;
+        }
+        assert_eq!(status, StatusCode::OK);
+    }
+    assert!(limited, "signed-out searches from one address are limited");
+    let (status, _) = search_people(&app, "q=kai", None, [203, 0, 113, 10]).await;
+    assert_eq!(status, StatusCode::OK);
+    // Per user signed in, whatever the address.
+    let mut limited = false;
+    for i in 0..=(2 * routes::social::PEOPLE_PER_MINUTE) {
+        let ip = [192, 0, 2, (i % 250) as u8];
+        let (status, _) = search_people(&app, "q=kai", Some(&lurker), ip).await;
+        if status == StatusCode::TOO_MANY_REQUESTS {
+            limited = true;
+            break;
+        }
+        assert_eq!(status, StatusCode::OK);
+    }
+    assert!(limited, "a signed-in user's searches are limited");
+
+    db.close().await;
+}

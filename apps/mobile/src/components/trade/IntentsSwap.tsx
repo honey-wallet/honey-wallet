@@ -15,6 +15,7 @@ import { InFlightBar } from '@/components/wallet/InFlightBar';
 import { applyKey, Keypad, PercentChips, TypedAmount } from '@/components/wallet/Keypad';
 import { SCREEN, TokenIcon } from '@/components/wallet/parts';
 import { backendSession, backendSessionToken } from '@/lib/backend-session';
+import { useMoney } from '@/lib/fx';
 import { success, tap } from '@/lib/haptics';
 import {
   canBuyRef,
@@ -40,7 +41,7 @@ import {
   unsupportedReason,
   useIntentsSwaps,
 } from '@/lib/intents-swap';
-import { formatBalance, formatUsd } from '@/lib/mock-wallet';
+import { formatBalance } from '@/lib/mock-wallet';
 import type { SendPlan } from '@/lib/send';
 import { shareTrade } from '@/lib/social';
 import { type TokenRef, updateSwap, useSwap } from '@/lib/swap';
@@ -116,6 +117,8 @@ type TrayState =
 
 function IntentsSwapForm() {
   const styles = useStyles();
+  // Dollar values read in Settings' Local currency (lib/fx); amounts stay in tokens.
+  const money = useMoney();
   const c = useTheme();
   const wallet = useActiveWallet();
   const stored = useSwap();
@@ -331,7 +334,7 @@ function IntentsSwapForm() {
           </View>
           <View style={styles.cardRow}>
             <Text style={styles.meta}>
-              {sellPrice && typed ? `≈ ${formatUsd(typed * sellPrice)}` : sell.chain}
+              {sellPrice && typed ? `≈ ${money.format(typed * sellPrice)}` : sell.chain}
             </Text>
             <PressableScale
               accessibilityRole="button"
@@ -382,7 +385,7 @@ function IntentsSwapForm() {
             </View>
           ) : current ? (
             <Text style={styles.meta}>
-              {current.usdOutMin !== null ? `≈ ${formatUsd(current.usdOutMin)} · ` : ''}
+              {current.usdOutMin !== null ? `≈ ${money.format(current.usdOutMin)} · ` : ''}
               {arrivesIn(current.timeEstimate)}
             </Text>
           ) : estimate ? (
@@ -569,6 +572,8 @@ function ReviewStep({
   onConfirm: (plan: SendPlan) => void;
 }) {
   const styles = useStyles();
+  // Dollar values read in Settings' Local currency (lib/fx); amounts stay in tokens.
+  const money = useMoney();
   const c = useTheme();
   const [plan, setPlan] = useState<SendPlan | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -592,14 +597,14 @@ function ReviewStep({
   return (
     <View>
       <SheetHeader title="Review swap" />
-      <Leg title="You pay" text={pay} usd={formatUsd(swap.usdIn)} token={swap.sell} />
+      <Leg title="You pay" text={pay} usd={money.format(swap.usdIn)} token={swap.sell} />
       <View style={styles.arrow}>
         <Icon name="arrowDown" size={14} color={c.textSecondary} />
       </View>
       <Leg
         title="You get at least"
         text={get}
-        usd={swap.usdOutMin !== null ? formatUsd(swap.usdOutMin) : ''}
+        usd={swap.usdOutMin !== null ? money.format(swap.usdOutMin) : ''}
         token={swap.buy}
       />
       <View style={styles.rows}>

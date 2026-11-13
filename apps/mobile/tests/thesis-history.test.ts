@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { historySections, oneLine, pastChatsFrom, SAMPLE_HISTORY } from '@/lib/thesis-history';
+import {
+  historySections,
+  oneLine,
+  pastChatsFrom,
+  SAMPLE_HISTORY,
+  visibleChats,
+} from '@/lib/thesis-history';
 
 describe('chat history', () => {
   it('reads the runs, skipping malformed ones', () => {
@@ -78,5 +84,14 @@ describe('chat history', () => {
   it('has three sample chats for test mode, one in each group', () => {
     const now = new Date(2026, 10, 13, 15, 0).getTime();
     expect(historySections(SAMPLE_HISTORY(now), now).map((s) => s.rows.length)).toEqual([1, 1, 1]);
+  });
+
+  it('leaves out chats hidden on this phone', () => {
+    const all = SAMPLE_HISTORY();
+    expect(visibleChats(all, []).map((c) => c.runId)).toEqual(all.map((c) => c.runId));
+    expect(visibleChats(all, ['sample-ai']).map((c) => c.runId)).toEqual([
+      'sample-open-ai',
+      'sample-sol',
+    ]);
   });
 });

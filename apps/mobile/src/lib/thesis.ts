@@ -389,7 +389,21 @@ export const hostOf = (url: string) => {
   }
 };
 
-const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const wait = (ms: number, signal?: AbortSignal) =>
+  new Promise<void>((resolve) => {
+    const t = setTimeout(done, ms);
+    function done() {
+      clearTimeout(t);
+      signal?.removeEventListener('abort', done);
+      resolve();
+    }
+    signal?.addEventListener('abort', done);
+  });
+
+/** Throws `ThesisStopped` once the chat's Stop has been pressed. */
+function checkStopped(signal?: AbortSignal) {
+  if (signal?.aborted) throw new ThesisStopped();
+}
 
 /** What the agent is asked: the idea, and the amount and risk to size it for. */
 export type ThesisInput = { text: string; amount: number; risk: Risk };
@@ -404,18 +418,31 @@ export type OnStage = (index: number, live?: LiveProgress) => void;
  * Runs the agent on an idea: the live harness when signed in to Honey's server, a
  * staged sample answer in test mode.
  */
-export async function runThesis(input: ThesisInput, onStage: OnStage): Promise<Proposal> {
+export async function runThesis(
+  input: ThesisInput,
+  onStage: OnStage,
+  /** The chat's Stop: stops following the run (the server finishes it; History keeps it). */
+  signal?: AbortSignal,
+): Promise<Proposal> {
+  checkStopped(signal);
   // Loaded on demand, so the pure helpers here don't pull in the network stack.
-  if (TEST_MODE) return sampleThesis(input, onStage);
+  if (TEST_MODE) return sampleThesis(input, onStage, signal);
   // Real money: only the live agent, which picks from what NEAR Intents can deliver.
   // Before, a signed-out user or a failed run got the sample answer (TAO, RENDER…),
   // tokens Honey can't buy, presented as a real proposal.
   const token = await sessionToken();
-  return explained(() => runLive(token, input, onStage));
+  return explained(() => runLive(token, input, onStage, signal), signal);
 }
 
 /** An agent failure with words fit for the screen. */
 export class ThesisError extends Error {}
+
+/** The run was stopped from the chat: nothing more is shown, nothing was bought. */
+export class ThesisStopped extends ThesisError {
+  constructor() {
+    super('Stopped. Nothing was bought.');
+  }
+}
 
 async function sessionToken() {
   const token = (await import('@/lib/backend-session')).backendSessionToken();
@@ -423,11 +450,12 @@ async function sessionToken() {
   return token;
 }
 
-async function explained<T>(work: () => Promise<T>): Promise<T> {
+async function explained<T>(work: () => Promise<T>, signal?: AbortSignal): Promise<T> {
   try {
     return await work();
   } catch (error) {
     if (error instanceof ThesisError) throw error;
+    checkStopped(signal);
     const reason = error instanceof Error && error.message ? ` (${error.message})` : '';
     throw new ThesisError(`The agent couldn’t finish${reason}. Nothing was bought.`);
   }
@@ -564,7 +592,12 @@ function fromStrategy(run: LiveRun, strategy: LiveStrategy, input: ThesisInput):
   };
 }
 
-async function runLive(token: string, input: ThesisInput, onStage: OnStage): Promise<Proposal> {
+async function runLive(
+  token: string,
+  input: ThesisInput,
+  onStage: OnStage,
+  signal?: AbortSignal,
+): Promise<Proposal> {
   const tracker = new RunTracker();
   onStage(0, tracker.initial());
   const { api } = await import('@/lib/api');
@@ -576,7 +609,8 @@ async function runLive(token: string, input: ThesisInput, onStage: OnStage): Pro
       risk: input.risk.toLowerCase() as 'low' | 'medium' | 'high',
     },
   });
-  return followRun(token, runId, input, onStage, tracker);
+  checkStopped(signal);
+  return followRun(token, runId, input, onStage, tracker, signal);
 }
 
 const finished = (run: { stage: string }) => run.stage === 'done' || run.stage === 'failed';
@@ -592,21 +626,25 @@ async function followRun(
   input: ThesisInput,
   onStage: OnStage,
   tracker = new RunTracker(),
+  signal?: AbortSignal,
 ): Promise<Proposal> {
   // The server allows a run three minutes (the model may think for a while).
   const deadline = Date.now() + 190_000;
   const seen = (run: LiveRun) => {
+    if (signal?.aborted) return;
     const live = tracker.update(run);
     onStage(Math.min(live.at, STAGES.length - 1), live);
   };
-  let final = await streamRun(token, runId, seen, deadline).catch(() => null);
+  let final = await streamRun(token, runId, seen, deadline, signal).catch(() => null);
   const { api } = await import('@/lib/api');
   while (!final && Date.now() < deadline) {
+    checkStopped(signal);
     const run: LiveRun = await api.thesis(token, runId);
     seen(run);
     if (finished(run)) final = run;
-    else await wait(800);
+    else await wait(800, signal);
   }
+  checkStopped(signal);
   if (!final) throw new Error('The agent took too long');
   if (final.stage === 'failed')
     throw new Error(final.progress?.at(-1)?.message ?? 'The agent stopped');
@@ -630,12 +668,16 @@ async function streamRun(
   runId: string,
   onRun: (run: LiveRun) => void,
   deadline: number,
+  signal?: AbortSignal,
 ): Promise<LiveRun | null> {
+  if (signal?.aborted) return null;
   const [{ fetch: streamingFetch }, { resolveBaseUrl }] = await Promise.all([
     import('expo/fetch'),
     import('@/lib/api'),
   ]);
   const abort = new AbortController();
+  const stopped = () => abort.abort();
+  signal?.addEventListener('abort', stopped);
   let silent: ReturnType<typeof setTimeout> | undefined;
   // A stream with no heartbeat for 15s is a dead one: back to polling.
   const arm = () => {
@@ -678,6 +720,7 @@ async function streamRun(
   } finally {
     clearTimeout(silent);
     clearTimeout(stop);
+    signal?.removeEventListener('abort', stopped);
     abort.abort();
   }
 }
@@ -690,6 +733,8 @@ export type PastRun = {
   stage: string;
   proposal: Proposal | null;
   error?: string;
+  /** A finished run's steps, times and thinking, to show folded above its answer. */
+  live?: LiveProgress;
 };
 
 /** Loads a past run (GET /theses/{id}); in test mode, one of the sample chats. */
@@ -699,7 +744,22 @@ export async function loadRun(runId: string, said = ''): Promise<PastRun> {
     const { SAMPLE_HISTORY } = await import('@/lib/thesis-history');
     const sample = SAMPLE_HISTORY().find((r) => r.runId === runId);
     const input = { ...fallback, text: sample?.text ?? said };
-    return { text: input.text, input, stage: 'done', proposal: sampleProposal(input) };
+    const proposal = sampleProposal(input);
+    const steps = sampleSteps(sample?.createdAt);
+    return {
+      text: input.text,
+      input,
+      stage: sample?.stage ?? 'done',
+      proposal: sample?.stage === 'failed' ? null : proposal,
+      live: savedProgress({
+        stage: 'done',
+        startedAt: steps?.[0]?.startedAt,
+        steps,
+        events: sampleScript(proposal).flatMap((s) =>
+          s.events.map((text) => ({ step: s.step, text })),
+        ),
+      }),
+    };
   }
   const token = await sessionToken();
   return explained(async () => {
@@ -712,7 +772,29 @@ export async function loadRun(runId: string, said = ''): Promise<PastRun> {
       stage: run.stage,
       proposal: run.stage === 'done' ? proposalFromRun(run, input) : null,
       error: run.stage === 'failed' ? run.progress?.at(-1)?.message : undefined,
+      live: run.stage === 'done' ? savedProgress(run) : undefined,
     };
+  });
+}
+
+/**
+ * A finished run's progress as the server saved it (step times, updates, thinking), or
+ * nothing when it saved no step times: device timing would read "0s" everywhere.
+ */
+export function savedProgress(run: RunLive): LiveProgress | undefined {
+  if (!run.steps?.some((s) => s.startedAt && s.endedAt)) return undefined;
+  return new RunTracker().update({ ...run, stage: 'done' });
+}
+
+/** Test mode's saved step times: a 40-second run that began at `createdAt`. */
+function sampleSteps(createdAt?: string): RunLive['steps'] {
+  const start = createdAt ? Date.parse(createdAt) : Date.now() - 40_000;
+  const lengths = [2, 9, 6, 11, 5, 3, 4];
+  let t = start;
+  return ['intake', 'understand', 'shortlist', 'pick', 'critic', 'size', 'quote'].map((step, i) => {
+    const startedAt = new Date(t).toISOString();
+    t += (lengths[i] ?? 3) * 1000;
+    return { step, startedAt, endedAt: new Date(t).toISOString() };
   });
 }
 
@@ -721,18 +803,23 @@ export async function followThesis(
   runId: string,
   input: ThesisInput,
   onStage: OnStage,
+  signal?: AbortSignal,
 ): Promise<Proposal> {
-  if (TEST_MODE) return sampleThesis(input, onStage);
+  if (TEST_MODE) return sampleThesis(input, onStage, signal);
   const token = await sessionToken();
-  return explained(() => followRun(token, runId, input, onStage));
+  return explained(() => followRun(token, runId, input, onStage, undefined, signal), signal);
 }
 
 /**
  * Test mode's run: what the harness says while it works (updates, thinking that grows
  * in bursts as polls would deliver it, step times, the idea and picks as they're known),
- * over about six seconds, then the sample answer.
+ * over about ten seconds, then the sample answer.
  */
-async function sampleThesis(input: ThesisInput, onStage: OnStage): Promise<Proposal> {
+async function sampleThesis(
+  input: ThesisInput,
+  onStage: OnStage,
+  signal?: AbortSignal,
+): Promise<Proposal> {
   const proposal = sampleProposal(input);
   const tracker = new RunTracker();
   const iso = () => new Date().toISOString();
@@ -751,7 +838,7 @@ async function sampleThesis(input: ThesisInput, onStage: OnStage): Promise<Propo
       if (s.step === 'understand') partial.theme = proposal.thesis;
       if (s.step === 'pick' && tick === 1)
         partial.picks = proposal.picks.map((p) => ({ symbol: p.symbol, reason: p.reason }));
-      // Thinking arrives in bursts (half, then all of it), as 800ms polls would bring it.
+      // Thinking arrives in bursts (half, then all of it), as polls would bring it.
       const text = s.thinking.slice(0, Math.ceil((s.thinking.length * (tick + 1)) / 2));
       const live = tracker.update({
         stage: 'strategize',
@@ -762,10 +849,12 @@ async function sampleThesis(input: ThesisInput, onStage: OnStage): Promise<Propo
         partial: { ...partial },
         thinking: { step: s.step, text },
       });
+      checkStopped(signal);
       onStage(Math.min(live.at, STAGES.length - 1), live);
-      await wait(450);
+      await wait(700, signal);
     }
   }
+  checkStopped(signal);
   const last = steps.at(-1);
   if (last) last.endedAt = iso();
   onStage(

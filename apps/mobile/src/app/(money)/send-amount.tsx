@@ -15,6 +15,7 @@ import { FailurePage } from '@/components/sheets/FailurePage';
 import { SHEET, SheetScreen, StatRow } from '@/components/sheets/Sheet';
 import { finishDemo, SuccessPage } from '@/components/sheets/SuccessPage';
 import { FlowTray, InlineTray } from '@/components/sheets/Tray';
+import { Spinner } from '@/components/trade/SwapReview';
 import {
   applyKey,
   Keypad,
@@ -26,13 +27,13 @@ import { LiveProposedPage } from '@/components/wallet/MultisigParts';
 import { EmptyState, TokenIcon } from '@/components/wallet/parts';
 import { SearchField } from '@/components/wallet/SearchField';
 import { useCopy } from '@/lib/copy';
+import { useMoney } from '@/lib/fx';
 import { success, tap } from '@/lib/haptics';
 import { LOADS } from '@/lib/loads';
 import {
   type Chain,
   chainSymbol,
   formatBalance,
-  formatUsd,
   HOLDINGS,
   RECENT_RECIPIENTS,
   shortAddress,
@@ -54,9 +55,10 @@ import { useActiveWallet, wallets } from '@/lib/wallets';
 import { warningOn } from '@/lib/warnings';
 import { makeStyles, radius, useTheme } from '@/theme';
 
-type Page = 'pick' | 'amount' | 'review' | 'sent' | 'failed';
+type Page = 'pick' | 'amount' | 'review' | 'sending' | 'sent' | 'failed';
 /** In slide order: the token list sits to the left of the amount, so it opens from there. */
-const PAGES: Page[] = ['pick', 'amount', 'review', 'sent', 'failed'];
+const PAGES: Page[] = ['pick', 'amount', 'review', 'sending', 'sent', 'failed'];
+/** What the keypad types: money in Settings' Local currency (lib/fx), or the token. */
 type Unit = 'usd' | 'token';
 /** What you can send: one choice per token per network you hold it on, largest first. */
 const SENDABLE = HOLDINGS.filter((h) => h.amount > 0);
@@ -85,6 +87,8 @@ export default function SendAmountSheet() {
   }>();
   const styles = useStyles();
   const c = useTheme();
+  // Money is typed and shown in the Local currency; what's sent is always token units.
+  const money = useMoney();
   // A shared wallet sends from its own balances, and proposes rather than sends.
   const signer = useSigner();
   // A new wallet holds nothing until its first deposit.
@@ -123,19 +127,25 @@ export default function SendAmountSheet() {
   const sendToken = (token as { token?: SendToken }).token;
   const price = token.usd / token.amount;
   const value = Number(amount) || 0;
-  // Dollars are rounded to cents, so "$0.01" of USDC at $0.9995 is 0.010005, a hair over a
-  // 0.01 balance. Within half a cent over the whole balance, it means all of it.
-  const typed = unit === 'usd' ? value / price : value;
+  // Money is rounded to cents, so "$0.01" of USDC at $0.9995 is 0.010005, a hair over a
+  // 0.01 balance. Within half a cent (half a unit) over the whole balance, it means all of it.
+  const typed = unit === 'usd' ? money.toUsd(value) / price : value;
   const tokenValue =
-    unit === 'usd' && typed > token.amount && (typed - token.amount) * price < 0.005
+    unit === 'usd' &&
+    typed > token.amount &&
+    (typed - token.amount) * price < money.toUsd(0.5 / 10 ** money.decimals)
       ? token.amount
       : typed;
-  const usdValue = unit === 'usd' ? value : value * price;
+  const usdValue = unit === 'usd' ? money.toUsd(value) : value * price;
   const insufficient = tokenValue > token.amount * (1 + 1e-9);
   const ready = value > 0 && !insufficient;
   const label = !value ? 'Enter an amount' : insufficient ? 'Insufficient balance' : 'Continue';
 
   const recipient = describeRecipient(to);
+  // Sent to a name rather than a pasted address: the review also shows where it goes.
+  const named =
+    !!recipient.subtitle ||
+    (!!plan?.to && plan.to.toLowerCase() !== recipient.address.toLowerCase());
   // The sent transaction's id and explorer link, for the receipt: the real one for a real
   // send, a placeholder in the sample flow.
   const tx = sent
@@ -150,7 +160,12 @@ export default function SendAmountSheet() {
 
   const flipUnit = () => {
     tap();
-    if (value) setAmount(unit === 'usd' ? trimNumber(tokenValue, 8) : trimNumber(usdValue, 2));
+    if (value)
+      setAmount(
+        unit === 'usd'
+          ? trimNumber(tokenValue, 8)
+          : trimNumber(money.fromUsd(usdValue), money.decimals),
+      );
     setUnit(unit === 'usd' ? 'token' : 'usd');
   };
 
@@ -203,6 +218,8 @@ export default function SendAmountSheet() {
   const sendReal = async () => {
     if (!plan || busy) return;
     setBusy(true);
+    // Uniswap's pattern: the same tray turns into the pending state, then the receipt.
+    setPage('sending');
     try {
       const walletId = wallet.id;
       setSent(await plan.execute(() => wallets.get().activeId === walletId));
@@ -215,7 +232,7 @@ export default function SendAmountSheet() {
       if (plan.spent?.()) {
         setPlan(null);
         setPage('amount');
-      }
+      } else setPage('review');
     } finally {
       setBusy(false);
     }
@@ -290,8 +307,10 @@ export default function SendAmountSheet() {
 
   // Family's pattern: the amount is entered on the page; the review, and then the
   // result, rise over it in one tray that fits its content.
-  const trayPage = page === 'review' || page === 'sent' || page === 'failed' ? page : null;
+  const trayPage =
+    page === 'review' || page === 'sending' || page === 'sent' || page === 'failed' ? page : null;
   const closeTray = () => {
+    if (page === 'sending') return;
     if (page === 'sent') finish();
     else go('amount');
   };
@@ -393,7 +412,9 @@ export default function SendAmountSheet() {
                       onPress={() => {
                         tap();
                         setAmount(
-                          unit === 'usd' ? trimNumber(token.usd, 2) : trimNumber(token.amount, 8),
+                          unit === 'usd'
+                            ? trimNumber(money.fromUsd(token.usd), money.decimals)
+                            : trimNumber(token.amount, 8),
                         );
                       }}
                     >
@@ -412,14 +433,14 @@ export default function SendAmountSheet() {
                     <View style={styles.amountRow}>
                       <TypedAmount
                         value={amount}
-                        prefix={unit === 'usd' ? '$' : ''}
+                        prefix={unit === 'usd' ? money.sign : ''}
                         size={amount.length > 9 ? 40 : 56}
                       />
                       {unit === 'token' ? <Text style={styles.unit}>{symbol}</Text> : null}
                     </View>
                     <PressableScale
                       accessibilityRole="button"
-                      accessibilityLabel="Switch between dollars and token"
+                      accessibilityLabel={`Switch between ${money.code} and ${symbol}`}
                       hitSlop={10}
                       onPress={flipUnit}
                       style={styles.convert}
@@ -428,19 +449,21 @@ export default function SendAmountSheet() {
                       <Text style={styles.convertLabel}>
                         {unit === 'usd'
                           ? `${formatBalance(tokenValue)} ${symbol}`
-                          : formatUsd(usdValue)}
+                          : money.format(usdValue)}
                       </Text>
                     </PressableScale>
                   </View>
 
                   <PercentChips
-                    balance={unit === 'usd' ? token.usd : token.amount}
-                    decimals={unit === 'usd' ? 2 : 8}
+                    balance={unit === 'usd' ? money.fromUsd(token.usd) : token.amount}
+                    decimals={unit === 'usd' ? money.decimals : 8}
                     onPick={setAmount}
                     style={styles.shares}
                   />
                   <Keypad
-                    onKey={(key) => setAmount((a) => applyKey(a, key, unit === 'usd' ? 2 : 8))}
+                    onKey={(key) =>
+                      setAmount((a) => applyKey(a, key, unit === 'usd' ? money.decimals : 8))
+                    }
                   />
                 </>
               )}
@@ -456,7 +479,8 @@ export default function SendAmountSheet() {
           />
         ) : null}
       </SheetScreen>
-      <InlineTray onClose={closeTray}>
+      {/* A send in flight must finish: no drag, backdrop or close until it lands. */}
+      <InlineTray onClose={closeTray} dismissible={page !== 'sending'}>
         {trayPage ? (
           <ContentSwap id={trayPage} index={PAGES.indexOf(trayPage)}>
             {trayPage === 'review' ? (
@@ -468,7 +492,7 @@ export default function SendAmountSheet() {
                   </Text>
                   <View style={styles.summaryUsd}>
                     <TokenIcon symbol={symbol} chain={chain} size={20} ring={c.sheet} />
-                    <Text style={styles.summaryUsdLabel}>{formatUsd(usdValue)}</Text>
+                    <Text style={styles.summaryUsdLabel}>{money.format(usdValue)}</Text>
                   </View>
                 </View>
                 <View style={styles.rule} />
@@ -478,13 +502,9 @@ export default function SendAmountSheet() {
                     value={
                       <View style={styles.inline}>
                         <Avatar name={recipient.title} size={20} seed={to} />
-                        <View style={styles.toValue}>
-                          <Text style={styles.rowValue}>{recipient.title}</Text>
-                          {/* The address too, so it can be checked before sending. */}
-                          {recipient.subtitle ? (
-                            <Text style={styles.rowAddress}>{recipient.subtitle}</Text>
-                          ) : null}
-                        </View>
+                        <Text style={styles.rowValue} numberOfLines={1}>
+                          {recipient.title}
+                        </Text>
                       </View>
                     }
                   />
@@ -497,13 +517,20 @@ export default function SendAmountSheet() {
                       </View>
                     }
                   />
+                  {/* To a name (a saved label, a .near or .eth name): the address it goes to,
+                      so it can be checked. A bare address is already the To row. */}
+                  {named ? (
+                    <StatRow
+                      label="Address"
+                      value={
+                        <Text style={styles.rowValue}>
+                          {shortAddress(plan?.to ?? recipient.address, 8, 6)}
+                        </Text>
+                      }
+                    />
+                  ) : null}
                   {plan ? (
                     <>
-                      {/* The whole address, so it can be checked character by character. */}
-                      <StatRow
-                        label="Address"
-                        value={<Text style={styles.rowAddress}>{plan.to}</Text>}
-                      />
                       <StatRow label="Network cost" value={plan.fee} />
                       {plan.setup ? <StatRow label="Setup" value={plan.setup} /> : null}
                     </>
@@ -515,7 +542,7 @@ export default function SendAmountSheet() {
                   ) : null}
                   <StatRow
                     label="Total"
-                    value={<Text style={styles.total}>{formatUsd(usdValue)}</Text>}
+                    value={<Text style={styles.total}>{money.format(usdValue)}</Text>}
                   />
                 </View>
                 {plan?.note || warningOn('sendIrreversible') ? (
@@ -532,6 +559,21 @@ export default function SendAmountSheet() {
                   onPress={send}
                   style={styles.cta}
                 />
+              </SheetScreen>
+            ) : trayPage === 'sending' ? (
+              <SheetScreen>
+                <View style={styles.sending}>
+                  <TokenIcon symbol={symbol} chain={chain} size={48} ring={c.sheet} />
+                  <Text style={styles.sendingTitle} accessibilityRole="header">
+                    Sending
+                  </Text>
+                  <Text style={styles.sendingDetail}>
+                    {formatBalance(tokenValue)} {symbol} to {recipient.title}
+                  </Text>
+                  <View style={styles.sendingSpinner}>
+                    <Spinner />
+                  </View>
+                </View>
               </SheetScreen>
             ) : trayPage === 'failed' && outcome.failure ? (
               <SheetScreen>
@@ -566,7 +608,7 @@ export default function SendAmountSheet() {
                     symbol,
                     chain,
                     text: `${formatBalance(tokenValue)} ${symbol}`,
-                    usd: formatUsd(usdValue),
+                    usd: money.format(usdValue),
                   }}
                   rows={[
                     // A saved name first, then the address itself, so it can be checked.
@@ -613,13 +655,25 @@ const useStyles = makeStyles((c) => ({
   flex: {
     flex: 1,
   },
-  toValue: {
-    alignItems: 'flex-end',
+  sending: {
+    alignItems: 'center',
+    paddingTop: 36,
+    paddingBottom: 28,
   },
-  rowAddress: {
-    marginTop: 1,
+  sendingTitle: {
+    marginTop: 18,
+    color: c.text,
+    fontSize: 22,
+    fontWeight: '600',
+  },
+  sendingDetail: {
+    marginTop: 6,
     color: c.textSecondary,
-    fontSize: 13,
+    fontSize: 15,
+    textAlign: 'center',
+  },
+  sendingSpinner: {
+    marginTop: 22,
   },
   pickSearch: {
     marginBottom: 12,

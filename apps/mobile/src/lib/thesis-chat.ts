@@ -34,7 +34,8 @@ export type ChatPart =
   /** The idea as the agent understood it, and its picks as they're chosen. */
   | { type: 'understood'; theme: string; picks: PartialPick[] }
   | { type: 'strategy'; proposal: Proposal }
-  | { type: 'projection'; amount: number; risk: Risk }
+  /** A rough 12-month range, for the amount on Create jar (see `chatStake`). */
+  | { type: 'projection'; risk: Risk }
   /** Price charts: one token's, or several on one chart, each starting at 100. */
   | { type: 'chart'; symbols: string[]; range: ChatRange; picks: boolean }
   | { type: 'replies'; options: string[] };
@@ -49,6 +50,20 @@ export const chatDraft = createStore<Proposal | null>(null);
  * How much?'s risk tabs: the agent reworks the idea in the conversation, not in place.
  */
 export const chatAsk = createStore<string | null>(null);
+
+/**
+ * The amount on the newest answer's Create jar, once it's been set (by its − / + or a
+ * typed "$250"); null means Settings' default copy amount. The projection and every
+ * sentence about an amount read it, so the words never disagree with the button.
+ */
+export const chatStake = createStore<number | null>(null);
+
+/** The step on Create jar's − / + nearest to an amount someone typed. */
+export function nearestStep(amount: number, steps: readonly number[]): number {
+  let best = steps[0] ?? amount;
+  for (const s of steps) if (Math.abs(s - amount) < Math.abs(best - amount)) best = s;
+  return best;
+}
 
 /** The quick reply offered when a run fails: it runs the same message again. */
 export const RETRY = 'Try again';
@@ -66,6 +81,35 @@ export function amountIn(text: string): number | null {
   const raw = m?.[1] ?? m?.[2];
   const n = raw ? Number(raw.replace(/,/g, '')) : Number.NaN;
   return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+/** Talk about risk, not an idea that happens to say "high" or "lower". */
+const RISK_TALK =
+  /\b(risk\w*|safer|safe|careful|conservative|aggressive|degen|balanced|moderate)\b/i;
+const LEVEL_ONLY = /^(?:make it |go |be |keep it )?(?:low|lower|medium|high|higher|max)[.!?]*$/i;
+
+/** Whether a message asks to change the risk level ("make it safer", "low risk"). */
+export function asksRisk(text: string): boolean {
+  const t = text.trim();
+  return RISK_TALK.test(t) || LEVEL_ONLY.test(t);
+}
+
+/**
+ * Quick replies never repeat what you just said: after "Make it safer" (High to
+ * Medium), "Make it safer" isn't offered back as a chip.
+ */
+export function withoutEcho(parts: ChatPart[], said: string): ChatPart[] {
+  const key = (s: string) =>
+    s
+      .toLowerCase()
+      .replace(/[^a-z0-9 ]/g, '')
+      .trim();
+  const you = key(said);
+  return parts.flatMap((p): ChatPart[] => {
+    if (p.type !== 'replies') return [p];
+    const options = p.options.filter((o) => key(o) !== you);
+    return options.length ? [{ ...p, options }] : [];
+  });
 }
 
 /** A risk level someone typed ("low risk", "aggressive"), if any. */
@@ -103,17 +147,22 @@ type Turn = {
   named?: readonly Chartable[];
   /** Every symbol on the market list, matched when written as a ticker. */
   listed?: readonly string[];
+  /** Sets Create jar to a typed amount; returns the amount the button now shows. */
+  stake?: (amount: number) => number;
+  /** The chat's Stop. */
+  signal?: AbortSignal;
 };
 
 /** Answers one message, given the strategy so far. Returns the strategy after it. */
 export async function reply(
   text: string,
   current: Proposal | null,
-  turn: Turn,
+  said: Turn,
 ): Promise<Proposal | null> {
   const asked = text.trim();
+  const turn: Turn = { ...said, update: (parts) => said.update(withoutEcho(parts, asked)) };
   const amount = amountIn(asked);
-  const risk = riskIn(asked);
+  const risk = asksRisk(asked) ? riskIn(asked) : null;
 
   // A chart of a token, the picks, or a comparison: drawn from price history, no AI run.
   const chart = chartAsk(asked, { picks: current?.picks, named: turn.named, listed: turn.listed });
@@ -128,9 +177,9 @@ export async function reply(
       turn.update([
         {
           type: 'text',
-          text: `Here's a rough range for ${money(current.amount)} over the next year at ${current.risk.toLowerCase()} risk.`,
+          text: `Here's a rough range for the next year at ${current.risk.toLowerCase()} risk.`,
         },
-        { type: 'projection', amount: current.amount, risk: current.risk },
+        { type: 'projection', risk: current.risk },
         { type: 'replies', options: ['Make it safer', 'Why these picks?', 'Buy it'] },
       ]);
       return current;
@@ -169,8 +218,9 @@ export async function reply(
       ]);
       return next;
     }
-    const safer = /\b(safer|lower|less risk(y)?)\b/i.test(asked);
-    const riskier = /\b(riskier|higher|more risk(y)?)\b/i.test(asked);
+    const talk = asksRisk(asked);
+    const safer = talk && /\b(safer|lower|less risk(y)?)\b/i.test(asked);
+    const riskier = talk && /\b(riskier|higher|more risk(y)?)\b/i.test(asked);
     const nextRisk =
       risk ??
       (safer
@@ -179,9 +229,17 @@ export async function reply(
           ? RISK_ORDER[Math.min(2, RISK_ORDER.indexOf(current.risk) + 1)]
           : null);
     if (amount && !nextRisk) {
-      const next = withAmount(current, amount);
+      // In the words exactly as the button will read, which moves in steps.
+      const set = turn.stake?.(amount) ?? amount;
+      const next = withAmount(current, set);
       turn.update([
-        { type: 'text', text: `Same picks, now ${money(amount)}.` },
+        {
+          type: 'text',
+          text:
+            set === amount
+              ? `Same picks. Create jar is set to ${set} USDC.`
+              : `Same picks. Create jar is set to ${set} USDC, the closest step to ${money(amount)}.`,
+        },
         { type: 'strategy', proposal: next },
       ]);
       return next;
@@ -189,7 +247,8 @@ export async function reply(
     // The run answered every risk level at once: switch here, without asking the AI again.
     const variant = nextRisk ? current.byRisk?.[nextRisk] : undefined;
     if (nextRisk && variant) {
-      const next = { ...withAmount(variant, amount ?? current.amount), byRisk: current.byRisk };
+      const stake = amount ? (turn.stake?.(amount) ?? amount) : current.amount;
+      const next = { ...withAmount(variant, stake), byRisk: current.byRisk };
       turn.update([
         {
           type: 'text',
@@ -225,7 +284,9 @@ export async function reply(
   }
 
   // A new idea.
-  return build(asked, amount ?? 500, risk ?? 'Medium', turn);
+  // An amount in the idea ("$250 on AI") sets Create jar, the one place an amount shows.
+  const stake = amount ? (turn.stake?.(amount) ?? amount) : 500;
+  return build(asked, stake, risk ?? 'Medium', turn);
 }
 
 /**
@@ -312,7 +373,7 @@ function build(
   lead?: string,
 ): Promise<Proposal> {
   const input: ThesisInput = { text: ideaOnly(idea), amount, risk };
-  return follow((onStage) => runThesis(input, onStage), turn, lead);
+  return follow((onStage) => runThesis(input, onStage, turn.signal), turn, lead);
 }
 
 /**
@@ -327,17 +388,19 @@ export async function replay(
   turn.update([]);
   const past = await loadRun(runId, said);
   if (past.stage === 'done' && past.proposal) {
-    // Read-only: the answer and its card, without the steps or follow-up chips.
-    turn.update(
-      answer(past.proposal, undefined).filter((p) => p.type !== 'replies' && p.type !== 'stages'),
-    );
+    // The answer as it was: the research folded (with its saved times, when the server
+    // kept them), the card with its risk switch and Create jar, and the follow-ups.
+    turn.update(answer(past.proposal, past.live).filter((p) => past.live || p.type !== 'stages'));
     return { text: past.text, proposal: past.proposal };
   }
   if (past.stage === 'failed' || past.stage === 'done') {
     turn.update([{ type: 'text', text: "This one didn't finish. Nothing was bought." }]);
     return { text: past.text, proposal: null };
   }
-  const proposal = await follow((onStage) => followThesis(runId, past.input, onStage), turn);
+  const proposal = await follow(
+    (onStage) => followThesis(runId, past.input, onStage, turn.signal),
+    turn,
+  );
   return { text: past.text, proposal };
 }
 

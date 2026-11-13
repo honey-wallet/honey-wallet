@@ -1,3 +1,4 @@
+import { createStore } from '@/lib/store';
 import { TEST_MODE } from '@/lib/test-mode';
 
 /**
@@ -29,6 +30,24 @@ export type HistoryRow = {
 export type HistorySection = { title: 'Today' | 'This week' | 'Older'; rows: HistoryRow[] };
 
 const PAGE = 20;
+
+/**
+ * Chats you swiped away. The server has no delete for runs (GET only), so a chat is
+ * hidden on this phone, not erased: it stays in your account.
+ */
+export const hiddenChats = createStore<string[]>([], { persist: 'thesisHiddenChats' });
+
+/** The chats still to show, without the ones hidden on this phone. */
+export function visibleChats(chats: readonly PastChat[], hidden: readonly string[]): PastChat[] {
+  if (!hidden.length) return [...chats];
+  const gone = new Set(hidden);
+  return chats.filter((c) => !gone.has(c.runId));
+}
+
+/** Hides a chat on this phone (swipe to delete). */
+export function hideChat(runId: string) {
+  hiddenChats.set((now) => (now.includes(runId) ? now : [...now, runId]));
+}
 const DAY = 86_400_000;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -151,6 +170,9 @@ export const SAMPLE_HISTORY = (now = Date.now()): PastChat[] => [
   },
 ];
 
+/** The server has no chat list yet (an older deploy). */
+export class HistoryUnavailable extends Error {}
+
 /** A page of your past chats, newest first; `before` is the oldest one's `createdAt`. */
 export async function fetchPastChats(
   before?: string,
@@ -165,6 +187,8 @@ export async function fetchPastChats(
     headers: { Authorization: `Bearer ${token}` },
     credentials: 'omit',
   });
+  // A server without the list (GET answers 404 or 405) can't show history yet.
+  if (response.status === 404 || response.status === 405) throw new HistoryUnavailable();
   if (!response.ok) throw new Error(`History failed (${response.status})`);
   const chats = pastChatsFrom(await response.json());
   return { chats, more: chats.length >= PAGE };

@@ -28,20 +28,25 @@
 //!
 //! Group jars (`groups`): friends buy one jar together; a published group jar carries
 //! its members, and shows on every member's profile.
+//!
+//! People search (`GET /social/people?q=`) finds anyone with a handle by handle prefix
+//! or by a name word, and serves only their card and follower count (what a private
+//! account's profile serves anyway). People without a handle have no profile to find.
 
 mod groups;
 pub(crate) use groups::{majority, record_created};
 
 use std::{
     collections::HashMap,
+    net::SocketAddr,
     sync::Arc,
     time::{Duration, Instant},
 };
 
 use axum::{
     Json, Router,
-    extract::{Path, Query, State},
-    http::HeaderMap,
+    extract::{ConnectInfo, Path, Query, State},
+    http::{HeaderMap, request::Parts},
     routing::{get, post},
 };
 use serde::{Deserialize, Serialize};
@@ -51,6 +56,7 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::{
+    config::{TrustedProxyCidr, forwarded_client_ip},
     error::AppError,
     identity::{Identity, unavailable},
     jar_dao::JarDao,
@@ -78,6 +84,18 @@ const LIST_TTL: Duration = Duration::from_secs(60);
 const MARK_RETENTION_DAYS: i32 = 400;
 /// How often the marker values every live jar.
 const MARK_EVERY: Duration = Duration::from_secs(60 * 60);
+/// People search answers at most this many people.
+const PEOPLE_LIMIT: i64 = 20;
+/// People search needs at least this many characters (after a leading @).
+const PEOPLE_MIN_CHARS: usize = 2;
+/// Longer than any name (40) or handle (20) can match.
+const PEOPLE_MAX_CHARS: usize = 40;
+/// People searches a minute per signed-in user, or per client address signed out. The
+/// app asks once typing pauses (~250 ms), so a person stays far below this.
+pub const PEOPLE_PER_MINUTE: i32 = 60;
+/// People searches a minute across everyone, so the endpoint can't be used to page
+/// through every profile quickly.
+const PEOPLE_GLOBAL_PER_MINUTE: i32 = 6000;
 /// Handles nobody can claim: the team's names and ones that read as official.
 const RESERVED: &[&str] = &[
     "honey",
@@ -127,6 +145,10 @@ struct SocialState {
     lists: ListCache,
     /// NEAR chain reads for group jars (their DAOs); None turns group chain steps off.
     dao: Option<Arc<JarDao>>,
+    /// Whether (and which) proxies' `X-Forwarded-For` names the client, for limits on
+    /// signed-out reads keyed by client address.
+    trust_proxy: bool,
+    trusted_proxy_cidrs: Arc<[TrustedProxyCidr]>,
 }
 
 /// A jar as its owner sees it, with what's needed to serve it to anyone else: always
@@ -145,8 +167,17 @@ pub fn router(
     identity: Option<Identity>,
     market: Option<Arc<MarketData>>,
     dao: Option<Arc<JarDao>>,
+    trust_proxy: bool,
+    trusted_proxy_cidrs: Vec<TrustedProxyCidr>,
 ) -> Router {
-    router_with(identity, market, ONE_CLICK_ORIGIN.to_string(), dao)
+    build(
+        identity,
+        market,
+        ONE_CLICK_ORIGIN.to_string(),
+        dao,
+        trust_proxy,
+        trusted_proxy_cidrs,
+    )
 }
 
 /// `router` with 1Click's status API somewhere else and no chain reads (tests).
@@ -158,12 +189,24 @@ pub fn router_with_one_click(
     router_with(identity, market, one_click, None)
 }
 
-/// `router` with 1Click and NEAR RPC wherever the caller says (tests).
+/// `router` with 1Click and NEAR RPC wherever the caller says, and the connecting peer
+/// as the client address (tests).
 pub fn router_with(
     identity: Option<Identity>,
     market: Option<Arc<MarketData>>,
     one_click: String,
     dao: Option<Arc<JarDao>>,
+) -> Router {
+    build(identity, market, one_click, dao, false, Vec::new())
+}
+
+fn build(
+    identity: Option<Identity>,
+    market: Option<Arc<MarketData>>,
+    one_click: String,
+    dao: Option<Arc<JarDao>>,
+    trust_proxy: bool,
+    trusted_proxy_cidrs: Vec<TrustedProxyCidr>,
 ) -> Router {
     let client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(3))
@@ -176,6 +219,7 @@ pub fn router_with(
         .route("/social/handles/{handle}", get(handle_status))
         .route("/social/me", get(me).put(upsert_me))
         .route("/social/me/privacy", get(my_privacy).put(update_privacy))
+        .route("/social/people", get(search_people))
         .route("/social/profiles/{handle}", get(profile))
         .route(
             "/social/profiles/{handle}/follow",
@@ -200,6 +244,8 @@ pub fn router_with(
             client,
             lists: Arc::default(),
             dao,
+            trust_proxy,
+            trusted_proxy_cidrs: trusted_proxy_cidrs.into(),
         })
 }
 
@@ -213,6 +259,19 @@ pub struct ProfileCard {
     pub handle: String,
     pub display_name: String,
     pub avatar_seed: String,
+}
+
+/// Someone people search found: their card, follower count and whether you follow
+/// them. `SocialPerson`.
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct Person {
+    #[serde(flatten)]
+    pub card: ProfileCard,
+    pub followers: i64,
+    /// Always false signed out.
+    pub followed_by_me: bool,
+    pub is_me: bool,
 }
 
 /// `SocialProfile`.
@@ -531,6 +590,32 @@ pub fn normalize_handle(raw: &str) -> Option<String> {
             .bytes()
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_');
     ok.then_some(handle)
+}
+
+/// A people search as typed, ready to match: trimmed, one leading @ dropped, lowercased.
+/// None when it's under `PEOPLE_MIN_CHARS`, over `PEOPLE_MAX_CHARS` or not plain text.
+pub fn people_query(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    let query = trimmed
+        .strip_prefix('@')
+        .unwrap_or(trimmed)
+        .trim()
+        .to_lowercase();
+    let chars = query.chars().count();
+    ((PEOPLE_MIN_CHARS..=PEOPLE_MAX_CHARS).contains(&chars) && plain_text(&query, false))
+        .then_some(query)
+}
+
+/// `text` with LIKE's wildcards (and its escape) escaped, so `a_b` matches only `a_b`.
+pub fn like_escape(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        if matches!(c, '\\' | '%' | '_') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
 }
 
 /// The team's names, and anything that reads as Honey Wallet itself.
@@ -1601,6 +1686,101 @@ async fn following(
 ) -> Result<Json<Vec<ProfileCard>>, AppError> {
     let me = viewer(&state, &headers).await?;
     people(&state, &handle, false, me).await
+}
+
+#[derive(Deserialize)]
+struct PeopleQuery {
+    q: Option<String>,
+    limit: Option<i64>,
+}
+
+/// Who to count a people search against: the signed-in user, or else the client's
+/// address (an IPv6 /64), from the peer or the trusted proxies' `X-Forwarded-For`.
+fn search_subject(
+    state: &SocialState,
+    parts: &Parts,
+    viewer: Option<Uuid>,
+) -> Result<String, AppError> {
+    if let Some(user) = viewer {
+        return Ok(format!("user:{user}"));
+    }
+    let peer = parts
+        .extensions
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|info| info.0.ip())
+        .ok_or(AppError::Busy)?;
+    let ip = forwarded_client_ip(
+        peer,
+        &parts.headers,
+        state.trust_proxy,
+        &state.trusted_proxy_cidrs,
+    )
+    .ok_or_else(|| AppError::BadRequest("missing client address".into()))?;
+    Ok(format!("ip:{}", super::identity::client_bucket(ip)))
+}
+
+/// People by handle or name, for Search. Public; rate limited per person (or address).
+/// Matches, case-insensitively: the handle starting with `q`, or the name or any word
+/// in it starting with `q`. Ranked: the exact handle, other handle matches, name
+/// matches, then most followers. Everyone with a handle can be found: a private
+/// account's card (name, handle, avatar, follower count) is what its profile serves
+/// anyone anyway, and nothing else of theirs is in the answer.
+async fn search_people(
+    State(state): State<SocialState>,
+    Query(query): Query<PeopleQuery>,
+    parts: Parts,
+) -> Result<Json<Vec<Person>>, AppError> {
+    let q = people_query(query.q.as_deref().unwrap_or_default()).ok_or_else(|| {
+        AppError::BadRequest(format!("search for at least {PEOPLE_MIN_CHARS} characters"))
+    })?;
+    let limit = query.limit.unwrap_or(PEOPLE_LIMIT).clamp(1, PEOPLE_LIMIT);
+    let me = viewer(&state, &parts.headers).await?;
+    let identity = state.identity.as_ref().ok_or(AppError::Busy)?;
+    identity
+        .rate_limit_pair(
+            "social_people",
+            &search_subject(&state, &parts, me)?,
+            PEOPLE_GLOBAL_PER_MINUTE,
+            PEOPLE_PER_MINUTE,
+        )
+        .await?;
+    let prefix = format!("{}%", like_escape(&q));
+    let word = format!("% {prefix}");
+    type PersonRow = (String, String, String, i64, bool, bool);
+    let rows: Vec<PersonRow> = sqlx::query_as(
+        "SELECT p.handle, p.display_name, p.avatar_seed,
+                (SELECT count(*) FROM social_follows f WHERE f.followee = p.user_id) AS followers,
+                EXISTS(SELECT 1 FROM social_follows f
+                       WHERE f.follower = $4 AND f.followee = p.user_id),
+                COALESCE(p.user_id = $4, false)
+         FROM social_profiles p
+         WHERE p.handle LIKE $2
+            OR lower(p.display_name) LIKE $2
+            OR lower(p.display_name) LIKE $3
+         ORDER BY CASE WHEN p.handle = $1 THEN 0 WHEN p.handle LIKE $2 THEN 1 ELSE 2 END,
+                  followers DESC, p.handle
+         LIMIT $5",
+    )
+    .bind(&q)
+    .bind(&prefix)
+    .bind(&word)
+    .bind(me)
+    .bind(limit)
+    .fetch_all(pool(&state)?)
+    .await
+    .map_err(unavailable)?;
+    Ok(Json(
+        rows.into_iter()
+            .map(
+                |(handle, display_name, avatar_seed, followers, followed_by_me, is_me)| Person {
+                    card: card((handle, display_name, avatar_seed)),
+                    followers,
+                    followed_by_me,
+                    is_me,
+                },
+            )
+            .collect(),
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -2836,6 +3016,29 @@ mod tests {
             assert!(reserved(taken), "{taken}");
         }
         assert!(!reserved("honeybadger"));
+    }
+
+    #[test]
+    fn people_search_needs_two_plain_characters_and_drops_one_at() {
+        assert_eq!(people_query("  @Ka "), Some("ka".into()));
+        assert_eq!(people_query("Jane Doe"), Some("jane doe".into()));
+        assert_eq!(people_query("ÉLODIE"), Some("élodie".into()));
+        assert_eq!(people_query("@@ab"), Some("@ab".into()));
+        for short in ["", " ", "a", "@a", "@ a "] {
+            assert_eq!(people_query(short), None, "{short:?}");
+        }
+        assert_eq!(people_query(&"a".repeat(41)), None);
+        assert!(people_query(&"a".repeat(40)).is_some());
+        assert_eq!(people_query("ab\u{200B}"), None);
+        assert_eq!(people_query("a\nb"), None);
+    }
+
+    #[test]
+    fn people_search_escapes_like_wildcards() {
+        assert_eq!(like_escape("al_ce"), "al\\_ce");
+        assert_eq!(like_escape("100%"), "100\\%");
+        assert_eq!(like_escape("a\\b"), "a\\\\b");
+        assert_eq!(like_escape("bob"), "bob");
     }
 
     #[test]

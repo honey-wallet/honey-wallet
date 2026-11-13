@@ -17,6 +17,7 @@ import {
   cardEntering,
   FeedCard,
   FeedSkeleton,
+  FollowButton,
   MascotEmpty,
   openProfile,
   ReturnText,
@@ -38,18 +39,24 @@ import {
   loadFeed,
   loadLeaderboard,
   loadMe,
-  loadProfile,
   openSocialJar,
+  type PersonHit,
+  peopleQuery,
+  peopleResults,
   type SocialProfileCard,
   shareRank,
   social,
+  socialError,
   socialSignedIn,
+  toggleFollow,
   toLocalJar,
   useBoard,
+  usePeopleSearch,
   useSocial,
   useSocialMe,
 } from '@/lib/social';
-import { requireWallet } from '@/lib/wallet-gate';
+import { showErrorToast } from '@/lib/toast';
+import { requireSignIn, requireWallet } from '@/lib/wallet-gate';
 import { makeStyles, radius, useTheme } from '@/theme';
 import { DURATION, EASE, lazy } from '@/theme/motion';
 
@@ -190,22 +197,25 @@ export function EdgeTabs<T extends string>({
   );
 }
 
-const HANDLE = /^@?([a-z0-9_]{3,20})$/;
-
 /**
- * Typing a handle in the search field finds that person. The server looks up exact
- * handles (there's no fuzzy people search), so "kai" or "@kai" shows @kai if it exists.
+ * Search's People: anyone whose @handle, name or a word in their name starts with what
+ * you typed (lib/social `usePeopleSearch`: from 2 characters, once typing pauses). The
+ * people the phone already knows show at once; the server's ranked answer replaces
+ * them, the exact @handle first. Nothing at all when nobody matches.
  */
 export function PersonResult({
   query,
   onFound,
+  onSearching,
   onPick,
   picked,
   exclude,
 }: {
   query: string;
-  /** Told whether the handle exists, so the page can drop its "No matches". */
+  /** Told whether anyone matched, so the page can show its "People" heading. */
   onFound?: (found: boolean) => void;
+  /** Told while the server hasn't answered yet, so the page holds its "No matches". */
+  onSearching?: (searching: boolean) => void;
   /** A picker (Launch's "Add friends"): rows pick instead of opening the profile. */
   onPick?: (who: SocialProfileCard) => void;
   /** Handles already picked: their rows show a check. */
@@ -213,32 +223,13 @@ export function PersonResult({
   /** Handles never listed (you). */
   exclude?: string[];
 }) {
-  const handle = HANDLE.exec(query.trim().toLowerCase())?.[1];
-  const [found, setFound] = useState<SocialProfileCard | null>(null);
-  // Prefix matches among people already loaded, at once; the exact lookup adds the rest.
+  const server = usePeopleSearch(query);
   const known = knownPeople(social.useValue(), query);
-  useEffect(() => {
-    setFound(null);
-    if (!handle) return;
-    let live = true;
-    // Wait for typing to pause before asking the server.
-    const timer = setTimeout(() => {
-      loadProfile(handle)
-        .then((profile) => {
-          if (live) setFound(profile);
-        })
-        .catch(() => {});
-    }, 300);
-    return () => {
-      live = false;
-      clearTimeout(timer);
-    };
-  }, [handle]);
-  const people = (
-    found && !known.some((p) => p.handle === found.handle) ? [found, ...known] : known
-  ).filter((p) => !exclude?.includes(p.handle));
+  const people = peopleResults(query, server, known, exclude);
   const any = people.length > 0;
+  const searching = peopleQuery(query) != null && server === undefined;
   useEffect(() => onFound?.(any), [any, onFound]);
+  useEffect(() => onSearching?.(searching), [searching, onSearching]);
   if (!any) return null;
   return (
     <>
@@ -255,39 +246,58 @@ export function PersonResult({
 }
 
 function PersonRow({
-  who: found,
+  who,
   onPick,
   picked,
 }: {
-  who: SocialProfileCard;
+  who: PersonHit;
   onPick?: (who: SocialProfileCard) => void;
   picked?: boolean;
 }) {
   const styles = useStyles();
   const c = useTheme();
+  const { profiles, pendingFollow, me } = useSocial();
+  // A profile opened or followed since is newer than the search's answer.
+  const following = profiles[who.handle]?.followedByMe ?? who.followedByMe ?? false;
+  const card: SocialProfileCard = {
+    handle: who.handle,
+    displayName: who.displayName,
+    avatarSeed: who.avatarSeed,
+  };
   return (
     <PressableRow
       accessibilityRole={onPick ? 'checkbox' : 'button'}
       accessibilityState={onPick ? { checked: !!picked } : undefined}
-      accessibilityLabel={`${found.displayName}, @${found.handle}`}
-      onPress={() => (onPick ? onPick(found) : openProfile(found.handle))}
+      accessibilityLabel={`${who.displayName}, @${who.handle}`}
+      onPress={() => (onPick ? onPick(card) : openProfile(who.handle))}
       style={styles.person}
     >
-      <SocialAvatar who={found} size={40} />
+      <SocialAvatar who={card} size={40} />
       <View style={styles.flex}>
         <Text style={styles.suggestionName} numberOfLines={1}>
-          {found.displayName}
+          {who.displayName}
         </Text>
         <Text style={styles.suggestionHandle} numberOfLines={1}>
-          @{found.handle}
+          @{who.handle}
         </Text>
       </View>
       {onPick ? (
         picked ? (
           <Icon name="check" size={18} color={c.accentText} />
         ) : null
-      ) : (
-        <Icon name="chevronRight" size={13} color={c.textSecondary} />
+      ) : who.isMe || who.handle === me?.handle ? null : (
+        <FollowButton
+          variant="icon"
+          handle={who.handle}
+          following={following}
+          busy={pendingFollow[who.handle]}
+          onPress={() => {
+            if (!requireSignIn(`follow @${who.handle}`, `/u/${who.handle}`)) return;
+            void toggleFollow(who.handle, following).catch((error) =>
+              showErrorToast(socialError(error)),
+            );
+          }}
+        />
       )}
     </PressableRow>
   );

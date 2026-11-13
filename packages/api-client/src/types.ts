@@ -1449,6 +1449,18 @@ export interface SocialProfileCard {
   avatarSeed: string;
 }
 
+/**
+ * Someone people search found (`GET /social/people`): their card, follower count and
+ * whether you follow them. A private account is found by its card too; nothing else of
+ * theirs is in the answer.
+ */
+export interface SocialPerson extends SocialProfileCard {
+  followers: number;
+  /** Always false signed out. */
+  followedByMe: boolean;
+  isMe: boolean;
+}
+
 export interface SocialPick {
   symbol: string;
   chain: string;

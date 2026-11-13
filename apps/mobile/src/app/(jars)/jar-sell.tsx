@@ -14,6 +14,7 @@ import { FlowTray, InlineTray } from '@/components/sheets/Tray';
 import { TokenIcon } from '@/components/wallet/parts';
 import { confirmOwner } from '@/lib/auth';
 import { SPONSORED_FEE } from '@/lib/evm-gas';
+import { useMoney } from '@/lib/fx';
 import { honeyPaysOn, useGasAllowance } from '@/lib/gas';
 import { success, tap } from '@/lib/haptics';
 import {
@@ -54,6 +55,7 @@ function JarSellSheet() {
   // Kept from when the screen opened: selling all of it removes the jar.
   const [jar] = useState(live);
   const styles = useStyles();
+  const money = useMoney();
   const c = useTheme();
   const [usd, setUsd] = useState(0);
   const [page, setPage] = useState<'amount' | 'review' | 'sold'>('amount');
@@ -182,7 +184,7 @@ function JarSellSheet() {
             <StrategyCard split jar={jar} picks={jar.picks} name={jar.name} meta="Your jar" />
           }
           note="You pick what you get next"
-          cta={(amount) => `Sell ${formatUsd(amount)}`}
+          cta={(amount) => `Sell ${money.format(amount)}`}
           onDone={(amount) => {
             tap();
             review(amount);

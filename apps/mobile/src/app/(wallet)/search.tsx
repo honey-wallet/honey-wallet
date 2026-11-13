@@ -135,6 +135,8 @@ export default function SearchScreen() {
   const jars = useThesisJars();
   const publicJars = useMemo(() => jars.filter((j) => j.id.startsWith(SOCIAL_PREFIX)), [jars]);
   const [personFound, setPersonFound] = useState(false);
+  // People search is still asking the server: "No matches" waits for its answer.
+  const [peopleSearching, setPeopleSearching] = useState(false);
   // Live prices and stats outside test mode (lib/market).
   const marketList = useMarketList();
   const { failed: offline, retrying, retry } = useMarketListStatus();
@@ -293,21 +295,31 @@ export default function SearchScreen() {
                 <MarketRow key={token.symbol} token={token} />
               ))}
               {personFound ? <Text style={styles.group}>People</Text> : null}
-              {SOCIAL ? <PersonResult query={query} onFound={setPersonFound} /> : null}
+              {SOCIAL ? (
+                <PersonResult
+                  query={query}
+                  onFound={setPersonFound}
+                  onSearching={setPeopleSearching}
+                />
+              ) : null}
               {jarResults.length ? <Text style={styles.group}>Jars</Text> : null}
               {jarResults.length ? <JarList jars={jarResults.slice(0, 8)} /> : null}
-              {results.length === 0 && !site && !personFound && !jarResults.length && (
-                <EmptyState
-                  icon="search"
-                  title="No matches"
-                  hint={
-                    offline
-                      ? 'Couldn’t reach Honey to search tokens. Check your connection.'
-                      : `Nothing found for “${query.trim()}”.`
-                  }
-                  action={{ label: 'Clear search', onPress: () => setQuery('') }}
-                />
-              )}
+              {results.length === 0 &&
+                !site &&
+                !personFound &&
+                !(SOCIAL && peopleSearching) &&
+                !jarResults.length && (
+                  <EmptyState
+                    icon="search"
+                    title="No matches"
+                    hint={
+                      offline
+                        ? 'Couldn’t reach Honey to search tokens. Check your connection.'
+                        : `Nothing found for “${query.trim()}”.`
+                    }
+                    action={{ label: 'Clear search', onPress: () => setQuery('') }}
+                  />
+                )}
             </SkeletonReveal>
           </View>
         ) : (

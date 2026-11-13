@@ -8,6 +8,7 @@ import {
   RunTracker,
   revealChars,
   STAGES,
+  STARTING,
   STILL_WORKING,
   sharedPrefix,
 } from '@/lib/thesis-live';
@@ -128,8 +129,17 @@ describe('following a run live', () => {
     expect(feedFor(live, c.now())).toEqual([]);
   });
 
+  it('says something the moment a run starts, before the first update', () => {
+    const c = clock();
+    const tracker = new RunTracker(c.now);
+    const first = tracker.initial();
+    expect(feedFor(first, c.now()).map((l) => l.text)).toEqual([STARTING]);
+    const live = tracker.update({ stage: 'intake', step: 'intake', events: [{ text: 'Read it' }] });
+    expect(feedFor(live, c.now()).map((l) => l.text)).toEqual(['Read it']);
+  });
+
   it('writes times plainly', () => {
-    expect(elapsed(400)).toBe('0s');
+    expect(elapsed(400)).toBe('<1s');
     expect(elapsed(4_200)).toBe('4s');
     expect(elapsed(38_000)).toBe('38s');
     expect(elapsed(125_000)).toBe('2m 5s');

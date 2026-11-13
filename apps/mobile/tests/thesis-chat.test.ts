@@ -30,3 +30,55 @@ describe('reading the idea', () => {
     expect(ideaOnly('$300')).toBe('$300');
   });
 });
+
+describe('chat follow-ups', () => {
+  const input = { text: 'AI compute', amount: 500, risk: 'Medium' as const };
+
+  it('changes risk only when risk is what you talk about', async () => {
+    const { asksRisk } = await import('@/lib/thesis-chat');
+    for (const said of ['Make it safer', 'low risk', 'more aggressive', 'lower', 'High'])
+      expect(asksRisk(said)).toBe(true);
+    for (const said of ['high interest rates hurt crypto', 'lower fees on Base win'])
+      expect(asksRisk(said)).toBe(false);
+  });
+
+  it('never offers your own words back as a quick reply', async () => {
+    const { reply } = await import('@/lib/thesis-chat');
+    const { sampleProposal } = await import('@/lib/thesis');
+    const high = { ...sampleProposal({ ...input, risk: 'High' }) };
+    const chips: string[][] = [];
+    await reply('Make it safer', high, {
+      update: (parts) => {
+        for (const p of parts) if (p.type === 'replies') chips.push(p.options);
+      },
+    });
+    expect(chips.flat()).not.toContain('Make it safer');
+  });
+
+  it('states an amount exactly as Create jar shows it', async () => {
+    const { nearestStep, reply } = await import('@/lib/thesis-chat');
+    const { sampleProposal } = await import('@/lib/thesis');
+    const steps = [1, 2, 5, 10, 25, 50, 100, 250, 500, 1000];
+    expect(nearestStep(300, steps)).toBe(250);
+    expect(nearestStep(100, steps)).toBe(100);
+    const texts: string[] = [];
+    const next = await reply('$300', sampleProposal(input), {
+      stake: (n) => nearestStep(n, steps),
+      update: (parts) => {
+        for (const p of parts) if (p.type === 'text') texts.push(p.text);
+      },
+    });
+    expect(next?.amount).toBe(250);
+    expect(texts.join(' ')).toContain('set to 250 USDC');
+  });
+
+  it('stops a run when Stop is pressed, without an answer', async () => {
+    const { reply } = await import('@/lib/thesis-chat');
+    const { ThesisStopped } = await import('@/lib/thesis');
+    const stop = new AbortController();
+    stop.abort();
+    await expect(
+      reply('AI keeps eating the world', null, { update: () => {}, signal: stop.signal }),
+    ).rejects.toBeInstanceOf(ThesisStopped);
+  });
+});

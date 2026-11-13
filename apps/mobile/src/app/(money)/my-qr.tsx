@@ -48,9 +48,27 @@ export default function MyQRSheet() {
       </SheetScreen>
     );
 
-  // Opened without a network (from Home): ask which one first.
+  // Withdrawing from an exchange (Receive's last row): the same picker and QR page, plus
+  // the one thing that loses money there, picking a different network in the exchange.
+  const exchange = from === 'exchange';
+
+  // Opened without a network (from Home, or the exchange guide): ask which one first.
   if (!chain && list.length > 1)
-    return (
+    return exchange ? (
+      <SheetScreen title="From an exchange">
+        <SheetText lead>
+          In your exchange, choose Withdraw and the network to send on. Pick the same one here.
+        </SheetText>
+        <View style={styles.picker}>
+          <ChainPicker
+            entries={list}
+            onPick={(family) =>
+              router.push({ pathname: '/my-qr', params: { chain: family, from: 'exchange' } })
+            }
+          />
+        </View>
+      </SheetScreen>
+    ) : (
       <SheetScreen title="Which network?">
         <SheetText lead>Each network has its own address.</SheetText>
         <View style={styles.picker}>
@@ -85,7 +103,8 @@ export default function MyQRSheet() {
       {/* Press and drag to tilt the code toward your finger; it rests flat to scan. */}
       <TiltCard style={styles.qr}>
         <QRCode
-          value={entry.uri}
+          // Exchange scanners read a bare address, not a payment URI.
+          value={exchange ? entry.address : entry.uri}
           size={QR_SIZE}
           color={c.primary}
           center={
@@ -133,6 +152,11 @@ export default function MyQRSheet() {
           </View>
         </View>
       )}
+      {exchange ? (
+        <Text style={styles.warning}>
+          Pick the same network in your exchange, or the money can be lost.
+        </Text>
+      ) : null}
     </SheetScreen>
   );
 }
@@ -192,6 +216,13 @@ const useStyles = makeStyles((c) => ({
     color: c.text,
     fontSize: 15,
     // A two-line warning (Solana, NEAR…) stays centred under the code.
+    textAlign: 'center',
+  },
+  warning: {
+    marginTop: 12,
+    color: c.textSecondary,
+    fontSize: 14,
+    lineHeight: 19,
     textAlign: 'center',
   },
   networksRow: {

@@ -316,7 +316,13 @@ fn router(config: &Config, health: runtime::RuntimeHealth, services: RouterServi
         .merge(routes::morpho::router(identity.clone(), morpho))
         .merge(routes::hyperliquid::router(identity.clone(), redis.clone()))
         .merge(push::after_writes(
-            routes::social::router(identity.clone(), market.clone(), jar_dao),
+            routes::social::router(
+                identity.clone(),
+                market.clone(),
+                jar_dao,
+                config.trust_proxy_headers,
+                config.trusted_proxy_cidrs.clone(),
+            ),
             push_sender(identity.as_ref()),
         ))
         .merge(routes::push::router(identity.clone()))

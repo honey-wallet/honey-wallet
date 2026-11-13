@@ -1,9 +1,10 @@
 import type { Href } from 'expo-router';
-import { type ReactNode, useEffect, useId, useMemo, useState } from 'react';
+import { type ReactElement, type ReactNode, useEffect, useId, useMemo, useState } from 'react';
 import {
   type AccessibilityState,
   Image,
   Pressable,
+  type RefreshControlProps,
   type StyleProp,
   StyleSheet,
   Text,
@@ -680,6 +681,7 @@ export function PushedScreen({
   scroll = true,
   contentStyle,
   onEndReached,
+  refreshControl,
   children,
 }: {
   title: ReactNode;
@@ -692,6 +694,8 @@ export function PushedScreen({
   /** Set false for screens that lay out their own content (e.g. a fixed panel). */
   scroll?: boolean;
   contentStyle?: StyleProp<ViewStyle>;
+  /** Pull to refresh, for a scrolling screen. */
+  refreshControl?: ReactElement<RefreshControlProps>;
   children: ReactNode;
 }) {
   const insets = useSafeAreaInsets();
@@ -742,7 +746,8 @@ export function PushedScreen({
           scrollEventThrottle={16}
           // Only scroll (and bounce) when there's more than fits; a page that fits
           // stays put, so dragging a chart on it scrubs instead of moving the page.
-          alwaysBounceVertical={false}
+          alwaysBounceVertical={!!refreshControl}
+          refreshControl={refreshControl}
           keyboardShouldPersistTaps="handled"
           onLayout={(e) => {
             viewportH.value = e.nativeEvent.layout.height;

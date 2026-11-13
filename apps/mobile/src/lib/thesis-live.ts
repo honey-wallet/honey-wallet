@@ -237,9 +237,10 @@ export class RunTracker {
   }
 }
 
-/** A duration as the timeline shows it: "4s", "38s", "2m 5s". */
+/** A duration as the timeline shows it: "<1s", "4s", "38s", "2m 5s". */
 export function elapsed(ms: number): string {
-  const s = Math.max(0, Math.floor(ms / 1000));
+  if (ms < 1000) return '<1s';
+  const s = Math.floor(ms / 1000);
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
 }
 
@@ -253,9 +254,17 @@ export function stepTime(step: { start?: number; end?: number } | undefined, now
 export const QUIET_MS = 20_000;
 export const STILL_WORKING = 'Still working, the AI is thinking it through.';
 
-/** The lines under the step in progress: its updates, and a reassurance when it's quiet. */
+/** The first line, shown the moment a run starts, before the server's first update. */
+export const STARTING = 'Reading your idea';
+
+/**
+ * The lines under the step in progress: its updates (or, before the first one arrives,
+ * `STARTING`, so the feed moves within a second), and a reassurance when it's quiet.
+ */
 export function feedFor(progress: LiveProgress, now: number): FeedLine[] {
   const lines = progress.events.filter((e) => e.step === progress.at);
+  if (!progress.done && progress.at === 0 && progress.events.length === 0)
+    lines.push({ id: 'starting', text: STARTING, step: 0 });
   if (!progress.done && now - progress.quietSince >= QUIET_MS)
     return [...lines, { id: 'quiet', text: STILL_WORKING, step: progress.at }];
   return lines;

@@ -4,6 +4,7 @@ import { Text, TextInput } from 'react-native';
 import Animated, { FadeIn } from 'react-native-reanimated';
 import { PillButton } from '@/components/onboarding/PillButton';
 import { StepScreen, useStepStyles } from '@/components/onboarding/StepScreen';
+import { offerHandle } from '@/lib/handle-offer';
 import { failure, success } from '@/lib/haptics';
 import { EMAIL_SIGN_IN, useEmailLink, useEmailLinkArrival } from '@/lib/identity-flows';
 import { continueAfterSignIn } from '@/lib/identity-onboarding';
@@ -67,6 +68,8 @@ function CheckEmail() {
           router.dismissAll();
           router.push({ pathname: '/get-started', params: { mode: 'restore' } });
         }
+        // Onboarding's last step, as after Apple or Google: an @handle, if none yet.
+        else void offerHandle();
       } catch (cause) {
         console.warn('Email sign-in failed', cause);
         failure();

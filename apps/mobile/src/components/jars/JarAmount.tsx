@@ -1,5 +1,5 @@
 import { router } from 'expo-router';
-import { type ReactNode, useEffect, useState } from 'react';
+import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { Text, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { Icon } from '@/components/Icon';
@@ -11,9 +11,10 @@ import { SHEET, StatRow } from '@/components/sheets/Sheet';
 import { Chip } from '@/components/wallet/Chip';
 import { applyKey, Keypad, TypedAmount, trimNumber } from '@/components/wallet/Keypad';
 import { TokenIcon } from '@/components/wallet/parts';
+import { useMoney } from '@/lib/fx';
 import { tap } from '@/lib/haptics';
 import { PAY_CHAINS } from '@/lib/jar-buy';
-import { formatUsd } from '@/lib/mock-wallet';
+import { quickAmount } from '@/lib/money';
 import { holdingOf, isUsdc, jarPayWith, PAY_BUFFER_BPS, spendable } from '@/lib/pay-with';
 import { TEST_MODE } from '@/lib/test-mode';
 import { useWalletView } from '@/lib/wallet-view';
@@ -98,12 +99,15 @@ export function JarAmount({
   header?: ReactNode;
   /** The line under a typed amount, e.g. the copy fee. */
   note?: string;
-  /** The button's words; a function gets the typed amount (e.g. "Sell $3.20"). */
+  /** The button's words; a function gets the typed amount in dollars (e.g. "Sell $3.20"). */
   cta: string | ((amount: number) => string);
+  /** Gets the amount in dollars, whatever currency it was typed in. */
   onDone: (amount: number) => void;
 }) {
   const styles = useStyles();
   const c = useTheme();
+  // Typed and shown in Settings' Local currency (lib/fx); everything handed back is dollars.
+  const money = useMoney();
   const funds = useJarFunds(!!payWith && !sell);
   const { real, symbol } = funds;
   const showPayWith = !!payWith && !sell && real && !funds.watchOnly;
@@ -111,14 +115,35 @@ export function JarAmount({
   const watchOnly = !sell && funds.watchOnly;
   const loading = !sell && funds.loading;
   const failed = !sell && funds.failed;
-  const [typed, setTyped] = useState(() => (initial && initial > 0 ? trimNumber(initial, 2) : ''));
-  const amount = Number(typed) || 0;
+  const [typed, setTyped] = useState(() =>
+    initial && initial > 0 ? trimNumber(money.fromUsd(initial), money.decimals) : '',
+  );
+  // The rate can arrive after the sheet opens (dollars until then): keep what's typed
+  // worth the same, in the new currency.
+  const unit = useRef(money);
+  useEffect(() => {
+    const was = unit.current;
+    unit.current = money;
+    if (was.code === money.code && was.rate === money.rate) return;
+    setTyped((v) =>
+      v && Number(v) ? trimNumber(money.fromUsd(was.toUsd(Number(v))), money.decimals) : v,
+    );
+  }, [money]);
+  // What's typed is in `money`; its dollars are what's checked, priced and paid. Within
+  // half a unit over the balance it means all of it (Max rounds to the currency's units).
+  const typedValue = Number(typed) || 0;
+  const slack = money.toUsd(0.5 / 10 ** money.decimals);
+  const typedUsd = money.toUsd(typedValue);
+  const amount = typedUsd > available && typedUsd - available <= slack ? available : typedUsd;
   useEffect(() => {
     onChange?.(amount);
   }, [amount, onChange]);
   // Until the balance is read, "not enough" would be a guess: wait instead.
   const tooMuch = (sell ? true : real) && !loading && !failed && amount > available;
-  const max = trimNumber(available, 2);
+  const max = trimNumber(
+    Math.floor(money.fromUsd(available) * 10 ** money.decimals) / 10 ** money.decimals,
+    money.decimals,
+  );
   // Running past the balance shakes the amount once, with the error haptic.
   const shaken = useOverShake(tooMuch);
   return (
@@ -126,7 +151,7 @@ export function JarAmount({
       {header}
       <View style={styles.amountArea}>
         <Animated.View style={shaken}>
-          <TypedAmount value={typed} prefix="$" size={56} />
+          <TypedAmount value={typed} prefix={money.sign} size={56} />
         </Animated.View>
         <TextSwap
           text={
@@ -138,13 +163,13 @@ export function JarAmount({
                   ? 'Couldn’t check your balance. Pull to refresh your Wallet, then try again'
                   : tooMuch
                     ? sell
-                      ? `The jar holds ${formatUsd(available)}`
-                      : `You have ${formatUsd(funds.held)} in ${symbol}`
+                      ? `The jar holds ${money.format(available)}`
+                      : `You have ${money.format(funds.held)} in ${symbol}`
                     : amount && note
                       ? note
                       : sell
-                        ? `${formatUsd(available)} in this jar`
-                        : `${formatUsd(funds.held)} ${symbol} available`
+                        ? `${money.format(available)} in this jar`
+                        : `You have ${money.format(funds.held)} in ${symbol}`
           }
           style={[styles.hint, tooMuch && styles.error]}
         />
@@ -169,6 +194,8 @@ export function JarAmount({
               <View style={styles.payValue}>
                 <TokenIcon symbol={symbol} chain={funds.token?.chain} size={22} ring={c.sheet} />
                 <Text style={styles.payText}>{symbol}</Text>
+                {/* What it's worth, in the currency the amount is typed in. */}
+                {loading ? null : <Text style={styles.payWorth}>{money.format(funds.held)}</Text>}
                 <Icon name="chevronRight" size={13} color={c.textSecondary} />
               </View>
             }
@@ -178,7 +205,7 @@ export function JarAmount({
       <View style={styles.presets}>
         {sell
           ? [25, 50].map((pct) => {
-              const v = trimNumber((available * pct) / 100, 2);
+              const v = trimNumber((money.fromUsd(available) * pct) / 100, money.decimals);
               return (
                 <Chip
                   key={pct}
@@ -189,15 +216,18 @@ export function JarAmount({
                 />
               );
             })
-          : presets.map((p) => (
-              <Chip
-                key={p}
-                label={`$${p}`}
-                accessibilityRole="radio"
-                selected={amount === p}
-                onPress={() => setTyped(String(p))}
-              />
-            ))}
+          : presets.map((p) => {
+              const v = quickAmount(money, p);
+              return (
+                <Chip
+                  key={p}
+                  label={money.format(money.toUsd(v)).replace(/\.0+$/, '')}
+                  accessibilityRole="radio"
+                  selected={typedValue === v}
+                  onPress={() => setTyped(String(v))}
+                />
+              );
+            })}
         {available > 0 && !loading ? (
           <Chip
             label="Max"
@@ -207,7 +237,7 @@ export function JarAmount({
           />
         ) : null}
       </View>
-      <Keypad onKey={(key) => setTyped((v) => applyKey(v, key, 2))} />
+      <Keypad onKey={(key) => setTyped((v) => applyKey(v, key, money.decimals))} />
       <PillButton
         label={
           watchOnly
@@ -274,5 +304,10 @@ const useStyles = makeStyles((c) => ({
     color: c.text,
     fontSize: 16,
     fontWeight: '500',
+  },
+  payWorth: {
+    color: c.textSecondary,
+    fontSize: 16,
+    fontVariant: ['tabular-nums'],
   },
 }));

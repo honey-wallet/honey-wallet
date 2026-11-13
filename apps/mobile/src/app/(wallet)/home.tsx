@@ -354,8 +354,16 @@ function HomeScreen() {
                   }
                   style={[styles.action, watchBlocked(action.label) && styles.actionOff]}
                 >
-                  <Icon name={action.icon} size={22} color={c.accentText} />
-                  <Text style={styles.actionLabel}>{action.label}</Text>
+                  <Icon name={action.icon} size={28} color={c.accentText} />
+                  {/* "Receive" is the widest: it shrinks a little on small phones, never wraps. */}
+                  <Text
+                    style={styles.actionLabel}
+                    numberOfLines={1}
+                    adjustsFontSizeToFit
+                    minimumFontScale={0.85}
+                  >
+                    {action.label}
+                  </Text>
                 </PressableScale>
               </Rise>
             ))}
@@ -695,17 +703,18 @@ const useStyles = makeStyles((c) => ({
     flexDirection: 'row',
     gap: 8,
   },
+  // 1.25× the first size (2026-11-13): the four ways in read at a glance.
   action: {
-    height: 82,
+    height: 102,
     padding: 12,
-    ...radius(18),
+    ...radius(20),
     justifyContent: 'space-between',
     backgroundColor: c.accentSurface,
   },
   actionLabel: {
     color: c.accentText,
-    fontSize: 15,
-    fontWeight: '500',
+    fontSize: 18,
+    fontWeight: '600',
   },
   // One line that opens into the ways to earn, on the same filled card as the
   // approvals one above it.
