@@ -8,8 +8,12 @@
 //! for this Firebase account: its waitlist email (matched on the verified sign-in email)
 //! and the Honey account linked to the sign-in (`user_verified_identities`), whose
 //! `users` row is deleted so every table under it cascades (sessions, wallets, profile,
-//! posts, groups they created, push tokens and watched wallets, thesis runs). Gas spend
-//! is kept without the person (SET NULL) so daily budgets stay right. Operation evidence
+//! posts, groups only they are in, push tokens and watched wallets, thesis runs). Gas
+//! spend and fee sponsorship ledgers are kept without the person (SET NULL) so daily
+//! budgets and once-ever top-ups stay right. Refused (409) while the person created a
+//! group anyone else accepted or paid into, or is accepted or paid in an open group with
+//! others: deleting them would take the group's record of other people's deposits (or
+//! their own share of it) with them. Operation evidence
 //! is immutable, so someone with operations keeps a bare `users` row and the wallet
 //! memberships those operations name; everything personal is still removed. The app then
 //! deletes the Firebase sign-in account itself with the same session, and wipes the
@@ -76,23 +80,66 @@ pub const PERSONAL_TABLES: &[&str] = &[
     "auth_refresh_families",
     "wallet_link_challenges",
     "identity_events",
-    "jar_dao_relays",
+    // Replaced (review): fee ledgers keep their rows (SPEND_TABLES).
+    // "jar_dao_relays",
     "push_tokens",
-    "social_group_sponsorships",
+    // "social_group_sponsorships",
     "social_profiles",
     "thesis_runs",
     "user_verified_identities",
 ];
 /// Spend ledgers that keep their rows without the person (`ON DELETE SET NULL`).
-pub const SPEND_TABLES: &[&str] = &["gas_charges", "evm_sponsorships"];
+// Replaced (review): the fee sponsorship ledgers are kept too.
+// pub const SPEND_TABLES: &[&str] = &["gas_charges", "evm_sponsorships"];
+pub const SPEND_TABLES: &[&str] = &[
+    "gas_charges",
+    "evm_sponsorships",
+    "jar_dao_relays",
+    "social_group_sponsorships",
+];
 /// What may keep a `users` row alive: immutable operation evidence.
 pub const EVIDENCE_TABLES: &[&str] = &["operations"];
 
-/// Deletes the Honey account linked to this Firebase sign-in. `Ok(true)` when the
-/// `users` row went (and everything with it); `Ok(false)` when operation evidence kept a
-/// bare row, after removing everything personal by hand.
-pub async fn delete_linked_user(pool: &PgPool, user: uuid::Uuid) -> Result<bool, sqlx::Error> {
+/// What [`delete_linked_user`] did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Deletion {
+    /// The `users` row went, and everything under it.
+    Deleted,
+    /// Operation evidence kept a bare `users` row; everything personal went.
+    EvidenceKept,
+    /// Nothing was deleted: the person shares a group with others (see the module docs).
+    SharedGroups,
+}
+
+/// Whether deleting `user` would take a group other people are in with it, or their
+/// part of one still open: they created a group in which someone else accepted or paid,
+/// or they accepted or paid in an unclosed group where someone else did too.
+const SHARED_GROUPS: &str = "SELECT EXISTS (
+    SELECT 1 FROM social_groups g
+    WHERE (g.creator = $1
+           OR (g.status <> 'closed' AND EXISTS (
+                SELECT 1 FROM social_group_members me
+                WHERE me.group_id = g.id AND me.user_id = $1
+                  AND (me.state = 'accepted' OR me.paid_ref IS NOT NULL))))
+      AND EXISTS (
+        SELECT 1 FROM social_group_members other
+        WHERE other.group_id = g.id AND other.user_id <> $1
+          AND (other.state = 'accepted' OR other.paid_ref IS NOT NULL)))";
+
+/// Deletes the Honey account linked to this Firebase sign-in, unless it shares a group
+/// with others ([`Deletion::SharedGroups`], nothing deleted). When operation evidence
+/// keeps the `users` row, everything personal is removed by hand.
+// Replaced (review): returns a Deletion, and refuses shared groups first.
+// pub async fn delete_linked_user(pool: &PgPool, user: uuid::Uuid) -> Result<bool, sqlx::Error> {
+pub async fn delete_linked_user(pool: &PgPool, user: uuid::Uuid) -> Result<Deletion, sqlx::Error> {
     let mut tx = pool.begin().await?;
+    let shared: bool = sqlx::query_scalar(SHARED_GROUPS)
+        .bind(user)
+        .fetch_one(&mut *tx)
+        .await?;
+    if shared {
+        return Ok(Deletion::SharedGroups);
+    }
     let mut attempt = tx.begin().await?;
     match sqlx::query("DELETE FROM users WHERE id = $1")
         .bind(user)
@@ -102,7 +149,7 @@ pub async fn delete_linked_user(pool: &PgPool, user: uuid::Uuid) -> Result<bool,
         Ok(_) => {
             attempt.commit().await?;
             tx.commit().await?;
-            return Ok(true);
+            return Ok(Deletion::Deleted);
         }
         Err(sqlx::Error::Database(e)) if e.code().as_deref() == Some("23503") => {
             attempt.rollback().await?;
@@ -133,7 +180,7 @@ pub async fn delete_linked_user(pool: &PgPool, user: uuid::Uuid) -> Result<bool,
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
-    Ok(false)
+    Ok(Deletion::EvidenceKept)
 }
 
 async fn delete_account(
@@ -161,13 +208,19 @@ async fn delete_account(
         .await
         .map_err(crate::identity::unavailable)?;
         if let Some(user) = linked {
-            account = if delete_linked_user(pool, user)
+            account = match delete_linked_user(pool, user)
                 .await
                 .map_err(crate::identity::unavailable)?
             {
-                "deleted"
-            } else {
-                "evidence_kept"
+                Deletion::Deleted => "deleted",
+                Deletion::EvidenceKept => "evidence_kept",
+                Deletion::SharedGroups => {
+                    return Err(AppError::Conflict(
+                        "You're in a group jar with other people. Leave it, or close it so \
+                         everyone is paid out, then delete your account."
+                            .into(),
+                    ));
+                }
             };
         }
         if let Some(email) = &session.verified_email {

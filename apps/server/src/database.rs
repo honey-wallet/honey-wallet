@@ -202,7 +202,8 @@ impl MigrationSource<'static> for EmbeddedMigrations {
                     LATEST_SCHEMA_VERSION,
                     "account deletion cascades",
                     include_str!("../migrations/202611140004_account_deletion_cascades.sql"),
-                    false,
+                    // Its own BEGIN/COMMIT steps, so each lock is short (see the file).
+                    true,
                 ),
             ])
         })

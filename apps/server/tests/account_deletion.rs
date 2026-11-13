@@ -6,7 +6,7 @@ mod common;
 
 use common::TestDatabase;
 use honey_server::routes::account_identity::{
-    EVIDENCE_TABLES, PERSONAL_TABLES, SPEND_TABLES, delete_linked_user,
+    Deletion, EVIDENCE_TABLES, PERSONAL_TABLES, SPEND_TABLES, delete_linked_user,
 };
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -102,7 +102,10 @@ async fn deleting_an_account_removes_the_user_and_everything_under_it() {
     let (other, _) = person(pool, 8).await;
     assert!(personal_rows(pool, user).await > 0);
 
-    assert!(delete_linked_user(pool, user).await.unwrap());
+    assert_eq!(
+        delete_linked_user(pool, user).await.unwrap(),
+        Deletion::Deleted
+    );
     assert_eq!(
         count(pool, "SELECT count(*) FROM users WHERE id = $1", user).await,
         0
@@ -169,7 +172,10 @@ async fn operation_evidence_keeps_a_bare_user_row_and_nothing_personal() {
     .await
     .unwrap();
 
-    assert!(!delete_linked_user(pool, user).await.unwrap());
+    assert_eq!(
+        delete_linked_user(pool, user).await.unwrap(),
+        Deletion::EvidenceKept
+    );
     assert_eq!(
         count(pool, "SELECT count(*) FROM users WHERE id = $1", user).await,
         1
@@ -243,5 +249,180 @@ async fn account_deletion_covers_every_reference() {
         refs.len(),
         cascading.len() + SPEND_TABLES.len() + EVIDENCE_TABLES.len()
     );
+    db.close().await;
+}
+
+async fn group(pool: &PgPool, creator: Uuid, status: &str) -> Uuid {
+    let id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO social_groups (id, creator, client_jar_id, name, picks, share_micro_usd, status)
+         VALUES ($1, $2, 'jar', 'Group', '[]', 1000000, $3)",
+    )
+    .bind(id)
+    .bind(creator)
+    .bind(status)
+    .execute(pool)
+    .await
+    .unwrap();
+    member(pool, id, creator, "accepted", None).await;
+    id
+}
+
+async fn member(pool: &PgPool, group: Uuid, user: Uuid, state: &str, paid: Option<&str>) {
+    sqlx::query(
+        "INSERT INTO social_group_members (group_id, user_id, state, paid_ref, paid_micro_usd)
+         VALUES ($1, $2, $3, $4, CASE WHEN $4 IS NULL THEN NULL ELSE 1000000 END)",
+    )
+    .bind(group)
+    .bind(user)
+    .bind(state)
+    .bind(paid)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires isolated TEST_DATABASE_URL"]
+async fn a_group_shared_with_others_blocks_deletion_and_loses_nothing() {
+    let db = TestDatabase::new().await;
+    let pool = &db.pool;
+    let (alice, _) = person(pool, 11).await;
+    let (bob, _) = person(pool, 12).await;
+    let (carol, _) = person(pool, 13).await;
+    // Alice's group: Bob paid in; Carol was invited and never answered.
+    let shared = group(pool, alice, "active").await;
+    member(pool, shared, bob, "accepted", Some("near:deposit-0001")).await;
+    member(pool, shared, carol, "invited", None).await;
+
+    // Neither the creator nor a paid member of the open group can go.
+    for user in [alice, bob] {
+        assert_eq!(
+            delete_linked_user(pool, user).await.unwrap(),
+            Deletion::SharedGroups
+        );
+        assert_eq!(
+            count(pool, "SELECT count(*) FROM users WHERE id = $1", user).await,
+            1
+        );
+    }
+    assert_eq!(
+        count(
+            pool,
+            "SELECT count(*) FROM social_group_members WHERE paid_ref IS NOT NULL AND $1::uuid IS NOT NULL",
+            bob
+        )
+        .await,
+        1
+    );
+    // Carol only had an invite: she can go, and the group keeps Bob's deposit.
+    assert_eq!(
+        delete_linked_user(pool, carol).await.unwrap(),
+        Deletion::Deleted
+    );
+    // Once closed, Bob can go; Alice still can't (her group would go with her).
+    sqlx::query("UPDATE social_groups SET status = 'closed' WHERE id = $1")
+        .bind(shared)
+        .execute(pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        delete_linked_user(pool, bob).await.unwrap(),
+        Deletion::Deleted
+    );
+    assert_eq!(
+        delete_linked_user(pool, alice).await.unwrap(),
+        Deletion::Deleted,
+        "nobody else accepted or paid is left"
+    );
+    db.close().await;
+}
+
+#[tokio::test]
+#[ignore = "requires isolated TEST_DATABASE_URL"]
+async fn fee_sponsorships_and_relays_outlive_the_person_and_their_group() {
+    let db = TestDatabase::new().await;
+    let pool = &db.pool;
+    let (dana, _) = person(pool, 21).await;
+    let solo = group(pool, dana, "solo").await;
+    sqlx::query(
+        "INSERT INTO social_group_sponsorships (group_id, user_id, account, yocto)
+         VALUES ($1, $2, 'dana-account', '1000')",
+    )
+    .bind(solo)
+    .bind(dana)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO jar_dao_relays (id, user_id, group_id, sender, receiver, methods, relayer, gas_yocto)
+         VALUES (gen_random_uuid(), $1, $2, 'dana-account', 'dao.near', 'add_proposal', 'honey.near', '500')",
+    )
+    .bind(dana)
+    .bind(solo)
+    .execute(pool)
+    .await
+    .unwrap();
+
+    assert_eq!(
+        delete_linked_user(pool, dana).await.unwrap(),
+        Deletion::Deleted
+    );
+    assert_eq!(
+        count(
+            pool,
+            "SELECT count(*) FROM social_groups WHERE id = $1",
+            solo
+        )
+        .await,
+        0
+    );
+    // Both ledgers keep their row, without the person or the group.
+    for table in ["social_group_sponsorships", "jar_dao_relays"] {
+        assert_eq!(
+            count(
+                pool,
+                &format!(
+                    "SELECT count(*) FROM {table}
+                     WHERE user_id IS NULL AND group_id IS NULL AND $1::uuid IS NOT NULL"
+                ),
+                dana
+            )
+            .await,
+            1,
+            "{table}"
+        );
+    }
+    // The account stays topped up once ever: a new account can't claim it again.
+    let (eve, _) = person(pool, 22).await;
+    let again = group(pool, eve, "solo").await;
+    let claimed = sqlx::query(
+        "INSERT INTO social_group_sponsorships (group_id, user_id, account, yocto)
+         VALUES ($1, $2, 'dana-account', '1000') ON CONFLICT DO NOTHING",
+    )
+    .bind(again)
+    .bind(eve)
+    .execute(pool)
+    .await
+    .unwrap()
+    .rows_affected();
+    assert_eq!(claimed, 0);
+    db.close().await;
+}
+
+/// Applying migration 202611140004 twice (as after a lock timeout) changes nothing.
+#[tokio::test]
+#[ignore = "requires isolated TEST_DATABASE_URL"]
+async fn the_cascades_migration_can_be_rerun() {
+    let db = TestDatabase::new().await;
+    let sql = include_str!("../migrations/202611140004_account_deletion_cascades.sql");
+    sqlx::raw_sql(sql).execute(&db.pool).await.unwrap();
+    let invalid: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM pg_constraint WHERE contype = 'f' AND NOT convalidated",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(invalid, 0);
     db.close().await;
 }
