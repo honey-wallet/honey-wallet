@@ -709,7 +709,9 @@ export default function NewThesisSheet() {
     const payoutText = TEST_MODE ? '' : copyFeePayoutText(payoutAccount);
     return (
       <SheetScreen
-        title="Launch your jar"
+        // title="Launch your jar"
+        // A copy reads as one: the jar is someone else's idea, at your amount.
+        title={copied && !copied.mine ? 'Copy jar' : 'Launch your jar'}
         size="fill"
         scroll
         pinFooter
@@ -739,8 +741,8 @@ export default function NewThesisSheet() {
                             ? tooSmall.label
                             : // `Buy ${formatUsd(proposal.amount)} and launch`
                               copied && !copied.mine
-                              ? `Copy for ${usdText.format(proposal.amount)}`
-                              : `Buy ${usdText.format(proposal.amount)} and launch`
+                              ? `Copy for ${usdText.format(proposal.amount).replace(/\.00$/, '')}`
+                              : `Buy ${usdText.format(proposal.amount).replace(/\.00$/, '')} and launch`
               }
               // disabled={!name.trim() || buying || blocked.length > 0}
               disabled={
@@ -763,7 +765,9 @@ export default function NewThesisSheet() {
           <TextInput
             value={name}
             onChangeText={setName}
-            autoFocus
+            // autoFocus
+            // A copy arrives named: no keyboard over its Copy button.
+            autoFocus={!(copied && !copied.mine)}
             maxLength={32}
             placeholder="Name your jar"
             placeholderTextColor={c.placeholder}

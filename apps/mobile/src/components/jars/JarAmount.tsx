@@ -33,7 +33,9 @@ import { TEST_MODE } from '@/lib/test-mode';
 import { useWalletView } from '@/lib/wallet-view';
 import { makeStyles, useTheme } from '@/theme';
 
-const PRESETS = [50, 100, 250];
+// const PRESETS = [50, 100, 250];
+// Dollar amounts a copy or a first jar starts with (2026-11-14), like Copy's own steps.
+const PRESETS = [5, 10, 25];
 
 /**
  * What the wallet in use can spend on a jar. USDC by default: on every network that pays
