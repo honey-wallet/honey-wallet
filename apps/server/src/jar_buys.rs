@@ -580,6 +580,19 @@ fn check_quote(body: &Value, payload: &Value) -> Result<LegQuote, AppError> {
     if Some(amount_in.as_str()) != payload["amount"].as_str() || min > out || min < floor {
         return Err(AppError::Busy);
     }
+    // The quote's deadline: ours, unless 1Click's is sooner. Since 2026-11-13 1Click
+    // answers a 15-minute ask with a deadline days out (its deposit address stays open),
+    // and the app rightly refuses a quote that far off as stale ("The quote expired").
+    let asked_deadline = payload["deadline"].as_str().map(String::from);
+    let deadline = match (text("deadline"), asked_deadline) {
+        (Some(got), Some(asked))
+            if instant(Some(&Value::String(got.clone()))) > instant(payload.get("deadline")) =>
+        {
+            asked
+        }
+        (Some(got), _) => got,
+        (None, asked) => asked.unwrap_or_default(),
+    };
     Ok(LegQuote {
         destination_asset: payload["destinationAsset"]
             .as_str()
@@ -591,8 +604,7 @@ fn check_quote(body: &Value, payload: &Value) -> Result<LegQuote, AppError> {
         amount_out,
         min_amount_out: min_out,
         amount_out_usd: text("amountOutUsd"),
-        deadline: text("deadline")
-            .unwrap_or_else(|| payload["deadline"].as_str().unwrap_or_default().into()),
+        deadline,
         recipient: payload["recipient"].as_str().unwrap_or_default().into(),
         refund_to: payload["refundTo"].as_str().unwrap_or_default().into(),
         slippage_bps: bps as u16,
@@ -699,6 +711,20 @@ mod tests {
         assert_eq!(q.refund_to, "0xabc");
         assert_eq!(q.slippage_bps, 100);
         assert_eq!(p["dry"], false);
+    }
+
+    #[test]
+    fn keeps_our_deadline_when_1click_returns_a_later_one() {
+        let r = request();
+        let p = payload(&r, &r.legs[0], "2026-11-08T12:15:00Z");
+        // 1Click (since 2026-11-13) answers a 15-minute ask with one days out.
+        let mut later = reply(&p, "1336500000000000000000000");
+        later["quote"]["deadline"] = json!("2026-11-11T12:15:00.000Z");
+        assert_eq!(check_quote(&later, &p).unwrap().deadline, "2026-11-08T12:15:00Z");
+        // A sooner one is kept: the deposit address closes then.
+        let mut sooner = reply(&p, "1336500000000000000000000");
+        sooner["quote"]["deadline"] = json!("2026-11-08T12:10:00Z");
+        assert_eq!(check_quote(&sooner, &p).unwrap().deadline, "2026-11-08T12:10:00Z");
     }
 
     #[test]
