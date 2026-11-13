@@ -459,13 +459,19 @@ impl ThesisService {
     /// Answers one follow-up question on a strategy.
     pub async fn ask(&self, owner: Uuid, req: AskRequest) -> Result<AskAnswer, AskError> {
         // The run, when named: its stored thesis, picks and sources stand in for the app's.
+        // Replaced (review): a run that isn't the caller's was a 404 (telling them it
+        // exists or not); now it's ignored and the question answered from the app's own.
+        // let stored = match req.run_id {
+        //     Some(id) => Some(
+        //         self.owned(owner, id)
+        //             .await
+        //             .map_err(|_| AskError::Busy)?
+        //             .ok_or(AskError::NotFound)?,
+        //     ),
+        //     None => None,
+        // };
         let stored = match req.run_id {
-            Some(id) => Some(
-                self.owned(owner, id)
-                    .await
-                    .map_err(|_| AskError::Busy)?
-                    .ok_or(AskError::NotFound)?,
-            ),
+            Some(id) => self.owned(owner, id).await.map_err(|_| AskError::Busy)?,
             None => None,
         };
         let assets = self.registry.assets().await;
@@ -848,19 +854,18 @@ mod tests {
         let user = seen.lock().unwrap().clone();
         assert!(user.contains("<user_question>\nHow can I hedge against this ?"));
         assert!(user.contains("PAXG (PAX Gold)"));
-        // Someone else's run, or one that doesn't exist: not found.
+        // Someone else's run, or one that doesn't exist: ignored, and the question is
+        // answered from what the app sent.
         let _ = StartThesis {
             text: None,
             links: vec![],
             params: Default::default(),
         };
-        assert_eq!(
-            service
-                .ask(owner, request("why?", Some(Uuid::new_v4())))
-                .await
-                .unwrap_err(),
-            AskError::NotFound
-        );
+        let other = service
+            .ask(owner, request("why?", Some(Uuid::new_v4())))
+            .await
+            .unwrap();
+        assert!(!other.answer.is_empty());
     }
 
     #[tokio::test]
