@@ -882,6 +882,59 @@ export interface Strategy {
    * run. The top-level fields equal `byRisk[params.risk]`. Absent inside the variants.
    */
   byRisk?: { low: Strategy; medium: Strategy; high: Strategy };
+  /**
+   * The pages the run read, numbered as the `[n]` citation markers in the thesis
+   * rationale and bear case cite them (http(s) only; markers pointing nowhere are
+   * removed). Top level only; absent when nothing was read.
+   */
+  sources?: ThesisSource[];
+}
+
+/** A numbered source a `[n]` citation marker points at. */
+export interface ThesisSource {
+  n: number;
+  url: string;
+  title: string;
+  /** The site without `www.`, e.g. "reuters.com". */
+  domain: string;
+}
+
+/** `POST /api/v1/theses/ask`: a follow-up question on a strategy. */
+export interface ThesisAskRequest {
+  /** The run the strategy came from: its stored result is used instead when known. */
+  runId?: string;
+  question: string;
+  strategy: {
+    thesis: string;
+    risk?: ThesisRisk;
+    amountUsd?: number;
+    cashPct?: number;
+    picks: { symbol: string; weightPct: number; reason?: string }[];
+  };
+}
+
+/** A pick in a change the answer proposes, checked against what Honey can buy. */
+export interface ThesisAskPick {
+  symbol: string;
+  chain: string;
+  weightPct: number;
+  reason: string;
+}
+
+/** `POST /api/v1/theses/ask` response. */
+export interface ThesisAnswer {
+  /** 2-5 plain sentences; `[n]` markers point at `sources`. */
+  answer: string;
+  /** A changed set of picks ("Update the jar"); absent when nothing changes. */
+  picks?: ThesisAskPick[];
+  /** What the proposed picks leave in USDC. */
+  cashPct?: number;
+  risk: ThesisRisk;
+  sources?: ThesisSource[];
+  /** Tickers the model proposed that Honey can't buy at this risk level. */
+  ignored?: string[];
+  dryRun: boolean;
+  promptVersion: string;
 }
 
 /** GET /api/v1/theses/:id */

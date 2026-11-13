@@ -31,7 +31,7 @@ import { formatBalance, formatUsd, tokenName } from '@/lib/mock-wallet';
 import { useProfile } from '@/lib/profile';
 import { COPY_FEES } from '@/lib/surface';
 import { TEST_MODE } from '@/lib/test-mode';
-import { jarReturn, jarValue, type Pick, type ThesisJar } from '@/lib/thesis';
+import { jarReturn, jarValue, type Pick, splitWithCash, type ThesisJar } from '@/lib/thesis';
 import { tokenColor } from '@/lib/token-colors';
 import { useTokenLogo } from '@/lib/token-logos';
 import { makeStyles, radius, useTheme } from '@/theme';
@@ -842,8 +842,11 @@ export function Mix({
   extra,
   tappable,
   trailing,
+  shares,
 }: {
   picks: Slice[];
+  /** Each token's share after its symbol ("XAUT 50%"), so the legend reads as the bar. */
+  shares?: boolean;
   /** At the far right of the legend row, e.g. a post's fee. */
   trailing?: ReactNode;
   /** In place of the share, e.g. a thesis token's move since posting. */
@@ -862,6 +865,7 @@ export function Mix({
               <TokenIcon symbol={p.symbol} size={16} />
               <Text style={styles.mixText}>
                 {p.symbol}
+                {shares ? <Text style={styles.mixShare}> {p.weight}%</Text> : null}
                 {extra ? <> {extra(p.symbol)}</> : null}
               </Text>
             </>
@@ -925,7 +929,17 @@ export function JarCard({ jar }: { jar: ThesisJar }) {
           <Change value={ret * 100} />
         </View>
       </View>
-      {hidden ? null : <Mix picks={jar.picks} />}
+      {/* {hidden ? null : <Mix picks={jar.picks} />} */}
+      {/* Cash included, so a jar holding some USDC never draws the rest wider. */}
+      {hidden ? null : (
+        <Mix
+          picks={splitWithCash(jar.picks).map((p, i) => ({
+            symbol: p.symbol,
+            weight: p.weight,
+            color: jar.picks.find((x) => x.symbol === p.symbol)?.color ?? tokenColor(p.symbol, i),
+          }))}
+        />
+      )}
       {jar.openOrder ? (
         <Text style={styles.cardNote}>
           {formatUsd(jar.openOrder.amount)} limit order waiting to fill
@@ -950,8 +964,11 @@ export function StrategyCard({
   split,
   children,
   fee,
+  cashPct,
 }: {
   jar?: ThesisJar;
+  /** What a proposal keeps in USDC: drawn and listed as part of the split. */
+  cashPct?: number;
   picks: Pick[];
   name: string;
   meta?: string;
@@ -1065,8 +1082,10 @@ export function StrategyCard({
           </View>
         </View>
       ) : showSplit ? (
+        // The whole split, cash included, so the bar, its legend and the rows agree.
         <Mix
-          picks={picks.map((p, i) => ({
+          shares
+          picks={splitWithCash(picks, cashPct).map((p, i) => ({
             symbol: p.symbol,
             weight: p.weight,
             color: tokenColor(p.symbol, i),
@@ -1317,6 +1336,7 @@ const useStyles = makeStyles((c) => ({
   mixLegend: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 14, rowGap: 6 },
   mixItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   mixText: { color: c.text, fontSize: 13, fontWeight: '500' },
+  mixShare: { color: c.textSecondary, fontVariant: ['tabular-nums'] },
   mixPct: { color: c.textSecondary, fontWeight: '400', fontVariant: ['tabular-nums'] },
   // Ideas to start from, as the empty chat shows them.
   ideas: { gap: 10 },

@@ -143,6 +143,38 @@ describe('createApiClient', () => {
     expect(new Headers(fetch.mock.calls[0]?.[1]?.headers).get('authorization')).toBeNull();
   });
 
+  it('asks a follow-up question on a strategy and checks the answer', async () => {
+    const answer = {
+      answer: 'Add PAXG as a hedge at 20% [1].',
+      picks: [{ symbol: 'PAXG', chain: 'eth', weightPct: 20, reason: 'Gold.' }],
+      cashPct: 30,
+      risk: 'medium',
+      sources: [{ n: 1, url: 'https://reuters.com/a', title: 'Gold', domain: 'reuters.com' }],
+      dryRun: false,
+      promptVersion: 'ask/1',
+    };
+    const fetch = mockFetch(200, answer);
+    const api = createApiClient({ baseUrl: 'http://api.test', fetch });
+    const input = {
+      runId: 'r1',
+      question: 'How can I hedge against this ?',
+      strategy: {
+        thesis: 'Nvidia',
+        risk: 'medium' as const,
+        picks: [{ symbol: 'XAUT', weightPct: 50 }],
+      },
+    };
+    await expect(api.askThesis('t', input)).resolves.toEqual(answer);
+    expect(fetch.mock.calls[0]?.[0]).toBe('http://api.test/api/v1/theses/ask');
+    expect(fetch.mock.calls[0]?.[1]?.method).toBe('POST');
+    expect(JSON.parse(String(fetch.mock.calls[0]?.[1]?.body))).toEqual(input);
+    const bad = createApiClient({
+      baseUrl: 'http://api.test',
+      fetch: mockFetch(200, { picks: 1 }),
+    });
+    await expect(bad.askThesis('t', input)).rejects.toThrow();
+  });
+
   it('joins the waitlist with a JSON POST', async () => {
     const fetch = mockFetch(200, { status: 'joined' });
     const api = createApiClient({ baseUrl: 'http://api.test', fetch });

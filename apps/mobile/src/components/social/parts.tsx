@@ -559,6 +559,7 @@ export function CopyStepper({
   verb = 'Copy',
   start: startAmount,
   onAmount,
+  format,
 }: {
   /** The word before the amount: Copy for someone's jar, Create jar for your own idea. */
   verb?: string;
@@ -570,6 +571,11 @@ export function CopyStepper({
   start?: number;
   /** Told the amount whenever − or + changes it. */
   onAmount?: (amount: number) => void;
+  /**
+   * The amount in the user's currency ("Create jar $5") instead of a number and the USDC
+   * logo (the thesis chat, 2026-11-14).
+   */
+  format?: (usd: number) => string;
 }) {
   const styles = useStyles();
   const c = useTheme();
@@ -624,7 +630,7 @@ export function CopyStepper({
           variant={variant}
           size={size}
           label={label}
-          accessibilityLabel={`${label}, ${amount} USDC`}
+          accessibilityLabel={format ? `${label}, ${format(amount)}` : `${label}, ${amount} USDC`}
           onPress={() => onCopy(amount)}
         >
           {/* Copy keeps its icon; "Create jar" reads fine on its own. */}
@@ -635,9 +641,15 @@ export function CopyStepper({
           ) : null}
           <Animated.View layout={glide} style={styles.copyWords}>
             <Text style={copyText}>{verb} </Text>
-            <TextSwap text={String(amount)} direction={direction} style={copyText} />
-            <Text style={copyText}> </Text>
-            <TokenIcon symbol="USDC" size={20} />
+            {format ? (
+              <TextSwap text={format(amount)} direction={direction} style={copyText} />
+            ) : (
+              <>
+                <TextSwap text={String(amount)} direction={direction} style={copyText} />
+                <Text style={copyText}> </Text>
+                <TokenIcon symbol="USDC" size={20} />
+              </>
+            )}
           </Animated.View>
         </PillButton>
       </Animated.View>
