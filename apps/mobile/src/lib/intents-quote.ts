@@ -158,10 +158,51 @@ export function declaredCopyFee(fee: unknown): DeclaredCopyFee | null {
 }
 
 /**
- * 1Click's own record must take exactly the copy fee shown, and nothing more: the creator
- * named once, paid the fee (or the half 1Click's 50/50 split leaves them), and every fee
- * on the swap together at most that plus 1Click's own share. Without a declared fee the
- * swap's fees aren't checked here (1Click's own, as before).
+ * The server's copy fees on a leg (one per creator, oldest copy first), checked for shape:
+ * each well formed, creators distinct, at most `MAX_COPY_FEE_BPS` together.
+ */
+export function declaredCopyFees(fees: unknown): DeclaredCopyFee[] {
+  if (fees === undefined || fees === null) return [];
+  if (!Array.isArray(fees)) throw quoteChanged();
+  const out = fees.map((f) => {
+    const fee = declaredCopyFee(f);
+    if (!fee) throw quoteChanged();
+    return fee;
+  });
+  const names = new Set(out.map((f) => f.recipient.toLowerCase()));
+  if (names.size !== out.length || out.reduce((s, f) => s + f.bps, 0) > MAX_COPY_FEE_BPS)
+    throw quoteChanged();
+  return out;
+}
+
+/**
+ * 1Click's own record must take exactly the copy fees shown, and nothing more: each
+ * creator named once and paid their fee (or the half 1Click's 50/50 split leaves them),
+ * and every fee on the swap together at most those plus 1Click's own share. Without
+ * declared fees the swap's fees aren't checked here (1Click's own, as before).
+ */
+export function checkOneClickCopyFees(record: OneClickStatus, fees: DeclaredCopyFee[]) {
+  if (!fees.length) return;
+  const list = record.quoteRequest.appFees;
+  if (!Array.isArray(list)) throw quoteChanged();
+  const entries = (list as { recipient?: unknown; fee?: unknown }[]).map((e) => {
+    if (typeof e?.recipient !== 'string' || !Number.isInteger(e.fee) || Number(e.fee) < 0)
+      throw quoteChanged();
+    return { to: e.recipient.toLowerCase(), bps: Number(e.fee) };
+  });
+  for (const fee of fees) {
+    const mine = entries.filter((e) => e.to === fee.recipient.toLowerCase());
+    const paid = mine[0]?.bps;
+    if (mine.length !== 1 || (paid !== fee.bps && paid !== Math.ceil(fee.bps / 2)))
+      throw quoteChanged();
+  }
+  const total = entries.reduce((s, e) => s + e.bps, 0);
+  if (total > fees.reduce((s, f) => s + f.bps, 0) + ONE_CLICK_EXTRA_BPS) throw quoteChanged();
+}
+
+/**
+ * Superseded 2026-11-14 (security review): one fee per swap, no longer called;
+ * `checkOneClickCopyFees` is the check.
  */
 export function checkOneClickFees(record: OneClickStatus, fee: DeclaredCopyFee | null) {
   if (!fee) return;

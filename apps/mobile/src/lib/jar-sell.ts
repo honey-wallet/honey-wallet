@@ -197,7 +197,8 @@ export async function quoteJarSell(
       ? amountOutMin
       : swaps.reduce((s, x) => s + usdMin(x.swap), 0) +
         dex.reduce((s, x) => s + (x.payout ? usdMin(x.payout) : dexOut(x, true)), 0),
-    copyFee: sellCopyFee(swaps.map((x) => x.swap.copyFee)),
+    // copyFee: sellCopyFee(swaps.map((x) => x.swap.copyFee)),
+    copyFee: sellCopyFee(swaps.flatMap((x) => x.swap.copyFees ?? [])),
   };
 }
 

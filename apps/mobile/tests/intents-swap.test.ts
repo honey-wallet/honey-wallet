@@ -963,6 +963,141 @@ describe('copy sales (creator fees)', () => {
   });
 
   const CREATOR = '0x97a5c31bfbfa1809cf20454f2aaefa05932ab18e';
+  const BEN = '0x3333333333333333333333333333333333333333';
+  const ONE_CLICK_FEES = '5880ad2b362620fadf759cbceb1cd5737ce8c6ed7fb8e9942881e6731f9247dd';
+  const fee = { recipient: CREATOR, bps: 120, pct: 10, usd: 0.05 };
+  const input = {
+    sell: { symbol: 'ETH', chain: 'Base' as const },
+    buy: { symbol: 'SOL', chain: 'Solana' as const },
+    amount: '0.002',
+  };
+  // 1Click's record, its fee split 50/50 with itself as its live quotes are.
+  const split = [
+    { recipient: CREATOR, fee: 60 },
+    { recipient: ONE_CLICK_FEES, fee: 60 },
+  ];
+
+  it('sends the copied jar as a hint, and keeps the fee the server set once 1Click agrees', async () => {
+    const ask = vi.fn(async () => quote([leg({ copyFees: [fee] })]));
+    const result = await quoteSwap(
+      { ...input, copySaleOf: 'jar-1' },
+      { fetcher: oneClick({ appFees: split }), quote: ask, now: () => NOW },
+    );
+    expect(ask).toHaveBeenCalledWith('session', expect.objectContaining({ copySaleOf: 'jar-1' }));
+    // Nothing about the fee itself is ever sent.
+    const [, sent] = ask.mock.calls[0] as unknown as [string, Record<string, unknown>];
+    expect(Object.keys(sent).sort()).toEqual(
+      ['copySaleOf', 'legs', 'originAsset', 'refundTo', 'slippageBps'].sort(),
+    );
+    expect(result).toMatchObject({ copySaleOf: 'jar-1', copyFees: [fee] });
+  });
+
+  it('shows a fee the server puts on any sell of copied tokens, named a copy or not', async () => {
+    // Swap (or a phone that left the hint out): the server charges it all the same.
+    const result = await quoteSwap(input, {
+      fetcher: oneClick({ appFees: split }),
+      quote: async () => quote([leg({ copyFees: [fee] })]),
+      now: () => NOW,
+    });
+    expect(result.copySaleOf).toBeUndefined();
+    expect(result.copyFees).toEqual([fee]);
+    // Two creators, oldest copy first: one entry each in 1Click's record.
+    const ben = { recipient: BEN, bps: 300, pct: 20, usd: 0.12 };
+    const both = await quoteSwap(input, {
+      fetcher: oneClick({
+        appFees: [
+          { recipient: CREATOR, fee: 60 },
+          { recipient: BEN, fee: 150 },
+          { recipient: ONE_CLICK_FEES, fee: 210 },
+        ],
+      }),
+      quote: async () => quote([leg({ copyFees: [fee, ben] })]),
+      now: () => NOW,
+    });
+    expect(both.copyFees).toEqual([fee, ben]);
+  });
+
+  it('refuses a fee 1Click doesn’t take as shown', async () => {
+    for (const appFees of [
+      undefined,
+      [{ recipient: ONE_CLICK_FEES, fee: 20 }],
+      [
+        { recipient: OTHER, fee: 60 },
+        { recipient: ONE_CLICK_FEES, fee: 60 },
+      ],
+      [{ recipient: CREATOR, fee: 240 }],
+      [
+        { recipient: CREATOR, fee: 120 },
+        { recipient: ONE_CLICK_FEES, fee: 25 },
+        { recipient: OTHER, fee: 5 },
+      ],
+    ])
+      await expect(
+        quoteSwap(
+          { ...input, copySaleOf: 'jar-1' },
+          {
+            fetcher: oneClick({ appFees }),
+            quote: async () => quote([leg({ copyFees: [fee] })]),
+            now: () => NOW,
+          },
+        ),
+      ).rejects.toThrow('The quote changed');
+    // Out of bounds, the same creator twice, or more than the cap together.
+    for (const bad of [
+      [{ ...fee, bps: 476 }],
+      [{ ...fee, bps: 1.5 }],
+      [{ ...fee, pct: 31 }],
+      [{ ...fee, recipient: '' }],
+      [fee, { ...fee, recipient: CREATOR.toUpperCase() }],
+      [
+        { ...fee, bps: 400 },
+        { ...fee, recipient: BEN, bps: 76 },
+      ],
+      { ...fee },
+    ])
+      await expect(
+        quoteSwap(
+          { ...input, copySaleOf: 'jar-1' },
+          {
+            fetcher: oneClick({ appFees: split }),
+            quote: async () => quote([leg({ copyFees: bad })]),
+            now: () => NOW,
+          },
+        ),
+      ).rejects.toThrow('The quote changed');
+  });
+
+  it('checks the fee again before paying', async () => {
+    const prepare = vi.fn();
+    await expect(
+      prepareSwapPayment(swap({ copySaleOf: 'jar-1', copyFees: [fee] }), {
+        fetcher: oneClick({ appFees: [{ recipient: OTHER, fee: 120 }] }),
+        prepare,
+        now: () => NOW,
+      }),
+    ).rejects.toThrow('The quote changed');
+    expect(prepare).not.toHaveBeenCalled();
+  });
+
+  it('a sell with no profit carries no fee', async () => {
+    const result = await quoteSwap(
+      { ...input, copySaleOf: 'jar-1' },
+      { fetcher: oneClick(), quote: async () => quote([leg({ copyFees: [] })]), now: () => NOW },
+    );
+    expect(result.copyFees).toBeUndefined();
+  });
+});
+
+/*
+Superseded 2026-11-14 (security review): fees only on sells named a copy sale.
+
+describe('copy sales (creator fees)', () => {
+  beforeEach(() => {
+    wallets.set({ activeId: 'seed-0', added: [wallet] });
+    intentsSwaps.set({});
+  });
+
+  const CREATOR = '0x97a5c31bfbfa1809cf20454f2aaefa05932ab18e';
   const ONE_CLICK_FEES = '5880ad2b362620fadf759cbceb1cd5737ce8c6ed7fb8e9942881e6731f9247dd';
   const fee = { recipient: CREATOR, bps: 120, pct: 10, usd: 0.05 };
   const input = {
@@ -1069,3 +1204,5 @@ describe('copy sales (creator fees)', () => {
     expect(result.copyFee).toBeNull();
   });
 });
+
+*/

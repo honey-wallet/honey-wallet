@@ -192,6 +192,348 @@ fn success(units: &str) -> Value {
 const BOUGHT_FOR: &str = "100000000000000000000";
 const BOUGHT: &str = "50000000000000000";
 
+/// (recipient, bps) of each copy fee on a quote's first leg.
+fn fees_of(quote: &honey_server::jar_buys::BuyQuote) -> Vec<(String, u16)> {
+    quote.legs[0]
+        .copy_fees
+        .iter()
+        .map(|f| (f.recipient.clone(), f.bps))
+        .collect()
+}
+
+/// The copier's lots: (state, units, sold), oldest first.
+async fn lot_rows(pool: &sqlx::PgPool, copier: Uuid) -> Vec<(String, Option<String>, String)> {
+    sqlx::query_as(
+        "SELECT state, units::text, sold::text FROM copy_buy_lots WHERE copier = $1 ORDER BY seq",
+    )
+    .bind(copier)
+    .fetch_all(pool)
+    .await
+    .unwrap()
+}
+
+fn account(wallet: [u8; 20]) -> String {
+    format!("0x{}", hex::encode(wallet))
+}
+
+/// A copy buy of ETH for `paid` (USDC atomic units) that 1Click delivered `units` for.
+async fn copied(
+    buys: &JarBuys,
+    double: &Arc<Mutex<Double>>,
+    me: &str,
+    jar: Uuid,
+    paid: &str,
+    units: &str,
+) -> String {
+    let mut buy = request(USDC, ETH, paid);
+    buy.copy_of = Some(jar);
+    let deposit = buys.quote(me, buy).await.unwrap().legs[0]
+        .deposit_address
+        .clone();
+    double
+        .lock()
+        .unwrap()
+        .swaps
+        .insert(deposit.clone(), success(units));
+    deposit
+}
+
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn every_sell_of_copied_units_pays_whatever_the_phone_says() {
+    let db = TestDatabase::new().await;
+    let pool = db.pool.clone();
+    let double = Arc::new(Mutex::new(Double::default()));
+    let (market, base) = one_click(double.clone()).await;
+    let buys = JarBuys::new(base, None, market, 1_000.0)
+        .unwrap()
+        .with_pool(Some(pool.clone()));
+    let ana_wallet = [0xAB; 20];
+    let ana = user(&pool, Some(ana_wallet)).await;
+    let copier = user(&pool, Some([0x01; 20])).await;
+    let stranger = user(&pool, Some([0x02; 20])).await;
+    let jar = jar(&pool, ana, 10).await;
+    let me = copier.to_string();
+
+    // The copy buy: recorded, unsettled; a sell before it lands charges nothing.
+    let mut buy = request(USDC, ETH, BOUGHT_FOR);
+    buy.copy_of = Some(jar);
+    let deposit = buys.quote(&me, buy).await.unwrap().legs[0]
+        .deposit_address
+        .clone();
+    assert_eq!(
+        lot_rows(&pool, copier).await,
+        vec![("quoted".into(), None, "0".into())]
+    );
+    let early = buys.quote(&me, request(ETH, USDC, BOUGHT)).await.unwrap();
+    assert!(fees_of(&early).is_empty());
+    assert!(
+        double
+            .lock()
+            .unwrap()
+            .asked
+            .last()
+            .unwrap()
+            .get("appFees")
+            .is_none()
+    );
+
+    // 1Click delivers; the app's status poll settles it.
+    double
+        .lock()
+        .unwrap()
+        .swaps
+        .insert(deposit.clone(), success(BOUGHT));
+    buys.status(&me, &deposit).await.unwrap();
+    assert_eq!(lot_rows(&pool, copier).await[0].1.as_deref(), Some(BOUGHT));
+
+    // Selling it all without naming the jar (a modified phone): $150 for $100, 10% of $50
+    // = $5 = 333 bps of $150, to Ana's signed-in wallet.
+    let sold = buys.quote(&me, request(ETH, USDC, BOUGHT)).await.unwrap();
+    assert_eq!(fees_of(&sold), vec![(account(ana_wallet), 333)]);
+    assert_eq!(
+        double.lock().unwrap().asked.last().unwrap()["appFees"],
+        json!([{ "recipient": account(ana_wallet), "fee": 333 }])
+    );
+    // Naming some other jar changes nothing.
+    let mut other = request(ETH, USDC, BOUGHT);
+    other.copy_sale_of = Some(Uuid::new_v4());
+    assert_eq!(
+        fees_of(&buys.quote(&me, other).await.unwrap()),
+        vec![(account(ana_wallet), 333)]
+    );
+    // Half of it: the same share of profit.
+    let half = buys
+        .quote(&me, request(ETH, USDC, "25000000000000000"))
+        .await
+        .unwrap();
+    assert_eq!(fees_of(&half), vec![(account(ana_wallet), 333)]);
+    // Twice the copied units ($300): only the copied half counts, $5 of $300 = 166 bps.
+    let more = buys
+        .quote(&me, request(ETH, USDC, "100000000000000000"))
+        .await
+        .unwrap();
+    assert_eq!(fees_of(&more), vec![(account(ana_wallet), 166)]);
+
+    // Someone who didn't copy pays nothing.
+    let quote = buys
+        .quote(&stranger.to_string(), request(ETH, USDC, BOUGHT))
+        .await
+        .unwrap();
+    assert!(fees_of(&quote).is_empty());
+
+    // 1Click dropping the fee from its echo is refused, not passed on.
+    double.lock().unwrap().drop_fees = true;
+    assert!(matches!(
+        buys.quote(&me, request(ETH, USDC, BOUGHT)).await,
+        Err(AppError::Busy)
+    ));
+    double.lock().unwrap().drop_fees = false;
+
+    // Once the full sell goes through, those units are sold: the next sell is the
+    // seller's own and pays nothing.
+    double
+        .lock()
+        .unwrap()
+        .swaps
+        .insert(sold.legs[0].deposit_address.clone(), success("150000000"));
+    let after = buys.quote(&me, request(ETH, USDC, BOUGHT)).await.unwrap();
+    assert!(fees_of(&after).is_empty());
+    assert_eq!(lot_rows(&pool, copier).await[0].2, BOUGHT);
+
+    db.close().await;
+}
+
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn copies_of_several_creators_pay_oldest_first_each_their_own() {
+    let db = TestDatabase::new().await;
+    let pool = db.pool.clone();
+    let double = Arc::new(Mutex::new(Double::default()));
+    let (market, base) = one_click(double.clone()).await;
+    let buys = JarBuys::new(base, None, market, 1_000.0)
+        .unwrap()
+        .with_pool(Some(pool.clone()));
+    let (ana_wallet, ben_wallet) = ([0xA1; 20], [0xB1; 20]);
+    let ana = user(&pool, Some(ana_wallet)).await;
+    let ben = user(&pool, Some(ben_wallet)).await;
+    let copier = user(&pool, Some([0x03; 20])).await;
+    let (ana_jar, ben_jar) = (jar(&pool, ana, 10).await, jar(&pool, ben, 20).await);
+    let me = copier.to_string();
+
+    // Ana's copy first: 0.05 ETH for $100. Then Ben's: 0.05 ETH for $50. Both settle at
+    // sale time, from 1Click itself (the phone never polled).
+    copied(&buys, &double, &me, ana_jar, BOUGHT_FOR, BOUGHT).await;
+    copied(&buys, &double, &me, ben_jar, "50000000000000000000", BOUGHT).await;
+    // Selling 0.1 ETH ($300): Ana's half made $50 → $5 (166 bps of $300); Ben's made
+    // $100 → $20 (666 bps). 832 together, scaled to the 475 cap: 94 and 380.
+    let both = buys
+        .quote(&me, request(ETH, USDC, "100000000000000000"))
+        .await
+        .unwrap();
+    assert_eq!(
+        fees_of(&both),
+        vec![(account(ana_wallet), 94), (account(ben_wallet), 380)]
+    );
+    assert_eq!(
+        double.lock().unwrap().asked.last().unwrap()["appFees"],
+        json!([{ "recipient": account(ana_wallet), "fee": 94 },
+               { "recipient": account(ben_wallet), "fee": 380 }])
+    );
+    // Selling only 0.05 ETH takes Ana's (older) copy alone.
+    let first = buys.quote(&me, request(ETH, USDC, BOUGHT)).await.unwrap();
+    assert_eq!(fees_of(&first), vec![(account(ana_wallet), 333)]);
+
+    db.close().await;
+}
+
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn unsettled_rows_can_neither_hide_settled_ones_nor_pile_up() {
+    let db = TestDatabase::new().await;
+    let pool = db.pool.clone();
+    let double = Arc::new(Mutex::new(Double::default()));
+    let (market, base) = one_click(double.clone()).await;
+    let buys = JarBuys::new(base, None, market, 1_000.0)
+        .unwrap()
+        .with_pool(Some(pool.clone()));
+    let ana_wallet = [0xC1; 20];
+    let ana = user(&pool, Some(ana_wallet)).await;
+    let copier = user(&pool, Some([0x04; 20])).await;
+    let jar = jar(&pool, ana, 10).await;
+    let me = copier.to_string();
+    copied(&buys, &double, &me, jar, BOUGHT_FOR, BOUGHT).await;
+    // Settle it, then bury it under 300 newer quoted (never paid) copy buys of ETH.
+    buys.quote(&me, request(ETH, USDC, "1")).await.ok();
+    sqlx::query(
+        "INSERT INTO copy_buy_lots (deposit_address, copier, jar_id, asset, cost_micro_usd, fee_pct)
+         SELECT 'unpaid-' || g, $1, $2, $3, 1000000, 10 FROM generate_series(1, 300) g",
+    )
+    .bind(copier)
+    .bind(jar)
+    .bind(ETH)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let sold = buys.quote(&me, request(ETH, USDC, BOUGHT)).await.unwrap();
+    assert_eq!(fees_of(&sold), vec![(account(ana_wallet), 333)]);
+
+    // With that many unsettled, a new copy buy is refused in plain words.
+    let mut buy = request(USDC, ETH, BOUGHT_FOR);
+    buy.copy_of = Some(jar);
+    match buys.quote(&me, buy).await {
+        Err(AppError::BadRequest(message)) => assert!(message.contains("Too many copy buys")),
+        other => panic!("{other:?}"),
+    }
+
+    // Refunded, failed, expired or unpaid past 1Click's deadline: void.
+    {
+        let mut d = double.lock().unwrap();
+        d.swaps
+            .insert("unpaid-1".into(), json!({ "status": "REFUNDED" }));
+        d.swaps
+            .insert("unpaid-2".into(), json!({ "status": "FAILED" }));
+        d.swaps
+            .insert("unpaid-3".into(), json!({ "status": "EXPIRED" }));
+        d.swaps
+            .insert("unpaid-4".into(), json!({ "status": "PENDING_DEPOSIT" }));
+        d.swaps
+            .insert("unpaid-5".into(), json!({ "status": "PENDING_DEPOSIT" }));
+        d.swaps
+            .insert("unpaid-6".into(), json!({ "status": "PROCESSING" }));
+    }
+    sqlx::query(
+        "UPDATE copy_buy_lots SET expires_at = clock_timestamp() - interval '1 minute'
+         WHERE deposit_address = 'unpaid-4'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    buys.quote(&me, request(ETH, USDC, BOUGHT)).await.unwrap();
+    let states: Vec<(String, String)> = sqlx::query_as(
+        "SELECT deposit_address, state FROM copy_buy_lots
+         WHERE deposit_address IN ('unpaid-1','unpaid-2','unpaid-3','unpaid-4','unpaid-5','unpaid-6')
+         ORDER BY deposit_address",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        states,
+        vec![
+            ("unpaid-1".into(), "void".into()),
+            ("unpaid-2".into(), "void".into()),
+            ("unpaid-3".into(), "void".into()),
+            ("unpaid-4".into(), "void".into()),
+            ("unpaid-5".into(), "quoted".into()),
+            ("unpaid-6".into(), "quoted".into()),
+        ]
+    );
+
+    db.close().await;
+}
+
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn a_loss_a_refund_or_no_wallet_means_no_fee() {
+    let db = TestDatabase::new().await;
+    let pool = db.pool.clone();
+    let double = Arc::new(Mutex::new(Double::default()));
+    let (market, base) = one_click(double.clone()).await;
+    let buys = JarBuys::new(base, None, market, 1_000.0)
+        .unwrap()
+        .with_pool(Some(pool.clone()));
+    let creator = user(&pool, Some([0xCD; 20])).await;
+    let copier = user(&pool, Some([0x05; 20])).await;
+    let jar1 = jar(&pool, creator, 20).await;
+    let me = copier.to_string();
+
+    // Bought 0.05 ETH for $200 (at $4,000): selling at $3,000 is a loss.
+    copied(&buys, &double, &me, jar1, "200000000000000000000", BOUGHT).await;
+    let quote = buys.quote(&me, request(ETH, USDC, BOUGHT)).await.unwrap();
+    assert!(fees_of(&quote).is_empty());
+    assert!(
+        double
+            .lock()
+            .unwrap()
+            .asked
+            .last()
+            .unwrap()
+            .get("appFees")
+            .is_none()
+    );
+    // A loss still sells those units once it goes through.
+    double
+        .lock()
+        .unwrap()
+        .swaps
+        .insert(quote.legs[0].deposit_address.clone(), success("150000000"));
+
+    // A creator with no signed-in wallet has nowhere to be paid: no fee.
+    let walletless = user(&pool, None).await;
+    assert_eq!(
+        copy_fees::payout_account(&pool, walletless).await.unwrap(),
+        None
+    );
+    let jar2 = jar(&pool, walletless, 30).await;
+    copied(&buys, &double, &me, jar2, "10000000000000000000", BOUGHT).await;
+    let quote = buys.quote(&me, request(ETH, USDC, BOUGHT)).await.unwrap();
+    assert!(fees_of(&quote).is_empty());
+    let rows = lot_rows(&pool, copier).await;
+    assert_eq!(rows[0].2, BOUGHT, "the loss-making sell counted as sold");
+
+    // Copying your own jar records nothing.
+    let mut own = request(USDC, ETH, BOUGHT_FOR);
+    own.copy_of = Some(jar1);
+    buys.quote(&creator.to_string(), own).await.unwrap();
+    assert!(lot_rows(&pool, creator).await.is_empty());
+
+    db.close().await;
+}
+
+/*
+Superseded 2026-11-14 (security review): tests of the fee charged only on a named jar.
+
 #[tokio::test]
 #[ignore = "requires TEST_DATABASE_URL"]
 async fn a_copiers_sell_pays_the_creator_their_cut_of_the_profit() {
@@ -411,3 +753,4 @@ impl CloneLeg for BuyLeg {
         }
     }
 }
+*/

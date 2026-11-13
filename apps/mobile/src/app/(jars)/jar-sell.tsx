@@ -291,7 +291,9 @@ function JarSellSheet() {
                     }
                   />
                   {/* A copied jar: the creator's cut of your profit, set by the server. */}
-                  {real && copiedJarId(jar) ? (
+                  {/* {real && copiedJarId(jar) ? ( */}
+                  {/* Any sell of copied tokens pays it, so it shows whenever there's one. */}
+                  {real && (copiedJarId(jar) || quote?.copyFee) ? (
                     <StatRow
                       label="Creator's fee"
                       value={quote ? copyFeeText(quote.copyFee) : '…'}

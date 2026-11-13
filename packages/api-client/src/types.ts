@@ -991,8 +991,8 @@ export interface JarBuyRequest {
   /** A copy of this published jar (`SocialJar.id`): the server records its cost for copy fees. */
   copyOf?: string;
   /**
-   * Selling holdings copied from this published jar (one leg): the server works out the
-   * creator's fee and adds it to the 1Click quote. Nothing about the fee is sent from here.
+   * The phone's hint that this sells a copied jar's holdings. The server never reads it:
+   * every sell of copied units pays the creators' fees (`copyFees`), named or not.
    */
   copySaleOf?: string;
 }
@@ -1317,8 +1317,13 @@ export interface JarBuyLeg {
   slippageBps: number;
   /** 1Click's signature over the quote, passed through. */
   signature: string | null;
-  /** The creator's cut taken from this swap (a copy sale only); absent from older servers. */
-  copyFee?: CopyFeeQuote | null;
+  // /** The creator's cut taken from this swap (a copy sale only); absent from older servers. */
+  // copyFee?: CopyFeeQuote | null;
+  /**
+   * Creators' cuts taken from this swap: it sells units copied from their jars (oldest
+   * copy first). Empty, or absent from older servers, for every other swap.
+   */
+  copyFees?: CopyFeeQuote[];
 }
 
 export interface JarBuyQuote {

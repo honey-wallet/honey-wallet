@@ -55,9 +55,11 @@ import {
   atomic,
   quoteChanged as changed,
   checkDeadline,
+  checkOneClickCopyFees,
   checkOneClickRecord,
   checkOneClickTerms,
   DEADLINE_MARGIN_MS,
+  declaredCopyFees,
   MAX_SLIPPAGE_BPS,
   MIN_VALUE_KEPT,
   minWithinSlippage,
@@ -963,6 +965,9 @@ export async function verifyWithOneClick(
     amountIn: leg.amountIn,
   });
   checkOneClickTerms(record, leg);
+  // Paying with tokens copied from someone's jar pays their creators' fees: exactly the
+  // ones the server declared, or nothing is paid.
+  checkOneClickCopyFees(record, declaredCopyFees(leg.copyFees));
 }
 
 /**

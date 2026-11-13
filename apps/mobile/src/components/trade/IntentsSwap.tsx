@@ -20,6 +20,7 @@ import { /* SCREEN, */ TokenIcon } from '@/components/wallet/parts';
 import { confirmOwner } from '@/lib/auth';
 import { backendSession, backendSessionToken } from '@/lib/backend-session';
 import { planRoute } from '@/lib/best-route';
+import { copyFeeText, sellCopyFee } from '@/lib/copy-fees';
 import {
   type DexQuoted,
   dexGasNote,
@@ -1111,6 +1112,10 @@ function ReviewStep({
         <Row label="Network" value={network} />
         <Row label="Amount" value={pay} />
         <Row label="Network cost" value={plan ? plan.fee : null} />
+        {/* Selling tokens copied from someone's jar: their creator's cut (lib/copy-fees). */}
+        {swap.copyFees?.length ? (
+          <Row label="Creator's fee" value={copyFeeText(sellCopyFee(swap.copyFees))} />
+        ) : null}
         <Row label="Arrives" value={arrivesIn(swap.timeEstimate)} />
         <Row label="Max slippage" value={`${swap.slippageBps / 100}%`} />
         <Row
