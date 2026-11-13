@@ -882,6 +882,34 @@ describe('quote → pay', () => {
     expect(early.next.status).toBe('KNOWN_DEPOSIT_TX');
     expect(early.depositTx).not.toHaveBeenCalled();
   });
+
+  it('keeps the hash of a swap settled from its chain, so a late answer from 1Click still wins (nov14-c audit 2)', async () => {
+    const answer = (s: string) =>
+      (async () =>
+        new Response(
+          JSON.stringify({ status: s, quoteResponse: { quoteRequest: {}, quote: {} } }),
+        )) as unknown as typeof fetch;
+    const settled = swap({
+      status: 'EXPIRED' as const,
+      txHash: `0x${'d'.repeat(64)}`,
+      sentAt: NOW,
+    });
+    const soon = { token: () => null, now: () => NOW + 3600_000 };
+    expect((await refreshSwap(settled, { ...soon, fetcher: answer('SUCCESS') })).status).toBe(
+      'SUCCESS',
+    );
+    // 1Click still waiting: it stays settled, never back to moving.
+    expect(
+      (await refreshSwap(settled, { ...soon, fetcher: answer('PENDING_DEPOSIT') })).status,
+    ).toBe('EXPIRED');
+    // A day on, or an expired quote nobody paid: not asked again.
+    const fetcher = vi.fn(answer('SUCCESS'));
+    const dayOn = { token: () => null, now: () => NOW + 25 * 3600_000 };
+    expect((await refreshSwap(settled, { ...dayOn, fetcher })).status).toBe('EXPIRED');
+    const unpaid = swap({ status: 'EXPIRED' as const, sentAt: NOW });
+    expect((await refreshSwap(unpaid, { ...soon, fetcher })).status).toBe('EXPIRED');
+    expect(fetcher).not.toHaveBeenCalled();
+  });
 });
 
 describe('payout wording', () => {

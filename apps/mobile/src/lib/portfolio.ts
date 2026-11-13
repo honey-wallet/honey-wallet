@@ -68,6 +68,20 @@ const begin = (key: string) => {
 };
 
 /**
+ * The signed-in session's token, sent on balance and activity reads so the server counts
+ * uncached reads per account instead of per IP (14 Nov: many people share a carrier IP).
+ * Set by the session lifecycle; reads stay public and work without it.
+ */
+let sessionToken: () => string | null = () => null;
+export function setPortfolioSessionToken(get: () => string | null) {
+  sessionToken = get;
+}
+function authInit(): RequestInit | undefined {
+  const token = sessionToken();
+  return token ? { headers: { Authorization: `Bearer ${token}` } } : undefined;
+}
+
+/**
  * `force` reads even when the last read is recent; `fresh` also asks the server past its
  * own cache (after a transaction), and isn't held back by a read already under way.
  */
@@ -79,7 +93,7 @@ export async function refreshBalances(addresses: PortfolioAddresses, force = fal
   const current = begin(`balances:${key}`);
   patch(key, { loadingBalances: true });
   try {
-    const portfolio = await api.portfolioBalances(addresses, undefined, { fresh });
+    const portfolio = await api.portfolioBalances(addresses, authInit(), { fresh });
     if (!current()) return portfolio;
     patch(key, { portfolio, loadingBalances: false, error: false, balancesAt: Date.now() });
     return portfolio;
@@ -97,7 +111,7 @@ export async function refreshActivity(addresses: PortfolioAddresses, force = fal
   const current = begin(`activity:${key}`);
   patch(key, { loadingActivity: true });
   try {
-    const { items } = await api.portfolioActivity(addresses, undefined, { fresh });
+    const { items } = await api.portfolioActivity(addresses, authInit(), { fresh });
     if (current()) patch(key, { activity: items, loadingActivity: false, activityAt: Date.now() });
   } catch {
     if (current()) patch(key, { loadingActivity: false, activityAt: Date.now() });

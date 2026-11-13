@@ -1,3 +1,4 @@
+import { ApiError } from '@honey-wallet/api-client';
 import { useState } from 'react';
 import { Linking, Text, View } from 'react-native';
 import { Icon } from '@/components/Icon';
@@ -34,10 +35,19 @@ export default function DeleteAccountSheet() {
     } catch (error) {
       failure();
       setBusy(false);
+      // showErrorToast(
+      //   error instanceof RecentSignInRequired
+      //     ? 'Sign in again, then delete your account'
+      //     : 'Couldn’t delete your account. Try again.',
+      // );
+      // 14 Nov: the server refuses (409) while you share a group jar with others, and
+      // says what to do; show its words instead of "Try again".
       showErrorToast(
         error instanceof RecentSignInRequired
           ? 'Sign in again, then delete your account'
-          : 'Couldn’t delete your account. Try again.',
+          : error instanceof ApiError && error.status === 409
+            ? error.message
+            : 'Couldn’t delete your account. Try again.',
       );
     }
   };

@@ -52,6 +52,8 @@ vi.mock('@/lib/intents-swap', () => ({
   fetchSwapTokens: async () => [],
   quoteSwap: (input: never) => quoteSwap(input),
   requoteSwap: (swap: never) => requoteSwap(swap),
+  noWorse: (shown: { minAmountOut: string }, fresh: { minAmountOut: string }) =>
+    BigInt(fresh.minAmountOut) >= BigInt(shown.minAmountOut),
   // As lib/intents-swap's: no worse than the reviewed minimum less its slippage.
   withinSlippage: (
     shown: { minAmountOut: string; slippageBps: number },
@@ -209,29 +211,44 @@ describe('selling a DEX-bought token', () => {
     });
   });
 
-  it('re-quotes the onward swap only when it ran out, and only pays one within the slippage reviewed (money audit 3)', async () => {
-    const sell = async () => {
+  it('re-quotes the onward swap only when it ran out, and shows a lower price again before paying it (money audit 3, nov14-c audit 3)', async () => {
+    const sell = async (confirm = vi.fn(async (_reason: string) => true)) => {
       const api = fakeServer();
       const d = dexDeps(api, deviceRpc({ [TX('a')]: '0x1' }));
       const j = jar([dexLeg('Arbitrum', GRAIL, 'GRAIL')]);
       thesisJars.set([j]);
       const q = await quoteJarSell(j, 6, 12, { dex: d }, 'USDC');
-      return executeJarSell(j, q, () => true, { confirm: async () => true, dex: d });
+      return executeJarSell(j, q, () => true, { confirm, dex: d });
     };
     // Any other failure is not a reason to re-quote: the USDC stays, nothing more is paid.
     prepareFails = true;
     await expect(sell()).rejects.toThrow('The USDC is in your wallet');
     expect(requoteSwap).not.toHaveBeenCalled();
     expect(calls).toEqual(['prepare dep-Arbitrum']);
-    // Ran out while the DEX swap landed: a fresh quote 0.5% lower is within the 1% reviewed.
+    // Ran out while the DEX swap landed; the fresh minimum is no lower: straight on.
     prepareFails = false;
     calls.length = 0;
     payoutLeft = 30_000;
-    freshMin = '9651500';
-    await sell();
+    freshMin = '9700000';
+    const once = vi.fn(async (_reason: string) => true);
+    await sell(once);
     expect(requoteSwap).toHaveBeenCalledTimes(1);
+    expect(once).toHaveBeenCalledTimes(1); // the sell's own confirmation only
     expect(calls).toEqual(['prepare dep-Arbitrum-fresh', 'pay dep-Arbitrum-fresh']);
-    // One 2% lower: refused, nothing paid onward.
+    // 0.5% lower, within the slippage reviewed: shown again, paid only once confirmed.
+    calls.length = 0;
+    freshMin = '9651500';
+    const again = vi.fn(async (_reason: string) => true);
+    await sell(again);
+    expect(again).toHaveBeenCalledTimes(2);
+    expect(again.mock.calls[1]?.[0]).toContain('get at least 9.6515 USDC');
+    expect(calls).toEqual(['prepare dep-Arbitrum-fresh', 'pay dep-Arbitrum-fresh']);
+    // Declined: nothing paid onward, the USDC stays.
+    calls.length = 0;
+    let n = 0;
+    await expect(sell(vi.fn(async () => n++ === 0))).rejects.toThrow('The USDC is in your wallet');
+    expect(calls).toEqual([]);
+    // 2% lower: past the slippage reviewed, refused without asking.
     calls.length = 0;
     freshMin = '9506000';
     await expect(sell()).rejects.toThrow('max slippage');

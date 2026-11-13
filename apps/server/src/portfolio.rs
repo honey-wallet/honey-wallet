@@ -31,7 +31,11 @@ use tokio::sync::{OnceCell, Semaphore};
 // Replaced (audit #3): the caches are bounded LRUs behind a plain mutex now.
 // use tokio::sync::RwLock;
 
-const BALANCES_TTL: Duration = Duration::from_secs(20);
+// Replaced (review): the app polls every 30 s, so a 20 s answer never served a poll.
+// const BALANCES_TTL: Duration = Duration::from_secs(20);
+/// Over the app's 30 s poll, so at most every other poll misses (`fresh=1` reads right
+/// after the app's own transactions skip it).
+const BALANCES_TTL: Duration = Duration::from_secs(40);
 const ACTIVITY_TTL: Duration = Duration::from_secs(60);
 /// NearBlocks' keyless tier allows only a few calls a minute: NEAR history is kept longer.
 const NEAR_ACTIVITY_TTL: Duration = Duration::from_secs(180);

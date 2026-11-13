@@ -27,7 +27,7 @@ import {
 import { formatUnits, isAddress } from 'viem';
 import { api } from '@/lib/api';
 import { backendSessionToken } from '@/lib/backend-session';
-import { depositTxState } from '@/lib/deposit-tx';
+import { type depositTxState, depositTxVerdict } from '@/lib/deposit-tx';
 import {
   atomic,
   checkDeadline,
@@ -526,6 +526,18 @@ export type IntentsSwap = {
 const FINAL = new Set<SwapStatus>(['SUCCESS', 'REFUNDED', 'FAILED', 'EXPIRED']);
 export const isFinal = (s: IntentsSwap) => FINAL.has(s.status);
 
+/** How long a swap settled from its own chain is still asked about, in case 1Click saw it late. */
+const RECHECK_MS = 24 * 3600_000;
+/**
+ * A sent swap settled as EXPIRED or FAILED from its own chain (it kept its hash): 1Click
+ * is still asked about it for a day, so a late SUCCESS or refund wins (nov14-c audit 2).
+ * It doesn't keep the in-flight bar up.
+ */
+export const settledFromChain = (s: IntentsSwap, now = Date.now()) =>
+  (s.status === 'EXPIRED' || s.status === 'FAILED') &&
+  !!s.txHash &&
+  now - (s.sentAt ?? 0) < RECHECK_MS;
+
 /** What the screen says about a swap's progress. */
 export type SwapStage = 'quoted' | 'sending' | 'sent' | 'swapping' | 'done' | 'refunded' | 'failed';
 export function swapStage(s: Pick<IntentsSwap, 'status'>): SwapStage {
@@ -718,7 +730,9 @@ const defaults: SwapDeps = {
   prepare: prepareSend,
   // The server's clock: deadlines are set on it, and a phone's may be minutes off.
   now: serverNow,
-  depositTx: (chain, hash) => depositTxState(chain, hash),
+  // depositTx: (chain, hash) => depositTxState(chain, hash),
+  // Two "missing" reads minutes apart before a deposit counts as dropped (nov14-c audit 2).
+  depositTx: (chain, hash) => depositTxVerdict(chain, hash, serverNow()),
 };
 
 /** A live, verified quote for selling `amount` (decimal text) of `sell` for `buy`. Nothing is signed. */
@@ -1111,7 +1125,9 @@ export async function refreshSwap(
   deps: Partial<SwapDeps> = {},
 ): Promise<IntentsSwap> {
   const d = { ...defaults, ...deps };
-  if (isFinal(swap) || swap.status === 'QUOTED') return swap;
+  // if (isFinal(swap) || swap.status === 'QUOTED') return swap;
+  const recheck = settledFromChain(swap, d.now());
+  if ((isFinal(swap) && !recheck) || swap.status === 'QUOTED') return swap;
   const token = d.token();
   let status: JarBuyState | null = null;
   let destinationTxHashes = swap.destinationTxHashes;
@@ -1129,6 +1145,8 @@ export async function refreshSwap(
     if (s && KNOWN.includes(s)) status = s;
   }
   if (!status) return swap;
+  // Settled from its own chain: only 1Click seeing the deposit after all changes it.
+  if (recheck && (status === 'PENDING_DEPOSIT' || status === 'KNOWN_DEPOSIT_TX')) return swap;
   if (status === 'PENDING_DEPOSIT') {
     // Never step back from "sent"; an address nobody paid runs out after its deadline.
     const late = d.now() > Date.parse(swap.deadline) + EXPIRY_GRACE_MS;
@@ -1150,8 +1168,11 @@ export async function refreshSwap(
 
 /** Refreshes every swap still moving and saves what changed. */
 export async function refreshSwaps(deps: Partial<SwapDeps> = {}) {
+  // const moving = Object.values(intentsSwaps.get()).filter(
+  //   (s) => !isFinal(s) && s.status !== 'QUOTED',
+  // );
   const moving = Object.values(intentsSwaps.get()).filter(
-    (s) => !isFinal(s) && s.status !== 'QUOTED',
+    (s) => (!isFinal(s) && s.status !== 'QUOTED') || settledFromChain(s),
   );
   for (const s of moving) {
     const next = await refreshSwap(s, deps).catch(() => s);

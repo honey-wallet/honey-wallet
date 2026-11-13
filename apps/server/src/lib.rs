@@ -214,6 +214,8 @@ fn router(config: &Config, health: runtime::RuntimeHealth, services: RouterServi
                 config.trust_proxy_headers,
                 config.trusted_proxy_cidrs.clone(),
             )
+            // Signed-in readers are counted by account (many phones share a carrier's address).
+            .with_identity(identity.clone())
         }),
     );
     // Honey's Solana fee payer; off unless switched on with its key.

@@ -10,10 +10,11 @@
 //! shows on the bell. Items older than 15 minutes are claimed without sending, so
 //! turning push on later doesn't flood anyone.
 //!
-//! Devices Expo reports as gone are forgotten: `DeviceNotRegistered` or
-//! `InvalidCredentials` in a ticket (the answer to a send) or, 15 minutes later, in its
-//! receipt. `InvalidCredentials` is also what a broken project credential looks like, so
-//! it only counts when Expo accepted something else in the same answer.
+//! Devices Expo reports as gone are forgotten: `DeviceNotRegistered` in a ticket (the
+//! answer to a send) or, 15 minutes later, in its receipt. `InvalidCredentials` is
+//! Honey's own push credential failing (FCM or APNs, possibly one and not the other), so
+//! it is logged and the token kept: pruning on it would forget every Android (or iOS)
+//! device at once.
 
 use std::{
     collections::{HashMap, VecDeque},
@@ -267,19 +268,37 @@ enum GoneKind {
     Credentials,
 }
 
-/// The gone tokens of one answer: every `DeviceNotRegistered`, and `InvalidCredentials`
-/// only when something else in the same answer went through (all of them refused looks
-/// like Honey's own credentials, which must not wipe every device).
-fn settle_gone(found: Vec<(GoneKind, String)>, any_ok: bool) -> Vec<String> {
-    let refused_all = !any_ok && found.iter().any(|(k, _)| *k == GoneKind::Credentials);
-    if refused_all {
+/// The gone tokens of one answer: only `DeviceNotRegistered`. `InvalidCredentials` is
+/// logged and its tokens kept (see the module docs).
+// Replaced (review): InvalidCredentials pruned a token when anything else went through,
+// which an FCM-only credential break (APNs fine) would turn into wiping every Android.
+// fn settle_gone(found: Vec<(GoneKind, String)>, any_ok: bool) -> Vec<String> {
+//     let refused_all = !any_ok && found.iter().any(|(k, _)| *k == GoneKind::Credentials);
+//     if refused_all {
+//         tracing::error!(
+//             "expo refused every message with InvalidCredentials: check EAS push credentials"
+//         );
+//     }
+//     found
+//         .into_iter()
+//         .filter(|(kind, _)| *kind == GoneKind::Unregistered || any_ok)
+//         .map(|(_, token)| token)
+//         .collect()
+// }
+fn settle_gone(found: Vec<(GoneKind, String)>, _any_ok: bool) -> Vec<String> {
+    let refused = found
+        .iter()
+        .filter(|(kind, _)| *kind == GoneKind::Credentials)
+        .count();
+    if refused > 0 {
         tracing::error!(
-            "expo refused every message with InvalidCredentials: check EAS push credentials"
+            refused,
+            "expo answered InvalidCredentials: check the EAS push credentials (tokens kept)"
         );
     }
     found
         .into_iter()
-        .filter(|(kind, _)| *kind == GoneKind::Unregistered || any_ok)
+        .filter(|(kind, _)| *kind == GoneKind::Unregistered)
         .map(|(_, token)| token)
         .collect()
 }
@@ -456,14 +475,15 @@ mod tests {
     }
 
     #[test]
-    fn invalid_credentials_drop_a_token_only_when_others_went_through() {
-        let batch = vec![json!({ "to": "real" }), json!({ "to": "fake" })];
+    fn invalid_credentials_never_drop_a_token() {
+        let batch = vec![json!({ "to": "ios" }), json!({ "to": "android" })];
         let invalid = json!({ "status": "error", "details": { "error": "InvalidCredentials" } });
+        // APNs fine, FCM's credential broken: the Android device is kept.
         let body = json!({ "data": [{ "status": "ok", "id": "r1" }, invalid.clone()] });
         let tickets = read_ticket_receipts(&batch, &body);
         assert_eq!(tickets.ok, 1);
-        assert_eq!(tickets.gone, vec!["fake".to_string()]);
-        assert_eq!(tickets.receipts, vec![("r1".into(), "real".into())]);
+        assert_eq!(tickets.gone, Vec::<String>::new());
+        assert_eq!(tickets.receipts, vec![("r1".into(), "ios".into())]);
         // Everything refused: Honey's credentials, not the devices; nobody is forgotten.
         let body = json!({ "data": [invalid.clone(), invalid] });
         assert_eq!(
@@ -486,11 +506,8 @@ mod tests {
             "r3": { "status": "error", "details": { "error": "InvalidCredentials" } },
             "r4": { "status": "error", "details": { "error": "MessageRateExceeded" } },
         } });
-        assert_eq!(
-            read_receipts(&asked, &body),
-            vec!["t2".to_string(), "t3".to_string()]
-        );
-        // No receipt went through: only the unregistered device is forgotten.
+        assert_eq!(read_receipts(&asked, &body), vec!["t2".to_string()]);
+        // No receipt went through: still only the unregistered device is forgotten.
         let body = json!({ "data": {
             "r2": { "status": "error", "details": { "error": "DeviceNotRegistered" } },
             "r3": { "status": "error", "details": { "error": "InvalidCredentials" } },
