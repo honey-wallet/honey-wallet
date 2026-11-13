@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
+  Keyboard,
   KeyboardAvoidingView,
   Linking,
   Platform,
@@ -184,6 +185,7 @@ export default function ThesisChatScreen() {
   const latestStrategy =
     [...messages].reverse().find((m) => m.parts.some((p) => p.type === 'strategy'))?.id ?? null;
 
+  const keyboard = useKeyboardShown();
   return (
     <KeyboardAvoidingView
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -252,7 +254,13 @@ export default function ThesisChatScreen() {
       {readOnly ? (
         <View style={{ height: Math.max(insets.bottom, 12) }} />
       ) : (
-        <View style={[styles.composerWrap, { paddingBottom: Math.max(insets.bottom, 12) }]}>
+        // The home-indicator inset only without the keyboard: over it, it left a band.
+        <View
+          style={[
+            styles.composerWrap,
+            { paddingBottom: keyboard ? 8 : Math.max(insets.bottom, 12) },
+          ]}
+        >
           {linksIn(draft).length ? (
             <View style={styles.linkRow}>
               {linksIn(draft).map((url) => (
@@ -1007,3 +1015,22 @@ const useStyles = makeStyles((c) => ({
   },
   sendOff: { backgroundColor: c.raised },
 }));
+
+/** Whether the keyboard is up (iOS reports it as it starts to move). */
+function useKeyboardShown() {
+  const [shown, setShown] = useState(false);
+  useEffect(() => {
+    const ios = Platform.OS === 'ios';
+    const show = Keyboard.addListener(ios ? 'keyboardWillShow' : 'keyboardDidShow', () =>
+      setShown(true),
+    );
+    const hide = Keyboard.addListener(ios ? 'keyboardWillHide' : 'keyboardDidHide', () =>
+      setShown(false),
+    );
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, []);
+  return shown;
+}
