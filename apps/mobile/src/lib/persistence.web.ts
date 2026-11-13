@@ -15,8 +15,22 @@ type ChromeArea = {
 const chromeLocal = (globalThis as { chrome?: { storage?: { local?: ChromeArea } } }).chrome
   ?.storage?.local;
 
+/**
+ * The page's localStorage, or null where there is none: Node's static render (Node 26
+ * defines a `localStorage` that is undefined without `--localstorage-file`).
+ */
+const pageStorage = (): Storage | null => {
+  try {
+    return globalThis.localStorage ?? null;
+  } catch {
+    return null;
+  }
+};
+
 async function readAll(): Promise<{ [key: string]: unknown }> {
   if (chromeLocal) return chromeLocal.get(null);
+  const localStorage = pageStorage();
+  if (!localStorage) return {};
   const out: { [key: string]: unknown } = {};
   for (let i = 0; i < localStorage.length; i++) {
     const key = localStorage.key(i);
@@ -27,7 +41,7 @@ async function readAll(): Promise<{ [key: string]: unknown }> {
 
 async function write(key: string, value: unknown) {
   if (chromeLocal) await chromeLocal.set({ [key]: value });
-  else localStorage.setItem(key, JSON.stringify(value));
+  else pageStorage()?.setItem(key, JSON.stringify(value));
 }
 
 const restorers = new Map<string, (saved: unknown) => void>();
@@ -59,6 +73,6 @@ export const persistence = {
   async clear() {
     const keys = Object.keys(await readAll()).filter((k) => k.startsWith(PREFIX));
     if (chromeLocal) await chromeLocal.remove(keys);
-    else for (const k of keys) localStorage.removeItem(k);
+    else for (const k of keys) pageStorage()?.removeItem(k);
   },
 };

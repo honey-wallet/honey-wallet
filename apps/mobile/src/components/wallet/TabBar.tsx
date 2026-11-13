@@ -21,6 +21,7 @@ import { Icon, type IconName } from '@/components/Icon';
 import { PressableScale } from '@/components/motion/PressableScale';
 import { fadeIn, fadeOut } from '@/components/motion/reducedFade';
 import { useHasMounted } from '@/components/motion/useHasMounted';
+import { useRestoringSession } from '@/lib/backend-lifecycle';
 import { backendSession, resumeBackendSession } from '@/lib/backend-session';
 import { tap } from '@/lib/haptics';
 import { joinLabel } from '@/lib/join-label';
@@ -90,7 +91,9 @@ export function TabBar({ state, navigation }: TabBarProps) {
   // a wallet it gets you one first. Signed in, it opens Jars.
   const { signedIn } = useSocialMe();
   const walletHere = useHasWallet();
-  const join = !signedIn && !EXTENSION;
+  // Not while a saved session is reconnecting on launch (it would flash Sign in).
+  const restoring = useRestoringSession();
+  const join = !signedIn && !EXTENSION && !restoring;
   // What Sign in is for, when the screen says ("Sign in to follow" on Following).
   const joinText = joinLabel.useValue();
   const index = PILL_TABS.findIndex((tab) => tab.name === current);

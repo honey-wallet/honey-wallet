@@ -9,6 +9,7 @@ import {
   resumeBackendSession,
   suspendBackendSession,
 } from '@/lib/backend-session';
+import { createStore } from '@/lib/store';
 import { walletLoad, wallets } from '@/lib/wallets';
 
 /**
@@ -21,11 +22,24 @@ async function staySignedIn() {
   if (!walletLoad.get().ready) return;
   const lock = appLock.get();
   if (lock.enabled && !lock.unlocked) return;
-  if (!(await refreshResumeAvailability())) return;
-  const session = backendSession.get();
-  if (session.profile || session.busy || session.review) return;
-  await resumeBackendSession({ silent: true });
+  try {
+    if (!(await refreshResumeAvailability())) return;
+    const session = backendSession.get();
+    if (session.profile || session.busy || session.review) return;
+    await resumeBackendSession({ silent: true });
+  } finally {
+    restoring.set(false);
+  }
 }
+
+/**
+ * True from launch until the saved session has had its quiet try, so Sign in doesn't
+ * flash up and vanish while a signed-in user is being reconnected (2026-11-14). Behind
+ * the app lock it stays true until the unlock.
+ */
+export const restoringSession = createStore(true);
+const restoring = restoringSession;
+export const useRestoringSession = () => restoring.useValue();
 
 /** Wires the backend session to the app's lifecycle; returns the cleanup. */
 export function startBackendLifecycle() {
@@ -39,8 +53,13 @@ export function startBackendLifecycle() {
     activeId = wallets.get().activeId;
     void staySignedIn();
   };
+  // Never keep Sign in hidden for long: a wallet load that failed, or a slow network.
+  const giveUp = setTimeout(() => restoring.set(false), 8000);
   start();
-  const removeLoad = walletLoad.subscribe(start);
+  const removeLoad = walletLoad.subscribe(() => {
+    if (walletLoad.get().error) restoring.set(false);
+    start();
+  });
   const removeWallet = wallets.subscribe(() => {
     if (activeId === null || activeId === wallets.get().activeId) return;
     activeId = wallets.get().activeId;
@@ -58,6 +77,7 @@ export function startBackendLifecycle() {
     if (state === 'active') void staySignedIn();
   });
   return () => {
+    clearTimeout(giveUp);
     removeLoad();
     removeWallet();
     removeLock();

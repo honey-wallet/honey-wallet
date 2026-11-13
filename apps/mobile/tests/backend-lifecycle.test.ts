@@ -92,3 +92,18 @@ it('resumes quietly when the app comes back to the front', async () => {
   expect(m.resume).toHaveBeenCalledWith({ silent: true });
   stop();
 });
+
+it('hides Sign in until the saved session has had its quiet try', async () => {
+  const { restoringSession } = await import('@/lib/backend-lifecycle');
+  restoringSession.set(true);
+  let finish = () => {};
+  m.resume.mockImplementationOnce(() => new Promise<void>((r) => (finish = r)));
+  const stop = startBackendLifecycle();
+  m.walletLoad.set({ ready: true, error: false });
+  await flush();
+  expect(restoringSession.get()).toBe(true);
+  finish();
+  await flush();
+  expect(restoringSession.get()).toBe(false);
+  stop();
+});
