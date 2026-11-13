@@ -955,3 +955,117 @@ describe('a quote kept fresh at Confirm', () => {
     expect(intentsSwaps.get()[DEPOSIT]).toBeUndefined();
   });
 });
+
+describe('copy sales (creator fees)', () => {
+  beforeEach(() => {
+    wallets.set({ activeId: 'seed-0', added: [wallet] });
+    intentsSwaps.set({});
+  });
+
+  const CREATOR = '0x97a5c31bfbfa1809cf20454f2aaefa05932ab18e';
+  const ONE_CLICK_FEES = '5880ad2b362620fadf759cbceb1cd5737ce8c6ed7fb8e9942881e6731f9247dd';
+  const fee = { recipient: CREATOR, bps: 120, pct: 10, usd: 0.05 };
+  const input = {
+    sell: { symbol: 'ETH', chain: 'Base' as const },
+    buy: { symbol: 'SOL', chain: 'Solana' as const },
+    amount: '0.002',
+  };
+  // 1Click's record, its fee split 50/50 with itself as its live quotes are.
+  const split = [
+    { recipient: CREATOR, fee: 60 },
+    { recipient: ONE_CLICK_FEES, fee: 60 },
+  ];
+
+  it('names the copied jar, and keeps the fee the server set once 1Click agrees', async () => {
+    const ask = vi.fn(async () => quote([leg({ copyFee: fee })]));
+    const result = await quoteSwap(
+      { ...input, copySaleOf: 'jar-1' },
+      { fetcher: oneClick({ appFees: split }), quote: ask, now: () => NOW },
+    );
+    expect(ask).toHaveBeenCalledWith('session', expect.objectContaining({ copySaleOf: 'jar-1' }));
+    // Nothing about the fee itself is ever sent.
+    const [, sent] = ask.mock.calls[0] as unknown as [string, Record<string, unknown>];
+    expect(Object.keys(sent).sort()).toEqual(
+      ['copySaleOf', 'legs', 'originAsset', 'refundTo', 'slippageBps'].sort(),
+    );
+    expect(result).toMatchObject({ copySaleOf: 'jar-1', copyFee: fee });
+    // A requote asks again for the same copy sale.
+    expect(
+      await quoteSwap(
+        { ...input, copySaleOf: result.copySaleOf },
+        { fetcher: oneClick({ appFees: split }), quote: ask, now: () => NOW },
+      ),
+    ).toMatchObject({ copyFee: fee });
+  });
+
+  it('refuses a fee 1Click doesn’t take as shown, or one on a sale that isn’t a copy', async () => {
+    for (const appFees of [
+      undefined,
+      [{ recipient: ONE_CLICK_FEES, fee: 20 }],
+      [
+        { recipient: OTHER, fee: 60 },
+        { recipient: ONE_CLICK_FEES, fee: 60 },
+      ],
+      [{ recipient: CREATOR, fee: 240 }],
+      [
+        { recipient: CREATOR, fee: 120 },
+        { recipient: ONE_CLICK_FEES, fee: 25 },
+        { recipient: OTHER, fee: 5 },
+      ],
+    ])
+      await expect(
+        quoteSwap(
+          { ...input, copySaleOf: 'jar-1' },
+          {
+            fetcher: oneClick({ appFees }),
+            quote: async () => quote([leg({ copyFee: fee })]),
+            now: () => NOW,
+          },
+        ),
+      ).rejects.toThrow('The quote changed');
+    // A fee the app didn't ask about, or out of bounds, is refused before anything else.
+    await expect(
+      quoteSwap(input, {
+        fetcher: oneClick({ appFees: split }),
+        quote: async () => quote([leg({ copyFee: fee })]),
+        now: () => NOW,
+      }),
+    ).rejects.toThrow('The quote changed');
+    for (const bad of [
+      { ...fee, bps: 476 },
+      { ...fee, bps: 1.5 },
+      { ...fee, pct: 31 },
+      { ...fee, recipient: '' },
+    ])
+      await expect(
+        quoteSwap(
+          { ...input, copySaleOf: 'jar-1' },
+          {
+            fetcher: oneClick({ appFees: split }),
+            quote: async () => quote([leg({ copyFee: bad })]),
+            now: () => NOW,
+          },
+        ),
+      ).rejects.toThrow('The quote changed');
+  });
+
+  it('checks the fee again before paying', async () => {
+    const prepare = vi.fn();
+    await expect(
+      prepareSwapPayment(swap({ copySaleOf: 'jar-1', copyFee: fee }), {
+        fetcher: oneClick({ appFees: [{ recipient: OTHER, fee: 120 }] }),
+        prepare,
+        now: () => NOW,
+      }),
+    ).rejects.toThrow('The quote changed');
+    expect(prepare).not.toHaveBeenCalled();
+  });
+
+  it('a copy sale with no profit carries no fee', async () => {
+    const result = await quoteSwap(
+      { ...input, copySaleOf: 'jar-1' },
+      { fetcher: oneClick(), quote: async () => quote([leg({ copyFee: null })]), now: () => NOW },
+    );
+    expect(result.copyFee).toBeNull();
+  });
+});

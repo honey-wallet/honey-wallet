@@ -97,6 +97,7 @@ import type {
   PublicThesisSnapshot,
   PushTokenRequest,
   PushTokenResult,
+  SocialCopyFeeAccount,
   SocialFeed,
   SocialFeedScope,
   SocialGroup,
@@ -1061,6 +1062,8 @@ export function createApiClient({ baseUrl, fetch: fetchImpl = fetch }: ApiClient
         method: 'DELETE',
       });
     },
+    socialCopyFeeAccount: (accessToken: string) =>
+      request<SocialCopyFeeAccount>('/api/v1/social/me/copy-fee-account', authorized(accessToken)),
     socialRecordCopy: (accessToken: string, id: string) =>
       request<{ copies: number }>(
         `/api/v1/social/jars/${encodeURIComponent(id)}/copies`,

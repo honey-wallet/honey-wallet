@@ -127,3 +127,63 @@ export function checkOneClickTerms(
   )
     throw quoteChanged();
 }
+
+/** Highest copy fee the server ever asks for, in bps of the sale (`copy_fees::ABS_CAP_BPS`). */
+export const MAX_COPY_FEE_BPS = 475;
+/** The most 1Click adds to an app fee for itself (25 bps without a partner key). */
+const ONE_CLICK_EXTRA_BPS = 25;
+
+/** A copy fee the server declared on a quote: who's paid, and how much of the sale. */
+export type DeclaredCopyFee = { recipient: string; bps: number; pct: number; usd: number };
+
+/** The server's copy fee on a leg, checked for shape; null when there's none. */
+export function declaredCopyFee(fee: unknown): DeclaredCopyFee | null {
+  if (fee === undefined || fee === null) return null;
+  const f = fee as Partial<DeclaredCopyFee>;
+  if (
+    typeof f.recipient !== 'string' ||
+    !f.recipient ||
+    !Number.isInteger(f.bps) ||
+    (f.bps as number) < 1 ||
+    (f.bps as number) > MAX_COPY_FEE_BPS ||
+    !Number.isInteger(f.pct) ||
+    (f.pct as number) < 1 ||
+    (f.pct as number) > 30 ||
+    typeof f.usd !== 'number' ||
+    !Number.isFinite(f.usd) ||
+    f.usd < 0
+  )
+    throw quoteChanged();
+  return f as DeclaredCopyFee;
+}
+
+/**
+ * 1Click's own record must take exactly the copy fee shown, and nothing more: the creator
+ * named once, paid the fee (or the half 1Click's 50/50 split leaves them), and every fee
+ * on the swap together at most that plus 1Click's own share. Without a declared fee the
+ * swap's fees aren't checked here (1Click's own, as before).
+ */
+export function checkOneClickFees(record: OneClickStatus, fee: DeclaredCopyFee | null) {
+  if (!fee) return;
+  const list = record.quoteRequest.appFees;
+  if (!Array.isArray(list)) throw quoteChanged();
+  let total = 0;
+  const mine: number[] = [];
+  for (const entry of list as { recipient?: unknown; fee?: unknown }[]) {
+    if (
+      typeof entry?.recipient !== 'string' ||
+      !Number.isInteger(entry.fee) ||
+      Number(entry.fee) < 0
+    )
+      throw quoteChanged();
+    total += Number(entry.fee);
+    if (entry.recipient.toLowerCase() === fee.recipient.toLowerCase()) mine.push(Number(entry.fee));
+  }
+  const [paid] = mine;
+  if (
+    mine.length !== 1 ||
+    (paid !== fee.bps && paid !== Math.ceil(fee.bps / 2)) ||
+    total > fee.bps + ONE_CLICK_EXTRA_BPS
+  )
+    throw quoteChanged();
+}

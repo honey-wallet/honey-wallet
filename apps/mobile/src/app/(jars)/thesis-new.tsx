@@ -26,6 +26,8 @@ import { AddFace, FACE, FaceRow, FaceTile } from '@/components/social/FaceTile';
 import { SocialAvatar, Trend } from '@/components/social/parts';
 import { Chip } from '@/components/wallet/Chip';
 import { EmptyState } from '@/components/wallet/parts';
+import { useCopyFeeAccount } from '@/lib/copy-fee-account';
+import { copiedJarId, copyFeePayoutText } from '@/lib/copy-fees';
 import { routeLabel } from '@/lib/dex-tokens';
 import { useMoney } from '@/lib/fx';
 import { inviteLabel, MAX_FRIENDS, dollars as plainDollars } from '@/lib/group-jar-core';
@@ -190,7 +192,10 @@ export default function NewThesisSheet() {
     return () => friendPicks.set([]);
   }, []);
   // No copy fee is charged yet (lib/surface COPY_FEES), so outside test mode none is set.
+  // Copy fees are collected (2026-11-14, lib/copy-fees): COPY_FEES is on.
   const [copyFee, setCopyFee] = useState(() => (COPY_FEES ? settings.get().jarCopyFee : 0));
+  // Where a creator's fees are paid (their signed-in wallet's NEAR Intents account).
+  const payoutAccount = useCopyFeeAccount(COPY_FEES && !TEST_MODE);
   // Limit orders are off for now, so every buy is a market order.
   const [order] = useState<OrderKind>('market');
   // Slippage is automatic here: the max from Settings, changed there, not on Launch.
@@ -437,11 +442,17 @@ export default function NewThesisSheet() {
       setBuyStage('Getting quotes…');
       try {
         const quoteAndPay = async (again: boolean) => {
-          const quoted = await quoteJarBuy(routes, maxSlip / 100, {}, jarPayWith.get()).catch(
-            (e: unknown) => {
-              throw again ? new Error(REFRESH_FAILED) : e;
-            },
-          );
+          // const quoted = await quoteJarBuy(routes, maxSlip / 100, {}, jarPayWith.get()).catch(
+          // A copy of someone's published jar: the server records its cost for their fee.
+          const copyOf = copied && !copied.mine ? copiedJarId({ copiedFrom }) : undefined;
+          const quoted = await quoteJarBuy(
+            routes,
+            maxSlip / 100,
+            copyOf ? { copyOf } : {},
+            jarPayWith.get(),
+          ).catch((e: unknown) => {
+            throw again ? new Error(REFRESH_FAILED) : e;
+          });
           legCount = quoted.legs.length;
           // Legs bought through a DEX say so, and what you'll hold.
           routeLines = quoted.legs
@@ -686,6 +697,7 @@ export default function NewThesisSheet() {
     // A copy can't be resold for a cut of someone else's idea, and only Everyone's jars
     // show the picks a copy buys.
     const copyable = COPY_FEES && !copied && visibility === 'public';
+    const payoutText = TEST_MODE ? '' : copyFeePayoutText(payoutAccount);
     return (
       <SheetScreen
         title="Launch your jar"
@@ -844,6 +856,8 @@ export default function NewThesisSheet() {
 
           {/* Everyone's jars can be copied: the landing page's cut slider. */}
           {copyable ? <CopyCutSlider value={copyFee} onChange={setCopyFee} /> : null}
+          {/* Where that cut is paid, or that it can't be (lib/copy-fees). */}
+          {copyable && payoutText ? <Text style={styles.note}>{payoutText}</Text> : null}
 
           {/* Limit orders ("At a better price") are off for now (2026-11-13): every buy is
               at today's price within the max slippage from Settings.

@@ -988,6 +988,25 @@ export interface JarBuyRequest {
   legs: { destinationAsset: string; amount: string; recipient: string }[];
   /** Shared jars: INTENTS in and out (server sets this for `/jar-dao/buy-quote`). */
   intents?: boolean;
+  /** A copy of this published jar (`SocialJar.id`): the server records its cost for copy fees. */
+  copyOf?: string;
+  /**
+   * Selling holdings copied from this published jar (one leg): the server works out the
+   * creator's fee and adds it to the 1Click quote. Nothing about the fee is sent from here.
+   */
+  copySaleOf?: string;
+}
+
+/** A creator's cut of a copier's sell, as the server asked 1Click for it (`copy_fees::CopyFee`). */
+export interface CopyFeeQuote {
+  /** The creator's NEAR Intents account. */
+  recipient: string;
+  /** Basis points of the sale (1Click `appFees`). */
+  bps: number;
+  /** The jar's fee, percent of profit. */
+  pct: number;
+  /** `bps` of the sale, in dollars. */
+  usd: number;
 }
 
 /**
@@ -1298,6 +1317,8 @@ export interface JarBuyLeg {
   slippageBps: number;
   /** 1Click's signature over the quote, passed through. */
   signature: string | null;
+  /** The creator's cut taken from this swap (a copy sale only); absent from older servers. */
+  copyFee?: CopyFeeQuote | null;
 }
 
 export interface JarBuyQuote {
@@ -1708,6 +1729,11 @@ export interface SocialProfileRequest {
   avatarSeed?: string;
   /** Omitted keeps the current setting (off for a new profile). */
   shareTrades?: boolean;
+}
+
+/** `GET /api/v1/social/me/copy-fee-account`: where your copy fees are paid, or null (none are). */
+export interface SocialCopyFeeAccount {
+  nearAccount: string | null;
 }
 
 export interface SocialHandleStatus {

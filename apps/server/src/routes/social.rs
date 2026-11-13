@@ -223,6 +223,7 @@ fn build(
         .route("/social/handles/{handle}", get(handle_status))
         .route("/social/me", get(me).put(upsert_me))
         .route("/social/me/privacy", get(my_privacy).put(update_privacy))
+        .route("/social/me/copy-fee-account", get(my_copy_fee_account))
         .route("/social/people", get(search_people))
         .route("/social/profiles/{handle}", get(profile))
         .route(
@@ -1428,6 +1429,25 @@ fn privacy((public_profile, show_holdings, show_returns, allow_copy): PrivacyRow
         show_returns,
         allow_copy,
     }
+}
+
+/// Where your copy fees are paid (`copy_fees`): the NEAR Intents account of the first
+/// wallet you signed in with, or null when there's none and no fee is collected.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CopyFeeAccount {
+    pub near_account: Option<String>,
+}
+
+async fn my_copy_fee_account(
+    State(state): State<SocialState>,
+    headers: HeaderMap,
+) -> Result<Json<CopyFeeAccount>, AppError> {
+    let user = viewer(&state, &headers)
+        .await?
+        .ok_or(AppError::Unauthorized)?;
+    let near_account = crate::copy_fees::payout_account(pool(&state)?, user).await?;
+    Ok(Json(CopyFeeAccount { near_account }))
 }
 
 /// Your privacy settings (also on `GET /social/me`). 404 before you claim a handle.

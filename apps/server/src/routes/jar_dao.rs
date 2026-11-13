@@ -387,6 +387,8 @@ async fn buy_quote(
             refund_to: input.dao.clone(),
             slippage_bps: input.slippage_bps,
             intents: true,
+            copy_of: None,
+            copy_sale_of: None,
             legs: input
                 .legs
                 .into_iter()
