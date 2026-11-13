@@ -1188,6 +1188,16 @@ async fn privacy_hides_what_the_owner_hides_from_everyone_else() {
     // A private account: others get only the card; it leaves the feed, Explore, the
     // leaderboard, theses and holders, and its jars and posts aren't there for them.
     set(json!({ "publicProfile": false })).await;
+    // The owner still sees their own followers.
+    let (_, mine) = call(
+        &app,
+        "GET",
+        "/social/profiles/alice/followers",
+        Some(&alice),
+        None,
+    )
+    .await;
+    assert_eq!(mine.as_array().map(Vec::len), Some(1));
     for token in [Some(bob.as_str()), None] {
         let (status, profile) = call(&app, "GET", "/social/profiles/alice", token, None).await;
         assert_eq!(status, StatusCode::OK);
@@ -1198,6 +1208,16 @@ async fn privacy_hides_what_the_owner_hides_from_everyone_else() {
         assert_eq!(profile["jars"], json!([]));
         assert_eq!(profile["posts"], json!([]));
         assert_eq!(profile["trades"], json!([]));
+        // Its follower and following lists are its own, and it leaves other people's.
+        let (_, list) = call(&app, "GET", "/social/profiles/alice/followers", token, None).await;
+        assert_eq!(list, json!([]));
+        let (_, list) = call(&app, "GET", "/social/profiles/bob/following", token, None).await;
+        assert!(
+            list.as_array()
+                .unwrap()
+                .iter()
+                .all(|p| p["handle"] != "alice")
+        );
         let (status, _) = call(&app, "GET", &jar_path, token, None).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
         let (status, _) = call(&app, "GET", &post_path, token, None).await;

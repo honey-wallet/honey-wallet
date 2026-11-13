@@ -1477,20 +1477,36 @@ async fn people(
     state: &SocialState,
     handle: &str,
     followers: bool,
+    viewer: Option<Uuid>,
 ) -> Result<Json<Vec<ProfileCard>>, AppError> {
     let pool = pool(state)?;
     let user = user_by_handle(pool, handle).await?;
+    // A private account's lists are its own: others get an empty list.
+    let public: bool =
+        sqlx::query_scalar("SELECT public_profile FROM social_profiles WHERE user_id = $1")
+            .bind(user)
+            .fetch_optional(pool)
+            .await
+            .map_err(unavailable)?
+            .unwrap_or(true);
+    if !public && viewer != Some(user) {
+        return Ok(Json(Vec::new()));
+    }
+    // Private accounts stay out of other people's lists too (you always see yourself).
     let sql = if followers {
         "SELECT p.handle, p.display_name, p.avatar_seed FROM social_follows f
          JOIN social_profiles p ON p.user_id = f.follower
-         WHERE f.followee = $1 ORDER BY f.created_at DESC LIMIT 200"
+         WHERE f.followee = $1 AND (p.public_profile OR p.user_id = $2)
+         ORDER BY f.created_at DESC LIMIT 200"
     } else {
         "SELECT p.handle, p.display_name, p.avatar_seed FROM social_follows f
          JOIN social_profiles p ON p.user_id = f.followee
-         WHERE f.follower = $1 ORDER BY f.created_at DESC LIMIT 200"
+         WHERE f.follower = $1 AND (p.public_profile OR p.user_id = $2)
+         ORDER BY f.created_at DESC LIMIT 200"
     };
     let rows: Vec<CardRow> = sqlx::query_as(sql)
         .bind(user)
+        .bind(viewer)
         .fetch_all(pool)
         .await
         .map_err(unavailable)?;
@@ -1500,15 +1516,19 @@ async fn people(
 async fn followers(
     State(state): State<SocialState>,
     Path(handle): Path<String>,
+    headers: HeaderMap,
 ) -> Result<Json<Vec<ProfileCard>>, AppError> {
-    people(&state, &handle, true).await
+    let me = viewer(&state, &headers).await?;
+    people(&state, &handle, true, me).await
 }
 
 async fn following(
     State(state): State<SocialState>,
     Path(handle): Path<String>,
+    headers: HeaderMap,
 ) -> Result<Json<Vec<ProfileCard>>, AppError> {
-    people(&state, &handle, false).await
+    let me = viewer(&state, &headers).await?;
+    people(&state, &handle, false, me).await
 }
 
 // ---------------------------------------------------------------------------
