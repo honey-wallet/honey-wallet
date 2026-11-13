@@ -7,7 +7,7 @@ import type {
 import { ApiError } from '@honey-wallet/api-client';
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '@/lib/api';
-import { CHAINS, type Chain, MARKET, type MarketToken } from '@/lib/mock-wallet';
+import { CHAINS, type Chain, MARKET, type MarketToken, series } from '@/lib/mock-wallet';
 import { type HeldToken, holdingsHistory, type PriceSeries } from '@/lib/portfolio-history';
 import { createStore } from '@/lib/store';
 import { TEST_MODE } from '@/lib/test-mode';
@@ -180,6 +180,32 @@ export function useTokenChart(symbol: string, range: ChartRangeId, enabled = tru
   };
 }
 
+/**
+ * Several tokens' price series over one range, oldest first, by symbol: the chat's charts.
+ * `loading` is per token, until its first answer. Test mode draws sample series ending at
+ * each token's price (live where known), so the charts render offline.
+ */
+export function useTokenCharts(symbols: readonly string[], range: ChartRangeId) {
+  const all = charts.useValue();
+  const key = symbols.join(',');
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `key` stands for the symbols.
+  useEffect(() => {
+    if (TEST_MODE) return;
+    for (const s of symbols) if (s) void loadChart(s, range);
+  }, [key, range]);
+  const out: Record<string, { prices: number[]; loading: boolean }> = {};
+  const prices = TEST_MODE ? livePrices() : {};
+  for (const s of symbols) {
+    if (TEST_MODE) {
+      out[s] = { prices: series(s, range, prices[s.toUpperCase()] ?? 1), loading: false };
+      continue;
+    }
+    const entry = all[`${s}:${range}`];
+    out[s] = { prices: entry?.prices ?? [], loading: !entry || (entry.loading && !entry.prices) };
+  }
+  return out;
+}
+
 /** Portfolio charts this many of a wallet's largest holdings; the rest count at today's value. */
 const HOLDINGS_CHARTED = 12;
 const HOUR_MS = 3_600_000;
@@ -227,12 +253,12 @@ export function useHoldingsChart(
   // biome-ignore lint/correctness/useExhaustiveDependencies: `held` and `loaded` stand for the inputs.
   const history = useMemo(() => {
     if (!enabled || loading) return null;
-    const series: Record<string, PriceSeries> = {};
+    const byToken: Record<string, PriceSeries> = {};
     charted.forEach((s, i) => {
       const e = entries[i];
-      if (e?.prices && e.times) series[s] = { times: e.times, prices: e.prices };
+      if (e?.prices && e.times) byToken[s] = { times: e.times, prices: e.prices };
     });
-    return holdingsHistory(holdings, series, stableHolding, RANGE_SPAN_MS[range], Date.now());
+    return holdingsHistory(holdings, byToken, stableHolding, RANGE_SPAN_MS[range], Date.now());
   }, [held, loaded, range, enabled, loading]);
   return { history, loading, charted };
 }
@@ -392,6 +418,26 @@ export function livePrices(): Record<string, number> {
   }
   for (const t of tokens) if (t.priceUsd > 0) out[t.symbol.toUpperCase()] = t.priceUsd;
   return out;
+}
+
+/** The largest tokens by market cap, whose names the chat also reads ("bitcoin chart"). */
+const NAMED_TOP = 25;
+
+/**
+ * The tokens the idea chat can chart, read once per message: `named` (the samples and the
+ * largest coins, by symbol or name in any case) and `listed` (every symbol on Search's
+ * list, matched only when written as a ticker). Loads the list if it hasn't been.
+ */
+export function chartableTokens() {
+  if (!listing.get().tokens) void loadListing();
+  const tokens = listedTokens() ?? [];
+  const top = isRanked(tokens)
+    ? [...tokens].sort((a, b) => (a.rank ?? Infinity) - (b.rank ?? Infinity)).slice(0, NAMED_TOP)
+    : [];
+  return {
+    named: [...MARKET, ...top].map((t) => ({ symbol: t.symbol, name: t.name })),
+    listed: tokens.map((t) => t.symbol),
+  };
 }
 
 /** The same, kept current (Jars → Saved's "since you saved"). */

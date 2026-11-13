@@ -273,7 +273,8 @@ pub struct CoinMarket {
     pub change_24h: Option<f64>,
 }
 
-fn parse_coin_markets(body: &Value) -> Vec<CoinMarket> {
+/// Rows of CoinGecko's `/coins/markets` (public for frozen eval fixtures).
+pub fn parse_coin_markets(body: &Value) -> Vec<CoinMarket> {
     body.as_array()
         .into_iter()
         .flatten()

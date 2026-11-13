@@ -1,6 +1,7 @@
 import { persistence } from '@/lib/persistence';
 import { createStore } from '@/lib/store';
 import { TEST_MODE } from '@/lib/test-mode';
+import { type LiveProgress, parseSse, type RunLive, RunTracker, STAGES } from '@/lib/thesis-live';
 import { tokenColor } from '@/lib/token-colors';
 
 /**
@@ -31,6 +32,8 @@ export type Pick = {
   match: 'direct' | 'proxy';
   reason: string;
   color: string;
+  /** What would prove this pick wrong, in the agent's words; agent picks only. */
+  wrongIf?: string;
 };
 
 export type Proposal = {
@@ -38,14 +41,24 @@ export type Proposal = {
   amount: number;
   risk: Risk;
   picks: Pick[];
+  /** The share the risk rules kept in USDC: the picks add up to 100 minus this. */
+  cashPct?: number;
   /** Ideas with no clean on-chain way to buy them. */
   unmatched: { idea: string; note: string }[];
   /** The critic's strongest objection. */
   caution: string;
+  /** What could go wrong, a few plain lines (the agent's bear case); none when empty. */
+  bearCase?: string[];
   feesUsd: number;
   sources: { title: string; url: string }[];
   /** Where the numbers came from, shown under every strategy (REQUIREMENTS R-RS-1). */
   provenance: { sample: boolean; prices: string; at: number };
+  /**
+   * The same idea sized for each risk level, from the one run (the agent answers all
+   * three at once), so Low / Medium / High swap in place with no new AI call. Absent
+   * from older servers: then the switch is hidden.
+   */
+  byRisk?: Partial<Record<Risk, Proposal>>;
 };
 
 export type Member = {
@@ -361,15 +374,7 @@ export const jarReturn = (jar: ThesisJar) => {
 };
 export const unitsTotal = (jar: ThesisJar) => jar.members.reduce((s, m) => s + m.units, 0);
 
-/** The stages the agent reports while it works (REQUIREMENTS.md §2). */
-export const STAGES = [
-  'Reading what you shared',
-  'Understanding your idea',
-  'Researching the web',
-  'Finding tokens you can buy',
-  'Checking prices and routes',
-  'Sizing to your risk',
-] as const;
+export { STAGES, stepIndex } from '@/lib/thesis-live';
 
 /** Links pulled out of what someone typed or pasted. */
 export function linksIn(text: string) {
@@ -386,25 +391,41 @@ export const hostOf = (url: string) => {
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** What the agent is asked: the idea, and the amount and risk to size it for. */
+export type ThesisInput = { text: string; amount: number; risk: Risk };
+
 /**
- * Runs the agent on an idea. Placeholder: walks the stages, then answers with a fixed
- * strategy shaped by the risk level. The harness replaces this.
+ * Reports the step in progress and, from the agent, everything it has said so far (its
+ * updates, thinking, step times and the first parts of the answer).
  */
-export async function runThesis(
-  input: { text: string; amount: number; risk: Risk },
-  onStage: (index: number) => void,
-): Promise<Proposal> {
-  // The live agent when signed in to Honey's server; the sample answer otherwise, or if
-  // the server can't be reached (so the flow always finishes).
+export type OnStage = (index: number, live?: LiveProgress) => void;
+
+/**
+ * Runs the agent on an idea: the live harness when signed in to Honey's server, a
+ * staged sample answer in test mode.
+ */
+export async function runThesis(input: ThesisInput, onStage: OnStage): Promise<Proposal> {
   // Loaded on demand, so the pure helpers here don't pull in the network stack.
   if (TEST_MODE) return sampleThesis(input, onStage);
   // Real money: only the live agent, which picks from what NEAR Intents can deliver.
   // Before, a signed-out user or a failed run got the sample answer (TAO, RENDER…),
   // tokens Honey can't buy, presented as a real proposal.
+  const token = await sessionToken();
+  return explained(() => runLive(token, input, onStage));
+}
+
+/** An agent failure with words fit for the screen. */
+export class ThesisError extends Error {}
+
+async function sessionToken() {
   const token = (await import('@/lib/backend-session')).backendSessionToken();
   if (!token) throw new ThesisError('Sign in to Honey to use the agent. Nothing was bought.');
+  return token;
+}
+
+async function explained<T>(work: () => Promise<T>): Promise<T> {
   try {
-    return await runLive(token, input, onStage);
+    return await work();
   } catch (error) {
     if (error instanceof ThesisError) throw error;
     const reason = error instanceof Error && error.message ? ` (${error.message})` : '';
@@ -412,18 +433,140 @@ export async function runThesis(
   }
 }
 
-/** An agent failure with words fit for the screen. */
-export class ThesisError extends Error {}
+type LiveStrategy = {
+  picks: {
+    asset: { symbol: string; chain: string };
+    exposure: string;
+    weightPct: number;
+    match: 'direct' | 'proxy';
+    reason?: string | null;
+    conviction?: string | null;
+    quote?: { ok: boolean; amountOut?: string | null; note?: string | null } | null;
+  }[];
+  unmatched: { idea: string; note: string }[];
+  bearCase?: string[] | null;
+  cashPct?: number | null;
+};
 
-/** The server's stages, mapped onto the steps the screen shows. */
-const STAGE_INDEX = { intake: 1, understand: 3, strategize: 5, done: 6, failed: 6 } as const;
+/**
+ * What `runLive` reads from GET /theses/:id (and its stream), typed loosely so the newer
+ * harness fields (steps, events, thinking, reasons, quotes, bear case, the risk
+ * variants) are read when the server sends them and skipped when it doesn't.
+ */
+export type LiveRun = RunLive & {
+  runId?: string;
+  stage: string;
+  step?: string | null;
+  dryRun: boolean;
+  createdAt?: string | null;
+  progress?: { message: string }[] | null;
+  intent?: {
+    text?: string | null;
+    amountUsd?: number | null;
+    risk?: string | null;
+    links?: { url: string; status: string; title?: string | null }[];
+  } | null;
+  thesis?: {
+    theme?: string;
+    rationale?: string;
+    exposures?: { label: string; wrongIf?: string | null }[];
+  } | null;
+  proposal?:
+    | (LiveStrategy & {
+        /** The same picks sized for each risk level; the top level is the run's own risk. */
+        byRisk?: Partial<Record<'low' | 'medium' | 'high', LiveStrategy | null>> | null;
+      })
+    | null;
+};
 
-async function runLive(
-  token: string,
-  input: { text: string; amount: number; risk: Risk },
-  onStage: (index: number) => void,
-): Promise<Proposal> {
-  onStage(0);
+const riskOf = (level: string | null | undefined): Risk | undefined =>
+  RISKS.find((r) => r.toLowerCase() === level?.toLowerCase());
+
+/** What a run was asked, from its intake record (an old run opened from History). */
+export function inputFromRun(run: LiveRun, fallback: ThesisInput): ThesisInput {
+  return {
+    text: run.intent?.text?.trim() || fallback.text,
+    amount: run.intent?.amountUsd ?? fallback.amount,
+    risk: riskOf(run.intent?.risk) ?? fallback.risk,
+  };
+}
+
+/**
+ * A finished run as the proposal the chat shows. Each pick says why in the agent's
+ * words (its exposure when the agent gave none). A pick whose quote failed can't be
+ * bought: it joins the ideas left out, and the others share its weight. With the
+ * server's risk variants, `byRisk` holds all three so the answer can switch in place.
+ */
+export function proposalFromRun(run: LiveRun, input: ThesisInput): Proposal | null {
+  const strategy = run.proposal;
+  if (!strategy) return null;
+  const top = fromStrategy(run, strategy, input);
+  if (!strategy.byRisk) return top;
+  const byRisk: Partial<Record<Risk, Proposal>> = {};
+  for (const level of RISKS) {
+    const variant = strategy.byRisk[level.toLowerCase() as 'low' | 'medium' | 'high'];
+    // The top level is the run's own risk, so it stands for that level.
+    if (level === input.risk) byRisk[level] = top;
+    else if (variant?.picks) byRisk[level] = fromStrategy(run, variant, { ...input, risk: level });
+  }
+  return Object.keys(byRisk).length > 1 ? { ...top, byRisk } : top;
+}
+
+function fromStrategy(run: LiveRun, strategy: LiveStrategy, input: ThesisInput): Proposal {
+  const failed = strategy.picks.filter((p) => p.quote?.ok === false);
+  const cashPct = Math.max(0, Math.min(100, Math.round(strategy.cashPct ?? 0)));
+  // Each exposure's "wrong if", for the picks that buy it.
+  const wrongIf = new Map(
+    (run.thesis?.exposures ?? []).map((e) => [e.label, e.wrongIf?.trim() || undefined]),
+  );
+  const buyable = strategy.picks
+    .filter((p) => p.quote?.ok !== false)
+    .map(
+      (p, i): Pick => ({
+        symbol: p.asset.symbol,
+        name: p.asset.symbol,
+        chain: p.asset.chain,
+        weight: Math.round(p.weightPct),
+        match: p.match,
+        reason: p.reason?.trim() || p.exposure,
+        color: tokenColor(p.asset.symbol, i),
+        wrongIf: wrongIf.get(p.exposure),
+      }),
+    );
+  const said = (lines: (string | null | undefined)[]) =>
+    lines.map((l) => l?.trim() ?? '').filter(Boolean);
+  return {
+    thesis: run.thesis?.theme ?? input.text,
+    amount: input.amount,
+    risk: input.risk,
+    picks: failed.length ? resplit(buyable, 100 - cashPct) : buyable,
+    cashPct: cashPct || undefined,
+    unmatched: [
+      ...strategy.unmatched,
+      ...failed.map((p) => ({
+        idea: p.asset.symbol,
+        note: p.quote?.note?.trim() || 'No way to buy it right now.',
+      })),
+    ],
+    caution: run.thesis?.rationale ?? '',
+    // A variant without its own bear case shares the run's.
+    bearCase: said(strategy.bearCase ?? run.proposal?.bearCase ?? []),
+    feesUsd: 0,
+    provenance: {
+      sample: run.dryRun,
+      prices: 'NEAR Intents 1Click token list',
+      at: Date.now(),
+    },
+    sources: (run.intent?.links ?? []).map((l) => ({
+      title: l.status === 'read' && l.title ? l.title : hostOf(l.url),
+      url: l.url,
+    })),
+  };
+}
+
+async function runLive(token: string, input: ThesisInput, onStage: OnStage): Promise<Proposal> {
+  const tracker = new RunTracker();
+  onStage(0, tracker.initial());
   const { api } = await import('@/lib/api');
   const { runId } = await api.startThesis(token, {
     text: input.text,
@@ -433,56 +576,260 @@ async function runLive(
       risk: input.risk.toLowerCase() as 'low' | 'medium' | 'high',
     },
   });
-  // The server allows a run three minutes (the model may think for a while).
-  const deadline = Date.now() + 190_000;
-  while (Date.now() < deadline) {
-    const run = await api.thesis(token, runId);
-    onStage(Math.min(STAGE_INDEX[run.stage], STAGES.length - 1));
-    if (run.stage === 'failed')
-      throw new Error(run.progress.at(-1)?.message ?? 'The agent stopped');
-    if (run.stage === 'done' && run.proposal) {
-      const strategy = run.proposal;
-      return {
-        thesis: run.thesis?.theme ?? input.text,
-        amount: input.amount,
-        risk: input.risk,
-        picks: strategy.picks.map((p, i) => ({
-          symbol: p.asset.symbol,
-          name: p.asset.symbol,
-          chain: p.asset.chain,
-          weight: Math.round(p.weightPct),
-          match: p.match,
-          reason: p.exposure,
-          color: tokenColor(p.asset.symbol, i),
-        })),
-        unmatched: strategy.unmatched,
-        caution: run.thesis?.rationale ?? '',
-        feesUsd: 0,
-        provenance: {
-          sample: run.dryRun,
-          prices: 'NEAR Intents 1Click token list',
-          at: Date.now(),
-        },
-        sources: (run.intent?.links ?? []).map((l) => ({
-          title: l.status === 'read' && l.title ? l.title : hostOf(l.url),
-          url: l.url,
-        })),
-      };
-    }
-    await wait(800);
-  }
-  throw new Error('The agent took too long');
+  return followRun(token, runId, input, onStage, tracker);
 }
 
-/** The fixed answer used in test mode and offline. */
-async function sampleThesis(
-  input: { text: string; amount: number; risk: Risk },
-  onStage: (index: number) => void,
+const finished = (run: { stage: string }) => run.stage === 'done' || run.stage === 'failed';
+
+/**
+ * Follows a run to its answer: the server's event stream when it has one, polling every
+ * 800ms otherwise (and on any stream error). The screen buffers what arrives, so both
+ * look the same.
+ */
+async function followRun(
+  token: string,
+  runId: string,
+  input: ThesisInput,
+  onStage: OnStage,
+  tracker = new RunTracker(),
 ): Promise<Proposal> {
-  for (let i = 0; i < STAGES.length; i++) {
-    onStage(i);
-    await wait(650);
+  // The server allows a run three minutes (the model may think for a while).
+  const deadline = Date.now() + 190_000;
+  const seen = (run: LiveRun) => {
+    const live = tracker.update(run);
+    onStage(Math.min(live.at, STAGES.length - 1), live);
+  };
+  let final = await streamRun(token, runId, seen, deadline).catch(() => null);
+  const { api } = await import('@/lib/api');
+  while (!final && Date.now() < deadline) {
+    const run: LiveRun = await api.thesis(token, runId);
+    seen(run);
+    if (finished(run)) final = run;
+    else await wait(800);
   }
+  if (!final) throw new Error('The agent took too long');
+  if (final.stage === 'failed')
+    throw new Error(final.progress?.at(-1)?.message ?? 'The agent stopped');
+  const proposal = proposalFromRun(final, inputFromRun(final, input));
+  if (!proposal) throw new Error('The agent gave no answer');
+  return proposal;
+}
+
+const asRun = (value: unknown): LiveRun | null =>
+  value && typeof value === 'object' && typeof (value as LiveRun).stage === 'string'
+    ? (value as LiveRun)
+    : null;
+
+/**
+ * GET /theses/{id}/stream: `update` events carry the run, heartbeats keep it open. Uses
+ * expo/fetch, whose body streams on native (React Native's own fetch doesn't). Resolves
+ * with the finished run, or null when streaming isn't there or drops, so the caller polls.
+ */
+async function streamRun(
+  token: string,
+  runId: string,
+  onRun: (run: LiveRun) => void,
+  deadline: number,
+): Promise<LiveRun | null> {
+  const [{ fetch: streamingFetch }, { resolveBaseUrl }] = await Promise.all([
+    import('expo/fetch'),
+    import('@/lib/api'),
+  ]);
+  const abort = new AbortController();
+  let silent: ReturnType<typeof setTimeout> | undefined;
+  // A stream with no heartbeat for 15s is a dead one: back to polling.
+  const arm = () => {
+    clearTimeout(silent);
+    silent = setTimeout(() => abort.abort(), 15_000);
+  };
+  const stop = setTimeout(() => abort.abort(), Math.max(0, deadline - Date.now()));
+  try {
+    arm();
+    const response = await streamingFetch(
+      `${resolveBaseUrl()}/api/v1/theses/${encodeURIComponent(runId)}/stream`,
+      {
+        headers: { Authorization: `Bearer ${token}`, Accept: 'text/event-stream' },
+        signal: abort.signal,
+      },
+    );
+    const reader = response.ok ? response.body?.getReader() : undefined;
+    if (!reader) return null;
+    const decoder = new TextDecoder();
+    let buffer = '';
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) return null;
+      arm();
+      const parsed = parseSse(buffer + decoder.decode(value, { stream: true }));
+      buffer = parsed.rest;
+      for (const event of parsed.events) {
+        if (event.event !== 'update') continue;
+        let run: LiveRun | null = null;
+        try {
+          run = asRun(JSON.parse(event.data));
+        } catch {}
+        if (!run) continue;
+        onRun(run);
+        if (finished(run)) return run;
+      }
+    }
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(silent);
+    clearTimeout(stop);
+    abort.abort();
+  }
+}
+
+/** One past chat, opened from History: what was asked, and its saved answer. */
+export type PastRun = {
+  text: string;
+  input: ThesisInput;
+  /** done, failed, or still working (then `followThesis` picks it up). */
+  stage: string;
+  proposal: Proposal | null;
+  error?: string;
+};
+
+/** Loads a past run (GET /theses/{id}); in test mode, one of the sample chats. */
+export async function loadRun(runId: string, said = ''): Promise<PastRun> {
+  const fallback: ThesisInput = { text: said, amount: 500, risk: 'Medium' };
+  if (TEST_MODE) {
+    const { SAMPLE_HISTORY } = await import('@/lib/thesis-history');
+    const sample = SAMPLE_HISTORY().find((r) => r.runId === runId);
+    const input = { ...fallback, text: sample?.text ?? said };
+    return { text: input.text, input, stage: 'done', proposal: sampleProposal(input) };
+  }
+  const token = await sessionToken();
+  return explained(async () => {
+    const { api } = await import('@/lib/api');
+    const run: LiveRun = await api.thesis(token, runId);
+    const input = inputFromRun(run, fallback);
+    return {
+      text: input.text,
+      input,
+      stage: run.stage,
+      proposal: run.stage === 'done' ? proposalFromRun(run, input) : null,
+      error: run.stage === 'failed' ? run.progress?.at(-1)?.message : undefined,
+    };
+  });
+}
+
+/** Picks up a run that was still working when it was opened from History. */
+export async function followThesis(
+  runId: string,
+  input: ThesisInput,
+  onStage: OnStage,
+): Promise<Proposal> {
+  if (TEST_MODE) return sampleThesis(input, onStage);
+  const token = await sessionToken();
+  return explained(() => followRun(token, runId, input, onStage));
+}
+
+/**
+ * Test mode's run: what the harness says while it works (updates, thinking that grows
+ * in bursts as polls would deliver it, step times, the idea and picks as they're known),
+ * over about six seconds, then the sample answer.
+ */
+async function sampleThesis(input: ThesisInput, onStage: OnStage): Promise<Proposal> {
+  const proposal = sampleProposal(input);
+  const tracker = new RunTracker();
+  const iso = () => new Date().toISOString();
+  const startedAt = iso();
+  const t0 = Date.now();
+  const events: NonNullable<RunLive['events']> = [];
+  const steps: NonNullable<RunLive['steps']> = [];
+  const partial: NonNullable<RunLive['partial']> = {};
+  for (const s of sampleScript(proposal)) {
+    const previous = steps.at(-1);
+    if (previous) previous.endedAt = iso();
+    steps.push({ step: s.step, startedAt: iso() });
+    for (let tick = 0; tick < 2; tick++) {
+      const line = s.events[tick];
+      if (line) events.push({ at: iso(), step: s.step, text: line, ms: Date.now() - t0 });
+      if (s.step === 'understand') partial.theme = proposal.thesis;
+      if (s.step === 'pick' && tick === 1)
+        partial.picks = proposal.picks.map((p) => ({ symbol: p.symbol, reason: p.reason }));
+      // Thinking arrives in bursts (half, then all of it), as 800ms polls would bring it.
+      const text = s.thinking.slice(0, Math.ceil((s.thinking.length * (tick + 1)) / 2));
+      const live = tracker.update({
+        stage: 'strategize',
+        step: s.step,
+        startedAt,
+        steps: steps.map((x) => ({ ...x })),
+        events: [...events],
+        partial: { ...partial },
+        thinking: { step: s.step, text },
+      });
+      onStage(Math.min(live.at, STAGES.length - 1), live);
+      await wait(450);
+    }
+  }
+  const last = steps.at(-1);
+  if (last) last.endedAt = iso();
+  onStage(
+    STAGES.length - 1,
+    tracker.update({ stage: 'done', startedAt, steps, events, partial: { ...partial } }),
+  );
+  return proposal;
+}
+
+/** What test mode's agent says at each step, about the sample answer it's building. */
+function sampleScript(proposal: Proposal) {
+  const [a, b] = proposal.picks;
+  const tokens = proposal.picks.length;
+  return [
+    {
+      step: 'intake',
+      events: ['Read your idea'],
+      thinking: `The idea: “${proposal.thesis}”. Nothing to open, so I'll work from the words.`,
+    },
+    {
+      step: 'understand',
+      events: ['Read 3 news articles: Reuters, The Block, CoinDesk'],
+      thinking:
+        'The bet is that AI spending keeps growing. What wins first is compute: GPUs, and the networks that pay for models.',
+    },
+    {
+      step: 'shortlist',
+      events: ["Looking at 28 tokens for 'AI compute'", 'Dropped WBTC: same as BTC'],
+      thinking:
+        'I need tokens tied to AI compute that NEAR Intents can deliver. Wrapped copies of the same coin add nothing.',
+    },
+    {
+      step: 'pick',
+      events: [a, b].filter(Boolean).map((p) => `Picked ${p?.symbol}: ${p?.reason}`),
+      thinking: `${proposal.picks.map((p) => `${p.symbol}: ${p.reason.toLowerCase()}`).join('. ')}. That covers the idea from more than one side.`,
+    },
+    {
+      step: 'critic',
+      events: ['Checked the picks: all fall if AI spending slows'],
+      thinking:
+        'Are these too alike? They would all fall together if AI cools. Keep them, but say so plainly.',
+    },
+    {
+      step: 'size',
+      events: [`Sized for ${proposal.risk.toLowerCase()} risk`],
+      thinking: `${proposal.risk} risk: no single token too big${proposal.cashPct ? `, and ${proposal.cashPct}% kept in USDC` : ''}.`,
+    },
+    {
+      step: 'quote',
+      events: [`Got prices for ${tokens} ${tokens === 1 ? 'token' : 'tokens'}`],
+      thinking: 'Checking each token has a working route from USDC right now.',
+    },
+  ];
+}
+
+/** Test mode's answer, sized for all three risk levels at once (as the harness answers). */
+export function sampleProposal(input: ThesisInput): Proposal {
+  const byRisk: Partial<Record<Risk, Proposal>> = {};
+  for (const level of RISKS) byRisk[level] = sampleAt({ ...input, risk: level });
+  return { ...(byRisk[input.risk] as Proposal), byRisk };
+}
+
+/** The fixed answer used in test mode, at one risk level. */
+function sampleAt(input: ThesisInput): Proposal {
   const base = SEED[0]?.picks ?? [];
   const picks: Pick[] =
     input.risk === 'Low'
@@ -515,11 +862,25 @@ async function sampleThesis(
             },
           ];
   const kz = /kazakh|tenge|kzt/i.test(input.text);
+  // As the harness answers: what would prove each pick wrong, and at medium risk a
+  // tenth trimmed by the risk rules and kept in USDC.
+  const WRONG_IF: Record<string, string> = {
+    TAO: 'Wrong if AI labs stop paying for open models.',
+    RENDER: 'Wrong if GPU rental prices keep falling.',
+    NEAR: 'Wrong if NEAR AI usage stays flat.',
+    SOL: 'Wrong if AI agent tokens move to other chains.',
+  };
+  const cashPct = input.risk === 'Medium' ? 10 : 0;
+  const trimmed =
+    input.risk === 'Medium'
+      ? picks.map((p, i) => ({ ...p, weight: [40, 25, 25][i] ?? p.weight }))
+      : picks;
   return {
     thesis: input.text.replace(/https?:\/\/[^\s]+/g, '').trim() || 'Your idea from the link',
     amount: input.amount,
     risk: input.risk,
-    picks,
+    picks: trimmed.map((p) => (WRONG_IF[p.symbol] ? { ...p, wrongIf: WRONG_IF[p.symbol] } : p)),
+    cashPct: cashPct || undefined,
     unmatched: kz
       ? [
           { idea: 'Kazakh companies', note: 'Not on chain yet. Closest proxy is shown instead.' },
@@ -530,6 +891,11 @@ async function sampleThesis(
         ]
       : [],
     caution: 'News this widely shared is often already in the price.',
+    bearCase: [
+      'Big tech could cut its AI budgets, and these tokens would fall first.',
+      'Small tokens drop much harder than Bitcoin when markets turn.',
+      'A cheaper network could win the same users.',
+    ],
     feesUsd: +(input.amount * 0.006).toFixed(2),
     sources: linksIn(input.text).map((url) => ({ title: hostOf(url), url })),
     provenance: { sample: true, prices: 'Sample prices (test mode)', at: Date.now() },
@@ -729,15 +1095,18 @@ export function withProxy(proposal: Proposal, symbol: string): Proposal {
  * stays 100%. (The harness re-sizes and re-quotes instead: PATCH /proposals/{id}.)
  */
 export function withoutPick(proposal: Proposal, symbol: string): Proposal {
-  const kept = proposal.picks.filter((p) => p.symbol !== symbol);
-  const sum = kept.reduce((s, p) => s + p.weight, 0) || 1;
-  let left = 100;
-  const picks = kept.map((p, i) => {
-    const weight = i === kept.length - 1 ? left : Math.round((p.weight / sum) * 100);
+  return { ...proposal, picks: resplit(proposal.picks.filter((p) => p.symbol !== symbol)) };
+}
+
+/** Picks re-weighted in proportion so they add to exactly `total`% (100 unless cash is kept). */
+function resplit(picks: Pick[], total = 100): Pick[] {
+  const sum = picks.reduce((s, p) => s + p.weight, 0) || 1;
+  let left = total;
+  return picks.map((p, i) => {
+    const weight = i === picks.length - 1 ? left : Math.round((p.weight / sum) * total);
     left -= weight;
     return { ...p, weight };
   });
-  return { ...proposal, picks };
 }
 
 /**
