@@ -623,10 +623,22 @@ function Banner({
                 }))}
                 value={level}
                 onChange={(next) => void setPnlLevel(next)}
+                // The pill says the setting itself: with no jars yet there's no P&L to
+                // show, which used to read "private" even when it was public (14 Nov).
                 trigger={() => (
                   <View style={styles.lockedPill}>
-                    <Icon name="lock" size={14} color={c.textSecondary} />
-                    <Text style={styles.lockedText}>P&L is private</Text>
+                    <Icon
+                      name={PNL_LEVELS.find((l) => l.value === level)?.icon ?? 'lock'}
+                      size={14}
+                      color={c.textSecondary}
+                    />
+                    <Text style={styles.lockedText}>
+                      {level === 'private'
+                        ? 'P&L is private'
+                        : level === 'returns'
+                          ? 'Returns are public'
+                          : 'P&L is public'}
+                    </Text>
                     <Text style={styles.lockedAction}>Change</Text>
                   </View>
                 )}
