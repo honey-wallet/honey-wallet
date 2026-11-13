@@ -585,6 +585,31 @@ describe('the device checks the Solana swap it signs (audit findings 1, 6)', () 
     expect(check(tx({ jupiter: { destination: filler(66) } }))).toThrow(changed);
   });
 
+  it('refuses a Jupiter route selling another token, or from an account that isn’t the wallet’s (money audit 11)', () => {
+    // The same amount of another token (its own account and mint): refused.
+    expect(check(tx({ jupiter: { sell: filler(70) } }))).toThrow(changed);
+    const honest = jupiterIx({
+      taker: MY_SOL,
+      sell: SOL_USDC,
+      buy: JTO,
+      inAmount: 10_000_000n,
+      quotedOut: 10_000_000_000n,
+      slippageBps: 100,
+    });
+    const withAccount = (at: number, key: string) => {
+      const accounts = [...honest.accounts];
+      accounts[at] = key;
+      const ixs = [{ ...honest, accounts }];
+      return quoteFor(req, { solana: { transaction: solanaTx([HONEY_PAYER, MY_SOL], ixs) } });
+    };
+    expect(check(withAccount(1, MY_SOL))).not.toThrow();
+    // Source account, source mint, destination mint or signer swapped: each refused.
+    expect(check(withAccount(2, filler(71)))).toThrow(changed);
+    expect(check(withAccount(6, filler(72)))).toThrow(changed);
+    expect(check(withAccount(7, filler(73)))).toThrow(changed);
+    expect(check(withAccount(1, filler(74)))).toThrow(changed);
+  });
+
   it('refuses two routes, an exact-out route, or no route at all', () => {
     const route = jupiterIx({
       taker: MY_SOL,

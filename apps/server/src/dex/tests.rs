@@ -57,15 +57,30 @@ impl SponsorGate for Gate {
 fn order_tx(payer: Option<[u8; 32]>, taker: [u8; 32], opens_account: bool) -> String {
     let program = |p: &str| solana::decode_key(p).unwrap();
     let mut keys: Vec<[u8; 32]> = payer.into_iter().collect();
+    // keys.extend([
+    //     taker,
+    //     [6u8; 32],
+    //     program(crate::solana_relayer::ATA_PROGRAM),
+    //     program(chains::JUPITER_V6),
+    // ]);
+    // The route names the taker's own USDC and JUP accounts and both mints (money audit 11).
+    let token = program(crate::solana_relayer::TOKEN_PROGRAM);
+    let (usdc, jup) = (program(chains::USDC_SOLANA), program(JUP));
     keys.extend([
         taker,
-        [6u8; 32],
+        solana::associated_token_address(&taker, &usdc, &token).unwrap(),
+        solana::associated_token_address(&taker, &jup, &token).unwrap(),
+        usdc,
+        jup,
         program(crate::solana_relayer::ATA_PROGRAM),
         program(chains::JUPITER_V6),
     ]);
     let n = keys.len() as u8;
-    let signers = keys.len() as u8 - 3;
-    let (ata, ata_program, jupiter, taker_at) = (n - 3, n - 2, n - 1, signers - 1);
+    // let signers = keys.len() as u8 - 3;
+    // let (ata, ata_program, jupiter, taker_at) = (n - 3, n - 2, n - 1, signers - 1);
+    let signers = keys.len() as u8 - 6;
+    let (ata, ata_program, jupiter, taker_at) = (signers + 1, n - 2, n - 1, signers - 1);
+    let (source, sell_mint, buy_mint) = (signers, signers + 2, signers + 3);
     let mut m = vec![0x80, signers, 0, 2, n];
     for k in &keys {
         m.extend_from_slice(k);
@@ -85,7 +100,14 @@ fn order_tx(payer: Option<[u8; 32]>, taker: [u8; 32], opens_account: bool) -> St
             vec![1u8],
         ));
     }
-    ixs.push((jupiter, vec![taker_at, ata], route));
+    // ixs.push((jupiter, vec![taker_at, ata], route));
+    ixs.push((
+        jupiter,
+        vec![
+            jupiter, taker_at, source, jupiter, jupiter, ata, sell_mint, buy_mint,
+        ],
+        route,
+    ));
     m.push(ixs.len() as u8);
     for (program, accounts, data) in ixs {
         m.push(program);
