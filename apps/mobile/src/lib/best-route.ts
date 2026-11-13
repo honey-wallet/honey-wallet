@@ -130,6 +130,12 @@ export const routeStatus = (e: unknown) =>
     ? (e as { status: number }).status
     : null;
 
+/** The least a refused route would take (atomic, in the token paid), when the planner said. */
+export const routeMinimum = (e: unknown): bigint | null => {
+  const raw = e && typeof e === 'object' ? (e as { minAmountIn?: unknown }).minAmountIn : null;
+  return typeof raw === 'bigint' && raw > 0n ? raw : null;
+};
+
 /** The shape of `/routes/best`'s answer (its terms are checked by `planRoute`). */
 export function parseBestRoute(body: unknown): BestRoute | null {
   if (!body || typeof body !== 'object') return null;
@@ -189,9 +195,16 @@ export async function planRoute(
     })
     .catch((error) => {
       // `status` tells a refusal (4xx: show it) from the planner being unreachable.
+      // if (error instanceof ApiError && error.status >= 400 && error.status < 500)
+      //   throw Object.assign(new Error(error.message || 'No route for this right now.'), {
+      //     status: error.status,
+      //   });
+      // An amount too small for any route also says the least that would go (atomic, in
+      // the token paid): `routeMinimum` reads it.
       if (error instanceof ApiError && error.status >= 400 && error.status < 500)
         throw Object.assign(new Error(error.message || 'No route for this right now.'), {
           status: error.status,
+          ...(error.minAmountIn ? { minAmountIn: error.minAmountIn } : {}),
         });
       throw new Error('Couldn’t find a route. Try again in a moment.');
     });

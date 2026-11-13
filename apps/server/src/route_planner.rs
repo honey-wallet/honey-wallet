@@ -407,6 +407,7 @@ fn dex_seconds(chain: DexChain) -> u32 {
 /// Whether 1Click's refusal is about the amount (too small, below a minimum).
 pub fn is_amount_refusal(error: &AppError) -> bool {
     match error {
+        AppError::BelowMinimum { .. } => true,
         AppError::BadRequest(m) => {
             let m = m.to_ascii_lowercase();
             ["too low", "too small", "minimum", "at least", "amount is"]
@@ -434,10 +435,11 @@ pub fn plain_minimum(
     decimals: Option<u8>,
     dex_tried: bool,
 ) -> String {
-    let least = message
-        .split_whitespace()
-        .rev()
-        .find_map(|w| atomic(w.trim_matches(|c: char| !c.is_ascii_digit())));
+    // let least = message
+    //     .split_whitespace()
+    //     .rev()
+    //     .find_map(|w| atomic(w.trim_matches(|c: char| !c.is_ascii_digit())));
+    let least = least_of(message);
     let mut out = match (least, symbol, decimals) {
         (Some(n), Some(symbol), Some(d)) => {
             let amount = n as f64 / 10f64.powi(i32::from(d));
@@ -451,6 +453,33 @@ pub fn plain_minimum(
         "."
     });
     out
+}
+
+/// The "try at least 6146083" in 1Click's refusal: atomic units of the token paid.
+fn least_of(message: &str) -> Option<u128> {
+    message
+        .split_whitespace()
+        .rev()
+        .find_map(|w| atomic(w.trim_matches(|c: char| !c.is_ascii_digit())))
+}
+
+/// The no-route 400 for an amount that's too small: [`plain_minimum`]'s words, plus
+/// `minAmountIn` (atomic, in the token paid) when 1Click named its minimum, so the app
+/// can show the least a buy needs without reading the sentence.
+pub fn minimum_refusal(
+    message: &str,
+    symbol: Option<&str>,
+    decimals: Option<u8>,
+    dex_tried: bool,
+) -> AppError {
+    let text = plain_minimum(message, symbol, decimals, dex_tried);
+    match least_of(message) {
+        Some(least) => AppError::BelowMinimum {
+            message: text,
+            min_amount_in: least.to_string(),
+        },
+        None => bad(&text),
+    }
 }
 
 /// Fallback order: most net USD, then fewer legs, then faster.
@@ -1038,7 +1067,8 @@ impl<S: Sources> Planner<S> {
                     let tried = dropped.iter().any(|d| d.kind != RouteKind::Intents);
                     let symbol = from.listing.as_ref().map(|l| l.symbol.as_str());
                     let decimals = in_price.map(|(_, d)| d);
-                    bad(&plain_minimum(&m, symbol, decimals, tried))
+                    // bad(&plain_minimum(&m, symbol, decimals, tried))
+                    minimum_refusal(&m, symbol, decimals, tried)
                 }
                 other => other,
             })?;

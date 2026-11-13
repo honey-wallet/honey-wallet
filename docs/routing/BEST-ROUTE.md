@@ -129,6 +129,13 @@ Planner time on the measured pass: 0.2–1.5 s.
 | | KyberSwap on Arbitrum (as WETH) | 0.0000854 WETH | 0.1664 | 0.0117 | 0.1547 | alternative (64% more, not taken: privacy first) |
 | SOL $0.1666 | NEAR Intents | 0.00193 SOL | 0.1547 | 0.0025 | **0.1521** | **chosen** (no canonical SOL on Arbitrum) |
 
+**The minimum, as a number.** That no-route 400 keeps the usual
+`{ "error": { "code": "bad_request", "message": … } }` and adds `minAmountIn`: 1Click's least,
+in atomic units of the token paid (`"6220000"`), whenever 1Click named one
+(`route_planner::minimum_refusal`). The launch screen asks each leg at its share before
+Buy and shows "Add at least $X" from it (apps/mobile `lib/jar-minimum.ts`), never reading
+the sentence.
+
 **Why the WBTC leg is refused.** For $0.17 KyberSwap routes USDC→WBTC through one pool
 and builds `srcReceivers = [pool 0x599b…4c55]` (decoded with `cast`), not its executor
 `0x8f10…f996`. Audit finding 5's fix (`dex/evm.rs` `check_kyber_shape`, mirrored on

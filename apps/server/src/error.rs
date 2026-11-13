@@ -14,6 +14,13 @@ pub enum AppError {
     NotFound,
     #[error("{0}")]
     BadRequest(String),
+    /// A 400 like `BadRequest`, for an amount below what any route can take, with the
+    /// least that would go: `minAmountIn`, atomic units of the token paid.
+    #[error("{message}")]
+    BelowMinimum {
+        message: String,
+        min_amount_in: String,
+    },
     #[error("{0}")]
     Conflict(String),
     #[error("not allowed")]
@@ -52,6 +59,8 @@ struct ErrorBody<'a> {
 struct ErrorDetail<'a> {
     code: &'a str,
     message: String,
+    #[serde(rename = "minAmountIn", skip_serializing_if = "Option::is_none")]
+    min_amount_in: Option<String>,
 }
 
 impl IntoResponse for AppError {
@@ -59,6 +68,7 @@ impl IntoResponse for AppError {
         let (status, code) = match &self {
             Self::NotFound => (StatusCode::NOT_FOUND, "not_found"),
             Self::BadRequest(_) => (StatusCode::BAD_REQUEST, "bad_request"),
+            Self::BelowMinimum { .. } => (StatusCode::BAD_REQUEST, "bad_request"),
             Self::Conflict(_) => (StatusCode::CONFLICT, "conflict"),
             Self::Forbidden => (StatusCode::FORBIDDEN, "forbidden"),
             Self::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized"),
@@ -82,11 +92,20 @@ impl IntoResponse for AppError {
             }
             other => other.to_string(),
         };
+        let min_amount_in = match &self {
+            Self::BelowMinimum { min_amount_in, .. } => Some(min_amount_in.clone()),
+            _ => None,
+        };
 
         let mut response = (
             status,
             Json(ErrorBody {
-                error: ErrorDetail { code, message },
+                // error: ErrorDetail { code, message },
+                error: ErrorDetail {
+                    code,
+                    message,
+                    min_amount_in,
+                },
             }),
         )
             .into_response();
@@ -108,4 +127,42 @@ impl IntoResponse for AppError {
 
 pub async fn not_found() -> AppError {
     AppError::NotFound
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn body(error: AppError) -> (StatusCode, serde_json::Value) {
+        let response = error.into_response();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap())
+    }
+
+    #[tokio::test]
+    async fn a_minimum_rides_beside_the_message_in_the_usual_400() {
+        let (status, json) = body(AppError::BelowMinimum {
+            message: "NEAR Intents needs at least 6.10 USDC for this.".into(),
+            min_amount_in: "6102429".into(),
+        })
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            json,
+            serde_json::json!({ "error": {
+                "code": "bad_request",
+                "message": "NEAR Intents needs at least 6.10 USDC for this.",
+                "minAmountIn": "6102429",
+            }})
+        );
+        // Every other error keeps its two fields.
+        let (_, json) = body(AppError::BadRequest("nope".into())).await;
+        assert_eq!(
+            json,
+            serde_json::json!({ "error": { "code": "bad_request", "message": "nope" } })
+        );
+    }
 }

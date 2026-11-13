@@ -14,6 +14,7 @@ export {
   ApiError,
   createApiClient,
   isFeatureAvailable,
+  parseMinAmountIn,
 } from './client';
 export * from './confidential-intents';
 export { ageEarnCatalog, formatEarnApy, isEarnCatalog, isEarnObservation } from './earn';
