@@ -20,6 +20,7 @@ import { daoAccountId, USDC_INTENTS } from '@honey-wallet/keyring';
 import { api } from '@/lib/api';
 import { confirmOwner } from '@/lib/auth';
 import { backendSessionToken } from '@/lib/backend-session';
+import { type DepositTxState, depositTxVerdict } from '@/lib/deposit-tx';
 import {
   advanceDemo,
   type DemoAction,
@@ -61,6 +62,7 @@ import {
 } from '@/lib/jar-dao';
 import type { Route } from '@/lib/jar-routes';
 import { enableGroupPush } from '@/lib/push';
+import { serverNow } from '@/lib/server-clock';
 import { social, socialPicks } from '@/lib/social';
 import { createStore } from '@/lib/store';
 import { TEST_MODE } from '@/lib/test-mode';
@@ -116,7 +118,21 @@ const DEMO_SIGNS: Partial<Record<DemoAction, (g: SocialGroup) => string>> = {
 export const friendPicks = createStore<SocialProfileCard[]>([]);
 
 /** A Base payment on its way to the group, until 1Click delivers it. Kept across restarts. */
-const pendingShares = createStore<Record<string, { depositAddress: string; at: number }>>(
+// const pendingShares = createStore<Record<string, { depositAddress: string; at: number }>>(
+/**
+ * The quote's `deadline` and the deposit's `txHash` (when it's known) are kept too, so a
+ * payment that never reached 1Click stops "paying" (nov14-c audit 1).
+ */
+// type PendingShare = { depositAddress: string; at: number; deadline?: string; txHash?: string };
+type PendingShare = {
+  depositAddress: string;
+  at: number;
+  deadline?: string;
+  txHash?: string;
+  /** When 1Click first answered PENDING_DEPOSIT past the deadline and grace (server clock). */
+  unseenAt?: number;
+};
+const pendingShares = createStore<Record<string, PendingShare>>(
   {},
   { persist: 'group-jars.pending' },
 );
@@ -447,7 +463,13 @@ export async function payShare(g: SocialGroup, nearUsdc: number | null) {
       if (error instanceof JarBuyError && error.sent?.some(wentOut))
         pendingShares.set((all) => ({
           ...all,
-          [g.id]: { depositAddress: leg.depositAddress, at: Date.now() },
+          // [g.id]: { depositAddress: leg.depositAddress, at: Date.now() },
+          [g.id]: {
+            depositAddress: leg.depositAddress,
+            at: Date.now(),
+            deadline: leg.deadline,
+            ...(error.sent?.[0]?.txHash ? { txHash: error.sent[0].txHash } : {}),
+          },
         }));
       throw error;
     },
@@ -455,30 +477,104 @@ export async function payShare(g: SocialGroup, nearUsdc: number | null) {
   if (!sent?.txHash) throw new Error('Payment not sent');
   pendingShares.set((all) => ({
     ...all,
-    [g.id]: { depositAddress: leg.depositAddress, at: Date.now() },
+    // [g.id]: { depositAddress: leg.depositAddress, at: Date.now() },
+    [g.id]: {
+      depositAddress: leg.depositAddress,
+      at: Date.now(),
+      deadline: leg.deadline,
+      txHash: sent.txHash,
+    },
   }));
   return g;
 }
 
+/** How long after its deadline a share 1Click never saw counts as not paid (as Swap's). */
+const SHARE_GRACE_MS = 10 * 60_000;
+/** Two PENDING_DEPOSIT answers this far apart before a share with no hash is cleared. */
+const SHARE_UNSEEN_CONFIRM_MS = 3 * 60_000;
+/** A share saved before deadlines were kept: its quote ran at most this long. */
+const LEGACY_DEADLINE_MS = 30 * 60_000;
+
+type SettleDeps = {
+  status: (depositAddress: string) => Promise<{ status?: string } | null>;
+  /** The server's clock (lib/server-clock). */
+  now: () => number;
+  depositTx: (chain: string, hash: string) => Promise<DepositTxState>;
+};
+const settleDefaults: SettleDeps = {
+  status: (depositAddress) => fetchOneClickStatus(depositAddress),
+  now: serverNow,
+  depositTx: (chain, hash) => depositTxVerdict(chain, hash, serverNow()),
+};
+
+/** For tests: the share in flight for a group, as kept. */
+export const pendingShareOf = (groupId: string) => pendingShares.get()[groupId];
+/** For tests: keeps a share in flight, as `payShare` does. */
+export const rememberShare = (groupId: string, share: PendingShare) =>
+  pendingShares.set((all) => ({ ...all, [groupId]: share }));
+
 /**
  * A Base payment in flight: once 1Click says it delivered, the server is told (it checks
- * with 1Click too). Returns 'paid', 'waiting' or 'refunded'.
+ * with 1Click too). Returns 'paid', 'waiting', 'refunded', or 'not_sent' once a payment
+ * 1Click never saw is past its deadline and grace and didn't land on Base.
  */
-export async function settleShare(groupId: string): Promise<'paid' | 'waiting' | 'refunded'> {
+// export async function settleShare(groupId: string): Promise<'paid' | 'waiting' | 'refunded'> {
+export async function settleShare(
+  groupId: string,
+  deps: Partial<SettleDeps> = {},
+): Promise<'paid' | 'waiting' | 'refunded' | 'not_sent'> {
+  const d: SettleDeps = { ...settleDefaults, ...deps };
   const pending = pendingShares.get()[groupId];
   if (!pending) return 'paid';
-  const record = await fetchOneClickStatus(pending.depositAddress);
+  // const record = await fetchOneClickStatus(pending.depositAddress);
+  const record = await d.status(pending.depositAddress);
   const status = record?.status;
   const clear = () =>
     pendingShares.set((all) => {
       const { [groupId]: _, ...rest } = all;
       return rest;
     });
+  const remember = (share: PendingShare) =>
+    pendingShares.set((all) => ({ ...all, [groupId]: share }));
   if (status === 'REFUNDED' || status === 'FAILED') {
     clear();
     return 'refunded';
   }
-  if (status !== 'SUCCESS') return 'waiting';
+  // if (status !== 'SUCCESS') return 'waiting';
+  if (status !== 'SUCCESS') {
+    // Still unseen by 1Click past the quote's deadline and grace (nov14-c audit 1): read
+    // on Base, a deposit that reverted or was dropped (two reads, lib/deposit-tx) means
+    // nothing was paid, and so does one that never got a hash. Pay comes back; a deposit
+    // arriving that late is refunded by 1Click.
+    // const unseen = !status || status === 'PENDING_DEPOSIT';
+    // Replaced 14 Nov (security review): a failed or empty status read is not "unseen";
+    // only 1Click positively answering PENDING_DEPOSIT is. Fail closed: keep waiting.
+    if (status !== 'PENDING_DEPOSIT') {
+      // Seen paid and moving: forget any earlier "unseen" answer.
+      if (status && pending.unseenAt !== undefined) remember({ ...pending, unseenAt: undefined });
+      return 'waiting';
+    }
+    const deadline = pending.deadline
+      ? Date.parse(pending.deadline)
+      : pending.at + LEGACY_DEADLINE_MS;
+    const now = d.now();
+    // if (!unseen || !(d.now() > deadline + SHARE_GRACE_MS)) return 'waiting';
+    if (!(now > deadline + SHARE_GRACE_MS)) return 'waiting';
+    if (pending.txHash) {
+      const tx = await d.depositTx('Base', pending.txHash).catch(() => 'unknown' as const);
+      if (tx !== 'failure' && tx !== 'missing') return 'waiting';
+    } else {
+      // No hash to read on Base: two PENDING_DEPOSIT answers, minutes apart, before Pay
+      // comes back (as lib/deposit-tx asks two "missing" reads).
+      if (pending.unseenAt === undefined) {
+        remember({ ...pending, unseenAt: now });
+        return 'waiting';
+      }
+      if (now - pending.unseenAt < SHARE_UNSEEN_CONFIRM_MS) return 'waiting';
+    }
+    clear();
+    return 'not_sent';
+  }
   put(await api.socialGroupPaid(token(), groupId, { depositAddress: pending.depositAddress }));
   clear();
   return 'paid';

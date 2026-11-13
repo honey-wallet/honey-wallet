@@ -36,7 +36,7 @@ import { confirmOwner } from '@/lib/auth';
 import { backendSessionToken } from '@/lib/backend-session';
 import { type PlannedRoute, planRoute, type RouteAsk, routeStatus } from '@/lib/best-route';
 import { prepareEvmSend } from '@/lib/dapp-sign';
-import { depositTxState } from '@/lib/deposit-tx';
+import { type depositTxState, depositTxVerdict } from '@/lib/deposit-tx';
 import {
   DEX_CHAIN_IDS,
   type DexChain,
@@ -402,7 +402,9 @@ const defaults: JarBuyDeps = {
     ),
   route: (ask) => planRoute(ask),
   now: serverNow,
-  depositTx: (chain, hash) => depositTxState(chain, hash),
+  // depositTx: (chain, hash) => depositTxState(chain, hash),
+  // Two "missing" reads minutes apart before a deposit counts as dropped (nov14-c audit 2).
+  depositTx: (chain, hash) => depositTxVerdict(chain, hash, serverNow()),
 };
 
 /** Routes with money on them that can't be paid in full: any one stops the whole buy. */
@@ -1351,6 +1353,22 @@ export async function refreshJarBuy(
       // if (isDexLeg(l) || !l.txHash || l.status === 'REFUNDED' || l.status === 'FAILED') return l;
       // Replaced 14 Nov (money audit 1): a `SENDING` leg has no hash yet but is asked about
       // by its deposit address; a leg never paid is `NOT_SENT` and isn't.
+      // A leg settled as NOT_SENT or FAILED from its own chain kept its hash: 1Click is
+      // still asked, so a late SUCCESS wins (nov14-c audit 2).
+      const recheck = (l.status === 'NOT_SENT' || l.status === 'FAILED') && !!l.txHash;
+      if (recheck) {
+        const s = token ? await d.status(token, l.depositAddress).catch(() => null) : null;
+        const later = s && known(s.status) ? s.status : null;
+        if (
+          !later ||
+          later === 'PENDING_DEPOSIT' ||
+          later === 'KNOWN_DEPOSIT_TX' ||
+          later === l.status
+        )
+          return l;
+        const amountOut = s?.amountOut && /^\d{1,38}$/.test(s.amountOut) ? s.amountOut : null;
+        return { ...l, status: later, ...(later === 'SUCCESS' && amountOut ? { amountOut } : {}) };
+      }
       if (
         isDexLeg(l) ||
         (!l.txHash && l.status !== 'SENDING' && !wentPastSending(l)) ||

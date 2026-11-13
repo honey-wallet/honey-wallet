@@ -7,6 +7,7 @@
  */
 import { jsonRpc, type Rpc, SOLANA_MAINNET } from '@honey-wallet/keyring';
 import { type Chain, EVM_CHAIN_IDS } from '@/lib/mock-wallet';
+import { createStore } from '@/lib/store';
 
 export type DepositTxState = 'success' | 'failure' | 'missing' | 'unknown';
 
@@ -61,4 +62,44 @@ export async function depositTxState(
   } catch {
     return 'unknown';
   }
+}
+
+/** Two "missing" reads must be at least this far apart before a deposit counts as dropped. */
+export const MISSING_CONFIRM_MS = 3 * 60_000;
+
+/**
+ * When each deposit hash was first read as missing, kept across restarts. A public Solana
+ * RPC without history, or a load-balanced EVM node that hasn't seen a pending
+ * transaction, can say "missing" once; it counts only when it says so again later
+ * (audit of release/nov14-c, item 2).
+ */
+const firstMissing = createStore<Record<string, number>>({}, { persist: 'deposit-tx-missing-v1' });
+
+/** For tests: forget what was read. */
+export const forgetMissingReads = () => firstMissing.set({});
+
+/**
+ * `depositTxState`, settled: `missing` only once a second read, `MISSING_CONFIRM_MS` or
+ * more after the first, says so too; until then `unknown`. Any other answer forgets the
+ * first read. `now` is the server's clock.
+ */
+export async function depositTxVerdict(
+  chain: string,
+  hash: string,
+  now: number,
+  deps: Partial<DepositTxDeps> = {},
+): Promise<DepositTxState> {
+  const state = await depositTxState(chain, hash, deps);
+  const key = `${chain}:${hash}`;
+  if (state !== 'missing') {
+    if (state !== 'unknown' && firstMissing.get()[key] !== undefined)
+      firstMissing.set(({ [key]: _gone, ...rest }) => rest);
+    return state;
+  }
+  const first = firstMissing.get()[key];
+  if (first === undefined) {
+    firstMissing.set((all) => ({ ...all, [key]: now }));
+    return 'unknown';
+  }
+  return now - first >= MISSING_CONFIRM_MS ? 'missing' : 'unknown';
 }
