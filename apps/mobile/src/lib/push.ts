@@ -1,3 +1,4 @@
+import type { PushWatchWallet } from '@honey-wallet/api-client';
 import Constants from 'expo-constants';
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
@@ -10,8 +11,10 @@ import { TEST_MODE } from '@/lib/test-mode';
  * System notifications. Remote pushes come from Honey's server through Expo's push
  * service for inbox events (group invites, votes, "add your share"): this phone's
  * Expo push token is registered for the signed-in person once notifications are
- * allowed. Permission is asked when it's useful (after joining or starting a group),
- * never at launch. Locally scheduled ones (`notify`) are test mode's simulations.
+ * allowed, with the wallets it wants "Money received" pushes for (`lib/arrival-watcher`).
+ * Permission is asked when it's useful (after joining or starting a group, or on the
+ * first Receive), never at launch. Locally scheduled ones (`notify`) are test mode's
+ * simulations.
  */
 
 /** The actions on an approval request, right on the notification. */
@@ -21,16 +24,41 @@ export const ACTION_REJECT = 'reject';
 
 let ready: Promise<void> | null = null;
 
-/** Shows notifications as banners even while Honey is open, and adds the approval buttons. */
+/**
+ * "Money received" hooks, installed by `lib/arrival-watcher` (kept out of this module so
+ * it stays light): the wallets to register for arrival pushes, and what to do when one
+ * arrives while Honey is open.
+ */
+type ArrivalHooks = {
+  /** The wallets to watch ([] when the setting is off); 'wait' until wallets load. */
+  wallets: () => PushWatchWallet[] | 'wait';
+  /** An arrival push while Honey is open: shown in the app instead of a system banner. */
+  onPush: (body: string, data: Record<string, unknown>) => void;
+};
+let arrivalHooks: ArrivalHooks | null = null;
+export function setArrivalHooks(hooks: ArrivalHooks) {
+  arrivalHooks = hooks;
+}
+
+const isArrivalPush = (data: unknown) =>
+  (data as Record<string, unknown> | undefined)?.type === 'arrival';
+
+/**
+ * Shows notifications as banners even while Honey is open, and adds the approval
+ * buttons. "Money received" is the exception: Honey shows its own banner instead.
+ */
 export function setUpNotifications() {
   if (ready) return ready;
   Notifications.setNotificationHandler({
-    handleNotification: async () => ({
-      shouldShowBanner: true,
-      shouldShowList: true,
-      shouldPlaySound: false,
-      shouldSetBadge: false,
-    }),
+    handleNotification: async (notification) => {
+      const own = isArrivalPush(notification.request.content.data) && !!arrivalHooks;
+      return {
+        shouldShowBanner: !own,
+        shouldShowList: !own,
+        shouldPlaySound: false,
+        shouldSetBadge: false,
+      };
+    },
   });
   ready = Notifications.setNotificationCategoryAsync(APPROVAL_CATEGORY, [
     // Approving moves money, so it opens Honey to confirm there; rejecting is safe
@@ -101,7 +129,7 @@ export async function notify(content: {
 const REMOTE_PUSH = Platform.OS !== 'web' && !TEST_MODE;
 
 let pushToken: string | null = null;
-/** Who this phone's token was last registered for (the signed-in user id). */
+/** What this phone's token was last registered with (user id and watched wallets). */
 let registeredFor: string | null = null;
 
 const projectId = () =>
@@ -130,15 +158,19 @@ export async function syncPushRegistration() {
   if (!REMOTE_PUSH) return;
   const session = backendSessionToken();
   const user = backendSession.get().profile?.userId ?? null;
-  if (!session || !user || registeredFor === user) return;
+  const wallets = arrivalHooks ? arrivalHooks.wallets() : undefined;
+  if (wallets === 'wait') return;
+  const key = `${user}|${JSON.stringify(wallets ?? null)}`;
+  if (!session || !user || registeredFor === key) return;
   if (!(await notificationsAllowed())) return;
   const token = await devicePushToken();
   if (!token) return;
   await api.registerPushToken(session, {
     token,
     platform: Platform.OS === 'ios' ? 'ios' : 'android',
+    ...(wallets ? { wallets } : {}),
   });
-  registeredFor = user;
+  registeredFor = key;
 }
 
 /**
@@ -147,12 +179,20 @@ export async function syncPushRegistration() {
  * once) and registers this phone. Never throws.
  */
 export async function enableGroupPush() {
+  await enablePush();
+}
+
+/**
+ * Asks for notifications (iOS shows its prompt once) and registers this phone. Never
+ * throws: notifications are a convenience; the bell and Activity still have everything.
+ */
+export async function enablePush() {
   if (!REMOTE_PUSH) return;
   try {
     await setUpNotifications();
     if (await askForNotifications()) await syncPushRegistration();
   } catch {
-    // Notifications are a convenience; the bell still has everything.
+    // Nothing to do: the app works without them.
   }
 }
 
@@ -186,6 +226,8 @@ export function watchPushRegistration() {
   sync();
   backendSession.subscribe(sync);
   Notifications.addNotificationReceivedListener((n) => {
-    if (typeof n.request.content.data?.inboxId === 'string') void loadInbox();
+    const { data, body } = n.request.content;
+    if (typeof data?.inboxId === 'string') void loadInbox();
+    if (isArrivalPush(data)) arrivalHooks?.onPush(body ?? '', data ?? {});
   });
 }

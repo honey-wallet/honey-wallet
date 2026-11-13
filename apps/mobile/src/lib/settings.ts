@@ -64,6 +64,10 @@ export type Settings = {
   jarVisibility: Visibility;
   jarCopyFee: number;
   jarSlippage: number;
+  /** "Money received": a push when money lands while Honey is closed, a banner while open. */
+  moneyReceivedAlerts: boolean;
+  /** Notifications were offered once, on the first Receive (never asked again from there). */
+  receivePushAsked: boolean;
 };
 
 export const settings = createStore<Settings>(
@@ -88,6 +92,8 @@ export const settings = createStore<Settings>(
     jarVisibility: 'private',
     jarCopyFee: 10,
     jarSlippage: 1,
+    moneyReceivedAlerts: true,
+    receivePushAsked: false,
   },
   { persist: 'settings' },
 );

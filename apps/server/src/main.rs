@@ -156,6 +156,14 @@ async fn main() -> anyhow::Result<()> {
         if let Some(morpho) = infrastructure.morpho() {
             background.push(morpho.clone().start(health.clone()));
         }
+        // "Money received" pushes; off unless ARRIVAL_PUSH_ENABLED=1 (src/arrivals.rs).
+        if let Some(task) = honey_server::arrivals::start_from_env(
+            infrastructure.postgres(),
+            infrastructure.redis(),
+            infrastructure.metrics().clone(),
+        ) {
+            background.push(task);
+        }
         // Social jars' hourly marks and milestones: reads never write.
         if let Some(pool) = infrastructure.postgres() {
             match honey_server::market_data::MarketData::new() {

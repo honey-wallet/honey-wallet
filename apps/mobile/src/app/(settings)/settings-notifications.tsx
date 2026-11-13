@@ -9,10 +9,12 @@ import Animated, {
 import { Icon } from '@/components/Icon';
 import { HoneyLogo } from '@/components/logo/HoneyLogo';
 import { TextsReveal } from '@/components/motion/TextsReveal';
+import { Toggle } from '@/components/motion/Toggle';
 import { PillButton } from '@/components/onboarding/PillButton';
-import { closeSheet, SheetScreen } from '@/components/sheets/Sheet';
+import { closeSheet, SheetRow, SheetScreen } from '@/components/sheets/Sheet';
 import { tap } from '@/lib/haptics';
 import { askForNotifications, notificationsAllowed } from '@/lib/push';
+import { updateSettings, useSettings } from '@/lib/settings';
 import { showToast } from '@/lib/toast';
 import { makeStyles, radius, useTheme } from '@/theme';
 import { DISTANCE, DURATION, EASE } from '@/theme/motion';
@@ -44,6 +46,7 @@ export default function NotificationsSheet() {
   const styles = useStyles();
   const reduceMotion = useReducedMotion();
   const c = useTheme();
+  const { moneyReceivedAlerts } = useSettings();
   const [allowed, setAllowed] = useState<boolean | null>(null);
   useEffect(() => {
     notificationsAllowed()
@@ -109,6 +112,24 @@ export default function NotificationsSheet() {
             </Animated.View>
           ))}
         </View>
+      </View>
+
+      {/* On by default: a push while Honey is closed, a banner while it's open. */}
+      <View style={styles.rows}>
+        <SheetRow
+          title="Money received"
+          subtitle="When money lands in your wallet"
+          accessory={
+            <Toggle
+              accessibilityLabel="Money received"
+              value={moneyReceivedAlerts}
+              onValueChange={(on) => {
+                tap();
+                updateSettings({ moneyReceivedAlerts: on });
+              }}
+            />
+          }
+        />
       </View>
     </SheetScreen>
   );
@@ -199,6 +220,10 @@ const useStyles = makeStyles((c) => ({
   },
   flex: {
     flex: 1,
+  },
+  rows: {
+    marginTop: 18,
+    alignSelf: 'stretch',
   },
   cardTitle: {
     color: c.text,

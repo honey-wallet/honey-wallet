@@ -21,6 +21,8 @@ import { LaunchAnimation } from '@/components/LaunchAnimation';
 import { ToastHost } from '@/components/motion/ToastHost';
 import { Tray } from '@/components/sheets/Tray';
 import { appLock } from '@/lib/app-lock';
+import { openArrival, useArrivalWatcher } from '@/lib/arrival-watcher';
+import { arrivalData } from '@/lib/arrivals';
 import { useInFlightWatcher } from '@/lib/in-flight';
 import { markInboxRead } from '@/lib/inbox';
 import { createMultisig, reject, startDemoRequests } from '@/lib/multisig';
@@ -33,7 +35,7 @@ import { useTheme } from '@/theme';
 /**
  * Tapping a notification about a proposal opens it; its Reject button rejects it
  * without opening Honey. Tapping a group push (an inbox item) opens its group, or the
- * invite, as the bell does.
+ * invite, as the bell does. Tapping "Money received" opens Activity (and the transfer).
  */
 const consumedResponses = new Set<string>();
 
@@ -42,6 +44,12 @@ function handleResponse(response: Notifications.NotificationResponse) {
   if (!appLock.get().unlocked) return;
   const key = `${response.notification.request.identifier}:${response.actionIdentifier}`;
   if (consumedResponses.has(key)) return;
+  const arrival = arrivalData(data);
+  if (arrival) {
+    consumedResponses.add(key);
+    void openArrival(arrival);
+    return;
+  }
   if (typeof data.groupId === 'string') {
     consumedResponses.add(key);
     if (typeof data.inboxId === 'string') markInboxRead([data.inboxId]);
@@ -96,6 +104,12 @@ function ExtensionRoutes() {
   useEffect(() => {
     if (hiddenHere(pathname)) router.replace(WALLET);
   }, [pathname]);
+  return null;
+}
+
+/** Money arriving in the wallet on screen: a banner wherever you are (foreground only). */
+function ArrivalWatcher() {
+  useArrivalWatcher();
   return null;
 }
 
@@ -170,6 +184,7 @@ export default function RootLayout() {
             {EXTENSION ? <ExtensionRoutes /> : null}
             <WalletConnectSessions />
             <InFlightWatcher />
+            <ArrivalWatcher />
             <BackendSessionLifecycle />
             <Stack
               screenOptions={{ headerShown: false }}

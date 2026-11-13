@@ -448,6 +448,22 @@ impl PortfolioService {
             .ok()
     }
 
+    /// The chains [`Self::balances`] reads for these addresses (a chain that answered
+    /// with nothing held is in here but in neither `holdings` nor `unavailable`).
+    pub fn chains(&self, addresses: &Addresses) -> Vec<&'static str> {
+        let mut out = Vec::new();
+        if addresses.evm.is_some() {
+            out.extend(self.endpoints.evm.iter().map(|n| n.chain));
+        }
+        if addresses.solana.is_some() {
+            out.push("Solana");
+        }
+        if addresses.near.is_some() {
+            out.push("NEAR");
+        }
+        out
+    }
+
     /// Balances on every chain for these addresses, priced in USD.
     pub async fn balances(&self, addresses: &Addresses) -> Portfolio {
         let key = format!("balances:{}", addresses.key());

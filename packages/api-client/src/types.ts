@@ -1061,6 +1061,33 @@ export interface EvmSponsorStatus {
 export interface PushTokenRequest {
   token: string;
   platform: 'ios' | 'android';
+  /**
+   * The wallets this phone wants "Money received" pushes for (at most 5); they replace
+   * what it sent before, and an empty list turns them off. Left out (older builds), the
+   * person's signed-in EVM wallets are watched. Mirrors `routes::push::WatchWallet`.
+   */
+  wallets?: PushWatchWallet[];
+}
+
+/** One wallet's public addresses; any may be missing. */
+export interface PushWatchWallet {
+  evm?: string;
+  solana?: string;
+  near?: string;
+}
+
+/**
+ * The data of a "Money received" push (`src/arrivals.rs`): the largest arrival, and how
+ * many arrived together. Tapping it opens Activity.
+ */
+export interface ArrivalPushData {
+  type: 'arrival';
+  chain: string;
+  symbol: string;
+  amount: number;
+  count: number;
+  txHash?: string;
+  refund?: boolean;
 }
 
 export interface PushTokenResult {

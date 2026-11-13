@@ -485,7 +485,15 @@ export function createApiClient({ baseUrl, fetch: fetchImpl = fetch }: ApiClient
     registerPushToken: (token: string, input: PushTokenRequest, init?: RequestInit) =>
       request<PushTokenResult>(
         '/api/v1/push/tokens',
-        authorizedJson(token, { token: input.token, platform: input.platform }, init),
+        authorizedJson(
+          token,
+          {
+            token: input.token,
+            platform: input.platform,
+            ...(input.wallets ? { wallets: input.wallets } : {}),
+          },
+          init,
+        ),
       ),
     /** Forgets this phone's push token (signing out). */
     removePushToken: (token: string, pushToken: string, init?: RequestInit) =>

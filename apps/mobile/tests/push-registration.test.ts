@@ -9,6 +9,10 @@ const mocks = vi.hoisted(() => ({
   register: vi.fn(async () => ({ ok: true })),
   remove: vi.fn(async () => ({ ok: true })),
   listeners: [] as (() => void)[],
+  received: [] as ((n: unknown) => void)[],
+  handler: null as null | {
+    handleNotification: (n: never) => Promise<{ shouldShowBanner: boolean }>;
+  },
 }));
 
 vi.mock('react-native', () => ({ Platform: { OS: 'ios' } }));
@@ -18,7 +22,9 @@ vi.mock('expo-constants', () => ({
 }));
 vi.mock('expo-notifications', () => ({
   AndroidImportance: { DEFAULT: 3 },
-  setNotificationHandler: vi.fn(),
+  setNotificationHandler: vi.fn((handler: unknown) => {
+    mocks.handler = handler as typeof mocks.handler;
+  }),
   setNotificationCategoryAsync: vi.fn(async () => undefined),
   setNotificationChannelAsync: vi.fn(async () => undefined),
   getPermissionsAsync: vi.fn(async () => ({
@@ -33,7 +39,9 @@ vi.mock('expo-notifications', () => ({
   getExpoPushTokenAsync: vi.fn(async ({ projectId }: { projectId: string }) => ({
     data: `ExponentPushToken[${projectId}-device]`,
   })),
-  addNotificationReceivedListener: vi.fn(),
+  addNotificationReceivedListener: vi.fn((fn: (n: unknown) => void) => {
+    mocks.received.push(fn);
+  }),
 }));
 vi.mock('@/lib/api', () => ({
   api: { registerPushToken: mocks.register, removePushToken: mocks.remove },
@@ -50,6 +58,8 @@ vi.mock('@/lib/inbox', () => ({ loadInbox: vi.fn() }));
 import {
   enableGroupPush,
   forgetPushDevice,
+  setArrivalHooks,
+  setUpNotifications,
   syncPushRegistration,
   watchPushRegistration,
 } from '@/lib/push';
@@ -94,5 +104,49 @@ describe('remote push registration', () => {
     mocks.session = null;
     await syncPushRegistration();
     expect(mocks.register).not.toHaveBeenCalled();
+  });
+});
+
+describe('"Money received" registration and foreground pushes', () => {
+  const wallet = { evm: '0xa', solana: 'So1', near: 'a.near' };
+  let watched: { evm: string; solana: string; near: string }[] | 'wait' = 'wait';
+  const onPush = vi.fn();
+
+  it('waits for wallets to load, then registers them, and again when they change', async () => {
+    mocks.session = 'access';
+    mocks.user = 'user-3';
+    mocks.register.mockClear();
+    setArrivalHooks({ wallets: () => watched, onPush });
+    await syncPushRegistration();
+    expect(mocks.register).not.toHaveBeenCalled();
+    watched = [wallet];
+    await syncPushRegistration();
+    expect(mocks.register).toHaveBeenLastCalledWith('access', {
+      token: DEVICE,
+      platform: 'ios',
+      wallets: [wallet],
+    });
+    await syncPushRegistration();
+    expect(mocks.register).toHaveBeenCalledTimes(1);
+    // The setting turned off: an empty list tells the server to stop.
+    watched = [];
+    await syncPushRegistration();
+    expect(mocks.register).toHaveBeenLastCalledWith('access', {
+      token: DEVICE,
+      platform: 'ios',
+      wallets: [],
+    });
+  });
+
+  it('shows an arrival push in the app instead of a system banner', async () => {
+    await setUpNotifications();
+    const handler = mocks.handler;
+    const as = (data: Record<string, unknown>) =>
+      ({ request: { content: { data, body: 'Received 5 USDC on Base' } } }) as never;
+    const arrival = { type: 'arrival', chain: 'Base', symbol: 'USDC', amount: 5 };
+    expect((await handler?.handleNotification(as(arrival)))?.shouldShowBanner).toBe(false);
+    expect((await handler?.handleNotification(as({ inboxId: 'i1' })))?.shouldShowBanner).toBe(true);
+    for (const received of mocks.received) received(as(arrival));
+    expect(onPush).toHaveBeenCalledWith('Received 5 USDC on Base', arrival);
   });
 });
