@@ -285,11 +285,12 @@ const positions = createStore<PerpPosition[]>(
 );
 export const usePerpPositions = positions.useValue;
 
-export function openPosition(position: Omit<PerpPosition, 'id'>) {
-  const id = `${position.symbol}-${Date.now()}`;
-  positions.set((list) => [{ ...position, id }, ...list]);
-  return id;
-}
+// Unused since 14 Nov (cleanup): nothing imports it.
+// export function openPosition(position: Omit<PerpPosition, 'id'>) {
+//   const id = `${position.symbol}-${Date.now()}`;
+//   positions.set((list) => [{ ...position, id }, ...list]);
+//   return id;
+// }
 
 export function closePosition(id: string) {
   positions.set((list) => list.filter((p) => p.id !== id));

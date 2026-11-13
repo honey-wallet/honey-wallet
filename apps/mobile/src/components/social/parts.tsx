@@ -391,18 +391,19 @@ const toneColors = (tone: Tone, c: Palette) =>
         ? { bg: c.accentSurface, fg: c.accentText }
         : { bg: c.raised, fg: c.textSecondary };
 
-/** "Bought", "Launched", "Copied", "+10%": what someone did, as a tinted pill. */
-export function ActionPill({ label, tone, icon }: { label: string; tone: Tone; icon?: 'flame' }) {
-  const styles = useStyles();
-  const c = useTheme();
-  const { bg, fg } = toneColors(tone, c);
-  return (
-    <View style={[styles.pill, { backgroundColor: bg }]}>
-      {icon ? <Icon name={icon} size={11} color={fg} /> : null}
-      <Text style={[styles.pillText, { color: fg }]}>{label}</Text>
-    </View>
-  );
-}
+// Unused since 14 Nov (cleanup): nothing imports it.
+// /** "Bought", "Launched", "Copied", "+10%": what someone did, as a tinted pill. */
+// export function ActionPill({ label, tone, icon }: { label: string; tone: Tone; icon?: 'flame' }) {
+//   const styles = useStyles();
+//   const c = useTheme();
+//   const { bg, fg } = toneColors(tone, c);
+//   return (
+//     <View style={[styles.pill, { backgroundColor: bg }]}>
+//       {icon ? <Icon name={icon} size={11} color={fg} /> : null}
+//       <Text style={[styles.pillText, { color: fg }]}>{label}</Text>
+//     </View>
+//   );
+// }
 
 /** A dollar price the way Fomo writes them: $63,084 · $77.66 · $0.1635. */
 export function priceText(usd: number) {
@@ -1265,62 +1266,63 @@ export function JarAttachment({
 // ---------------------------------------------------------------------------
 // Leaderboard
 
-/**
- * A leaderboard row, after Fomo: a 72pt card with the plain rank, the owner's avatar and
- * name, the jar's token logos and name under it, then the return on the right with the
- * range it covers (`label`, e.g. "this week"). Tap opens the jar.
- */
-export function LeaderRow({ jar, rank, label }: { jar: SocialJar; rank: number; label?: string }) {
-  const styles = useStyles();
-  const c = useTheme();
-  const state = useSaved();
-  return (
-    <PressableScale
-      accessibilityRole="button"
-      accessibilityLabel={`${rank}, ${jar.name} by ${jar.owner.handle}`}
-      scaleTo={0.98}
-      onPress={() => openJar(jar)}
-      style={styles.leaderRow}
-    >
-      <Text style={styles.leaderRank}>{rank}</Text>
-      <SocialAvatar who={jar.owner} size={40} />
-      <View style={styles.flex}>
-        <Text style={styles.leaderName} numberOfLines={1}>
-          {jar.owner.displayName}
-        </Text>
-        <View style={styles.leaderJar}>
-          {jar.holdingsHidden ? (
-            <Icon name="lock" size={12} color={c.textSecondary} />
-          ) : (
-            <TokenStack symbols={jar.picks.map((p) => p.symbol)} size={14} ring={c.card} />
-          )}
-          <Text style={[styles.leaderSub, styles.flex]} numberOfLines={1}>
-            {jar.name}
-          </Text>
-        </View>
-      </View>
-      <View style={styles.right}>
-        <ReturnText
-          value={jar.periodReturn ?? jar.returnSincePublish}
-          hidden={jar.returnsHidden}
-          size={17}
-          weight="700"
-        />
-        {label ? <Text style={styles.leaderLabel}>{label}</Text> : null}
-      </View>
-      {/* Nothing to save from hidden holdings; the space keeps the returns aligned. */}
-      {jar.holdingsHidden ? (
-        <View style={{ width: 17 }} />
-      ) : (
-        <SaveButton
-          saved={isStrategySaved(state, jarKey(jar.id))}
-          onToggle={() => toggleSavedStrategy(strategyFromJar(jar, livePrices()))}
-          size={17}
-        />
-      )}
-    </PressableScale>
-  );
-}
+// Unused since 14 Nov (cleanup): nothing imports it.
+// /**
+//  * A leaderboard row, after Fomo: a 72pt card with the plain rank, the owner's avatar and
+//  * name, the jar's token logos and name under it, then the return on the right with the
+//  * range it covers (`label`, e.g. "this week"). Tap opens the jar.
+//  */
+// export function LeaderRow({ jar, rank, label }: { jar: SocialJar; rank: number; label?: string }) {
+//   const styles = useStyles();
+//   const c = useTheme();
+//   const state = useSaved();
+//   return (
+//     <PressableScale
+//       accessibilityRole="button"
+//       accessibilityLabel={`${rank}, ${jar.name} by ${jar.owner.handle}`}
+//       scaleTo={0.98}
+//       onPress={() => openJar(jar)}
+//       style={styles.leaderRow}
+//     >
+//       <Text style={styles.leaderRank}>{rank}</Text>
+//       <SocialAvatar who={jar.owner} size={40} />
+//       <View style={styles.flex}>
+//         <Text style={styles.leaderName} numberOfLines={1}>
+//           {jar.owner.displayName}
+//         </Text>
+//         <View style={styles.leaderJar}>
+//           {jar.holdingsHidden ? (
+//             <Icon name="lock" size={12} color={c.textSecondary} />
+//           ) : (
+//             <TokenStack symbols={jar.picks.map((p) => p.symbol)} size={14} ring={c.card} />
+//           )}
+//           <Text style={[styles.leaderSub, styles.flex]} numberOfLines={1}>
+//             {jar.name}
+//           </Text>
+//         </View>
+//       </View>
+//       <View style={styles.right}>
+//         <ReturnText
+//           value={jar.periodReturn ?? jar.returnSincePublish}
+//           hidden={jar.returnsHidden}
+//           size={17}
+//           weight="700"
+//         />
+//         {label ? <Text style={styles.leaderLabel}>{label}</Text> : null}
+//       </View>
+//       {/* Nothing to save from hidden holdings; the space keeps the returns aligned. */}
+//       {jar.holdingsHidden ? (
+//         <View style={{ width: 17 }} />
+//       ) : (
+//         <SaveButton
+//           saved={isStrategySaved(state, jarKey(jar.id))}
+//           onToggle={() => toggleSavedStrategy(strategyFromJar(jar, livePrices()))}
+//           size={17}
+//         />
+//       )}
+//     </PressableScale>
+//   );
+// }
 
 // ---------------------------------------------------------------------------
 // States

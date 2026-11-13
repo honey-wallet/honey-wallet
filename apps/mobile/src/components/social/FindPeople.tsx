@@ -20,12 +20,12 @@ import { FollowButton, openProfile, SocialAvatar, TokenStack } from '@/component
 import { Sparkline } from '@/components/wallet/parts';
 import { tap } from '@/lib/haptics';
 import {
-  loadLeaderboard,
+  // loadLeaderboard: unused since 14 Nov (cleanup), only the commented-out TopPeople used it.
   openSocialJar,
   pct,
   type SocialJar,
   type SocialProfileCard,
-  social,
+  // social: unused since 14 Nov (cleanup), only the commented-out TopPeople used it.
   socialError,
   toggleFollow,
   useSocial,
@@ -111,36 +111,37 @@ export function useCreators(limit: number): Creator[] {
   }, [leaderboard, me?.handle, limit]);
 }
 
-/** Search's Top people: the Who to follow rows, best return first. */
-export function TopPeople() {
-  const { profiles, pendingFollow } = useSocial();
-  // Its people come from the leaderboard: fetch it if nothing has yet.
-  useEffect(() => {
-    if (!social.get().leaderboard) void loadLeaderboard();
-  }, []);
-  const creators = useCreators(20);
-  const ranked = useMemo(
-    () =>
-      [...creators].sort(
-        (a, b) => (b.jar.returnSincePublish ?? -Infinity) - (a.jar.returnSincePublish ?? -Infinity),
-      ),
-    [creators],
-  );
-  return (
-    <View>
-      {ranked.map((p, i) => (
-        <WhoRow
-          key={p.who.handle}
-          creator={p}
-          last={i === ranked.length - 1}
-          following={profiles[p.who.handle]?.followedByMe ?? false}
-          busy={pendingFollow[p.who.handle]}
-        />
-      ))}
-    </View>
-  );
-}
-
+// Unused since 14 Nov (cleanup): nothing imports it.
+// /** Search's Top people: the Who to follow rows, best return first. */
+// export function TopPeople() {
+//   const { profiles, pendingFollow } = useSocial();
+//   // Its people come from the leaderboard: fetch it if nothing has yet.
+//   useEffect(() => {
+//     if (!social.get().leaderboard) void loadLeaderboard();
+//   }, []);
+//   const creators = useCreators(20);
+//   const ranked = useMemo(
+//     () =>
+//       [...creators].sort(
+//         (a, b) => (b.jar.returnSincePublish ?? -Infinity) - (a.jar.returnSincePublish ?? -Infinity),
+//       ),
+//     [creators],
+//   );
+//   return (
+//     <View>
+//       {ranked.map((p, i) => (
+//         <WhoRow
+//           key={p.who.handle}
+//           creator={p}
+//           last={i === ranked.length - 1}
+//           following={profiles[p.who.handle]?.followedByMe ?? false}
+//           busy={pendingFollow[p.who.handle]}
+//         />
+//       ))}
+//     </View>
+//   );
+// }
+//
 /** Faces scattered over the top, popping in one after another, then gently floating. */
 function Collage({ people }: { people: SocialProfileCard[] }) {
   const styles = useStyles();

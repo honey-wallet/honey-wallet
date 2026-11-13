@@ -90,19 +90,20 @@ export function ChartEmpty({
   );
 }
 
-/**
- * The usual scrub `label`: the value bold over its date, on a small pill in the line's
- * colour (`color`), with dark text that reads on green and red in both themes.
- */
-export function ScrubLabel({ value, date, color }: { value: string; date: string; color: string }) {
-  const styles = useEmptyStyles();
-  return (
-    <View style={[styles.bubble, { backgroundColor: color }]}>
-      <Text style={styles.bubbleValue}>{value}</Text>
-      <Text style={styles.bubbleDate}>{date}</Text>
-    </View>
-  );
-}
+// Unused since 14 Nov (cleanup): nothing imports it.
+// /**
+//  * The usual scrub `label`: the value bold over its date, on a small pill in the line's
+//  * colour (`color`), with dark text that reads on green and red in both themes.
+//  */
+// export function ScrubLabel({ value, date, color }: { value: string; date: string; color: string }) {
+//   const styles = useEmptyStyles();
+//   return (
+//     <View style={[styles.bubble, { backgroundColor: color }]}>
+//       <Text style={styles.bubbleValue}>{value}</Text>
+//       <Text style={styles.bubbleDate}>{date}</Text>
+//     </View>
+//   );
+// }
 
 const useEmptyStyles = makeStyles((c) => ({
   bubble: { alignItems: 'center', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 },

@@ -2,10 +2,12 @@ import type { SocialFeedScope } from '@honey-wallet/api-client';
 import { router } from 'expo-router';
 import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import { ScrollView, Text, useWindowDimensions, View } from 'react-native';
-import Animated, { FadeIn, FadeOut, useReducedMotion } from 'react-native-reanimated';
+// useReducedMotion: unused since 14 Nov (cleanup), only the commented-out Invite used it.
+import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
 import { Icon } from '@/components/Icon';
 import { JarCarousel } from '@/components/jars/JarParts';
-import { HoneyJar } from '@/components/logo/HoneyJar';
+// Unused since 14 Nov (cleanup): only the commented-out code below used it.
+// import { HoneyJar } from '@/components/logo/HoneyJar';
 import { PressableRow } from '@/components/motion/PressableRow';
 import { PressableScale } from '@/components/motion/PressableScale';
 import { SegmentedTabs } from '@/components/motion/SegmentedTabs';
@@ -14,7 +16,7 @@ import { UnderlineTabs } from '@/components/motion/UnderlineTabs';
 import { BoardMap, BoardMapSkeleton } from '@/components/social/BoardMap';
 import { FollowingEmpty } from '@/components/social/FindPeople';
 import {
-  cardEntering,
+  // cardEntering: unused since 14 Nov (cleanup), only the commented-out Invite used it.
   FeedCard,
   FeedSkeleton,
   FollowButton,
@@ -303,49 +305,50 @@ function PersonRow({
   );
 }
 
-export function Invite({
-  icon,
-  title,
-  hint,
-  label,
-  onPress,
-}: {
-  icon: 'honey' | 'person';
-  title: string;
-  hint: string;
-  label: string;
-  onPress: () => void;
-}) {
-  const styles = useStyles();
-  const c = useTheme();
-  const reduced = useReducedMotion();
-  return (
-    <Animated.View entering={cardEntering(0, reduced)} style={styles.invite}>
-      <View style={styles.inviteIcon}>
-        {icon === 'honey' ? (
-          <HoneyJar size={26} />
-        ) : (
-          <Icon name={icon} size={20} color={c.accentText} />
-        )}
-      </View>
-      <View style={styles.flex}>
-        <Text style={styles.inviteTitle}>{title}</Text>
-        <Text style={styles.inviteHint}>{hint}</Text>
-      </View>
-      <PressableScale
-        accessibilityRole="button"
-        scaleTo={0.96}
-        onPress={() => {
-          tap();
-          onPress();
-        }}
-        style={styles.inviteButton}
-      >
-        <Text style={styles.inviteButtonText}>{label}</Text>
-      </PressableScale>
-    </Animated.View>
-  );
-}
+// Unused since 14 Nov (cleanup): nothing imports it.
+// export function Invite({
+//   icon,
+//   title,
+//   hint,
+//   label,
+//   onPress,
+// }: {
+//   icon: 'honey' | 'person';
+//   title: string;
+//   hint: string;
+//   label: string;
+//   onPress: () => void;
+// }) {
+//   const styles = useStyles();
+//   const c = useTheme();
+//   const reduced = useReducedMotion();
+//   return (
+//     <Animated.View entering={cardEntering(0, reduced)} style={styles.invite}>
+//       <View style={styles.inviteIcon}>
+//         {icon === 'honey' ? (
+//           <HoneyJar size={26} />
+//         ) : (
+//           <Icon name={icon} size={20} color={c.accentText} />
+//         )}
+//       </View>
+//       <View style={styles.flex}>
+//         <Text style={styles.inviteTitle}>{title}</Text>
+//         <Text style={styles.inviteHint}>{hint}</Text>
+//       </View>
+//       <PressableScale
+//         accessibilityRole="button"
+//         scaleTo={0.96}
+//         onPress={() => {
+//           tap();
+//           onPress();
+//         }}
+//         style={styles.inviteButton}
+//       >
+//         <Text style={styles.inviteButtonText}>{label}</Text>
+//       </PressableScale>
+//     </Animated.View>
+//   );
+// }
 
 /** "Top this week": the best returns over 7 days, a horizontal shelf. */
 export function Leaderboard({

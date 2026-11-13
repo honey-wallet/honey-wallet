@@ -31,20 +31,21 @@ export function BackIcon({ size = 22, color, weight = 2.6 }: ChevronProps) {
   );
 }
 
-export function ForwardIcon({ size = 22, color, weight = 2.6 }: ChevronProps) {
-  return (
-    <Svg width={size} height={size} viewBox="0 0 24 24">
-      <Path
-        d="M9 4.5l7.5 7.5L9 19.5"
-        stroke={color}
-        strokeWidth={weight}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        fill="none"
-      />
-    </Svg>
-  );
-}
+// Unused since 14 Nov (cleanup): nothing imports it.
+// export function ForwardIcon({ size = 22, color, weight = 2.6 }: ChevronProps) {
+//   return (
+//     <Svg width={size} height={size} viewBox="0 0 24 24">
+//       <Path
+//         d="M9 4.5l7.5 7.5L9 19.5"
+//         stroke={color}
+//         strokeWidth={weight}
+//         strokeLinecap="round"
+//         strokeLinejoin="round"
+//         fill="none"
+//       />
+//     </Svg>
+//   );
+// }
 
 export function HelpIcon({ size = 26, color }: IconProps) {
   return (

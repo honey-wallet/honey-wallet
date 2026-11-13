@@ -473,7 +473,8 @@ export const jarReturn = (jar: ThesisJar) => {
   const first = jar.history[0] ?? 0;
   return first > 0 ? (jarValue(jar) - first) / first : 0;
 };
-export const unitsTotal = (jar: ThesisJar) => jar.members.reduce((s, m) => s + m.units, 0);
+// Unused since 14 Nov (cleanup): nothing imports it.
+// export const unitsTotal = (jar: ThesisJar) => jar.members.reduce((s, m) => s + m.units, 0);
 
 export { STAGES, stepIndex } from '@/lib/thesis-live';
 

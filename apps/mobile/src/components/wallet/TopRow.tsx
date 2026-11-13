@@ -1,12 +1,14 @@
-import { router } from 'expo-router';
+// Unused since 14 Nov (cleanup): only the commented-out TopTitle/SearchPill used these.
+// import { router } from 'expo-router';
 import type { ReactNode } from 'react';
 import { Text, View } from 'react-native';
-import { Icon } from '@/components/Icon';
-import { PressableScale } from '@/components/motion/PressableScale';
+// import { Icon } from '@/components/Icon';
+// import { PressableScale } from '@/components/motion/PressableScale';
 import { HeaderIconButton } from '@/components/wallet/parts';
 import { WalletButton } from '@/components/wallet/WalletButton';
-import { tap } from '@/lib/haptics';
-import { makeStyles, useTheme } from '@/theme';
+// import { tap } from '@/lib/haptics';
+// useTheme: unused since 14 Nov (cleanup), see above.
+import { makeStyles } from '@/theme';
 
 /** The row's height: Search's field, the Search pill and a big title all fit it. */
 export const TOP_ROW_HEIGHT = 48;
@@ -55,36 +57,38 @@ export function TopRow({
   );
 }
 
-/** A screen's name as the row's middle, left-aligned and big, like Wallet's name. */
-export function TopTitle({ children }: { children: string }) {
-  const styles = useStyles();
-  return (
-    <Text style={styles.title} numberOfLines={1} accessibilityRole="header">
-      {children}
-    </Text>
-  );
-}
+// Unused since 14 Nov (cleanup): nothing imports it.
+// /** A screen's name as the row's middle, left-aligned and big, like Wallet's name. */
+// export function TopTitle({ children }: { children: string }) {
+//   const styles = useStyles();
+//   return (
+//     <Text style={styles.title} numberOfLines={1} accessibilityRole="header">
+//       {children}
+//     </Text>
+//   );
+// }
 
-/** A search field look-alike that opens Search (the Feed's middle). */
-export function SearchPill({ label = 'Search' }: { label?: string }) {
-  const styles = useStyles();
-  const c = useTheme();
-  return (
-    <PressableScale
-      accessibilityRole="search"
-      accessibilityLabel="Search people, jars and tokens"
-      scaleTo={0.98}
-      onPress={() => {
-        tap();
-        router.navigate('/search');
-      }}
-      style={styles.search}
-    >
-      <Icon name="search" size={18} color={c.textSecondary} />
-      <Text style={styles.searchText}>{label}</Text>
-    </PressableScale>
-  );
-}
+// Unused since 14 Nov (cleanup): nothing imports it.
+// /** A search field look-alike that opens Search (the Feed's middle). */
+// export function SearchPill({ label = 'Search' }: { label?: string }) {
+//   const styles = useStyles();
+//   const c = useTheme();
+//   return (
+//     <PressableScale
+//       accessibilityRole="search"
+//       accessibilityLabel="Search people, jars and tokens"
+//       scaleTo={0.98}
+//       onPress={() => {
+//         tap();
+//         router.navigate('/search');
+//       }}
+//       style={styles.search}
+//     >
+//       <Icon name="search" size={18} color={c.textSecondary} />
+//       <Text style={styles.searchText}>{label}</Text>
+//     </PressableScale>
+//   );
+// }
 
 const useStyles = makeStyles((c) => ({
   row: {
