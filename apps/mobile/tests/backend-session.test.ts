@@ -60,6 +60,7 @@ import {
   backendWalletChanged,
   clearBackendSession,
   clearWalletLinkReview,
+  forgetRemovedWalletSessions,
   forgetSavedBackendSession,
   prepareBackendSignIn,
   prepareWalletLink,
@@ -618,4 +619,41 @@ it('Sign out leaves a wallet of a different Honey account alone', async () => {
   await forgetSavedBackendSession();
   expect(stored()).toContain('c'.repeat(64));
   expect(stored()).not.toContain('f'.repeat(64));
+});
+
+it('revokes and deletes the saved session of a wallet removed from the phone', async () => {
+  mocks.accounts.mockResolvedValue([
+    { id: 'real', addresses: { evm: address } },
+    { id: 'other', addresses: { evm: address } },
+  ]);
+  await prepareBackendSignIn();
+  await approveBackendSignIn();
+  mocks.active = 'other';
+  backendWalletChanged();
+  const otherUser = { ...profile, userId: '00000000-0000-4000-8000-000000000009' };
+  mocks.verify.mockImplementation(async () => ({
+    accessToken: 'e'.repeat(64),
+    expiresAt: new Date(Date.now() + 900000).toISOString(),
+    refreshToken: 'f'.repeat(64),
+    refreshExpiresAt: new Date(Date.now() + 30 * 86400_000).toISOString(),
+    deviceId: '00000000-0000-4000-8000-000000000005',
+    profile: otherUser,
+  }));
+  mocks.profile.mockResolvedValue(otherUser);
+  await prepareBackendSignIn();
+  await approveBackendSignIn();
+  mocks.signOut.mockClear();
+  mocks.refresh.mockClear();
+  // 'real' leaves the phone.
+  mocks.accounts.mockResolvedValue([{ id: 'other', addresses: { evm: address } }]);
+  await forgetRemovedWalletSessions();
+  expect(stored()).not.toContain('c'.repeat(64));
+  expect(stored()).toContain('f'.repeat(64));
+  expect(mocks.refresh).toHaveBeenCalledWith(
+    'c'.repeat(64),
+    '00000000-0000-4000-8000-000000000002',
+  );
+  expect(mocks.signOut).toHaveBeenCalledWith('b'.repeat(64));
+  // The live session of the wallet still here is untouched.
+  expect(backendSessionToken()).toBe('e'.repeat(64));
 });

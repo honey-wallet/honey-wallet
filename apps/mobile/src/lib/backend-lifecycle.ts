@@ -5,6 +5,7 @@ import {
   backendVisibility,
   backendWalletChanged,
   clearBackendSession,
+  forgetRemovedWalletSessions,
   refreshResumeAvailability,
   resumeBackendSession,
   suspendBackendSession,
@@ -62,9 +63,15 @@ export function startBackendLifecycle() {
   // launch's own placeholder → saved wallet step is loading, not switching wallets:
   // treating it as a switch forgot the saved session on every cold start (2026-11-13).
   let activeId: string | null = null;
+  // The wallets on this phone, once loaded: one leaving takes its saved session with it.
+  let walletIds: Set<string> | null = null;
+  const prune = () => void forgetRemovedWalletSessions().catch(() => {});
   const start = () => {
     if (activeId !== null || !walletLoad.get().ready) return;
     activeId = wallets.get().activeId;
+    walletIds = new Set(wallets.get().added.map((w) => w.id));
+    // Also catches a wallet removed on an earlier launch.
+    prune();
     void staySignedIn();
   };
   // Never keep Sign in hidden for long: a wallet load that failed, or a slow network.
@@ -75,6 +82,12 @@ export function startBackendLifecycle() {
     start();
   });
   const removeWallet = wallets.subscribe(() => {
+    if (walletIds) {
+      const now = new Set(wallets.get().added.map((w) => w.id));
+      const removed = [...walletIds].some((id) => !now.has(id));
+      walletIds = now;
+      if (removed) prune();
+    }
     if (activeId === null || activeId === wallets.get().activeId) return;
     activeId = wallets.get().activeId;
     backendWalletChanged();

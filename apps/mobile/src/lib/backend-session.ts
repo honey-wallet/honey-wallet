@@ -632,6 +632,40 @@ export async function forgetSavedBackendSession({
   ]);
 }
 
+/**
+ * A wallet left this phone: its saved family is revoked on the server (best effort) and
+ * its keychain record deleted, so no live refresh token outlives the wallet (2026-11-14).
+ */
+export async function forgetWalletSession(accountId: string) {
+  const saved = await loadStoredRefresh(accountId).catch(() => null);
+  await deleteStoredRefresh(accountId).catch(() => {});
+  if (activeAccountId === accountId) {
+    // Still the live session: logging its access token out revokes the family too.
+    const previous = resetBackendSession(null);
+    if (previous) await revokeWithinDeadline(previous);
+    return;
+  }
+  if (!saved || Date.parse(saved.refreshExpiresAt) <= Date.now()) return;
+  try {
+    const rotated = await withinDeadline(api.refreshSession(saved.refreshToken, saved.deviceId));
+    await revokeWithinDeadline(rotated.accessToken);
+  } catch {
+    // The record is gone from the phone; the server family expires within 30 days.
+  }
+}
+
+/** Forgets the saved session of every wallet whose keys are no longer on this phone. */
+export async function forgetRemovedWalletSessions() {
+  if (isExtensionTarget()) return;
+  const present = new Set((await loadAccounts()).map((account) => account.id));
+  const families = await serially(readFamilies);
+  await Promise.all(
+    Object.keys(families)
+      .filter((accountId) => !present.has(accountId))
+      .map(forgetWalletSession),
+  );
+}
+
 async function revokeWithinDeadline(accessToken: string) {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
