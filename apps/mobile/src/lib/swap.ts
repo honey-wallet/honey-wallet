@@ -1,8 +1,12 @@
 import type { Chain } from '@/lib/mock-wallet';
 import { createStore } from '@/lib/store';
 
-/** A token on a specific network; the same symbol can live on several. */
-export type TokenRef = { symbol: string; chain: Chain };
+/**
+ * A token on a specific network; the same symbol can live on several. Real swaps name
+ * any NEAR Intents token, so `chain` may be a network the wallet doesn't hold (Arbitrum,
+ * Bitcoin…) and `assetId` pins the exact NEAR Intents asset.
+ */
+export type TokenRef = { symbol: string; chain: Chain | (string & {}); assetId?: string };
 
 type SwapState = {
   sell: TokenRef;
@@ -11,6 +15,11 @@ type SwapState = {
   network: Chain | null;
   /** The "bridging is built in" banner, once dismissed, stays hidden. */
   bridgeTipDismissed: boolean;
+  /**
+   * An amount to sell, set by the Feed's Buy sheet (in USDC, so dollars); the swap form
+   * takes it once and clears it.
+   */
+  presetAmount?: string | null;
 };
 
 /**

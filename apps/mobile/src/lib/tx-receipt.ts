@@ -14,6 +14,11 @@ const EXPLORERS: Record<Chain, { name: string; tx: (hash: string) => string }> =
 };
 
 /** Where a real transaction on `chain` is looked up. */
+/** An explorer link for a transaction on a network the app knows; null for others. */
+export function explorerTxOn(chain: string, hash: string) {
+  return chain in EXPLORERS ? explorerTx(chain as Chain, hash) : null;
+}
+
 export function explorerTx(chain: Chain, hash: string) {
   const explorer = EXPLORERS[chain];
   return { name: explorer.name, url: explorer.tx(hash) };

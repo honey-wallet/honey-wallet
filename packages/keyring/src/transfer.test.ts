@@ -90,6 +90,28 @@ describe('EVM', () => {
     expect(parseTransaction(signed)).toMatchObject({ chainId: 8453, nonce: 7, to: EVM_USDC[8453] });
   });
 
+  it('checks an ERC-20’s own decimals when asked to', async () => {
+    const token = '0x3333333333333333333333333333333333333333';
+    const answers = (decimals: bigint) => ({
+      ...evmAnswers(),
+      eth_call: (params: unknown) => {
+        const data = ((params as [{ data: string }])[0]?.data ?? '').slice(0, 10);
+        // decimals() is 0x313ce567; balanceOf() answers 5 tokens.
+        return `0x${(data === '0x313ce567' ? decimals : 5_000_000n).toString(16).padStart(64, '0')}`;
+      },
+    });
+    const input = {
+      chainId: 8453,
+      from: FROM,
+      to: TO,
+      amount: 1_000n,
+      token,
+      decimals: 6,
+    } as const;
+    await expect(prepareEvmTransfer(fake(answers(6n)), input)).resolves.toBeTruthy();
+    await expect(prepareEvmTransfer(fake(answers(18n)), input)).rejects.toThrow('decimals');
+  });
+
   it('refuses sends the balance can’t cover, wrong networks and self-sends', async () => {
     await expect(
       prepareEvmTransfer(fake(evmAnswers(10n ** 15n)), {
@@ -114,6 +136,15 @@ describe('EVM', () => {
     await expect(
       prepareEvmTransfer(fake(evmAnswers()), { chainId: 8453, from: FROM, to: FROM, amount: 1n }),
     ).rejects.toThrow('own address');
+    await expect(
+      prepareEvmTransfer(fake(evmAnswers()), {
+        chainId: 8453,
+        from: FROM,
+        to: (EVM_USDC[8453] as string).toLowerCase(),
+        amount: 1n,
+        token: EVM_USDC[8453],
+      }),
+    ).rejects.toThrow('own contract');
   });
 
   it('broadcasts and waits for the receipt', async () => {
@@ -217,6 +248,62 @@ describe('Solana', () => {
         token: 'USDC',
       }),
     ).rejects.toThrow('network fee');
+  });
+
+  it('sends any classic SPL token with its own decimals, and refuses Token-2022 mints', async () => {
+    const mint = base58.encode(new Uint8Array(32).fill(8));
+    const mintData = (decimals: number) => {
+      const d = new Uint8Array(82);
+      d[44] = decimals;
+      return base64.encode(d);
+    };
+    const answers = (owner: string, decimals = 5) => ({
+      getLatestBlockhash: { value: { blockhash } },
+      getBalance: { value: 10_000_000 },
+      getTokenAccountBalance: { value: { amount: '900000' } },
+      getAccountInfo: (params: unknown) =>
+        (params as string[])[0] === mint
+          ? { value: { owner, data: [mintData(decimals), 'base64'] } }
+          : { value: {} },
+      getMinimumBalanceForRentExemption: 2_039_280,
+    });
+    const classic = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
+    const plan = await prepareSolanaTransfer(fake(answers(classic)), {
+      from,
+      to,
+      amount: 12_345n,
+      token: { mint, decimals: 5 },
+    });
+    // TransferChecked carries the mint's decimals.
+    expect([...plan.message.slice(-10)]).toEqual([12, 0x39, 0x30, 0, 0, 0, 0, 0, 0, 5]);
+    const keys = Array.from({ length: plan.message[3] ?? 0 }, (_, i) =>
+      base58.encode(plan.message.slice(4 + i * 32, 36 + i * 32)),
+    );
+    expect(keys).toContain(associatedTokenAddress(from, mint));
+    await expect(
+      prepareSolanaTransfer(fake(answers('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb')), {
+        from,
+        to,
+        amount: 1n,
+        token: { mint, decimals: 5 },
+      }),
+    ).rejects.toThrow('isn’t supported yet');
+    await expect(
+      prepareSolanaTransfer(fake(answers(classic, 9)), {
+        from,
+        to,
+        amount: 1n,
+        token: { mint, decimals: 5 },
+      }),
+    ).rejects.toThrow('decimals');
+    await expect(
+      prepareSolanaTransfer(fake(answers(classic)), {
+        from,
+        to,
+        amount: 1_000_000n,
+        token: { mint, decimals: 5 },
+      }),
+    ).rejects.toThrow('Not enough tokens');
   });
 
   it('waits for confirmation', async () => {

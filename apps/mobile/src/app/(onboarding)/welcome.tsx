@@ -65,11 +65,15 @@ export default function WelcomeScreen() {
       </View>
 
       <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, 16) }]}>
-        <PillButton label="Create a new wallet" onPress={() => start('create')} />
+        {/* The main path last: the bottom button is the one thumbs reach for. */}
         <PillButton
           label="I already have a wallet"
           variant="secondary"
           onPress={() => start('restore')}
+        />
+        <PillButton
+          label="Create a new wallet"
+          onPress={() => start('create')}
           style={styles.second}
         />
         <Text style={styles.terms}>

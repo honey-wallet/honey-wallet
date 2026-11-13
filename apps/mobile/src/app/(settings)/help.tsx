@@ -1,5 +1,5 @@
-import { router } from 'expo-router';
-import { useState } from 'react';
+import { router, useLocalSearchParams } from 'expo-router';
+import { useEffect, useRef, useState } from 'react';
 import { ScrollView, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Icon } from '@/components/Icon';
@@ -9,6 +9,7 @@ import { EmptyState, ScreenHeader } from '@/components/wallet/parts';
 import { SearchField } from '@/components/wallet/SearchField';
 import { tap } from '@/lib/haptics';
 import { isWeb } from '@/lib/platform';
+import { warningOn } from '@/lib/warnings';
 import { makeStyles, useTheme } from '@/theme';
 
 const FAQ: { q: string; a: string }[] = [
@@ -30,31 +31,73 @@ const FAQ: { q: string; a: string }[] = [
   },
   {
     q: 'What are Honey Jars?',
-    a: 'Honey Jars are savings goals. Set a target, add funds whenever you like, and watch the jar fill. Some jars earn a variable yield, which can change and is never guaranteed.',
+    a: `Honey Jars are savings goals. Set a target, add funds whenever you like, and watch the jar fill.${warningOn('helpYieldCaveat') ? ' Some jars earn a variable yield, which can change and is never guaranteed.' : ''}`,
   },
   {
     q: 'Which chains are supported?',
     // a: 'Honey supports Ethereum, Solana, Tron and the XRP Ledger, with more on the way. Switch networks from the network picker on the home screen.',
-    a: 'Honey supports Solana, and Ethereum, Base and other EVM networks, with more on the way. Switch networks from the network picker on the home screen.',
+    a: 'Honey supports Solana, and Ethereum, Base and other EVM networks. Switch networks from the network picker on the home screen.',
   },
   {
     q: 'How do I contact support?',
-    a: 'Tap "Contact us" below or in Settings. We reply within a day. We\'ll never ask for your recovery phrase — anyone who does is a scammer.',
+    a: `Tap "Contact us" below or in Settings. We reply within a day.${warningOn('helpScammerNote') ? ' We’ll never ask for your recovery phrase — anyone who does is a scammer.' : ''}`,
   },
 ];
 
-/** Searchable FAQ, with a way to reach a person. */
+/** Jars' questions (from the Jars page's "Questions about jars"). */
+const JAR_FAQ: { q: string; a: string }[] = [
+  {
+    q: 'What is a jar?',
+    a: 'A few tokens bought around one idea. Pick the tokens and the split yourself, or ask Honey to suggest them.',
+  },
+  {
+    q: 'Who holds the tokens?',
+    a: 'You do. They sit in your wallet, and your keys never leave your phone.',
+  },
+  {
+    q: 'What does copying cost?',
+    a: 'The creator’s fee is a share of your profit, and nothing on a loss. Network and route fees show before you approve.',
+  },
+  ...(warningOn('jarGuideSmallBuys')
+    ? [
+        {
+          q: 'Is there a minimum?',
+          a: 'No, but small buys lose more to network fees, so the review warns you when they would.',
+        },
+      ]
+    : []),
+];
+
+const GROUPS = [
+  { id: 'general', title: 'Frequently asked', items: FAQ },
+  { id: 'jars', title: 'Jars', items: JAR_FAQ },
+] as const;
+
+/**
+ * Searchable FAQ in groups, with a way to reach a person. `section` (e.g. "jars") opens
+ * on that group: scrolled to, its first question open.
+ */
 export default function HelpScreen() {
   const insets = useSafeAreaInsets();
   const styles = useStyles();
   const c = useTheme();
+  const { section } = useLocalSearchParams<{ section?: string }>();
+  const target = GROUPS.find((g) => g.id === section);
   const [query, setQuery] = useState('');
-  const [open, setOpen] = useState<string | null>(null);
+  const [open, setOpen] = useState<string | null>(target?.items[0]?.q ?? null);
+  const scroll = useRef<ScrollView>(null);
+  const [targetY, setTargetY] = useState<number | null>(null);
+  // Opened on a group: bring it to the top once it's laid out.
+  useEffect(() => {
+    if (targetY !== null) scroll.current?.scrollTo({ y: targetY, animated: false });
+  }, [targetY]);
 
   const q = query.trim().toLowerCase();
-  const results = q
-    ? FAQ.filter((f) => f.q.toLowerCase().includes(q) || f.a.toLowerCase().includes(q))
-    : FAQ;
+  const matches = (f: { q: string; a: string }) =>
+    !q || f.q.toLowerCase().includes(q) || f.a.toLowerCase().includes(q);
+  const groups = GROUPS.map((g) => ({ ...g, items: g.items.filter(matches) })).filter(
+    (g) => g.items.length,
+  );
 
   const contact = (
     <PressableRow
@@ -84,12 +127,12 @@ export default function HelpScreen() {
       </View>
 
       <ScrollView
+        ref={scroll}
         alwaysBounceVertical={false}
         keyboardShouldPersistTaps="handled"
         contentContainerStyle={{ paddingBottom: insets.bottom + 32 }}
       >
-        <Text style={styles.section}>Frequently asked</Text>
-        {results.length === 0 ? (
+        {groups.length === 0 ? (
           <EmptyState
             icon="search"
             title="No results"
@@ -97,28 +140,40 @@ export default function HelpScreen() {
             action={{ label: 'Contact us', onPress: () => router.push('/contact') }}
           />
         ) : (
-          results.map((f) => {
-            const isOpen = open === f.q;
-            return (
-              <View key={f.q} style={styles.item}>
-                <PressableRow
-                  accessibilityRole="button"
-                  accessibilityState={{ expanded: isOpen }}
-                  onPress={() => {
-                    tap();
-                    setOpen(isOpen ? null : f.q);
-                  }}
-                  style={styles.question}
-                >
-                  <Text style={styles.questionText}>{f.q}</Text>
-                  <AccordionChevron open={isOpen} size={13} color={c.textSecondary} />
-                </PressableRow>
-                <Accordion open={isOpen}>
-                  <Text style={styles.answer}>{f.a}</Text>
-                </Accordion>
-              </View>
-            );
-          })
+          groups.map((g) => (
+            <View
+              key={g.id}
+              onLayout={
+                g.id === target?.id && targetY === null
+                  ? (e) => setTargetY(e.nativeEvent.layout.y)
+                  : undefined
+              }
+            >
+              <Text style={styles.section}>{g.title}</Text>
+              {g.items.map((f) => {
+                const isOpen = open === f.q;
+                return (
+                  <View key={f.q} style={styles.item}>
+                    <PressableRow
+                      accessibilityRole="button"
+                      accessibilityState={{ expanded: isOpen }}
+                      onPress={() => {
+                        tap();
+                        setOpen(isOpen ? null : f.q);
+                      }}
+                      style={styles.question}
+                    >
+                      <Text style={styles.questionText}>{f.q}</Text>
+                      <AccordionChevron open={isOpen} size={13} color={c.textSecondary} />
+                    </PressableRow>
+                    <Accordion open={isOpen}>
+                      <Text style={styles.answer}>{f.a}</Text>
+                    </Accordion>
+                  </View>
+                );
+              })}
+            </View>
+          ))
         )}
 
         {isWeb ? null : contact}

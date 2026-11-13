@@ -121,6 +121,8 @@ function CheckEmail() {
           keyboardType="email-address"
           autoCapitalize="none"
           autoCorrect={false}
+          returnKeyType="go"
+          onSubmitEditing={() => link && typed.trim() && void finish(link, typed.trim())}
           style={stepStyles.input}
         />
       </StepScreen>

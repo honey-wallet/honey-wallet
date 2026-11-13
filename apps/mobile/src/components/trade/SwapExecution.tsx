@@ -73,13 +73,14 @@ export function SwapExecution({ quote }: { quote: SwapQuote | null }) {
         if (live && id) timer = setTimeout(() => void poll(), 5000);
       };
       void poll();
+      // Only leaving the app cancels a review: Face ID makes iOS "inactive" mid-signing.
       const listener = AppState.addEventListener('change', (state) => {
-        if (state !== 'active') {
+        if (state === 'background') {
           generation.current++;
           clearTimeout(timer);
           setReview(null);
           setSigning(null);
-        } else {
+        } else if (state === 'active') {
           clearTimeout(timer);
           void poll();
         }

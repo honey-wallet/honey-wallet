@@ -16,6 +16,8 @@ export type AddedWallet = Wallet & {
   burner?: boolean;
   /** Wallets with keys on this device: their address on each chain. */
   addresses?: Partial<Addresses>;
+  /** A QR hardware wallet's account (watch-only here): which device, and the key's path. */
+  hardware?: { device: string; fingerprint: string | null; path: string };
 };
 
 /** The wallet the app is showing, and any wallets added this session. */
@@ -73,7 +75,8 @@ export function needsTestWallet(accounts: VaultAccount[], testMode: boolean = TE
  * wallet created or imported on this device.
  */
 export function isMainWallet(wallet: AddedWallet, added: AddedWallet[] = wallets.get().added) {
-  return wallet.id === 'main' || wallet.id === added.find((w) => w.addresses)?.id;
+  // Watched wallets carry addresses too, but they're someone else's, never your main one.
+  return wallet.id === 'main' || wallet.id === added.find((w) => w.addresses && !w.watchOnly)?.id;
 }
 
 /** Adds a wallet whose keys were just saved to the vault, and switches to it. */

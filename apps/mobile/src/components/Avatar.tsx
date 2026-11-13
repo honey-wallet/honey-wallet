@@ -21,6 +21,18 @@ type Props = {
   seed: string;
 };
 
+const colors = new Map<string, string | null>();
+
+/** The colour a seed's face is drawn on (e.g. `#619eff`), for halos behind it. */
+export function avatarColor(seed: string): string | null {
+  const known = colors.get(seed);
+  if (known !== undefined) return known;
+  const xml = new DiceBearAvatar(style, { seed }).toString();
+  const color = /<rect width="80" height="80" fill="(#[0-9a-fA-F]{6})"/.exec(xml)?.[1] ?? null;
+  colors.set(seed, color);
+  return color;
+}
+
 export function Avatar({ name, size, uri, seed }: Props) {
   const c = useTheme();
   // A photo that can't be read (deleted from the library, say) falls back to the face.

@@ -419,14 +419,48 @@ const ONE_YOCTO = 1n;
  * registers them (0.00125 NEAR, paid by the sender) when they aren't registered yet.
  */
 export function usdcTransferTx(to: string, amount: bigint, registerReceiver: boolean) {
+  return ftTransferTx(USDC_NEAR, to, amount, registerReceiver ? USDC_STORAGE_DEPOSIT : null);
+}
+
+/** What USDC on NEAR takes to register an account. */
+const USDC_STORAGE_DEPOSIT = 1_250_000_000_000_000_000_000n; // 0.00125 NEAR
+
+/** The least storage deposit `token` takes to register an account (NEP-145), in yoctoNEAR. */
+export async function viewStorageMin(rpc: Rpc, token: string) {
+  const value = (await viewFt(rpc, token, 'storage_balance_bounds', {})) as {
+    min?: unknown;
+  } | null;
+  const min = value?.min;
+  if (typeof min !== 'string' || !/^\d{1,38}$/.test(min)) throw new Error('Invalid storage bounds');
+  return BigInt(min);
+}
+
+/** A NEP-141 token's own `decimals` (from `ft_metadata`). */
+export async function viewFtDecimals(rpc: Rpc, token: string) {
+  const value = (await viewFt(rpc, token, 'ft_metadata', {})) as { decimals?: unknown } | null;
+  const decimals = value?.decimals;
+  if (typeof decimals !== 'number' || !Number.isInteger(decimals)) throw new Error('Invalid token');
+  return decimals;
+}
+
+/**
+ * Sends any NEP-141 token: `ft_transfer` with one yoctoNEAR, preceded by a
+ * `storage_deposit` of `registerDeposit` when the receiver isn't registered yet.
+ */
+export function ftTransferTx(
+  token: string,
+  to: string,
+  amount: bigint,
+  registerDeposit: bigint | null,
+) {
   const encode = (v: unknown) => new TextEncoder().encode(JSON.stringify(v));
   const actions: FunctionCall[] = [];
-  if (registerReceiver)
+  if (registerDeposit !== null)
     actions.push({
       methodName: 'storage_deposit',
       args: encode({ account_id: to, registration_only: true }),
       gas: 30n * TGAS,
-      deposit: 1_250_000_000_000_000_000_000n,
+      deposit: registerDeposit,
     });
   actions.push({
     methodName: 'ft_transfer',
@@ -434,7 +468,7 @@ export function usdcTransferTx(to: string, amount: bigint, registerReceiver: boo
     gas: 30n * TGAS,
     deposit: ONE_YOCTO,
   });
-  return { receiverId: USDC_NEAR, actions };
+  return { receiverId: token, actions };
 }
 
 /** `ft_balance_of` as a view call; atomic units. */

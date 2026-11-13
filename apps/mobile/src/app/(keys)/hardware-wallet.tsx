@@ -1,54 +1,69 @@
+import { scanFromURLAsync } from 'expo-camera';
+import * as ImagePicker from 'expo-image-picker';
 import { router, useLocalSearchParams } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { Text, View } from 'react-native';
 import Animated, {
-  cancelAnimation,
-  Easing,
   FadeIn,
   Keyframe,
   ReduceMotion,
-  useAnimatedStyle,
   useReducedMotion,
-  useSharedValue,
-  withRepeat,
-  withTiming,
 } from 'react-native-reanimated';
 import { Icon } from '@/components/Icon';
-import { ContentSwap } from '@/components/motion/ContentSwap';
-import { SkeletonList } from '@/components/motion/Skeleton';
 import { TextsReveal } from '@/components/motion/TextsReveal';
 import { PillButton } from '@/components/onboarding/PillButton';
 import { SHEET, SheetScreen } from '@/components/sheets/Sheet';
-import { EmptyState } from '@/components/wallet/parts';
 import { tap } from '@/lib/haptics';
+import { createHardwareScanner, type HardwareScan, holdHardwareImport } from '@/lib/hardware-scan';
+import { showErrorToast } from '@/lib/toast';
 import { makeStyles, radius, useTheme } from '@/theme';
 import { DISTANCE, DURATION, EASE } from '@/theme/motion';
 
-type Stage = 'steps' | 'searching' | 'none';
-const STAGES: Stage[] = ['steps', 'searching', 'none'];
-const SEARCH_MS = 2000;
+type Device = 'ledger' | 'keystone' | 'qr';
 
-type Device = 'ledger' | 'keystone';
-
-/** How each device connects: Ledger over Bluetooth, Keystone by QR code. */
-const DEVICES: Record<Device, { name: string; steps: { title: string; hint: string }[] }> = {
-  ledger: {
-    name: 'Ledger',
-    steps: [
-      { title: 'Unlock your Ledger', hint: 'Enter your PIN on the device itself.' },
-      { title: 'Open the Ethereum or Solana app', hint: 'Pick the app for the coins you hold.' },
-      { title: 'Keep Bluetooth on', hint: 'Stay close to your phone while it connects.' },
-    ],
-  },
+/**
+ * How each device connects. Keystone and the other QR wallets show their account as a
+ * QR code (the same UR standard), so they're real here; Ledger needs Bluetooth, which
+ * isn't built yet, so it says so instead of pretending to search.
+ */
+const DEVICES: Record<
+  Device,
+  { name: string; qr: boolean; steps: { title: string; hint: string }[] }
+> = {
   keystone: {
     name: 'Keystone',
+    qr: true,
     steps: [
       { title: 'Unlock your Keystone', hint: 'Enter your PIN on the device itself.' },
       {
         title: 'Open Connect Software Wallet',
-        hint: 'Find it in the menu, then choose a generic wallet.',
+        hint: 'Find it in the menu, then choose MetaMask.',
       },
-      { title: 'Scan its QR code', hint: 'Hold your phone up to the code on its screen.' },
+      {
+        title: 'Scan its QR code',
+        hint: 'Hold your phone up to it until the code fills in.',
+      },
+    ],
+  },
+  qr: {
+    name: 'QR wallet',
+    qr: true,
+    steps: [
+      { title: 'Unlock your device', hint: 'OneKey, NGRAVE, AirGap Vault and others.' },
+      {
+        title: 'Show your Ethereum account QR',
+        hint: 'Often under Connect, Export or Sync with a wallet (MetaMask).',
+      },
+      { title: 'Scan its QR code', hint: 'Or take a photo of it and choose it here.' },
+    ],
+  },
+  ledger: {
+    name: 'Ledger',
+    qr: false,
+    steps: [
+      { title: 'Unlock your Ledger', hint: 'Enter your PIN on the device itself.' },
+      { title: 'Open the Ethereum app', hint: 'Pick the app for the coins you hold.' },
+      { title: 'Keep Bluetooth on', hint: 'Stay close to your phone while it connects.' },
     ],
   },
 };
@@ -71,37 +86,67 @@ const rise = (i: number, reduced: boolean) =>
         .delay(DURATION.stagger * (i + 2));
 
 /**
- * Connect a hardware wallet. Ledger (`device=ledger`, the default): steps, a short
- * Bluetooth search, then the result. Keystone: steps, then the QR scanner. Demo only.
+ * Connect a hardware wallet (`device=keystone|qr|ledger`): its steps, then scan its
+ * account code (camera or a photo of it) into the account picker.
  */
 export default function HardwareWalletSheet() {
   const reduceMotion = useReducedMotion();
   const styles = useStyles();
   const c = useTheme();
   const params = useLocalSearchParams<{ device?: Device }>();
-  const device = params.device === 'keystone' ? 'keystone' : 'ledger';
-  const { name, steps } = DEVICES[device];
-  const [stage, setStage] = useState<Stage>('steps');
-  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  // Keystone (which works today) unless a device was asked for; Ledger only by name.
+  const device: Device =
+    params.device === 'ledger' || params.device === 'qr' ? params.device : 'keystone';
+  const { name, qr, steps } = DEVICES[device];
+  const [reading, setReading] = useState(false);
 
-  useEffect(() => () => clearTimeout(timer.current), []);
-
-  const search = () => {
+  const scan = () => {
     tap();
-    setStage('searching');
-    clearTimeout(timer.current);
-    // TODO: real Bluetooth discovery; for now every search comes back empty.
-    timer.current = setTimeout(() => setStage('none'), SEARCH_MS);
+    router.replace({ pathname: '/scan', params: { purpose: 'hardware' } });
   };
 
-  const cancel = () => {
+  // A photo or screenshot of the code: works for single-frame codes (an animated one
+  // needs the camera).
+  const photo = async () => {
     tap();
-    clearTimeout(timer.current);
-    setStage('steps');
+    let picked: ImagePicker.ImagePickerResult;
+    try {
+      picked = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'] });
+    } catch {
+      showErrorToast('Couldn’t open your photos. Check Honey’s photo access in Settings');
+      return;
+    }
+    if (picked.canceled) return;
+    setReading(true);
+    try {
+      const codes = await scanFromURLAsync(picked.assets[0].uri, ['qr']);
+      const scanner = createHardwareScanner();
+      let last: HardwareScan = { state: 'scanning', progress: 0 };
+      for (const code of codes) {
+        last = scanner.feed(code.data);
+        if (last.state !== 'scanning') break;
+      }
+      if (last.state === 'done') {
+        holdHardwareImport(last.result);
+        router.replace('/hardware-accounts');
+      } else if (last.state === 'error') {
+        showErrorToast(last.message);
+      } else if (last.foreign) {
+        showErrorToast('That isn’t an account code. On the device, pick Connect Software Wallet');
+      } else {
+        showErrorToast(
+          codes.length ? 'That code animates. Scan it with the camera' : 'No QR code found',
+        );
+      }
+    } catch {
+      // Unreadable image (format, a cloud photo not downloaded): say so, never crash.
+      showErrorToast('Couldn’t read that image. Try a screenshot of the code');
+    } finally {
+      setReading(false);
+    }
   };
 
   return (
-    // Each stage keeps its own button so it slides in with that stage's content.
     <SheetScreen>
       <View style={styles.hero}>
         <View style={styles.tile}>
@@ -113,86 +158,56 @@ export default function HardwareWalletSheet() {
           first={<Text style={styles.title}>Connect {name}</Text>}
           second={
             <Text style={styles.subtitle}>
-              Approve every transaction on your {name}. Your keys never touch your phone.
+              {qr
+                ? `Your keys never leave your ${name}. Honey reads its public address only.`
+                : `Approve every transaction on your ${name}. Your keys never touch your phone.`}
             </Text>
           }
         />
       </View>
 
-      <ContentSwap id={stage} index={STAGES.indexOf(stage)}>
-        {stage === 'steps' && (
-          <View>
-            <View style={styles.steps}>
-              {steps.map((step, i) => (
-                <Animated.View
-                  key={step.title}
-                  entering={rise(i, reduceMotion)}
-                  style={styles.step}
-                >
-                  <View style={styles.number}>
-                    <Text style={styles.numberLabel}>{i + 1}</Text>
-                  </View>
-                  <View style={styles.flex}>
-                    <Text style={styles.stepTitle}>{step.title}</Text>
-                    <Text style={styles.stepHint}>{step.hint}</Text>
-                  </View>
-                </Animated.View>
-              ))}
+      <View style={styles.steps}>
+        {steps.map((step, i) => (
+          <Animated.View key={step.title} entering={rise(i, reduceMotion)} style={styles.step}>
+            <View style={styles.number}>
+              <Text style={styles.numberLabel}>{i + 1}</Text>
             </View>
-            {device === 'keystone' ? (
-              <PillButton
-                label="Scan QR code"
-                onPress={() => {
-                  tap();
-                  router.replace('/scan');
-                }}
-                style={styles.cta}
-              />
-            ) : (
-              <PillButton label="Search for devices" onPress={search} style={styles.cta} />
-            )}
-          </View>
-        )}
-
-        {stage === 'searching' && (
-          <View>
-            <View style={styles.searching}>
-              <Spinner />
-              <Text style={styles.searchingLabel}>Looking for nearby devices…</Text>
+            <View style={styles.flex}>
+              <Text style={styles.stepTitle}>{step.title}</Text>
+              <Text style={styles.stepHint}>{step.hint}</Text>
             </View>
-            <SkeletonList count={2} iconRadius={12} trailing={false} />
-            <PillButton label="Cancel" variant="secondary" onPress={cancel} style={styles.cta} />
-          </View>
-        )}
+          </Animated.View>
+        ))}
+      </View>
 
-        {stage === 'none' && (
-          <View>
-            <EmptyState
-              icon="hardware"
-              title={`No ${name} found`}
-              hint="Check that your device is unlocked, nearby and has Bluetooth on."
-            />
-            <PillButton label="Try again" onPress={search} />
+      {qr ? (
+        // The main action last, at the bottom (the photo option above it).
+        <View style={styles.actions}>
+          <PillButton
+            label={reading ? 'Reading…' : 'Choose a photo of the code'}
+            variant="secondary"
+            disabled={reading}
+            onPress={photo}
+          />
+          <PillButton label="Scan QR code" onPress={scan} />
+        </View>
+      ) : (
+        <View style={styles.actions}>
+          <View style={styles.notice}>
+            <Icon name="info" size={16} color={c.textSecondary} />
+            <Text style={styles.noticeText}>Honey connects to Keystone and other QR wallets.</Text>
           </View>
-        )}
-      </ContentSwap>
+          <PillButton
+            label="Connect a QR wallet"
+            onPress={() => {
+              tap();
+              router.setParams({ device: 'keystone' });
+            }}
+          />
+        </View>
+      )}
     </SheetScreen>
   );
-}
-
-/** A honey arc turning in place while the search runs. */
-function Spinner() {
-  const styles = useStyles();
-  const reduceMotion = useReducedMotion();
-  const turn = useSharedValue(0);
-  useEffect(() => {
-    if (reduceMotion) return;
-    // Constant motion is linear; a quicker turn makes the search feel faster.
-    turn.value = withRepeat(withTiming(360, { duration: 750, easing: Easing.linear }), -1);
-    return () => cancelAnimation(turn);
-  }, [reduceMotion, turn]);
-  const style = useAnimatedStyle(() => ({ transform: [{ rotate: `${turn.value}deg` }] }));
-  return <Animated.View accessibilityLabel="Searching" style={[styles.spinner, style]} />;
 }
 
 const useStyles = makeStyles((c) => ({
@@ -256,25 +271,20 @@ const useStyles = makeStyles((c) => ({
     color: c.textSecondary,
     fontSize: 14,
   },
-  cta: {
-    marginTop: SHEET.footerGap,
+  actions: {
+    marginTop: SHEET.footerGap + 4,
+    gap: 10,
   },
-  searching: {
-    marginTop: 24,
-    marginBottom: 8,
-    alignItems: 'center',
-    gap: 12,
+  notice: {
+    flexDirection: 'row',
+    gap: 10,
+    alignItems: 'flex-start',
+    marginBottom: 6,
   },
-  spinner: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    borderWidth: 3,
-    borderColor: c.raised,
-    borderTopColor: c.primary,
-  },
-  searchingLabel: {
+  noticeText: {
+    flex: 1,
     color: c.textSecondary,
-    fontSize: 15,
+    fontSize: 14,
+    lineHeight: 20,
   },
 }));

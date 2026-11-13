@@ -60,7 +60,8 @@ function HyperliquidAccountPanel({
         }
       };
       const listener = AppState.addEventListener('change', (state) => {
-        if (state !== 'active') clear();
+        // Face ID makes iOS "inactive"; only leaving the app clears the account.
+        if (state === 'background') clear();
       });
       return () => {
         live = false;

@@ -2,6 +2,7 @@ import { Redirect } from 'expo-router';
 import { ClosePositionArt, LongShortArt, PickPerpArt } from '@/components/trade/PerpsGuideArt';
 import { Guide } from '@/components/wallet/Guide';
 import { useTradeModeAllowed } from '@/lib/trade-modes';
+import { warningOn } from '@/lib/warnings';
 
 /** How Perps work, in three steps; shown the first time Perps opens. */
 function PerpsGuideSheet() {
@@ -21,7 +22,9 @@ function PerpsGuideSheet() {
         {
           title: 'Close when you like',
           body: 'Take a profit or cut a loss any time. If the price moves too far against you, the position closes on its own and you lose that margin.',
-          note: "Perps are high risk and aren't available in every country.",
+          note: warningOn('perpsGuideRiskNote')
+            ? "Perps are high risk and aren't available in every country."
+            : undefined,
           art: <ClosePositionArt />,
         },
       ]}

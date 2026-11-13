@@ -47,7 +47,6 @@ import { NFTS, type Nft, nftFloorUsd, nftNative } from '@/lib/collectibles';
 import { tap } from '@/lib/haptics';
 import { LOADS } from '@/lib/loads';
 import { chainSymbol, formatUsd } from '@/lib/mock-wallet';
-import { showToast } from '@/lib/toast';
 import { makeStyles, radius, squircle, useTheme } from '@/theme';
 import { DURATION, EASE, SPRING } from '@/theme/motion';
 
@@ -413,12 +412,13 @@ function NftDetail({
               </GestureDetector>
             </Animated.View>
 
-            {/* One primary and one secondary, like ActionFooter (Buy honey, Sell grey) */}
+            {/* Share is the one action: sending NFTs isn't built, so no Send that only
+                says "coming soon". */}
             <Animated.View style={[styles.actions, { bottom: insets.bottom + 12 }, info]}>
-              <Action icon="send" label="Send" primary onPress={() => showToast('Coming soon')} />
               <Action
                 icon="link"
                 label="Share"
+                primary
                 onPress={() => Share.share({ message: `${nft.name} · ${nft.collection}` })}
               />
             </Animated.View>

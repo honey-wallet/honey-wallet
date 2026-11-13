@@ -1,5 +1,5 @@
 import * as ImagePicker from 'expo-image-picker';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Text, TextInput, View } from 'react-native';
 import { Avatar, randomAvatarSeed } from '@/components/Avatar';
 import { Icon, type IconName } from '@/components/Icon';
@@ -10,6 +10,7 @@ import { PillButton } from '@/components/onboarding/PillButton';
 import { closeSheet, SheetHeader, SheetScreen } from '@/components/sheets/Sheet';
 import { tap } from '@/lib/haptics';
 import { setProfile, useProfile } from '@/lib/profile';
+import { syncSocialProfile } from '@/lib/social';
 import { showToast } from '@/lib/toast';
 import { makeStyles, radius, useTheme } from '@/theme';
 
@@ -30,6 +31,7 @@ export default function ProfileEditSheet() {
   const [photo, setPhoto] = useState(profile.photo);
   const [seed, setSeed] = useState(profile.avatarSeed);
   const [bio, setBio] = useState(profile.bio ?? '');
+  const bioRef = useRef<TextInput>(null);
 
   const trimmed = name.trim();
   const changed =
@@ -59,6 +61,7 @@ export default function ProfileEditSheet() {
   const save = () => {
     tap();
     setProfile({ name: trimmed, photo, avatarSeed: seed, bio: bio.trim() });
+    void syncSocialProfile();
     showToast('Profile saved');
     closeSheet();
   };
@@ -66,7 +69,16 @@ export default function ProfileEditSheet() {
   return (
     // Sized to its content: the photo, the name and Save, nothing more. iOS lifts a
     // fitted sheet over the keyboard, and Save sits right under the field.
-    <SheetScreen>
+    <SheetScreen
+      // Pinned above the keyboard while typing, so Save is always in reach.
+      footer={
+        <PillButton
+          label={!valid ? 'Add a name' : changed ? 'Save' : 'No changes'}
+          disabled={!changed || !valid}
+          onPress={save}
+        />
+      }
+    >
       <SheetHeader title="Edit profile" />
 
       <View style={styles.identity}>
@@ -84,7 +96,7 @@ export default function ProfileEditSheet() {
 
         <View style={styles.actions}>
           <Action icon="photo" label="Choose photo" onPress={choosePhoto} />
-          <Action icon="sparkles" label="Shuffle" onPress={shuffle} />
+          <Action icon="refresh" label="Shuffle" onPress={shuffle} />
           {photo ? (
             <Action
               icon="trash"
@@ -110,8 +122,10 @@ export default function ProfileEditSheet() {
           cursorColor={c.accentText}
           maxLength={MAX_NAME}
           autoCorrect={false}
-          returnKeyType="done"
-          onSubmitEditing={() => changed && valid && save()}
+          // Return moves on to the bio; Save is pinned above the keyboard.
+          returnKeyType="next"
+          submitBehavior="submit"
+          onSubmitEditing={() => bioRef.current?.focus()}
           accessibilityLabel="Display name"
         />
         {name ? (
@@ -150,6 +164,7 @@ export default function ProfileEditSheet() {
           selectionColor={c.primary}
           cursorColor={c.accentText}
           maxLength={MAX_BIO}
+          ref={bioRef}
           multiline
           accessibilityLabel="Bio"
         />
@@ -160,8 +175,6 @@ export default function ProfileEditSheet() {
           {bio.length}/{MAX_BIO}
         </Text>
       </View>
-
-      <PillButton label="Save" disabled={!changed || !valid} onPress={save} style={styles.save} />
     </SheetScreen>
   );
 }
@@ -279,8 +292,5 @@ const useStyles = makeStyles((c) => ({
     color: c.textSecondary,
     fontSize: 13,
     fontVariant: ['tabular-nums'],
-  },
-  save: {
-    marginTop: 24,
   },
 }));

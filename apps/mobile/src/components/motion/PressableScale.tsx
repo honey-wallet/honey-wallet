@@ -24,6 +24,8 @@ type Props = Omit<PressableProps, 'style'> & {
   /** Scale while pressed: 0.97 for buttons, 0.98 for large cards. Never below 0.95. */
   scaleTo?: number;
   ref?: Ref<View>;
+  /** A layout transition for a button that changes size, e.g. an icon becoming a label. */
+  layout?: ComponentProps<typeof AnimatedPressable>['layout'];
 };
 
 /**

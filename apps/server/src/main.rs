@@ -156,6 +156,16 @@ async fn main() -> anyhow::Result<()> {
         if let Some(morpho) = infrastructure.morpho() {
             background.push(morpho.clone().start(health.clone()));
         }
+        // Social jars' hourly marks and milestones: reads never write.
+        if let Some(pool) = infrastructure.postgres() {
+            match honey_server::market_data::MarketData::new() {
+                Ok(market) => background.push(honey_server::routes::social::start_marker(
+                    pool.clone(),
+                    market,
+                )),
+                Err(error) => tracing::error!(%error, "social jar marker disabled"),
+            }
+        }
     }
     if let Some(task) = metrics_server {
         background.push(task);

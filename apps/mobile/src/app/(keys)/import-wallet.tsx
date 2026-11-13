@@ -16,6 +16,7 @@ import { HERE, isWeb } from '@/lib/platform';
 import { showErrorToast, showToast } from '@/lib/toast';
 import { importMnemonic, importPrivateKey, isValidMnemonic } from '@/lib/vault';
 import { addVaultWallet } from '@/lib/wallets';
+import { Gate } from '@/lib/warnings';
 import { makeStyles, radius, useTheme } from '@/theme';
 
 /** Splits a typed or pasted phrase into lowercase words. */
@@ -206,7 +207,29 @@ export default function ImportWalletSheet() {
   return (
     // The button stays inline under the field rather than pinned as a footer, so
     // it sits above the keyboard while typing.
-    <SheetScreen>
+    <SheetScreen
+      // Pinned above the keyboard while typing; Import last, where thumbs reach first.
+      footer={
+        <View style={styles.footer}>
+          {isKey ? (
+            <PillButton
+              label="Scan QR"
+              variant="secondary"
+              disabled={busy}
+              onPress={() => {
+                tap();
+                router.push({ pathname: '/scan', params: { purpose: 'key' } });
+              }}
+            />
+          ) : null}
+          <PillButton
+            label={busy ? 'Importing…' : copy.cta}
+            disabled={!complete || badChecksum || busy}
+            onPress={submit}
+          />
+        </View>
+      }
+    >
       {/* review: the popup has no room to spare above the words; the title says it. */}
       {isWeb ? null : (
         <View style={styles.glyph}>
@@ -271,29 +294,12 @@ export default function ImportWalletSheet() {
       {/* Only when something's wrong. */}
       {copy.hint ? <Text style={[styles.hint, styles.hintError]}>{copy.hint}</Text> : null}
 
-      <View style={[styles.rule, isWeb && styles.ruleWeb]}>
-        <Icon name="warning" size={15} color={c.textSecondary} />
-        <Text style={styles.ruleText}>Never share it. Anyone with it can take your funds.</Text>
-      </View>
-
-      <PillButton
-        label={busy ? 'Importing…' : copy.cta}
-        disabled={!complete || badChecksum || busy}
-        onPress={submit}
-        style={[styles.cta, isWeb && styles.ctaWeb]}
-      />
-      {isKey ? (
-        <PillButton
-          label="Scan QR"
-          variant="secondary"
-          disabled={busy}
-          onPress={() => {
-            tap();
-            router.push({ pathname: '/scan', params: { purpose: 'key' } });
-          }}
-          style={styles.scan}
-        />
-      ) : null}
+      <Gate id="importNeverShare">
+        <View style={[styles.rule, isWeb && styles.ruleWeb]}>
+          <Icon name="warning" size={15} color={c.textSecondary} />
+          <Text style={styles.ruleText}>Never share it. Anyone with it can take your funds.</Text>
+        </View>
+      </Gate>
     </SheetScreen>
   );
 }
@@ -467,16 +473,10 @@ const useStyles = makeStyles((c) => ({
     fontSize: 14,
     lineHeight: 19,
   },
-  cta: {
-    marginTop: 20,
+  footer: {
+    gap: 10,
   },
   ruleWeb: {
     marginTop: 12,
-  },
-  scan: {
-    marginTop: 10,
-  },
-  ctaWeb: {
-    marginTop: 14,
   },
 }));

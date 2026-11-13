@@ -142,8 +142,29 @@ export function toHoldings(holdings: PortfolioHolding[]) {
 const short = (value: string) =>
   value.length > 14 ? `${value.slice(0, 6)}…${value.slice(-4)}` : value;
 
-const formatAmount = (n: number) =>
+export const formatAmount = (n: number) =>
   n >= 1 ? n.toLocaleString('en-US', { maximumFractionDigits: 4 }) : n.toPrecision(3);
+
+/** Coins every chain here pays fees in; never treated as spam. */
+const NATIVE = new Set(['ETH', 'SOL', 'NEAR', 'BTC', 'USDC', 'USDT']);
+const SPAM_TEXT =
+  /https?:|www\.|\.(com|io|xyz|org|net|app|gift|site|top)\b|claim|visit|reward|airdrop|voucher|bonus/i;
+
+/**
+ * Unasked-for airdrops: wallets get sent worthless tokens named like links ("Visit
+ * x.com to claim") or with absurd amounts, to bait clicks. Only incoming items can be
+ * spam; `known` is every symbol with a real market (NEAR Intents' list, priced holdings).
+ */
+export function isLikelySpam(item: ChainActivityItem, known?: ReadonlySet<string>) {
+  if (item.direction !== 'received' || !item.symbol) return false;
+  const symbol = item.symbol;
+  if (NATIVE.has(symbol)) return false;
+  if (SPAM_TEXT.test(symbol)) return true;
+  // Anything outside printable ASCII, or a "symbol" that reads like a sentence.
+  if (!/^[\x21-\x7e]{1,12}$/.test(symbol)) return true;
+  if (item.amount != null && item.amount > 1e12) return true;
+  return !!known && known.size > 0 && !known.has(symbol);
+}
 
 /** On-chain items as Activity rows, grouped by month in the list. */
 export function toActivity(items: ChainActivityItem[], now = new Date()): Activity[] {

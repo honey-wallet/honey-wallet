@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react';
+import { type ReactNode, useEffect, useMemo } from 'react';
 import { Text, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
@@ -38,7 +38,27 @@ type Props = {
   height: number;
   /** Called with the index under the finger while scrubbing, then null on release. */
   onScrub?: (index: number | null) => void;
+  /**
+   * What sits on the live end of the line instead of the dot: the token's icon on a token
+   * page, the jar's on a jar page. Ringed in the line's colour; `endIconSize` is its size.
+   */
+  endIcon?: ReactNode;
+  endIconSize?: number;
+  /**
+   * A bubble that follows the finger above the line while scrubbing, e.g. the value and
+   * date under it. The caller renders it from `onScrub`; the chart places and fades it.
+   */
+  label?: ReactNode;
+  /** The dotted background. On by default. */
+  grid?: boolean;
+  /** How strongly the area under the line is tinted at the top. */
+  fillOpacity?: number;
 };
+
+/** The ring drawn around an end icon, in the line's colour. */
+const END_RING = 2;
+/** Room kept above the line for the scrub label, so it never covers the line. */
+const LABEL_SPACE = 44;
 
 /**
  * Price chart after Uniswap: the line draws itself in, the end dot pulses, and
@@ -70,7 +90,29 @@ export function ChartEmpty({
   );
 }
 
+/**
+ * The usual scrub `label`: the value bold over its date, on a small pill in the line's
+ * colour (`color`), with dark text that reads on green and red in both themes.
+ */
+export function ScrubLabel({ value, date, color }: { value: string; date: string; color: string }) {
+  const styles = useEmptyStyles();
+  return (
+    <View style={[styles.bubble, { backgroundColor: color }]}>
+      <Text style={styles.bubbleValue}>{value}</Text>
+      <Text style={styles.bubbleDate}>{date}</Text>
+    </View>
+  );
+}
+
 const useEmptyStyles = makeStyles((c) => ({
+  bubble: { alignItems: 'center', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 },
+  bubbleValue: {
+    color: c.onPrimary,
+    fontSize: 14,
+    fontWeight: '800',
+    fontVariant: ['tabular-nums'],
+  },
+  bubbleDate: { color: c.onPrimary, fontSize: 11, fontWeight: '500' },
   empty: {
     justifyContent: 'center',
     paddingHorizontal: 20,
@@ -92,11 +134,25 @@ const useEmptyStyles = makeStyles((c) => ({
   },
 }));
 
-function PriceLine({ data, width, height, onScrub }: Props) {
+function PriceLine({
+  data,
+  width,
+  height,
+  onScrub,
+  endIcon,
+  endIconSize = 22,
+  label,
+  grid = true,
+  fillOpacity = 0.22,
+}: Props) {
   const c = useTheme();
   const reduceMotion = useReducedMotion();
   const color = data[data.length - 1] < data[0] ? c.error : c.success;
-  const plotWidth = width - PAD_RIGHT;
+  // An end icon is bigger than the dot: leave room so it's never cut off at the edges.
+  const badge = endIcon ? endIconSize + END_RING * 2 : 0;
+  const padY = endIcon ? Math.max(PAD_Y, badge / 2 + 2) : PAD_Y;
+  const padTop = label ? padY + LABEL_SPACE : padY;
+  const plotWidth = width - (endIcon ? badge / 2 + 2 : PAD_RIGHT);
 
   const { line, area, points, length } = useMemo(() => {
     const min = Math.min(...data);
@@ -104,7 +160,7 @@ function PriceLine({ data, width, height, onScrub }: Props) {
     const span = max - min || 1;
     const pts = data.map((v, i) => ({
       x: (i / (data.length - 1)) * plotWidth,
-      y: PAD_Y + (1 - (v - min) / span) * (height - PAD_Y * 2),
+      y: padTop + (1 - (v - min) / span) * (height - padTop - padY),
     }));
     const d = pts.map((p, i) => `${i ? 'L' : 'M'}${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ');
     let len = 0;
@@ -117,7 +173,7 @@ function PriceLine({ data, width, height, onScrub }: Props) {
       points: pts,
       length: len,
     };
-  }, [data, plotWidth, height]);
+  }, [data, plotWidth, height, padY, padTop]);
 
   // Draw in whenever the data changes (first load, or a new range).
   const drawn = useSharedValue(0);
@@ -212,6 +268,17 @@ function PriceLine({ data, width, height, onScrub }: Props) {
       transform: [{ translateX: (xs[i] ?? 0) - 6 }, { translateY: (ys[i] ?? 0) - 6 }],
     };
   });
+  // The label sits centred over the point, kept inside the chart's edges.
+  const labelWidth = useSharedValue(0);
+  const labelStyle = useAnimatedStyle(() => {
+    const i = Math.max(scrubIndex.value, 0);
+    const half = labelWidth.value / 2;
+    const left = Math.min(Math.max((xs[i] ?? 0) - half, 0), width - labelWidth.value);
+    return {
+      opacity: labelWidth.value > 0 ? scrubbing.value : 0,
+      transform: [{ translateX: left }],
+    };
+  });
   const last = points[points.length - 1];
   const endDotStyle = useAnimatedStyle(() => ({
     opacity: drawn.value * (1 - scrubbing.value),
@@ -220,18 +287,25 @@ function PriceLine({ data, width, height, onScrub }: Props) {
     opacity: (1 - pulse.value) * 0.5 * drawn.value * (1 - scrubbing.value),
     transform: [{ scale: 1 + pulse.value * 1.6 }],
   }));
+  // The icon is already large, so its pulse spreads less.
+  const endRingStyle = useAnimatedStyle(() => ({
+    opacity: (1 - pulse.value) * 0.35 * drawn.value * (1 - scrubbing.value),
+    transform: [{ scale: 1 + pulse.value * 0.7 }],
+  }));
 
   return (
     <GestureDetector gesture={gesture}>
       <View style={{ width, height, overflow: 'hidden' }}>
-        <Svg width={width} height={height}>
-          <Defs>
-            <Pattern id="chart-dots" width={22} height={22} patternUnits="userSpaceOnUse">
-              <Circle cx={1} cy={1} r={0.9} fill={c.divider} />
-            </Pattern>
-          </Defs>
-          <Rect width={width} height={height} fill="url(#chart-dots)" />
-        </Svg>
+        {grid ? (
+          <Svg width={width} height={height}>
+            <Defs>
+              <Pattern id="chart-dots" width={22} height={22} patternUnits="userSpaceOnUse">
+                <Circle cx={1} cy={1} r={0.9} fill={c.divider} />
+              </Pattern>
+            </Defs>
+            <Rect width={width} height={height} fill="url(#chart-dots)" />
+          </Svg>
+        ) : null}
 
         <Animated.View style={[{ position: 'absolute', top: 0, left: 0 }, areaStyle]}>
           <Svg width={width} height={height}>
@@ -239,7 +313,7 @@ function PriceLine({ data, width, height, onScrub }: Props) {
                 one defined in a sibling Svg and fills the area black. */}
             <Defs>
               <LinearGradient id="chart-fill" x1="0" y1="0" x2="0" y2="1">
-                <Stop offset="0" stopColor={color} stopOpacity={0.22} />
+                <Stop offset="0" stopColor={color} stopOpacity={fillOpacity} />
                 <Stop offset="1" stopColor={color} stopOpacity={0} />
               </LinearGradient>
             </Defs>
@@ -260,41 +334,92 @@ function PriceLine({ data, width, height, onScrub }: Props) {
           />
         </Svg>
 
-        {/* Live end dot with a pulsing ring */}
-        <Animated.View
-          pointerEvents="none"
-          style={[
-            {
-              position: 'absolute',
-              left: last.x - 4,
-              top: last.y - 4,
-              width: 8,
-              height: 8,
-              borderRadius: 4,
-              backgroundColor: color,
-            },
-            endDotStyle,
-          ]}
-        >
+        {/* Live end: the token's (or jar's) icon ringed in the line's colour, pulsing
+            like a live price; else a dot with a pulsing ring. Hidden while scrubbing. */}
+        {endIcon ? (
           <Animated.View
+            pointerEvents="none"
             style={[
               {
                 position: 'absolute',
+                left: last.x - badge / 2,
+                top: last.y - badge / 2,
+                width: badge,
+                height: badge,
+              },
+              endDotStyle,
+            ]}
+          >
+            <Animated.View
+              style={[
+                {
+                  position: 'absolute',
+                  width: badge,
+                  height: badge,
+                  borderRadius: badge / 2,
+                  backgroundColor: color,
+                },
+                endRingStyle,
+              ]}
+            />
+            <View
+              style={{
+                width: badge,
+                height: badge,
+                borderRadius: badge / 2,
+                borderWidth: END_RING,
+                borderColor: color,
+                backgroundColor: c.canvas,
+                alignItems: 'center',
+                justifyContent: 'center',
+                overflow: 'hidden',
+              }}
+            >
+              {endIcon}
+            </View>
+          </Animated.View>
+        ) : (
+          <Animated.View
+            pointerEvents="none"
+            style={[
+              {
+                position: 'absolute',
+                left: last.x - 4,
+                top: last.y - 4,
                 width: 8,
                 height: 8,
                 borderRadius: 4,
                 backgroundColor: color,
               },
-              ringStyle,
+              endDotStyle,
             ]}
-          />
-        </Animated.View>
+          >
+            <Animated.View
+              style={[
+                {
+                  position: 'absolute',
+                  width: 8,
+                  height: 8,
+                  borderRadius: 4,
+                  backgroundColor: color,
+                },
+                ringStyle,
+              ]}
+            />
+          </Animated.View>
+        )}
 
         {/* Scrub cursor */}
         <Animated.View
           pointerEvents="none"
           style={[
-            { position: 'absolute', top: 0, bottom: 0, width: 1, backgroundColor: c.textSecondary },
+            {
+              position: 'absolute',
+              top: label ? LABEL_SPACE : 0,
+              bottom: 0,
+              width: 1,
+              backgroundColor: c.textSecondary,
+            },
             cursorStyle,
           ]}
         />
@@ -315,6 +440,17 @@ function PriceLine({ data, width, height, onScrub }: Props) {
             scrubDotStyle,
           ]}
         />
+        {label ? (
+          <Animated.View
+            pointerEvents="none"
+            onLayout={(e) => {
+              labelWidth.value = e.nativeEvent.layout.width;
+            }}
+            style={[{ position: 'absolute', top: 0, left: 0 }, labelStyle]}
+          >
+            {label}
+          </Animated.View>
+        ) : null}
       </View>
     </GestureDetector>
   );

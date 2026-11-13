@@ -52,6 +52,9 @@ export {
   isMarketListTokens,
   isPortfolio,
   isPortfolioHolding,
+  isTokenChart,
+  isTokenInfo,
+  isTokenLogos,
   isTokenMarket,
   portfolioQuery,
 } from './portfolio';

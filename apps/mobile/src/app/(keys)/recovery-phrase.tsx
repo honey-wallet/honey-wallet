@@ -18,6 +18,7 @@ import { PillButton } from '@/components/onboarding/PillButton';
 import { SheetScreen } from '@/components/sheets/Sheet';
 import { InlineTray } from '@/components/sheets/Tray';
 import { PushedScreen } from '@/components/wallet/parts';
+import { isAuthenticatingOwner, untilActive } from '@/lib/auth';
 import { tap } from '@/lib/haptics';
 import { goBackOr } from '@/lib/navigation';
 import { completeStep, finishOnboarding } from '@/lib/onboarding';
@@ -28,6 +29,7 @@ import { usePreventScreenCapture } from '@/lib/screen-capture';
 import { showErrorToast } from '@/lib/toast';
 import { startWithMnemonic } from '@/lib/vault';
 import { addVaultWallet } from '@/lib/wallets';
+import { Gate, warningOn } from '@/lib/warnings';
 import { makeStyles, radius, useTheme } from '@/theme';
 import { DISTANCE, DURATION, EASE } from '@/theme/motion';
 
@@ -84,7 +86,9 @@ export default function RecoveryPhraseScreen() {
   const [phrase, setPhrase] = useState<string | null | undefined>(() => access.draft);
   useEffect(() => {
     const sub = AppState.addEventListener('change', (state) => {
-      if (state !== 'active') {
+      // Hide on the app switcher too ("inactive"), but not for our own Face ID prompt,
+      // which also makes iOS inactive: that reset the screen before the words showed.
+      if (state === 'background' || (state === 'inactive' && !isAuthenticatingOwner())) {
         if (state === 'background') access.cancel();
         setRevealed(false);
         setWarning(true);
@@ -124,7 +128,8 @@ export default function RecoveryPhraseScreen() {
     tap();
     try {
       const result = await access.read();
-      if (!result || AppState.currentState !== 'active') return;
+      // Only once the app is truly in front: never under the app switcher's snapshot.
+      if (!result || !(await untilActive())) return;
       const value = result.phrase;
       if (!onboarding) setPhrase(value);
       setWarning(false);
@@ -187,7 +192,9 @@ export default function RecoveryPhraseScreen() {
           }
         : {
             title: 'Your recovery phrase',
-            body: 'Never share them or type them into a website.',
+            body: warningOn('recoveryNeverShare')
+              ? 'Never share them or type them into a website.'
+              : '',
           };
 
   return (
@@ -223,11 +230,15 @@ export default function RecoveryPhraseScreen() {
         <InlineTray onClose={close}>
           {warning ? (
             <SheetScreen>
-              <View style={[styles.warnTile, { backgroundColor: `${c.error}1F` }]}>
-                <Icon name="warning" size={22} color={c.error} />
-              </View>
+              <Gate id="recoveryPeekWarning">
+                <View style={[styles.warnTile, { backgroundColor: `${c.error}1F` }]}>
+                  <Icon name="warning" size={22} color={c.error} />
+                </View>
+              </Gate>
               <Text style={styles.panelTitle}>Check no one can see</Text>
-              <Text style={styles.panelBody}>Anyone with these words can take your funds.</Text>
+              <Gate id="recoveryPeekWarning">
+                <Text style={styles.panelBody}>Anyone with these words can take your funds.</Text>
+              </Gate>
               <View style={styles.buttons}>
                 <PillButton
                   label="Close"
@@ -246,7 +257,7 @@ export default function RecoveryPhraseScreen() {
         <TextsReveal
           id={hero.title}
           first={<Text style={styles.title}>{hero.title}</Text>}
-          second={<Text style={styles.body}>{hero.body}</Text>}
+          second={hero.body ? <Text style={styles.body}>{hero.body}</Text> : undefined}
         />
       </View>
 
@@ -301,14 +312,17 @@ export default function RecoveryPhraseScreen() {
             <Animated.View entering={FadeIn.duration(DURATION.fast)} style={styles.below}>
               {/* In a browser, ticking this later is how the setup checklist's backup gets done. */}
               {onboarding || isWeb ? (
-                <Checkbox
-                  label="I’ve written it down somewhere safe"
-                  checked={writtenDown}
-                  onChange={(checked) => {
-                    setWrittenDown(checked);
-                    if (checked && !onboarding) completeStep('backup');
-                  }}
-                />
+                // Takes the room left by Hide, so Hide stays on screen (it was pushed off).
+                <View style={styles.checkWrap}>
+                  <Checkbox
+                    label="I’ve written it down somewhere safe"
+                    checked={writtenDown}
+                    onChange={(checked) => {
+                      setWrittenDown(checked);
+                      if (checked && !onboarding) completeStep('backup');
+                    }}
+                  />
+                </View>
               ) : (
                 <View />
               )}
@@ -417,6 +431,9 @@ const useStyles = makeStyles((c) => ({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 12,
+  },
+  checkWrap: {
+    flex: 1,
   },
   hideButton: {
     flexDirection: 'row',

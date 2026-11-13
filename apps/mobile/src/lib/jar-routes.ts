@@ -33,8 +33,12 @@ export type Route = {
   slippage: number;
   /** Bridge costs, in dollars. */
   bridgeUsd: number;
-  /** ok: fills within max slippage; thin: too little liquidity, skip or shrink it. */
-  status: 'ok' | 'thin';
+  /**
+   * ok: fills within max slippage; thin: too little liquidity, skip or shrink it;
+   * loading: still asking the server; unbuyable: NEAR Intents can't deliver this token;
+   * unavailable: the server couldn't be reached. Only `ok` routes are ever paid.
+   */
+  status: 'ok' | 'thin' | 'loading' | 'unbuyable' | 'unavailable';
 };
 
 /** Pools shallower than this are ignored: too easy to move, too easy to be stuck in. */
@@ -119,11 +123,25 @@ export function planRoute(
   };
 }
 
-/** One line for a route: "Solana · Jupiter $600 + Ethereum · Uniswap $400". */
+/**
+ * One line for a route, without chains (a token is just its symbol; NEAR Intents picks
+ * where it buys): the venues, e.g. "Jupiter + Uniswap", else "Best route via NEAR Intents".
+ */
 export const describeRoute = (route: Route) =>
   route.status === 'thin'
     ? 'Too little liquidity at this size'
-    : route.legs.map((l) => `${l.chain} · ${l.venue} $${Math.round(l.usd)}`).join(' + ');
+    : route.status === 'loading'
+      ? 'Checking where it trades…'
+      : route.status === 'unbuyable'
+        ? `${route.symbol} can’t be bought through NEAR Intents`
+        : route.status === 'unavailable'
+          ? 'Couldn’t check routes. Try again in a moment'
+          : [...new Set(route.legs.map((l) => l.venue).filter(Boolean))].join(' + ') ||
+            'Best route via NEAR Intents';
+
+/** Routes that can't be paid as they are (anything but `ok` with money on it). */
+export const blockedRoutes = (routes: Route[]) =>
+  routes.filter((r) => r.usd > 0 && r.status !== 'ok');
 
 /**
  * Sample venues until the quote service returns real depth. Funds start on Base, so
@@ -193,21 +211,25 @@ const BRIDGE_USD = 0.3;
 /** Where a jar's money starts; buys on other chains cross through NEAR Intents. */
 const FUNDING_CHAIN = 'Base';
 
-const venueCache = new Map<string, { at: number; value: Promise<LiveVenues | null> }>();
 type LiveVenues = { price: number; venues: Venue[] };
+/** `none`: the server answered and NEAR Intents can't deliver it; `error`: no answer. */
+type LiveAnswer = LiveVenues | 'none' | 'error';
+const venueCache = new Map<string, { at: number; value: Promise<LiveAnswer> }>();
 
 /** Live venues for a symbol from the server (DexScreener depth, 1Click prices). */
-function liveVenues(symbol: string): Promise<LiveVenues | null> {
+function liveVenues(symbol: string): Promise<LiveAnswer> {
   const hit = venueCache.get(symbol);
   if (hit && Date.now() - hit.at < 30_000) return hit.value;
   const value = import('@/lib/api')
     .then(({ api }) => api.marketVenues(symbol))
-    .then((r) =>
-      r.priceUsd === null || !r.venues.length
-        ? null
+    .then((r): LiveAnswer => {
+      // Only venues NEAR Intents can deliver to (an asset id) can ever be paid.
+      const deliverable = r.venues.filter((v) => !!v.assetId);
+      return r.priceUsd === null || !deliverable.length
+        ? 'none'
         : {
             price: r.priceUsd,
-            venues: r.venues.map((v) => ({
+            venues: deliverable.map((v) => ({
               chain: v.chain,
               assetId: v.assetId,
               venue: v.venue,
@@ -215,9 +237,9 @@ function liveVenues(symbol: string): Promise<LiveVenues | null> {
               feeBps: v.feeBps,
               bridgeUsd: v.chain === FUNDING_CHAIN ? 0 : BRIDGE_USD,
             })),
-          },
-    )
-    .catch(() => null);
+          };
+    })
+    .catch((): LiveAnswer => 'error');
   venueCache.set(symbol, { at: Date.now(), value });
   return value;
 }
@@ -232,7 +254,7 @@ export function useRoutes(
   maxSlippage: number,
 ): { routes: Route[]; live: boolean } {
   const sample = picks.map((p) => sampleRoute(p, (amount * p.weight) / 100, maxSlippage));
-  const [live, setLive] = useState<Record<string, LiveVenues | null>>({});
+  const [live, setLive] = useState<Record<string, LiveAnswer>>({});
   const symbols = picks.map((p) => p.symbol).join(',');
   useEffect(() => {
     if (TEST_MODE || !symbols) return;
@@ -246,12 +268,17 @@ export function useRoutes(
       alive = false;
     };
   }, [symbols]);
-  let anyLive = false;
-  const routes = picks.map((p, i) => {
+  if (TEST_MODE) return { routes: sample, live: false };
+  // Real money: never the sample venues. A pick is loading, unbuyable, unreachable or
+  // planned on live venues; only planned `ok` routes are paid (see `blockedRoutes`).
+  const routes = picks.map((p): Route => {
+    const usd = (amount * p.weight) / 100;
     const v = live[p.symbol];
-    if (!v) return sample[i] as Route;
-    anyLive = true;
-    return planRoute(p.symbol, (amount * p.weight) / 100, v.price, v.venues, maxSlippage);
+    const empty = { symbol: p.symbol, usd, legs: [], slippage: 0, bridgeUsd: 0 };
+    if (v === undefined) return { ...empty, status: 'loading' };
+    if (v === 'none') return { ...empty, status: 'unbuyable' };
+    if (v === 'error') return { ...empty, status: 'unavailable' };
+    return planRoute(p.symbol, usd, v.price, v.venues, maxSlippage);
   });
-  return { routes, live: anyLive };
+  return { routes, live: true };
 }

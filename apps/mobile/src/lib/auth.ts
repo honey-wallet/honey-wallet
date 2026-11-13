@@ -28,3 +28,26 @@ export async function confirmOwner(reason: string, requireDeviceLock = true): Pr
     sub.remove();
   }
 }
+
+/**
+ * After Face ID, iOS reports "inactive" until the dialog is gone; the app switcher is
+ * "inactive" too. Resolves true once the app is really in front again, false if it goes
+ * to the background or doesn't come back in time, so nothing secret renders under the
+ * app switcher's snapshot.
+ */
+export function untilActive(timeoutMs = 3000): Promise<boolean> {
+  if (AppState.currentState === 'active') return Promise.resolve(true);
+  if (AppState.currentState === 'background') return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      sub.remove();
+      resolve(false);
+    }, timeoutMs);
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'inactive') return;
+      clearTimeout(timer);
+      sub.remove();
+      resolve(state === 'active');
+    });
+  });
+}

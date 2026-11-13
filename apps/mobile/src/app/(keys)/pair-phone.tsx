@@ -22,6 +22,7 @@ import { failure, success, tap } from '@/lib/haptics';
 import { completeStep, finishOnboarding } from '@/lib/onboarding';
 import { receiveWallet, sendWallet, startPairing, waitForPhone } from '@/lib/pair-phone';
 import { isWeb } from '@/lib/platform';
+import { LANDING } from '@/lib/surface';
 import { showToast } from '@/lib/toast';
 import { hasPrimaryMnemonic, importPairedWallet } from '@/lib/vault';
 import { addVaultWallet, setActiveWallet } from '@/lib/wallets';
@@ -49,7 +50,7 @@ const QR_SIZE = 200;
  */
 export default function PairPhoneSheet() {
   // The phone is the side that scans (pair-extension.tsx).
-  return isWeb ? <PairPhone /> : <Redirect href="/home" />;
+  return isWeb ? <PairPhone /> : <Redirect href={LANDING} />;
 }
 
 function PairPhone() {

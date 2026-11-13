@@ -18,11 +18,13 @@ import {
 import {
   createNearRpc,
   EVM_USDC,
+  isNearAccountId,
+  isSolanaAddress,
   SOLANA_USDC_MINT,
   toBaseUnits,
   USDC_NEAR,
 } from '@honey-wallet/keyring';
-import { formatUnits } from 'viem';
+import { formatUnits, isAddress } from 'viem';
 import { api } from '@/lib/api';
 import { backendSessionToken } from '@/lib/backend-session';
 import {
@@ -33,7 +35,6 @@ import {
   MAX_SLIPPAGE_BPS,
   minWithinSlippage,
   quoteChanged,
-  recipientOn,
   sameAddress,
 } from '@/lib/intents-quote';
 import { viewStorageRegistered } from '@/lib/jar-dao-core';
@@ -48,12 +49,116 @@ import { type AddedWallet, wallets } from '@/lib/wallets';
 // What can be swapped
 
 /**
- * Every token here can be paid by lib/send.ts (so it can be sold) and delivered to an
- * address this wallet owns (so it can be bought). Native NEAR is left out: 1Click
- * trades it as wNEAR, which a plain NEAR transfer doesn't pay and the wallet doesn't
- * show.
+ * Every chain NEAR Intents 1Click trades on, by its code, with the name the app shows,
+ * in the order the token picker lists them. Codes not here show as they are.
  */
-export const SWAP_TOKENS: readonly TokenRef[] = [
+export const BLOCKCHAINS: Record<string, string> = {
+  eth: 'Ethereum',
+  base: 'Base',
+  sol: 'Solana',
+  near: 'NEAR',
+  arb: 'Arbitrum',
+  btc: 'Bitcoin',
+  bsc: 'BNB Chain',
+  pol: 'Polygon',
+  op: 'Optimism',
+  avax: 'Avalanche',
+  tron: 'Tron',
+  xrp: 'XRP Ledger',
+  ton: 'TON',
+  sui: 'Sui',
+  aptos: 'Aptos',
+  zec: 'Zcash',
+  doge: 'Dogecoin',
+  ltc: 'Litecoin',
+  bch: 'Bitcoin Cash',
+  dash: 'Dash',
+  stellar: 'Stellar',
+  cardano: 'Cardano',
+  gnosis: 'Gnosis',
+  bera: 'Berachain',
+  scroll: 'Scroll',
+  monad: 'Monad',
+  xlayer: 'X Layer',
+  plasma: 'Plasma',
+  abs: 'Abstract',
+  hood: 'Robinhood Chain',
+  hypercore: 'Hyperliquid',
+  starknet: 'Starknet',
+  movement: 'Movement',
+  aleo: 'Aleo',
+  miden: 'Miden',
+  fogo: 'Fogo',
+  adi: 'ADI Chain',
+};
+
+/** The name the app shows for a 1Click chain code. */
+export const chainName = (blockchain: string) =>
+  BLOCKCHAINS[blockchain] ?? blockchain.toUpperCase();
+
+/** 1Click's code for a chain name the app shows (the inverse of `chainName`). */
+const blockchainOf = (chain: string) =>
+  Object.keys(BLOCKCHAINS).find((code) => BLOCKCHAINS[code] === chain) ?? chain.toLowerCase();
+
+/** Chains this wallet can pay from: lib/send.ts signs on these four. */
+const PAYABLE: Record<string, Chain> = {
+  eth: 'Ethereum',
+  base: 'Base',
+  sol: 'Solana',
+  near: 'NEAR',
+};
+
+/**
+ * EVM chains, where the wallet's one EVM address (same key) receives. Payouts on any
+ * other chain without a key here go to an address you enter.
+ */
+const EVM_BLOCKCHAINS = new Set([
+  'eth',
+  'base',
+  'arb',
+  'op',
+  'pol',
+  'bsc',
+  'avax',
+  'gnosis',
+  'bera',
+  'scroll',
+  'monad',
+  'xlayer',
+  'plasma',
+  'abs',
+  'hood',
+]);
+
+/** Your own address on a 1Click chain, when this wallet has keys there. */
+export function ownAddressOn(
+  blockchain: string,
+  addresses: { evm?: string; solana?: string; near?: string },
+) {
+  if (blockchain === 'sol') return addresses.solana;
+  if (blockchain === 'near') return addresses.near;
+  return EVM_BLOCKCHAINS.has(blockchain) ? addresses.evm : undefined;
+}
+
+/** Chains whose balances the wallet shows (Home, Portfolio): the ones it pays from. */
+export const shownInWallet = (chain: string) => Object.values(PAYABLE).includes(chain as Chain);
+
+/**
+ * Chains where exchanges often need a memo or tag with the address. A swap can't add one,
+ * so paying an exchange deposit address there can lose the funds.
+ */
+const MEMO_BLOCKCHAINS = new Set(['xrp', 'stellar', 'ton', 'hypercore']);
+export const needsMemoWarning = (chain: string) => MEMO_BLOCKCHAINS.has(blockchainOf(chain));
+
+/** Whether a payout on this chain needs an address typed in (no key for it here). */
+export const needsRecipient = (blockchain: string) =>
+  blockchain !== 'sol' && blockchain !== 'near' && !EVM_BLOCKCHAINS.has(blockchain);
+
+/**
+ * Shown before NEAR Intents' list loads (or when it can't be reached), and the pair
+ * moved onto when the stored one isn't swappable.
+ */
+export const FALLBACK_SWAP_TOKENS: readonly TokenRef[] = [
   { symbol: 'ETH', chain: 'Ethereum' },
   { symbol: 'USDC', chain: 'Ethereum' },
   { symbol: 'ETH', chain: 'Base' },
@@ -63,17 +168,10 @@ export const SWAP_TOKENS: readonly TokenRef[] = [
   { symbol: 'USDC', chain: 'NEAR' },
 ];
 
-/** Decimals lib/send.ts pays with; 1Click's token must agree or nothing is quoted. */
-const DECIMALS: Record<string, number> = { ETH: 18, USDC: 6, SOL: 9 };
+/** Decimals lib/send.ts pays a chain's own coin with; 1Click's entry must agree. */
+const NATIVE_DECIMALS: Record<string, number> = { ETH: 18, SOL: 9 };
 /** At most this many decimals are typed (lib/send.ts shows amounts to 8). */
 export const MAX_INPUT_DECIMALS = 8;
-/** 1Click's name for each chain. */
-const BLOCKCHAIN: Partial<Record<Chain, string>> = {
-  Ethereum: 'eth',
-  Base: 'base',
-  Solana: 'sol',
-  NEAR: 'near',
-};
 const EVM_CHAIN_ID: Partial<Record<Chain, number>> = { Ethereum: 1, Base: 8453 };
 
 /** Slippage every swap asks for: 1%. */
@@ -83,17 +181,61 @@ export const MAX_SWAP_USD = 1_000;
 /** A quote that keeps less than this share of the value is refused outright. */
 const MIN_VALUE_KEPT = 0.5;
 
-export const sameToken = (a: TokenRef, b: TokenRef) => a.symbol === b.symbol && a.chain === b.chain;
-export const isSwapToken = (t: TokenRef) => SWAP_TOKENS.some((s) => sameToken(s, t));
+/** Same token: by NEAR Intents asset when both sides name one, else by symbol and chain. */
+export const sameToken = (a: TokenRef, b: TokenRef) =>
+  a.assetId && b.assetId ? a.assetId === b.assetId : a.symbol === b.symbol && a.chain === b.chain;
+
+/** A picker entry for a 1Click token. */
+export const tokenRef = (t: OneClickToken): TokenRef => ({
+  symbol: t.symbol,
+  chain: chainName(t.blockchain),
+  assetId: t.assetId,
+});
+
+/**
+ * Whether this wallet can pay `t` with lib/send.ts: the chain's own coin on Ethereum,
+ * Base and Solana, any ERC-20 on Ethereum and Base, any SPL token on Solana (classic
+ * Token program, checked when paying), and any NEP-141 token on NEAR. Native NEAR isn't
+ * listed by 1Click (it trades wNEAR, which a plain NEAR transfer doesn't pay).
+ */
+export function canSell(t: OneClickToken) {
+  if (!PAYABLE[t.blockchain]) return false;
+  const contract = t.contractAddress;
+  if (t.blockchain === 'near')
+    return !!contract && isNearAccountId(contract) && t.assetId === `nep141:${contract}`;
+  if (t.blockchain === 'sol') return contract ? isSolanaAddress(contract) : t.symbol === 'SOL';
+  return contract ? isAddress(contract) : t.symbol === 'ETH';
+}
+
+/** Native NEAR: 1Click trades wNEAR, which a plain NEAR transfer doesn't pay. */
+const isNativeNear = (t: TokenRef) => t.symbol === 'NEAR' && t.chain === 'NEAR' && !t.assetId;
+
+/**
+ * Whether this wallet can sell `ref`: with NEAR Intents' list, it's listed and payable
+ * here (`canSell`); before the list loads, it's on a network this wallet pays from.
+ */
+export function canSellRef(ref: TokenRef, tokens?: OneClickToken[] | null) {
+  if (isNativeNear(ref)) return false;
+  if (!tokens?.length) return Object.values(PAYABLE).includes(ref.chain as Chain);
+  const t = findAsset(tokens, ref);
+  return !!t && canSell(t);
+}
+
+/** Whether `ref` can be bought: listed by NEAR Intents (assumed until the list loads). */
+export const canBuyRef = (ref: TokenRef, tokens?: OneClickToken[] | null) =>
+  !isNativeNear(ref) && (!tokens?.length || !!findAsset(tokens, ref));
 
 /** Why this pair can't be swapped, in words for the user; null when it can. */
-export function unsupportedReason(sell: TokenRef, buy: TokenRef): string | null {
-  if (sell.symbol === 'NEAR' && sell.chain === 'NEAR')
-    return 'Swapping from NEAR isn’t supported yet. USDC on NEAR is.';
-  if (!isSwapToken(sell))
-    return `Swapping from ${sell.symbol} on ${sell.chain} isn’t supported yet.`;
-  if (!isSwapToken(buy)) return `Getting ${buy.symbol} on ${buy.chain} isn’t supported yet.`;
+export function unsupportedReason(
+  sell: TokenRef,
+  buy: TokenRef,
+  tokens?: OneClickToken[] | null,
+): string | null {
+  if (isNativeNear(sell)) return 'Swapping from NEAR isn’t supported yet. USDC on NEAR is.';
   if (sameToken(sell, buy)) return 'Pick two different tokens.';
+  if (!canSellRef(sell, tokens))
+    return `Swapping from ${sell.symbol} on ${sell.chain} isn’t supported yet.`;
+  if (!canBuyRef(buy, tokens)) return `Getting ${buy.symbol} on ${buy.chain} isn’t supported yet.`;
   return null;
 }
 
@@ -157,26 +299,42 @@ export async function fetchSwapTokens(fetcher: typeof fetch = fetch, now = Date.
   return tokens;
 }
 
-/** The contract a token is, on its chain; null for the chain's own coin. */
-function contractOf(ref: TokenRef): string | null {
+/** NEAR Intents' token list for screens: null until loaded; `failed` when it couldn't be. */
+export const swapTokenList = createStore<{ tokens: OneClickToken[] | null; failed: boolean }>({
+  tokens: null,
+  failed: false,
+});
+
+/** Loads (or refreshes, after five minutes) the token list into `swapTokenList`. */
+export function loadSwapTokens() {
+  void fetchSwapTokens()
+    .then((tokens) => swapTokenList.set({ tokens, failed: false }))
+    .catch(() => swapTokenList.set((prev) => ({ ...prev, failed: !prev.tokens })));
+}
+
+/** The contract of a well-known token named without an asset id; null for the chain's own coin. */
+function knownContract(ref: TokenRef): string | null {
   if (ref.symbol !== 'USDC') return null;
   if (ref.chain === 'Solana') return SOLANA_USDC_MINT;
   if (ref.chain === 'NEAR') return USDC_NEAR;
-  const chainId = EVM_CHAIN_ID[ref.chain];
+  const chainId = EVM_CHAIN_ID[ref.chain as Chain];
   return chainId ? (EVM_USDC[chainId] ?? null) : null;
 }
 
 /**
- * 1Click's entry for an app token, matched by chain and contract address (or, for a
- * chain's own coin, by having no contract), never by guessing an id. Exactly one entry
- * must match, with the decimals the send code pays in.
+ * 1Click's entry for a token, or null. By asset id when the token names one (and its
+ * symbol and chain must agree with that entry); otherwise, for the few tokens the app
+ * names itself, by chain and contract address (or, for a chain's own coin, by having no
+ * contract), never by guessing an id. Exactly one entry must match.
  */
-export function assetFor(tokens: OneClickToken[], ref: TokenRef): OneClickToken {
-  const missing = new Error(`${ref.symbol} on ${ref.chain} isn’t available on NEAR Intents now.`);
-  const blockchain = BLOCKCHAIN[ref.chain];
-  const decimals = DECIMALS[ref.symbol];
-  if (!blockchain || decimals === undefined || !isSwapToken(ref)) throw missing;
-  const contract = contractOf(ref);
+function findAsset(tokens: OneClickToken[], ref: TokenRef): OneClickToken | null {
+  if (ref.assetId) {
+    const t = tokens.find((x) => x.assetId === ref.assetId);
+    return t && t.symbol === ref.symbol && chainName(t.blockchain) === ref.chain ? t : null;
+  }
+  const blockchain = blockchainOf(ref.chain);
+  const contract = knownContract(ref);
+  if (!contract && NATIVE_DECIMALS[ref.symbol] === undefined) return null;
   const matches = tokens.filter(
     (t) =>
       t.blockchain === blockchain &&
@@ -185,8 +343,24 @@ export function assetFor(tokens: OneClickToken[], ref: TokenRef): OneClickToken 
         : !t.contractAddress && t.symbol === ref.symbol),
   );
   const [only] = matches;
-  if (matches.length !== 1 || !only || only.decimals !== decimals) throw missing;
-  return only;
+  if (matches.length !== 1 || !only) return null;
+  // The app's own tokens: decimals must be the ones lib/send.ts pays with.
+  const decimals = contract ? (ref.symbol === 'USDC' ? 6 : null) : NATIVE_DECIMALS[ref.symbol];
+  return only.decimals === decimals ? only : null;
+}
+
+/** 1Click's entry for a token, or null when it isn't listed (see `findAsset`). */
+export const swapAssetOf = (tokens: OneClickToken[], ref: TokenRef) => findAsset(tokens, ref);
+
+/** 1Click's entry for a token; throws when it isn't listed (see `findAsset`). */
+export function assetFor(tokens: OneClickToken[], ref: TokenRef): OneClickToken {
+  const t = findAsset(tokens, ref);
+  if (!t) throw new Error(`${ref.symbol} on ${ref.chain} isn’t available on NEAR Intents now.`);
+  // A chain's own coin is paid by lib/send.ts at its fixed decimals.
+  const native = NATIVE_DECIMALS[t.symbol];
+  if (!t.contractAddress && native !== undefined && t.decimals !== native)
+    throw new Error(`${ref.symbol} on ${ref.chain} isn’t available on NEAR Intents now.`);
+  return t;
 }
 
 // ---------------------------------------------------------------------------
@@ -217,8 +391,12 @@ export type IntentsSwap = {
   minAmountOut: string;
   depositAddress: string;
   deadline: string;
-  /** Your address on the chain you buy on. */
+  /** Where the payout goes: your address on the chain you buy on, or one you entered. */
   recipient: string;
+  /** True when `recipient` was typed in (a chain this wallet has no key for). */
+  externalRecipient?: boolean;
+  /** The sold token's contract (ERC-20, SPL mint or NEP-141); null for a chain's own coin. */
+  sellContract?: string | null;
   /** Your address on the chain you sell on; refunds go here. */
   refundTo: string;
   slippageBps: number;
@@ -272,14 +450,31 @@ function payer(): AddedWallet {
   return wallet;
 }
 
-/** Your own addresses for both sides of a swap. */
-function ownAddresses(wallet: AddedWallet, sell: TokenRef, buy: TokenRef) {
+/** Basic shape of an address typed for a payout: one printable word. */
+const plausibleAddress = (a: string) => /^[\x21-\x7e]{10,128}$/.test(a);
+
+/**
+ * Where a swap refunds (your address on the chain you pay from) and pays out: your
+ * address on the chain you buy on, or, on a chain this wallet has no key for, the
+ * address you entered (NEAR Intents checks it's valid for that chain when quoting).
+ */
+function swapAddresses(
+  wallet: AddedWallet,
+  origin: OneClickToken,
+  destination: OneClickToken,
+  entered?: string,
+) {
   const addresses = wallet.addresses ?? {};
-  const refundTo = recipientOn(sell.chain, addresses);
-  const recipient = recipientOn(buy.chain, addresses);
-  if (!refundTo) throw new Error(`This wallet has no ${sell.chain} address.`);
-  if (!recipient) throw new Error(`This wallet has no ${buy.chain} address.`);
-  return { refundTo, recipient };
+  const refundTo = ownAddressOn(origin.blockchain, addresses);
+  if (!refundTo) throw new Error(`This wallet has no ${chainName(origin.blockchain)} address.`);
+  const own = ownAddressOn(destination.blockchain, addresses);
+  if (own) return { refundTo, recipient: own, external: false };
+  const typed = entered?.trim() ?? '';
+  if (!needsRecipient(destination.blockchain) || !typed)
+    throw new Error(`Enter your ${chainName(destination.blockchain)} address to receive at.`);
+  if (!plausibleAddress(typed))
+    throw new Error(`That isn’t a ${chainName(destination.blockchain)} address.`);
+  return { refundTo, recipient: typed, external: true };
 }
 
 const usdOf = (units: bigint, decimals: number, price: number | null) =>
@@ -362,8 +557,8 @@ export type SwapDeps = {
   fetcher: typeof fetch;
   token: () => string | null;
   quote: typeof api.jarBuyQuote;
-  /** Whether a NEAR account can receive USDC (registered on the USDC contract). */
-  nearUsdcReady: (account: string) => Promise<boolean>;
+  /** Whether a NEAR account can receive a NEP-141 token (registered on its contract). */
+  nearFtReady: (token: string, account: string) => Promise<boolean>;
   prepare: typeof prepareSend;
   now: () => number;
 };
@@ -372,28 +567,38 @@ const defaults: SwapDeps = {
   fetcher: (...args) => fetch(...args),
   token: backendSessionToken,
   quote: (...args) => api.jarBuyQuote(...args),
-  nearUsdcReady: (account) => viewStorageRegistered(createNearRpc('mainnet'), USDC_NEAR, account),
+  nearFtReady: (token, account) => viewStorageRegistered(createNearRpc('mainnet'), token, account),
   prepare: prepareSend,
   now: () => Date.now(),
 };
 
 /** A live, verified quote for selling `amount` (decimal text) of `sell` for `buy`. Nothing is signed. */
 export async function quoteSwap(
-  input: { sell: TokenRef; buy: TokenRef; amount: string },
+  input: { sell: TokenRef; buy: TokenRef; amount: string; recipient?: string },
   deps: Partial<SwapDeps> = {},
 ): Promise<IntentsSwap> {
   const d = { ...defaults, ...deps };
   const { sell, buy } = input;
-  const reason = unsupportedReason(sell, buy);
-  if (reason) throw new Error(reason);
+  const early = unsupportedReason(sell, buy);
+  if (early) throw new Error(early);
   const wallet = payer();
-  const { refundTo, recipient } = ownAddresses(wallet, sell, buy);
   const token = d.token();
   if (!token) throw new Error('Sign in to swap.');
 
   const tokens = await fetchSwapTokens(d.fetcher, d.now());
+  const reason = unsupportedReason(sell, buy, tokens);
+  if (reason) throw new Error(reason);
   const origin = assetFor(tokens, sell);
   const destination = assetFor(tokens, buy);
+  const sellChain = PAYABLE[origin.blockchain];
+  if (!sellChain || !canSell(origin))
+    throw new Error(`Swapping from ${sell.symbol} on ${sell.chain} isn’t supported yet.`);
+  const { refundTo, recipient, external } = swapAddresses(
+    wallet,
+    origin,
+    destination,
+    input.recipient,
+  );
   const typed = input.amount.trim();
   const decimals = typed.split('.')[1]?.length ?? 0;
   if (decimals > Math.min(MAX_INPUT_DECIMALS, origin.decimals))
@@ -407,11 +612,15 @@ export async function quoteSwap(
   const usdIn = usdOf(amountIn, origin.decimals, origin.price);
   if (usdIn === null) throw new Error(`Couldn’t price ${sell.symbol} right now. Try again.`);
   if (usdIn > MAX_SWAP_USD) throw new Error(`Swaps are capped at $${MAX_SWAP_USD} for now.`);
-  // NEAR Intents pays USDC on NEAR with a plain transfer, which fails into an account
-  // that isn't registered on the USDC contract; don't start a swap that can't land.
-  if (buy.chain === 'NEAR' && !(await d.nearUsdcReady(recipient).catch(() => false)))
+  // NEAR Intents pays tokens on NEAR with a plain transfer, which fails into an account
+  // that isn't registered on the token's contract; don't start a swap that can't land.
+  if (
+    destination.blockchain === 'near' &&
+    destination.contractAddress &&
+    !(await d.nearFtReady(destination.contractAddress, recipient).catch(() => false))
+  )
     throw new Error(
-      'Your NEAR account isn’t set up for USDC yet. Receive some USDC on NEAR first, or pick another network.',
+      `Your NEAR account isn’t set up for ${buy.symbol} yet. Receive some ${buy.symbol} on NEAR first, or pick another network.`,
     );
 
   const quote = await d.quote(token, {
@@ -423,7 +632,7 @@ export async function quoteSwap(
   const leg = checkSwapQuote(
     quote,
     {
-      sellChain: sell.chain,
+      sellChain,
       originAsset: origin.assetId,
       destinationAsset: destination.assetId,
       amountIn,
@@ -438,8 +647,8 @@ export async function quoteSwap(
     );
   const swap: IntentsSwap = {
     walletId: wallet.id,
-    sell,
-    buy,
+    sell: tokenRef(origin),
+    buy: tokenRef(destination),
     originAsset: origin.assetId,
     destinationAsset: destination.assetId,
     sellDecimals: origin.decimals,
@@ -450,7 +659,9 @@ export async function quoteSwap(
     depositAddress: leg.depositAddress,
     deadline: leg.deadline,
     recipient,
+    externalRecipient: external,
     refundTo,
+    sellContract: origin.contractAddress,
     slippageBps: SWAP_SLIPPAGE_BPS,
     usdIn,
     usdOutMin,
@@ -486,16 +697,28 @@ export async function prepareSwapPayment(
   // gone out (a broadcast can land even when the app saw an error).
   const known = intentsSwaps.get()[swap.depositAddress];
   if (known && known.status !== 'QUOTED') throw alreadyUsed();
-  const own = ownAddresses(wallet, swap.sell, swap.buy);
-  if (!sameAddress(swap.refundTo, own.refundTo) || !sameAddress(swap.recipient, own.recipient))
+  const sellChain = swap.sell.chain as Chain;
+  const addresses = wallet.addresses ?? {};
+  const refundTo = ownAddressOn(blockchainOf(swap.sell.chain), addresses);
+  const own = ownAddressOn(blockchainOf(swap.buy.chain), addresses);
+  // Paid out to this wallet, or (only on a chain it has no key for) the address entered.
+  if (
+    !Object.values(PAYABLE).includes(sellChain) ||
+    !refundTo ||
+    !sameAddress(swap.refundTo, refundTo) ||
+    (own ? !sameAddress(swap.recipient, own) : !swap.externalRecipient)
+  )
     throw quoteChanged();
   await verifySwapWithOneClick(swap, d.fetcher, { unpaid: true });
   const amount = unitsText(swap.amountIn, swap.sellDecimals);
   const plan = await d.prepare(wallet, {
-    chain: swap.sell.chain,
+    chain: sellChain,
     symbol: swap.sell.symbol,
     to: swap.depositAddress,
     amount,
+    ...(swap.sellContract
+      ? { token: { contract: swap.sellContract, decimals: swap.sellDecimals } }
+      : {}),
   });
   let paid: bigint | null = null;
   try {

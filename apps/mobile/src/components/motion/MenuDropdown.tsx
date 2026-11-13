@@ -7,9 +7,10 @@ import {
   Modal,
   Pressable,
   type StyleProp,
+  StyleSheet,
   Text,
   useWindowDimensions,
-  type View,
+  View,
   type ViewStyle,
 } from 'react-native';
 import Animated, {
@@ -35,6 +36,8 @@ export type MenuOption<T extends string> = {
   /** A symbol icon, or any element (e.g. a token logo) via `leading`. */
   icon?: IconName;
   leading?: ReactNode;
+  /** Deletes or leaves something: drawn in red. */
+  destructive?: boolean;
 };
 
 type Props<T extends string> = {
@@ -125,26 +128,34 @@ export function MenuDropdown<T extends string>({
         <Pressable style={styles.backdrop} onPress={hide} accessibilityLabel="Close menu" />
         {anchor && (
           <Animated.View style={[styles.menu, { top: anchor.top, right: anchor.right }, menuStyle]}>
-            {options.map((option) => (
-              <PressableRow
-                key={option.value}
-                accessibilityRole="menuitem"
-                accessibilityState={{ selected: option.value === value }}
-                onPress={() => {
-                  if (option.value !== value) {
-                    tap();
-                    onChange(option.value);
-                  }
-                  hide();
-                }}
-                style={styles.item}
-              >
-                {option.leading ??
-                  (option.icon && <Icon name={option.icon} size={16} color={c.textSecondary} />)}
-                <Text style={styles.itemLabel}>{option.label}</Text>
-                {option.value === value && <Icon name="checkCircle" size={16} color={c.text} />}
-              </PressableRow>
-            ))}
+            {/* Rows clip to the menu's corners, so a pressed first or last row stays round. */}
+            <View style={styles.rows}>
+              {options.map((option, i) => {
+                const tint = option.destructive ? c.error : c.text;
+                const icon =
+                  option.leading ??
+                  (option.icon ? <Icon name={option.icon} size={18} color={tint} /> : null);
+                return (
+                  <PressableRow
+                    key={option.value}
+                    accessibilityRole="menuitem"
+                    accessibilityState={{ selected: option.value === value }}
+                    onPress={() => {
+                      tap();
+                      if (option.value !== value) onChange(option.value);
+                      hide();
+                    }}
+                    style={[styles.item, i > 0 && styles.itemDivided]}
+                  >
+                    {icon ? <View style={styles.itemIcon}>{icon}</View> : null}
+                    <Text style={[styles.itemLabel, { color: tint }]} numberOfLines={1}>
+                      {option.label}
+                    </Text>
+                    {option.value === value && <Icon name="checkCircle" size={16} color={c.text} />}
+                  </PressableRow>
+                );
+              })}
+            </View>
           </Animated.View>
         )}
       </Modal>
@@ -174,10 +185,11 @@ const useStyles = makeStyles((c) => ({
     bottom: 0,
     left: 0,
   },
+  // One look for every menu: 48pt rows, a fixed icon column, hairlines between rows.
   menu: {
     position: 'absolute',
-    minWidth: 250,
-    paddingVertical: 6,
+    minWidth: 220,
+    maxWidth: 280,
     borderRadius: 16,
     backgroundColor: c.card,
     borderWidth: 1,
@@ -188,16 +200,20 @@ const useStyles = makeStyles((c) => ({
     shadowRadius: 18,
     shadowOffset: { width: 0, height: 8 },
   },
+  rows: { borderRadius: 16, overflow: 'hidden' },
   item: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-    height: 46,
+    height: 48,
     paddingHorizontal: 16,
   },
+  itemDivided: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: c.divider },
+  itemIcon: { width: 24, alignItems: 'center' },
   itemLabel: {
-    flex: 1,
-    color: c.text,
+    flexShrink: 1,
+    flexGrow: 1,
     fontSize: 16,
+    fontWeight: '500',
   },
 }));

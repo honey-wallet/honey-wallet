@@ -42,6 +42,7 @@ import { hostOf, multisigOf, propose, useMultisigState } from '@/lib/multisig';
 import { goBackOr } from '@/lib/navigation';
 import { isWeb } from '@/lib/platform';
 import { useProfile } from '@/lib/profile';
+import { LANDING } from '@/lib/surface';
 import {
   type AddedWallet,
   allWallets,
@@ -49,6 +50,7 @@ import {
   isMainWallet,
   useWallets,
 } from '@/lib/wallets';
+import { Gate, type WarningId, warningOn } from '@/lib/warnings';
 import { makeStyles, radius, useTheme } from '@/theme';
 
 /**
@@ -67,7 +69,7 @@ export default function ApproveScreen() {
     // Done: the extension closes its window; the phone goes back to where it was.
     if (!next) {
       if (hasWorker) globalThis.close?.();
-      else if (!isWeb) goBackOr('/home');
+      else if (!isWeb) goBackOr(LANDING);
     }
   };
   // biome-ignore lint/correctness/useExhaustiveDependencies: once, on open
@@ -136,7 +138,9 @@ function SiteChip({ approval }: { approval: Approval }) {
       <Text style={styles.chipText} numberOfLines={1}>
         {hostOf(approval.origin)}
       </Text>
-      {secure ? null : <Icon name="warning" size={14} color={c.error} />}
+      {secure || !warningOn('siteInsecureIcon') ? null : (
+        <Icon name="warning" size={14} color={c.error} />
+      )}
       {approval.verified === 'valid' ? (
         <Icon name="verified" size={14} color={c.accentText} />
       ) : null}
@@ -341,6 +345,7 @@ function Request({ approval, onAnswered }: { approval: Approval; onAnswered: () 
         {/* A scam flag is one red alert with its tick, at the bottom (scamAlert below). */}
         {approval.verified && approval.verified !== 'valid' && !scam ? (
           <Warning
+            id="siteUnverified"
             text={
               approval.verified === 'invalid'
                 ? 'This site isn’t the one it claims to be: its domain check failed.'
@@ -374,12 +379,14 @@ function Request({ approval, onAnswered }: { approval: Approval; onAnswered: () 
         <View style={styles.scamAlert}>
           {/* The icon in a box the checkbox's size, so both lines' text starts together. */}
           <View style={styles.scamLine}>
-            <View style={styles.scamIcon}>
-              <Icon name="warning" size={18} color={c.error} />
-            </View>
-            <Text style={[styles.alertText, styles.scamText]}>
-              WalletConnect flags this site as a scam.
-            </Text>
+            <Gate id="scamSiteWarning">
+              <View style={styles.scamIcon}>
+                <Icon name="warning" size={18} color={c.error} />
+              </View>
+              <Text style={[styles.alertText, styles.scamText]}>
+                WalletConnect flags this site as a scam.
+              </Text>
+            </Gate>
           </View>
           <Checkbox
             label="I understand the risk"
@@ -532,9 +539,19 @@ function Details({
   }
 }
 
-function Warning({ icon = 'warning', text }: { icon?: IconName; text: string }) {
+function Warning({
+  id,
+  icon = 'warning',
+  text,
+}: {
+  /** Its flag in lib/warnings: the copy shows only once approved. */
+  id: WarningId;
+  icon?: IconName;
+  text: string;
+}) {
   const styles = useStyles();
   const c = useTheme();
+  if (!warningOn(id)) return null;
   return (
     <View style={styles.alert}>
       <Icon name={icon} size={16} color={c.error} />
@@ -551,7 +568,9 @@ function SwitchChain({ approval }: { approval: Approval }) {
     <View style={styles.card}>
       {from ? <StatRow label="From" value={from.name} /> : null}
       <StatRow label="To" value={to?.name ?? 'Unknown'} />
-      {to?.testnet ? <StatRow label="Note" value="Test network: no real money" /> : null}
+      {to?.testnet && warningOn('testNetworkNote') ? (
+        <StatRow label="Note" value="Test network: no real money" />
+      ) : null}
     </View>
   );
 }
@@ -564,10 +583,16 @@ function MessageBox({ approval, bytes }: { approval: Approval; bytes: Uint8Array
   return (
     <>
       {siwe && siwe !== host ? (
-        <Warning text={`This sign-in is for ${siwe}, not ${host}. Don’t sign it here.`} />
+        <Warning
+          id="siweDomainMismatch"
+          text={`This sign-in is for ${siwe}, not ${host}. Don’t sign it here.`}
+        />
       ) : null}
       {isText ? null : (
-        <Warning text="This isn’t readable text. Only sign if you trust the site." />
+        <Warning
+          id="unreadableMessage"
+          text="This isn’t readable text. Only sign if you trust the site."
+        />
       )}
       <View style={styles.message}>
         <Text style={[styles.messageText, !isText && styles.mono]} selectable>
@@ -587,7 +612,8 @@ function TypedData({ approval, json }: { approval: Approval; json: string }) {
       return null;
     }
   }, [json]);
-  if (!review) return <Warning text="This request is malformed. Cancel it." />;
+  if (!review)
+    return <Warning id="typedDataMalformed" text="This request is malformed. Cancel it." />;
   const { typed } = review;
   const signedChainId = review.chainId;
   const wrongChain =
@@ -596,17 +622,25 @@ function TypedData({ approval, json }: { approval: Approval; json: string }) {
     <>
       {review.complete ? null : (
         <Warning
+          id="typedDataIncomplete"
           text={`This request has missing, malformed, unbound, or more than ${TYPED_ROW_LIMIT} fields. Honey won’t sign it.`}
         />
       )}
       {!review.hasChainBinding ? (
-        <Warning text="No chain ID is included in the signed domain. This signature may be valid on multiple chains." />
+        <Warning
+          id="typedDataNoChain"
+          text="No chain ID is included in the signed domain. This signature may be valid on multiple chains."
+        />
       ) : null}
       {isPermit(typed.primaryType as string) ? (
-        <Warning text="This lets someone move your tokens without asking again. Only sign on sites you trust." />
+        <Warning
+          id="permitAllowance"
+          text="This lets someone move your tokens without asking again. Only sign on sites you trust."
+        />
       ) : null}
       {wrongChain ? (
         <Warning
+          id="typedDataWrongChain"
           text={`This is for ${evmNetwork(signedChainId)?.name ?? `chain ${signedChainId}`}, not the site’s network.`}
         />
       ) : null}
@@ -667,11 +701,14 @@ function EvmSend({
   return (
     <>
       {!call.reviewable ? (
-        <Warning text={call.reason ?? 'Honey cannot safely decode this contract call.'} />
+        <Warning
+          id="contractUndecodable"
+          text={call.reason ?? 'Honey cannot safely decode this contract call.'}
+        />
       ) : null}
-      {call.warning ? <Warning icon="info" text={call.warning} /> : null}
+      {call.warning ? <Warning id="contractCallNote" icon="info" text={call.warning} /> : null}
       {preparation?.status === 'error' ? (
-        <Warning text={`This will probably fail: ${preparation.message}`} />
+        <Warning id="txWillFail" text={`This will probably fail: ${preparation.message}`} />
       ) : null}
       <View style={styles.card}>
         <StatRow label="Amount" value={`${formatEther(value)} ${native}`} />
@@ -723,13 +760,18 @@ function SolanaTx({ approval }: { approval: Approval }) {
     summary = null;
   }
   const mine = approval.site?.solana;
-  if (!summary) return <Warning text="This transaction can’t be read. Cancel it." />;
+  if (!summary)
+    return <Warning id="solanaUnreadable" text="This transaction can’t be read. Cancel it." />;
   return (
     <>
       {!summary.reviewable ? (
-        <Warning text="This transaction contains an instruction Honey cannot safely interpret. Signing is blocked." />
+        <Warning
+          id="solanaBlocked"
+          text="This transaction contains an instruction Honey cannot safely interpret. Signing is blocked."
+        />
       ) : (
         <Warning
+          id="solanaReviewNote"
           icon="info"
           text="Review every instruction below. Only simple SOL transfers and compute-budget settings are supported."
         />

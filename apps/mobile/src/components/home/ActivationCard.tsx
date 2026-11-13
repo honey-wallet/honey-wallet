@@ -7,6 +7,7 @@ import { PressableScale } from '@/components/motion/PressableScale';
 import { PillButton } from '@/components/onboarding/PillButton';
 import { tap } from '@/lib/haptics';
 import { doneCount, SETUP_REWARD_USD, setupSteps, useOnboarding } from '@/lib/onboarding';
+import { TEST_MODE } from '@/lib/test-mode';
 import { makeStyles, radius, useTheme } from '@/theme';
 
 /** Quick amounts for a first purchase; each goes straight to the review. */
@@ -19,6 +20,38 @@ const AMOUNTS = [25, 50, 100];
  * Crypto from elsewhere comes in through the Receive tile above.
  */
 export function FundWalletCard() {
+  // No card or bank provider is connected yet: outside test mode the card only offers
+  // what works today, receiving crypto from an exchange or another wallet.
+  if (!TEST_MODE) return <ReceiveFirstCard />;
+  return <DemoFundWalletCard />;
+}
+
+function ReceiveFirstCard() {
+  const styles = useStyles();
+  const c = useTheme();
+  // One tappable row, the same shape as "Finish setting up", so the empty wallet
+  // doesn't open with a big grey box and a cramped button.
+  return (
+    <PressableScale
+      accessibilityRole="button"
+      accessibilityLabel="Add money to get started. Receive crypto from an exchange or another wallet"
+      scaleTo={0.98}
+      onPress={() => {
+        tap();
+        router.push('/receive');
+      }}
+      style={[styles.card, styles.setup]}
+    >
+      <View style={styles.flex}>
+        <Text style={styles.setupTitle}>Add money to get started</Text>
+        <Text style={styles.wayHint}>Receive crypto from an exchange or wallet</Text>
+      </View>
+      <Icon name="chevronRight" size={12} color={c.textSecondary} />
+    </PressableScale>
+  );
+}
+
+function DemoFundWalletCard() {
   const styles = useStyles();
   const [pick, setPick] = useState<number | null>(AMOUNTS[1]);
   const buy = () => {

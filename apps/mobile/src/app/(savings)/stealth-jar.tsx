@@ -20,6 +20,7 @@ import {
   withMemberSigner,
 } from '@/lib/stealth-jar';
 import { decodeInvite, type JarInvite, openJarSession, runJarDkg } from '@/lib/stealth-jar-flow';
+import { LANDING } from '@/lib/surface';
 import { showErrorToast, showToast } from '@/lib/toast';
 import { wallets } from '@/lib/wallets';
 import { makeStyles, radius, useTheme } from '@/theme';
@@ -32,7 +33,7 @@ const short = (id: string) => `${id.slice(0, 6)}…${id.slice(-4)}`;
  * link to its members. Behind EXPO_PUBLIC_STEALTH_JARS; reached from New Honey Jar.
  */
 export default function StealthJarScreen() {
-  if (!stealthJarsEnabled) return <Redirect href="/home" />;
+  if (!stealthJarsEnabled) return <Redirect href={LANDING} />;
   return <StealthJarContent />;
 }
 

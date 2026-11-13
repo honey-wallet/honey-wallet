@@ -247,16 +247,19 @@ export function ThresholdStepper({
   value,
   members,
   onChange,
+  min = 1,
 }: {
   value: number;
   members: number;
   onChange: (next: number) => void;
+  /** The fewest approvals allowed (a NEAR shared jar needs 2 once it has 2 members). */
+  min?: number;
 }) {
   const styles = useStyles();
   const c = useTheme();
   const recommended = recommendedThreshold(members);
   const step = (d: number) => {
-    const next = Math.min(Math.max(value + d, 1), members);
+    const next = Math.min(Math.max(value + d, Math.min(min, members)), members);
     if (next === value) return;
     tap();
     onChange(next);

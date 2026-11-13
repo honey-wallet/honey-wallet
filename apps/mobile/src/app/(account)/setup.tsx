@@ -17,6 +17,7 @@ import {
   useOnboarding,
 } from '@/lib/onboarding';
 import { isWeb } from '@/lib/platform';
+import { LANDING } from '@/lib/surface';
 import { makeStyles, radius, useTheme } from '@/theme';
 
 /**
@@ -32,7 +33,7 @@ export default function SetupSheet() {
   const total = steps.length;
 
   // A sheet over Home only; opened on its own (a reloaded deep link), show Home.
-  if (!router.canGoBack()) return <Redirect href="/home" />;
+  if (!router.canGoBack()) return <Redirect href={LANDING} />;
 
   if (setupComplete(state)) {
     return (

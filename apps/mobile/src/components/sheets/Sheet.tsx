@@ -1,5 +1,5 @@
 import { router } from 'expo-router';
-import { type ReactNode, useRef, useState } from 'react';
+import { type ReactNode, useLayoutEffect, useRef, useState } from 'react';
 import {
   type LayoutChangeEvent,
   Platform,
@@ -16,11 +16,18 @@ import { Icon, type IconName } from '@/components/Icon';
 import { PressableRow } from '@/components/motion/PressableRow';
 import { PressableScale } from '@/components/motion/PressableScale';
 import { SkeletonRow } from '@/components/motion/Skeleton';
-import { TRAY_CLOSE, TRAY_SHOWS_CLOSE, useInTray } from '@/components/sheets/Tray';
+import {
+  TRAY_BOTTOM,
+  TRAY_CLOSE,
+  TRAY_SHOWS_CLOSE,
+  useInTray,
+  useTrayFooter,
+} from '@/components/sheets/Tray';
 import { useActiveMultisig } from '@/lib/multisig';
 import { goBackOr, leaveSheetTo } from '@/lib/navigation';
 import { isWeb } from '@/lib/platform';
 import { AVAILABLE_TRADE_MODES, useSettings } from '@/lib/settings';
+import { LANDING } from '@/lib/surface';
 import { makeStyles, useTheme } from '@/theme';
 
 /**
@@ -32,7 +39,7 @@ import { makeStyles, useTheme } from '@/theme';
 const TRAY_HEADER_TOP = TRAY_CLOSE.top + TRAY_CLOSE.size / 2 - 22;
 /** In a tray with no title, a pinned search field's top: centres the field on the close button. */
 const TRAY_SEARCH_TOP = TRAY_CLOSE.top + TRAY_CLOSE.size / 2 - 24;
-const TRAY_BOTTOM = 20;
+let nextFooterOwner = 0;
 
 export const SHEET = {
   /** Space between the grabber and the title row. */
@@ -61,6 +68,11 @@ type SheetScreenProps = {
   sticky?: ReactNode;
   /** Buttons at the bottom, e.g. a `PillButton`; wrap several in a row yourself. */
   footer?: ReactNode;
+  /**
+   * With `scroll` in a full-height sheet: keep the footer pinned over the bottom edge
+   * (the list scrolls under it, padded so its end clears it) instead of ending the list.
+   */
+  pinFooter?: boolean;
   contentStyle?: StyleProp<ViewStyle>;
   /** In a tray, the page draws its own `SheetHeader` (paged trays): line it up with the close button. */
   inlineHeader?: boolean;
@@ -81,11 +93,22 @@ export function SheetScreen({
   footer,
   contentStyle,
   inlineHeader,
+  pinFooter,
   children,
 }: SheetScreenProps) {
+  const [footerHeight, setFooterHeight] = useState(0);
   const insets = useSafeAreaInsets();
   const styles = useStyles();
   const inTray = useInTray();
+  // In a tray on the phone the footer is pinned to the card's bottom edge, above the
+  // keyboard while typing, instead of ending the scrolling content.
+  const placeFooter = useTrayFooter();
+  const pinned = inTray && !isWeb && !!footer && !!placeFooter;
+  const [footerOwner] = useState(() => nextFooterOwner++);
+  useLayoutEffect(() => {
+    placeFooter?.(footerOwner, pinned ? footer : null);
+  });
+  useLayoutEffect(() => () => placeFooter?.(footerOwner, null), [placeFooter, footerOwner]);
   // A tray sizes itself to its content and scrolls when it must, so inside one every
   // sheet is a fitted one: no full-height fill, no scroll root of its own.
   const fill = !inTray && (size === 'fill' || !!scroll);
@@ -93,9 +116,10 @@ export function SheetScreen({
   const header = title ? <SheetHeader title={title} onBack={onBack} right={right} /> : null;
   // In the extension popup a tall tray scrolls; keep its buttons pinned to the card's
   // bottom edge (CSS sticky) instead of scrolling them under it.
-  const footerView = footer ? (
-    <View style={[styles.footer, inTray && isWeb && styles.trayFooterWeb]}>{footer}</View>
-  ) : null;
+  const footerView =
+    footer && !pinned ? (
+      <View style={[styles.footer, inTray && isWeb && styles.trayFooterWeb]}>{footer}</View>
+    ) : null;
   // iOS sizes fitted sheets clear of the home indicator itself; adding the inset
   // again left a tall gap under the buttons.
   const bottom = (fill || Platform.OS !== 'ios' ? insets.bottom : 0) + SHEET.bottom;
@@ -113,8 +137,10 @@ export function SheetScreen({
     // The ScrollView must be the sheet's root: iOS form sheets lay a ScrollView out
     // against the sheet itself, so wrapping it leaves it zero-height, and a title
     // placed above it floats over the rows. The title (and any `sticky` content) is
-    // pinned as a sticky header instead, and the footer ends the list.
-    return (
+    // pinned as a sticky header instead, and the footer ends the list (or, with
+    // `pinFooter`, floats over the bottom edge: the primary action stays in reach).
+    const pin = !!pinFooter && !!footer;
+    const list = (
       <ScrollView
         onLayout={clear.onLayout}
         alwaysBounceVertical={false}
@@ -124,7 +150,7 @@ export function SheetScreen({
         contentContainerStyle={[
           styles.gutter,
           !header && !sticky && { paddingTop: SHEET.top + clear.top },
-          { paddingBottom: bottom },
+          { paddingBottom: bottom + (pin ? footerHeight + SHEET.footerGap : 0) },
           contentStyle,
         ]}
       >
@@ -135,8 +161,20 @@ export function SheetScreen({
           </View>
         )}
         {children}
-        {footerView}
+        {pin ? null : footerView}
       </ScrollView>
+    );
+    if (!pin) return list;
+    return (
+      <>
+        {list}
+        <View
+          onLayout={(e) => setFooterHeight(e.nativeEvent.layout.height)}
+          style={[styles.pinnedFooter, { paddingBottom: bottom }]}
+        >
+          {footer}
+        </View>
+      </>
     );
   }
 
@@ -148,7 +186,10 @@ export function SheetScreen({
         styles.gutter,
         fill && styles.fill,
         // A tray now sits on the screen edge, so it clears the home indicator itself.
-        { paddingTop: top, paddingBottom: inTray ? TRAY_BOTTOM + insets.bottom : bottom },
+        {
+          paddingTop: top,
+          paddingBottom: inTray ? (pinned ? 0 : TRAY_BOTTOM + insets.bottom) : bottom,
+        },
       ]}
     >
       {header}
@@ -301,8 +342,8 @@ export function WalletSettingsRow({ tradeTabs = false }: { tradeTabs?: boolean }
       )}
       <SheetRow
         icon="settings"
-        title="Wallet settings"
-        subtitle="Theme, currency, security and more"
+        title="Settings"
+        subtitle="Profile, theme, currency, security and more"
         accessory="chevron"
         onPress={() => leaveSheetTo('/settings')}
       />
@@ -353,6 +394,8 @@ type SheetRowProps = {
   destructive?: boolean;
   /** Read instead of the title, e.g. to add ", current wallet". */
   accessibilityLabel?: string;
+  /** A multi-pick row: read out as a checkbox, ticked or not. */
+  checked?: boolean;
 };
 
 /**
@@ -370,6 +413,7 @@ export function SheetRow({
   selected,
   destructive,
   accessibilityLabel,
+  checked,
 }: SheetRowProps) {
   const styles = useStyles();
   const c = useTheme();
@@ -417,9 +461,13 @@ export function SheetRow({
   }
   return (
     <PressableRow
-      accessibilityRole={accessory === 'check' ? 'radio' : 'button'}
+      accessibilityRole={
+        checked !== undefined ? 'checkbox' : accessory === 'check' ? 'radio' : 'button'
+      }
       accessibilityLabel={accessibilityLabel}
-      accessibilityState={selected === undefined ? undefined : { selected }}
+      accessibilityState={
+        checked !== undefined ? { checked } : selected === undefined ? undefined : { selected }
+      }
       onPress={onPress}
       style={styles.row}
     >
@@ -479,7 +527,7 @@ export function StatRow({
 
 /** Closes the current sheet, or goes home if it was opened directly. */
 export function closeSheet() {
-  goBackOr('/home');
+  goBackOr(LANDING);
 }
 
 const useStyles = makeStyles((c) => ({
@@ -514,6 +562,17 @@ const useStyles = makeStyles((c) => ({
   },
   footer: {
     marginTop: SHEET.footerGap,
+  },
+  // `pinFooter`: over the bottom of a scrolling sheet, on the sheet's own colour so the
+  // rows passing under it don't show through.
+  pinnedFooter: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    paddingTop: 12,
+    paddingHorizontal: SHEET.gutter,
+    backgroundColor: c.sheet,
   },
   trayFooterWeb: {
     // react-native-web passes `sticky` through to CSS.

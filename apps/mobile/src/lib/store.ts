@@ -30,9 +30,36 @@ export function createStore<T>(initial: T, options?: { persist?: string }) {
   };
   if (options?.persist) {
     persistence.register(options.persist, (saved) => {
-      state = saved as T;
+      // Saved before a field was added: lay it over the defaults, so the new field gets
+      // its default instead of undefined (Settings crashed on copyAmount, 2026-11-13).
+      const plain = (v: unknown) => !!v && typeof v === 'object' && !Array.isArray(v);
+      state = (plain(initial) && plain(saved) ? { ...initial, ...(saved as object) } : saved) as T;
       for (const listener of listeners) listener();
     });
   }
   return store;
+}
+
+// Whether saved state is back in the stores yet (a moment after launch).
+let restored = false;
+const restoredListeners = new Set<() => void>();
+const markRestored = () => {
+  restored = true;
+  for (const listener of restoredListeners) listener();
+};
+// Through Promise.resolve: a test's stand-in persistence may have no `ready`.
+void Promise.resolve(persistence.ready).then(markRestored, markRestored);
+const subscribeRestored = (listener: () => void) => {
+  restoredListeners.add(listener);
+  return () => {
+    restoredListeners.delete(listener);
+  };
+};
+
+/**
+ * False until persisted stores (jars, saved, settings) have loaded, so a screen built on
+ * them can show its skeleton instead of an empty state for that moment.
+ */
+export function useRestored() {
+  return useSyncExternalStore(subscribeRestored, () => restored);
 }

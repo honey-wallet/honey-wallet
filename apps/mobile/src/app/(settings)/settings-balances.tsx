@@ -9,17 +9,17 @@ const ROWS: { key: Key; title: string; hint: string }[] = [
   {
     key: 'hideSmallBalances',
     title: 'Hide small balances',
-    hint: 'Balances under 1 USD will be hidden from your portfolio.',
+    hint: 'Hides balances under 1 USD.',
   },
   {
     key: 'hideUnknownTokens',
     title: 'Hide unknown tokens',
-    hint: 'Potential scam tokens will be hidden from your portfolio.',
+    hint: 'Hides likely scam tokens.',
   },
   {
     key: 'hideReportedActivity',
     title: 'Hide reported activity',
-    hint: "Transactions you've reported as spam will be hidden from your activity feed.",
+    hint: 'Hides transactions you reported as spam.',
   },
 ];
 

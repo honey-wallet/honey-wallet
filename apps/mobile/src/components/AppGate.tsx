@@ -1,5 +1,5 @@
-import { type ReactNode, useEffect } from 'react';
-import { AppState, Text, View } from 'react-native';
+import { type ReactNode, useEffect, useRef } from 'react';
+import { AppState, StyleSheet, Text, View } from 'react-native';
 import { PillButton } from '@/components/onboarding/PillButton';
 import { appLock, appVisibility, loadAppLock, unlockApp } from '@/lib/app-lock';
 import { hydrateWallets, walletLoad } from '@/lib/wallets';
@@ -19,18 +19,26 @@ export function AppGate({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (lock.loaded && lock.unlocked && !accounts.ready) void hydrateWallets();
   }, [lock.loaded, lock.unlocked, accounts.ready]);
-  if (lock.loaded && lock.unlocked && accounts.ready) return children;
+  const open = lock.loaded && lock.unlocked && accounts.ready;
+  // Once the app has opened, locking again covers it instead of unmounting it, so after
+  // Face ID you're back where you were (it used to restart on Home). Before the first
+  // unlock nothing mounts, deep links included.
+  const opened = useRef(false);
+  if (open) opened.current = true;
   const retry = lock.error || accounts.error;
-  return (
+  const cover = (
     <View
-      style={{
-        flex: 1,
-        backgroundColor: c.canvas,
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 24,
-        padding: 32,
-      }}
+      accessibilityViewIsModal
+      style={[
+        opened.current ? StyleSheet.absoluteFill : { flex: 1 },
+        {
+          backgroundColor: c.canvas,
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 24,
+          padding: 32,
+        },
+      ]}
     >
       <Text style={{ color: c.text, fontSize: 24 }}>Honey</Text>
       <Text style={{ color: c.textSecondary }}>
@@ -51,6 +59,22 @@ export function AppGate({ children }: { children: ReactNode }) {
           }}
         />
       )}
+    </View>
+  );
+  if (!opened.current) return cover;
+  // The same tree locked or not, so the routes underneath never remount.
+  return (
+    <View style={{ flex: 1 }}>
+      {/* Hidden from touch and screen readers while locked. */}
+      <View
+        style={{ flex: 1 }}
+        pointerEvents={open ? 'auto' : 'none'}
+        accessibilityElementsHidden={!open}
+        importantForAccessibility={open ? 'auto' : 'no-hide-descendants'}
+      >
+        {children}
+      </View>
+      {open ? null : cover}
     </View>
   );
 }

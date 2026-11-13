@@ -26,3 +26,7 @@ export function confirmOwner(reason: string, _requireDeviceLock = false): Promis
 
 /** Checks a password typed into the prompt. */
 export const checkPassword = (password: string) => webVault.verify(password);
+
+/** The browser has no Face ID dialog or app switcher: it's in front when it's visible. */
+export const untilActive = async (_timeoutMs = 3000) =>
+  typeof document === 'undefined' || document.visibilityState !== 'hidden';

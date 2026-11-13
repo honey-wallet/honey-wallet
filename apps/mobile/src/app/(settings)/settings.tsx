@@ -1,9 +1,10 @@
+import type { SocialPrivacy } from '@honey-wallet/api-client';
 import Constants from 'expo-constants';
 import { type Href, router } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { Linking, Text, View } from 'react-native';
 import { Avatar } from '@/components/Avatar';
-import { Icon } from '@/components/Icon';
+import { Icon, type IconName } from '@/components/Icon';
 import { PressableRow } from '@/components/motion/PressableRow';
 import { PressableScale } from '@/components/motion/PressableScale';
 import { SkeletonBar } from '@/components/motion/Skeleton';
@@ -19,8 +20,11 @@ import { tap } from '@/lib/haptics';
 import { shortAddress } from '@/lib/mock-wallet';
 import { isWeb } from '@/lib/platform';
 import { setProfile, useProfile } from '@/lib/profile';
-import { useSettings } from '@/lib/settings';
-import { showToast } from '@/lib/toast';
+import { JAR_VISIBILITY, updateSettings, useSettings } from '@/lib/settings';
+import { privacyOf, type SocialProfile, setPrivacy, socialError, useSocialMe } from '@/lib/social';
+import { SOCIAL } from '@/lib/surface';
+import { showErrorToast, showToast } from '@/lib/toast';
+import { requireSignIn } from '@/lib/wallet-gate';
 import { useActiveWallet } from '@/lib/wallets';
 import { makeStyles, radius, useTheme } from '@/theme';
 
@@ -47,6 +51,9 @@ export default function SettingsScreen() {
       .catch(() => setServer('Unreachable'));
   }, []);
 
+  // Your public profile, once you've claimed a handle; signed out, the wallet stands in.
+  const { me, loaded, signedIn } = useSocialMe();
+  const visibility = JAR_VISIBILITY.find((v) => v.id === settings.jarVisibility);
   const open = (href: Href) => () => {
     tap();
     router.push(href);
@@ -60,11 +67,19 @@ export default function SettingsScreen() {
 
   return (
     <PushedScreen title="Settings">
+      {/* You first: your profile once you've a handle, else this wallet. */}
       <PressableRow onPress={open('/profile-edit')} style={[styles.profile, styles.gutter]}>
-        <Avatar name={profile.name} size={52} uri={profile.photo} seed={profile.avatarSeed} />
+        <Avatar
+          name={me?.displayName ?? profile.name}
+          size={52}
+          uri={profile.photo}
+          seed={profile.avatarSeed}
+        />
         <View style={styles.flex}>
-          <Text style={styles.profileName}>{profile.name}</Text>
-          <Text style={styles.value}>{shortAddress(wallet.address, 8, 6)}</Text>
+          <Text style={styles.profileName}>{me?.displayName ?? profile.name}</Text>
+          <Text style={styles.value}>
+            {me ? `@${me.handle}` : shortAddress(wallet.address, 8, 6)}
+          </Text>
         </View>
         <Icon name="chevronRight" size={15} color={c.textSecondary} />
       </PressableRow>
@@ -95,7 +110,172 @@ export default function SettingsScreen() {
       */}
 
       <View style={styles.gutter}>
+        {/* Social is the phone's: Honey for Chrome is only a wallet. */}
+        {SOCIAL && !signedIn ? (
+          <SheetRow
+            icon="person"
+            title="Sign in"
+            subtitle="Get a profile people can follow"
+            onPress={() => {
+              tap();
+              requireSignIn('sign in', '/settings');
+            }}
+            accessory="chevron"
+          />
+        ) : SOCIAL && loaded && !me ? (
+          <SheetRow
+            icon="person"
+            title="Claim your handle"
+            subtitle="Be followable on Honey"
+            onPress={open('/claim-handle')}
+            accessory="chevron"
+          />
+        ) : null}
+
+        <SheetSection title="Account" />
+        <SheetRow icon="wallet" title="Wallets" onPress={open('/wallets')} accessory="chevron" />
+        <SheetRow
+          icon="copy"
+          title="Addresses"
+          value={shortAddress(wallet.address)}
+          onPress={open('/addresses')}
+          accessory="chevron"
+        />
+        <SheetRow
+          icon="recovery"
+          title="Recovery phrase"
+          onPress={open('/recovery-phrase')}
+          accessory="chevron"
+        />
+        {isWeb ? null : (
+          <SheetRow
+            icon="cloud"
+            title="Cloud backup"
+            onPress={open('/icloud-backup')}
+            accessory="chevron"
+          />
+        )}
+        {isWeb ? null : (
+          <SheetRow
+            icon="faceId"
+            title="Face ID"
+            onPress={open('/settings-face-id')}
+            accessory="chevron"
+          />
+        )}
+        <SheetRow
+          icon="key"
+          title="Wallet sign-in"
+          onPress={open('/wallet-sign-in')}
+          accessory="chevron"
+        />
+        {isWeb ? (
+          <SheetRow
+            icon="qr"
+            title="Send wallet to phone"
+            onPress={open({ pathname: '/pair-phone', params: { send: '1' } })}
+            accessory="chevron"
+          />
+        ) : null}
+
+        {SOCIAL ? (
+          <>
+            <SheetSection title="Jars and copying" />
+            <SheetRow
+              icon="copy"
+              title="Default copy amount"
+              value={`${settings.copyAmount.toLocaleString()} USDC`}
+              onPress={open('/settings-copy-amount')}
+              accessory="chevron"
+            />
+            <SheetRow
+              icon={visibility?.icon ?? 'eye'}
+              title="Who sees new jars"
+              value={visibility?.title}
+              onPress={open('/settings-jar-visibility')}
+              accessory="chevron"
+            />
+            <SheetRow
+              icon="pie"
+              title="Your cut on copies"
+              value={`${settings.jarCopyFee}%`}
+              onPress={open('/settings-copy-fee')}
+              accessory="chevron"
+            />
+            <SheetRow
+              icon="trade"
+              title="Max slippage"
+              value={`${settings.jarSlippage}%`}
+              onPress={open('/settings-slippage')}
+              accessory="chevron"
+            />
+
+            <SheetSection title="Social" />
+            {me ? (
+              <>
+                <SheetRow
+                  icon="person"
+                  title="Your profile"
+                  value={`@${me.handle}`}
+                  onPress={open({ pathname: '/u/[handle]', params: { handle: me.handle } })}
+                  accessory="chevron"
+                />
+                <SheetRow
+                  icon="personOutline"
+                  title="Following"
+                  value={me.following.toLocaleString()}
+                  onPress={open({
+                    pathname: '/people',
+                    params: { handle: me.handle, kind: 'following' },
+                  })}
+                  accessory="chevron"
+                />
+                <SheetRow
+                  icon="heart"
+                  title="Followers"
+                  value={me.followers.toLocaleString()}
+                  onPress={open({
+                    pathname: '/people',
+                    params: { handle: me.handle, kind: 'followers' },
+                  })}
+                  accessory="chevron"
+                />
+              </>
+            ) : null}
+            {isWeb ? null : (
+              <SheetRow
+                icon="bell"
+                title="Notifications"
+                onPress={open('/settings-notifications')}
+                accessory="chevron"
+              />
+            )}
+            <SheetRow
+              icon="search"
+              title="Find people"
+              onPress={open('/find-people')}
+              accessory="chevron"
+            />
+            <SheetRow
+              icon="share"
+              title="Profile and sharing"
+              onPress={open('/settings-privacy')}
+              accessory="chevron"
+            />
+
+            <SheetSection title="Privacy" />
+            <PrivacyRows me={me} loaded={loaded} signedIn={signedIn} />
+          </>
+        ) : null}
+
         <SheetSection title="Preferences" />
+        <SheetRow
+          icon="theme"
+          title="Theme"
+          value={THEME_LABEL[settings.theme]}
+          onPress={open('/settings-theme')}
+          accessory="chevron"
+        />
         {isWeb ? null : (
           <SheetRow
             icon="grid"
@@ -104,13 +284,6 @@ export default function SettingsScreen() {
             accessory="chevron"
           />
         )}
-        <SheetRow
-          icon="theme"
-          title="Theme"
-          value={THEME_LABEL[settings.theme]}
-          onPress={open('/settings-theme')}
-          accessory="chevron"
-        />
         <SheetRow
           icon="currency"
           title="Local currency"
@@ -125,14 +298,6 @@ export default function SettingsScreen() {
           onPress={open('/settings-language')}
           accessory="chevron"
         />
-        {isWeb ? null : (
-          <SheetRow
-            icon="bell"
-            title="Notifications"
-            onPress={open('/settings-notifications')}
-            accessory="chevron"
-          />
-        )}
         <SheetRow
           icon="chart"
           title="Balances and activity"
@@ -155,42 +320,22 @@ export default function SettingsScreen() {
             }
           />
         )}
-        <SheetRow
-          icon="advanced"
-          title="Advanced"
-          onPress={open('/settings-advanced')}
-          accessory="chevron"
-        />
 
         <SheetSection title="Privacy and security" />
         <SheetRow
-          icon="wallet"
-          title="Wallet sign-in"
-          onPress={open('/wallet-sign-in')}
-          accessory="chevron"
+          icon="eyeSlash"
+          title="Hide balance"
+          accessory={
+            <Toggle
+              accessibilityLabel="Hide balance"
+              value={settings.hideBalance}
+              onValueChange={(hideBalance) => {
+                updateSettings({ hideBalance });
+                tap();
+              }}
+            />
+          }
         />
-        {isWeb ? null : (
-          <SheetRow
-            icon="faceId"
-            title="Face ID"
-            onPress={open('/settings-face-id')}
-            accessory="chevron"
-          />
-        )}
-        <SheetRow
-          icon="recovery"
-          title="Recovery phrase"
-          onPress={open('/recovery-phrase')}
-          accessory="chevron"
-        />
-        {isWeb ? (
-          <SheetRow
-            icon="qr"
-            title="Send wallet to phone"
-            onPress={open({ pathname: '/pair-phone', params: { send: '1' } })}
-            accessory="chevron"
-          />
-        ) : null}
         {/* The browser's own sites, or on the phone the ones connected by WalletConnect. */}
         <SheetRow
           icon="globe"
@@ -198,9 +343,12 @@ export default function SettingsScreen() {
           onPress={open('/connected-sites')}
           accessory="chevron"
         />
-        {inPopup ? (
-          <SheetRow icon="expandView" title="Expand view" onPress={() => void expandView()} />
-        ) : null}
+        <SheetRow
+          icon="permissions"
+          title="Permissions"
+          onPress={open('/settings-permissions')}
+          accessory="chevron"
+        />
         {isWeb ? (
           <SheetRow
             icon="lock"
@@ -211,33 +359,28 @@ export default function SettingsScreen() {
             }}
           />
         ) : null}
-        {isWeb ? null : (
+        {inPopup ? (
+          <SheetRow icon="expandView" title="Expand view" onPress={() => void expandView()} />
+        ) : null}
+
+        <SheetSection title="Help and about" />
+        <SheetRow icon="help" title="Help center" onPress={open('/help')} accessory="chevron" />
+        {SOCIAL ? (
           <SheetRow
-            icon="cloud"
-            title="Cloud backup"
-            onPress={open('/icloud-backup')}
+            icon="layers"
+            title="Jars FAQ"
+            onPress={open({ pathname: '/help', params: { section: 'jars' } })}
             accessory="chevron"
           />
-        )}
-        <SheetRow
-          icon="permissions"
-          title="Permissions"
-          onPress={open('/settings-permissions')}
-          accessory="chevron"
-        />
-
-        <SheetSection title="Support" />
-        <SheetRow icon="help" title="Help center" onPress={open('/help')} accessory="chevron" />
+        ) : null}
         <SheetRow icon="mail" title="Contact us" onPress={open('/contact')} accessory="chevron" />
-
-        <SheetSection title="About" />
-        <SheetRow icon="book" title="About" onPress={open('/settings-about')} accessory="chevron" />
         <SheetRow
-          icon="sparkles"
-          title="Motion gallery"
-          onPress={open('/motion-gallery')}
+          icon="shield"
+          title="Disclosures"
+          onPress={open('/disclosures')}
           accessory="chevron"
         />
+        <SheetRow icon="book" title="About" onPress={open('/settings-about')} accessory="chevron" />
         <SheetRow icon="info" title="Version" value={Constants.expoConfig?.version ?? '—'} />
         <SheetRow
           icon="server"
@@ -250,6 +393,16 @@ export default function SettingsScreen() {
             )
           }
         />
+
+        <SheetSection title="Advanced" />
+        <SheetRow
+          icon="advanced"
+          title="Advanced settings"
+          subtitle="Testnet, network cost and app data"
+          onPress={open('/settings-advanced')}
+          accessory="chevron"
+        />
+
         {/* Last, on its own: the one thing in Settings that can't be undone from here. */}
         <PressableScale
           accessibilityRole="button"
@@ -274,6 +427,82 @@ export default function SettingsScreen() {
       </View>
     </PushedScreen>
   );
+}
+
+const PRIVACY_ROWS: { key: keyof SocialPrivacy; icon: IconName; title: string }[] = [
+  { key: 'publicProfile', icon: 'globe', title: 'Public profile' },
+  { key: 'showHoldings', icon: 'pie', title: 'Show my tokens' },
+  { key: 'showReturns', icon: 'trendUp', title: 'Show my returns' },
+  { key: 'allowCopy', icon: 'copy', title: 'Let people copy my jars' },
+];
+
+/**
+ * What other people see of you, kept by the server (it strips what you hide from
+ * everything it sends anyone else; you always see all of yours). Off, Public profile
+ * makes a private account and the other three don't apply. Each switch moves at once and
+ * moves back, with a toast, if the server says no. Signed out, or before a handle, each
+ * row says what's needed first.
+ */
+function PrivacyRows({
+  me,
+  loaded,
+  signedIn,
+}: {
+  me: SocialProfile | null;
+  loaded: boolean;
+  signedIn: boolean;
+}) {
+  const privacy = privacyOf(me);
+  if (!signedIn)
+    return PRIVACY_ROWS.map((row) => (
+      <SheetRow
+        key={row.key}
+        icon={row.icon}
+        title={row.title}
+        value="Sign in"
+        accessory="chevron"
+        onPress={() => {
+          tap();
+          requireSignIn('sign in', '/settings');
+        }}
+      />
+    ));
+  if (!privacy)
+    return loaded ? (
+      <SheetRow
+        icon="globe"
+        title="Public profile"
+        value="Claim a handle"
+        accessory="chevron"
+        onPress={() => {
+          tap();
+          router.push('/claim-handle');
+        }}
+      />
+    ) : null;
+  const rows = privacy.publicProfile ? PRIVACY_ROWS : PRIVACY_ROWS.slice(0, 1);
+  return rows.map((row) => (
+    <SheetRow
+      key={row.key}
+      icon={row.icon}
+      title={row.title}
+      subtitle={
+        row.key === 'publicProfile' && !privacy.publicProfile
+          ? 'Only you see your jars and theses'
+          : undefined
+      }
+      accessory={
+        <Toggle
+          accessibilityLabel={row.title}
+          value={privacy[row.key]}
+          onValueChange={(on) => {
+            tap();
+            void setPrivacy({ [row.key]: on }).catch((error) => showErrorToast(socialError(error)));
+          }}
+        />
+      }
+    />
+  ));
 }
 
 /** Version, build, running update and mode, for testers' bug reports; tap to update now. */

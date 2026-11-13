@@ -14,6 +14,7 @@ import { leaveSheetTo } from '@/lib/navigation';
 import { isWeb } from '@/lib/platform';
 import { showErrorToast, showToast } from '@/lib/toast';
 import { isWalletConnectUri, pairWalletConnect } from '@/lib/walletconnect';
+import { pairingErrorMessage } from '@/lib/walletconnect-uri';
 import { makeStyles } from '@/theme';
 
 /**
@@ -46,7 +47,7 @@ export default function ConnectedSitesSheet() {
       return;
     }
     showToast('Connecting…');
-    pairWalletConnect(text).catch(() => showErrorToast('Link expired'));
+    pairWalletConnect(text).catch((error) => showErrorToast(pairingErrorMessage(error)));
   };
 
   return (
@@ -63,8 +64,8 @@ export default function ConnectedSitesSheet() {
       ) : sites.length === 0 ? (
         <Text style={styles.empty}>
           {isWeb
-            ? 'No sites yet. When you connect Honey to one, it shows here.'
-            : 'No sites yet. Open one from Search, or scan its WalletConnect code with Honey’s scanner.'}
+            ? 'Sites you connect Honey to show here.'
+            : 'Open a site from Search, or scan its WalletConnect code.'}
         </Text>
       ) : (
         sites.map((site) => (

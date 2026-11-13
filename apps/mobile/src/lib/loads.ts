@@ -17,6 +17,8 @@ export const LOADS = {
   earnRates: 'earn-rates',
   earn: (symbol: string) => `earn:${symbol}`,
   positions: 'positions',
+  /** Your jars and the Saved list (local, restored after launch). */
+  jars: 'jars',
   trades: 'trades',
   nfts: 'nfts',
   notifications: 'notifications',

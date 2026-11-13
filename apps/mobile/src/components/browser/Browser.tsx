@@ -23,7 +23,9 @@ import {
 } from '@/lib/browser';
 import { tap } from '@/lib/haptics';
 import { goBackOr } from '@/lib/navigation';
+import { LANDING } from '@/lib/surface';
 import { showErrorToast } from '@/lib/toast';
+import { warningOn } from '@/lib/warnings';
 import { makeStyles, useTheme } from '@/theme';
 import { DURATION } from '@/theme/motion';
 
@@ -101,7 +103,7 @@ export function Browser({ url: start }: { url: string }) {
   return (
     <View style={[styles.screen, { paddingTop: insets.top }]}>
       <View style={styles.top}>
-        <HeaderShortcut icon="close" label="Close browser" onPress={() => goBackOr('/home')} />
+        <HeaderShortcut icon="close" label="Close browser" onPress={() => goBackOr(LANDING)} />
         {editing === null ? (
           <PressableScale
             accessibilityRole="button"
@@ -113,11 +115,13 @@ export function Browser({ url: start }: { url: string }) {
             }}
             style={styles.address}
           >
-            <Icon
-              name={secure ? 'lock' : 'warning'}
-              size={13}
-              color={secure ? c.textSecondary : c.error}
-            />
+            {secure || warningOn('browserInsecureIcon') ? (
+              <Icon
+                name={secure ? 'lock' : 'warning'}
+                size={13}
+                color={secure ? c.textSecondary : c.error}
+              />
+            ) : null}
             <Text style={styles.host} numberOfLines={1}>
               {hostOfUrl(nav.url)}
             </Text>

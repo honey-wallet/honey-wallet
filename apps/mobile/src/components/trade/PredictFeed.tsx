@@ -35,6 +35,7 @@ import {
   useSavedMarkets,
 } from '@/lib/predict';
 import { formatShare, useTradePrefs } from '@/lib/trade-prefs';
+import { Gate } from '@/lib/warnings';
 import { makeStyles, radius, useTheme } from '@/theme';
 
 /** "$41.00M" → "$41M", "$2.40M" → "$2.4M". */
@@ -85,7 +86,9 @@ export function PredictFeed({
   return (
     <View>
       {SHOW_DEMO_LABELS ? <Text style={styles.previewHeading}>Sample preview</Text> : null}
-      <ExecutionUnavailable message="The preview below uses sample markets and prices. Trading and settlement are not available." />
+      <Gate id="predictFeedUnavailableNote">
+        <ExecutionUnavailable message="The preview below uses sample markets and prices. Trading and settlement are not available." />
+      </Gate>
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
@@ -137,7 +140,7 @@ export function PredictFeed({
               <EmptyState
                 icon="predict"
                 title={`No ${category.toLowerCase()} markets`}
-                hint="Nothing is open here right now. Check back soon."
+                hint="Nothing is open here right now."
                 action={{ label: 'Show all markets', onPress: () => setCategory('All') }}
               />
             ))}

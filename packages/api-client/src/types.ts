@@ -1001,3 +1001,258 @@ export interface TokenMarket {
   /** The deepest pool, for `poolHistory(chain, pool)`. */
   chart: { chain: string; pool: string } | null;
 }
+
+/** A link on a token page. */
+export interface TokenLink {
+  label: string;
+  /** Always https. */
+  url: string;
+}
+
+/**
+ * `GET /market/info`: what a token page shows below the chart, from CoinGecko by the id the
+ * 1Click list gives the token. Mirrors `market_data::TokenInfo`. Missing numbers are null.
+ */
+export interface TokenInfo {
+  symbol: string;
+  /** CoinGecko id. */
+  id: string;
+  name: string;
+  /** Plain text; paragraphs split by blank lines. */
+  description: string | null;
+  /** Logo URL, https only. */
+  image: string | null;
+  website: TokenLink | null;
+  explorer: TokenLink | null;
+  priceUsd: number | null;
+  /** Percent. */
+  change24h: number | null;
+  marketCap: number | null;
+  marketCapRank: number | null;
+  fdv: number | null;
+  volume24h: number | null;
+  high24h: number | null;
+  low24h: number | null;
+  ath: number | null;
+  atl: number | null;
+  circulatingSupply: number | null;
+  totalSupply: number | null;
+  maxSupply: number | null;
+}
+
+/** A chart range on token pages. "All" is up to a year. */
+export type ChartRangeId = '1H' | '1D' | '1W' | '1M' | '1Y' | 'All';
+
+/** `GET /market/chart`: USD prices for one range, oldest first. Mirrors `market_data::TokenChart`. */
+export interface TokenChart {
+  symbol: string;
+  range: ChartRangeId;
+  /** Unix milliseconds, one per price. */
+  times: number[];
+  prices: number[];
+}
+
+// ---------------------------------------------------------------------------
+// Social layer: mirrors `apps/server/src/routes/social.rs`.
+
+/** Who did something: enough for an avatar and a name. */
+export interface SocialProfileCard {
+  handle: string;
+  displayName: string;
+  /** Avatars are drawn on the phone from this seed (no remote image URL). */
+  avatarSeed: string;
+}
+
+export interface SocialPick {
+  symbol: string;
+  chain: string;
+  /** Percent of the jar; the picks sum to 100. */
+  weight: number;
+}
+
+/** A published jar, valued by the server at live prices. */
+export interface SocialJar {
+  id: string;
+  name: string;
+  thesis: string;
+  picks: SocialPick[];
+  copyFee: number;
+  copies: number;
+  /** Unix milliseconds. */
+  publishedAt: number;
+  owner: SocialProfileCard;
+  mine: boolean;
+  /** The jar's id on its owner's phone; only for the owner. */
+  clientId: string | null;
+  /**
+   * Since first publishing, as a fraction (0.12 = +12%); null while prices are unavailable.
+   * Changing the picks later continues the record; it never restarts.
+   */
+  returnSincePublish: number | null;
+  /** Over the leaderboard window, as a fraction. */
+  periodReturn: number | null;
+  /** Value index (1.0 at publish) from hourly marks, oldest first, ending now. */
+  spark: number[];
+  /**
+   * The owner hides this jar's picks: `picks` is empty. Never on your own jars. Absent
+   * (a server from before profile privacy) means shown.
+   */
+  holdingsHidden?: boolean;
+  /** The owner hides returns: returns are null and `spark` empty. Absent means shown. */
+  returnsHidden?: boolean;
+  /**
+   * Whether other people may copy it (off when copying is off or the picks are hidden).
+   * Absent means copyable: only `false` turns Copy off.
+   */
+  copyable?: boolean;
+}
+
+/** What other people may see of you. All on by default. */
+export interface SocialPrivacy {
+  /** Off: a private account; others see only your card and follower counts. */
+  publicProfile: boolean;
+  /** Off: your jars are shown without their tokens and split. */
+  showHoldings: boolean;
+  /** Off: no returns, sparklines or milestones, and off the leaderboard. */
+  showReturns: boolean;
+  /** Off: nobody can copy your jars. */
+  allowCopy: boolean;
+}
+
+/** The settings to change; omitted ones stay as they are. */
+export type SocialPrivacyRequest = Partial<SocialPrivacy>;
+
+export interface SocialTradeLeg {
+  symbol: string;
+  chain: string;
+  amount: number;
+}
+
+/** A swap as NEAR Intents 1Click recorded it (amounts delivered, not quoted). */
+export interface SocialTrade {
+  sell: SocialTradeLeg;
+  buy: SocialTradeLeg;
+  usd: number | null;
+}
+
+/**
+ * Sharing a swap sends only its 1Click deposit address: the server checks with 1Click
+ * that it succeeded and paid from (or to) a wallet you signed in with, and takes the
+ * amounts from 1Click.
+ */
+export interface SocialTradeRequest {
+  depositAddress: string;
+}
+
+export interface SocialTradeResult {
+  status: 'shared' | 'duplicate';
+}
+
+export type SocialEventKind = 'jar_published' | 'jar_copied' | 'trade' | 'jar_milestone' | 'thesis';
+
+export interface SocialFeedItem {
+  id: string;
+  kind: SocialEventKind;
+  /** Unix milliseconds. */
+  at: number;
+  actor: SocialProfileCard;
+  jar: SocialJar | null;
+  trade: SocialTrade | null;
+  /** For `thesis`: the post. */
+  post: SocialPost | null;
+  /** For `jar_milestone`: the percent reached. */
+  milestone: number | null;
+}
+
+/** A token a thesis is about, with its 1Click price when posted and now. */
+export interface SocialPostToken {
+  symbol: string;
+  chain: string;
+  priceAtPost: number;
+  /** Null while prices are unavailable. */
+  priceNow: number | null;
+  /** `priceNow / priceAtPost - 1`, as a fraction (0.24 = +24%). */
+  change: number | null;
+}
+
+/** "This is my thesis": a few lines about 1–10 tokens. */
+export interface SocialPost {
+  id: string;
+  body: string;
+  tokens: SocialPostToken[];
+  /** The author's public jar it's about, if any. */
+  jarId: string | null;
+  author: SocialProfileCard;
+  /** Unix milliseconds. */
+  at: number;
+  mine: boolean;
+}
+
+export interface SocialPostRequest {
+  /** 1–280 characters. */
+  body: string;
+  /** 1–10 tokens NEAR Intents can buy. */
+  tokens: { symbol: string; chain: string }[];
+  jarId?: string | null;
+}
+
+export interface SocialFeed {
+  items: SocialFeedItem[];
+  nextCursor: string | null;
+}
+
+export interface SocialProfile extends SocialProfileCard {
+  bio: string;
+  followers: number;
+  following: number;
+  followedByMe: boolean;
+  isMe: boolean;
+  /** Only on your own profile. */
+  shareTrades: boolean | null;
+  /** Only on your own profile; absent from a server from before profile privacy. */
+  privacy?: SocialPrivacy | null;
+  /**
+   * Someone else's private account: only the card and follower counts (no bio, jars,
+   * trades or theses). Absent means public.
+   */
+  isPrivate?: boolean;
+  jars: SocialJar[];
+  trades: SocialFeedItem[];
+  /** Their theses, newest first. */
+  posts: SocialPost[];
+}
+
+export interface SocialProfileRequest {
+  handle: string;
+  displayName: string;
+  bio?: string;
+  avatarSeed?: string;
+  /** Omitted keeps the current setting (off for a new profile). */
+  shareTrades?: boolean;
+}
+
+export interface SocialHandleStatus {
+  handle: string;
+  valid: boolean;
+  available: boolean;
+}
+
+export interface SocialPublishJarRequest {
+  clientId: string;
+  name: string;
+  thesis?: string;
+  picks: SocialPick[];
+  copyFee?: number;
+  /** Publish with the picks hidden from everyone else ("Returns only"). */
+  hidePicks?: boolean;
+}
+
+export interface SocialHolders {
+  symbol: string;
+  people: SocialProfileCard[];
+  total: number;
+}
+
+export type SocialFeedScope = 'following' | 'everyone';
+export type SocialJarSort = 'trending' | 'top' | 'new';
+export type SocialLeaderboardWindow = '7d' | '30d' | 'all';

@@ -1,9 +1,10 @@
 import { router } from 'expo-router';
 import type { ReactNode } from 'react';
-import { KeyboardAvoidingView, Platform, Text, View } from 'react-native';
+import { Keyboard, Pressable, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PressableScale } from '@/components/motion/PressableScale';
 import { TextsReveal } from '@/components/motion/TextsReveal';
+import { KeyboardFooter } from '@/components/sheets/KeyboardFooter';
 import { tap } from '@/lib/haptics';
 import { goBackOr } from '@/lib/navigation';
 import { isWeb } from '@/lib/platform';
@@ -29,12 +30,10 @@ export function StepScreen({ title, leading = 'back', children, footer, help }: 
   const insets = useSafeAreaInsets();
   const styles = useStyles();
   const c = useTheme();
+  const bottomSpace = Math.max(insets.bottom, 34);
 
   return (
-    <KeyboardAvoidingView
-      style={styles.root}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-    >
+    <View style={styles.root}>
       <View style={[styles.header, { marginTop: insets.top + 4 }]}>
         <PressableScale
           accessibilityRole="button"
@@ -61,13 +60,16 @@ export function StepScreen({ title, leading = 'back', children, footer, help }: 
         )}
       </View>
 
-      <View style={styles.content}>
+      {/* Tapping anywhere off a field puts the keyboard away. */}
+      <Pressable accessible={false} onPress={Keyboard.dismiss} style={styles.content}>
         <TextsReveal id={title} first={<Text style={styles.title}>{title}</Text>} />
         {children}
-      </View>
+      </Pressable>
 
-      <View style={[styles.footer, { marginBottom: Math.max(insets.bottom, 34) }]}>{footer}</View>
-    </KeyboardAvoidingView>
+      <View style={[styles.footer, { marginBottom: bottomSpace }]}>
+        <KeyboardFooter under={bottomSpace}>{footer}</KeyboardFooter>
+      </View>
+    </View>
   );
 }
 

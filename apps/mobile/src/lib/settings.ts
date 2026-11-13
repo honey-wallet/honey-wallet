@@ -1,6 +1,7 @@
 import { Appearance } from 'react-native';
 import type { IconName } from '@/components/Icon';
 import { createStore } from '@/lib/store';
+import type { Visibility } from '@/lib/thesis';
 
 export type ThemePreference = 'auto' | 'light' | 'dark';
 
@@ -57,6 +58,12 @@ export type Settings = {
   earnPromo: boolean;
   /** DEMO: every confirm fails, to review the failure pages (see `lib/outcomes.ts`). */
   simulateFailures: boolean;
+  /** Where Copy starts on a post or jar, in USDC; − and + step from here. */
+  copyAmount: number;
+  /** Launch your jar starts on these: who sees a new jar, your cut and max slippage (%). */
+  jarVisibility: Visibility;
+  jarCopyFee: number;
+  jarSlippage: number;
 };
 
 export const settings = createStore<Settings>(
@@ -77,11 +84,39 @@ export const settings = createStore<Settings>(
     tradeTabs: [...AVAILABLE_TRADE_MODES],
     earnPromo: true,
     simulateFailures: false,
+    copyAmount: 5,
+    jarVisibility: 'private',
+    jarCopyFee: 10,
+    jarSlippage: 1,
   },
   { persist: 'settings' },
 );
 
 export const useSettings = settings.useValue;
+
+/** The amounts Copy steps through with − and +, in USDC; the default is one of them. */
+export const COPY_STEPS = [1, 2, 5, 10, 25, 50, 100, 250, 500, 1000] as const;
+
+/** Who can see a jar: Launch your jar's choices, and the default picked in Settings. */
+export const JAR_VISIBILITY: { id: Visibility; icon: IconName; title: string; hint: string }[] = [
+  { id: 'members', icon: 'lock', title: 'Only members', hint: 'Private to you and your friends' },
+  {
+    id: 'private',
+    icon: 'eyeSlash',
+    title: 'Returns only',
+    hint: 'Others see how it does, not what it holds',
+  },
+  {
+    id: 'public',
+    icon: 'globe',
+    title: 'Everyone',
+    hint: 'The idea and holdings are public; anyone can copy',
+  },
+];
+
+/** Your cut of copiers' profit (%), and the max slippage on a jar's buys (%). */
+export const JAR_FEES = [5, 10, 15, 20] as const;
+export const JAR_SLIPPAGES = [0.5, 1, 2] as const;
 
 export function updateSettings(update: Partial<Settings>) {
   settings.set((prev) => ({ ...prev, ...update }));

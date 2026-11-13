@@ -6,6 +6,9 @@ import type {
   Portfolio,
   PortfolioAddresses,
   PortfolioHolding,
+  TokenChart,
+  TokenInfo,
+  TokenLink,
   TokenMarket,
 } from './types';
 
@@ -86,6 +89,66 @@ export function isTokenMarket(v: unknown): v is TokenMarket {
       (k) => nullable(v[k], isNumber),
     ) &&
     (v.chart === null || (isRecord(v.chart) && isString(v.chart.chain) && isString(v.chart.pool)))
+  );
+}
+
+const isHttps = (v: unknown): v is string => isString(v) && v.startsWith('https://');
+const isTokenLink = (v: unknown): v is TokenLink =>
+  isRecord(v) && isString(v.label) && isHttps(v.url);
+
+const TOKEN_INFO_NUMBERS = [
+  'priceUsd',
+  'change24h',
+  'marketCap',
+  'marketCapRank',
+  'fdv',
+  'volume24h',
+  'high24h',
+  'low24h',
+  'ath',
+  'atl',
+  'circulatingSupply',
+  'totalSupply',
+  'maxSupply',
+] as const;
+
+/** `GET /market/logos`: symbol → https logo URL; anything else is refused. */
+export function isTokenLogos(v: unknown): v is Record<string, string> {
+  return (
+    isRecord(v) &&
+    Object.entries(v).every(
+      ([k, url]) =>
+        k.length <= 20 && isString(url) && url.startsWith('https://') && url.length <= 300,
+    )
+  );
+}
+
+/** A token page's details; links and the logo must be https. */
+export function isTokenInfo(v: unknown): v is TokenInfo {
+  return (
+    isRecord(v) &&
+    isString(v.symbol) &&
+    isString(v.id) &&
+    isString(v.name) &&
+    nullable(v.description, isString) &&
+    nullable(v.image, isHttps) &&
+    nullable(v.website, isTokenLink) &&
+    nullable(v.explorer, isTokenLink) &&
+    TOKEN_INFO_NUMBERS.every((k) => nullable(v[k], isNumber))
+  );
+}
+
+/** A price series: matching lengths, finite numbers. */
+export function isTokenChart(v: unknown): v is TokenChart {
+  return (
+    isRecord(v) &&
+    isString(v.symbol) &&
+    isString(v.range) &&
+    Array.isArray(v.times) &&
+    Array.isArray(v.prices) &&
+    v.times.length === v.prices.length &&
+    v.times.every(isNumber) &&
+    v.prices.every(isNumber)
   );
 }
 

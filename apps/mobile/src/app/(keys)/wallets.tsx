@@ -27,8 +27,11 @@ import { memberKey } from '@/lib/multisig-deployments';
 import { leaveSheetTo } from '@/lib/navigation';
 import { useOnboarding } from '@/lib/onboarding';
 import { isWeb } from '@/lib/platform';
+import { usePortfolio } from '@/lib/portfolio';
 import { type Profile, useProfile } from '@/lib/profile';
 import { receiveAddresses } from '@/lib/receive';
+import { HIDDEN_AMOUNT, useSettings } from '@/lib/settings';
+import { useSocialMe } from '@/lib/social';
 import { showToast } from '@/lib/toast';
 import {
   type AddedWallet,
@@ -116,12 +119,22 @@ export default function WalletsSheet() {
   // review: in the popup the tray stopped halfway with Home showing above it. Fill the
   // popup instead (the tray caps itself at this height and scrolls past it).
   const { height: screen } = useWindowDimensions();
-  const settingsLabel = shared.multisigs[active.id] ? 'Shared wallet settings' : 'Wallet settings';
+  // Honey is social now (2026-11-13): signed in, your own wallet's button is your profile
+  // (name, photo, handle); app settings stay on every header's gear.
+  const { signedIn } = useSocialMe();
+  const isShared = !!shared.multisigs[active.id];
+  const settingsLabel = isShared
+    ? 'Shared wallet settings'
+    : signedIn
+      ? 'Profile settings'
+      : 'Wallet settings';
   const openSettings = () => {
     tap();
     // A shared wallet's settings are its own page: members and rules.
-    if (shared.multisigs[active.id]) {
+    if (isShared) {
       leaveSheetTo({ pathname: '/multisig/[id]', params: { id: active.id } });
+    } else if (signedIn) {
+      leaveSheetTo('/profile-edit');
     } else {
       leaveSheetTo('/settings');
     }
@@ -384,7 +397,18 @@ function WalletRow({
   const c = useTheme();
   // The main wallet is empty until its first deposit, as on Home.
   const { funded } = useOnboarding();
-  const usd = wallet.id === 'main' && !funded ? 0 : wallet.usd;
+  // A real wallet's total is read live, as on Home (the saved `usd` is only a sample
+  // figure, so every real wallet showed $0.00 here). A balance still loading shows a bar.
+  const live = usePortfolio(wallet);
+  const usd = live.addresses
+    ? (live.portfolio?.totalUsd ?? 0)
+    : wallet.id === 'main' && !funded
+      ? 0
+      : wallet.usd;
+  const rowLoading = loading || live.loading;
+  // "Hide balance" on Home hides it here too; a balance that couldn't be read is a dash.
+  const { hideBalance } = useSettings();
+  const failed = !!live.addresses && !!live.error && !live.portfolio;
   const kind = wallet.threshold
     ? waiting
       ? `${waiting} waiting · `
@@ -434,10 +458,10 @@ function WalletRow({
           `${kind}${shortAddress(wallet.address, kind ? 4 : 8, kind ? 4 : 6)}`
         )
       }
-      value={loading ? undefined : formatUsd(usd)}
+      value={rowLoading ? undefined : hideBalance ? HIDDEN_AMOUNT : failed ? '—' : formatUsd(usd)}
       accessory={
         <View style={styles.accessory}>
-          {loading && <SkeletonBar width={64} height={14} />}
+          {rowLoading && <SkeletonBar width={64} height={14} />}
           <View style={styles.checkSlot}>
             {active && (
               <View style={styles.check}>

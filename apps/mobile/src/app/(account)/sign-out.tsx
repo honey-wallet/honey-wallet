@@ -12,6 +12,7 @@ import { signOut } from '@/lib/onboarding';
 import { HERE } from '@/lib/platform';
 import { showErrorToast } from '@/lib/toast';
 import { loadAccounts, type VaultAccount } from '@/lib/vault';
+import { Gate, warningOn } from '@/lib/warnings';
 import { makeStyles, useTheme } from '@/theme';
 
 /**
@@ -69,12 +70,17 @@ export default function SignOutSheet() {
     <ContentSwap id={step} index={step === 'about' ? 0 : 1}>
       {step === 'about' ? (
         <SheetScreen>
-          <View style={styles.tile}>
-            <Icon name="warning" size={22} color={c.error} />
-          </View>
+          <Gate id="signOutRecoveryWarning">
+            <View style={styles.tile}>
+              <Icon name="warning" size={22} color={c.error} />
+            </View>
+          </Gate>
           <Text style={styles.title}>Sign out?</Text>
           <Text style={styles.body}>
-            Your wallets leave {HERE}. You’ll need your recovery phrase to get back in.
+            Your wallets leave {HERE}.
+            {warningOn('signOutRecoveryWarning')
+              ? ' You’ll need your recovery phrase to get back in.'
+              : ''}
           </Text>
           <View style={styles.buttons}>
             <PillButton

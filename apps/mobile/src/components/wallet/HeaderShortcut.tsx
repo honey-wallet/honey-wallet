@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { type ReactNode, useState } from 'react';
 import { View } from 'react-native';
 import type { IconName } from '@/components/Icon';
 import { IconSwap } from '@/components/motion/IconSwap';
@@ -14,11 +14,14 @@ import { useTheme } from '@/theme';
  */
 export function HeaderShortcut({
   icon,
+  glyph,
   label,
   onPress,
   badge = false,
 }: {
-  icon: IconName;
+  icon?: IconName;
+  /** Drawn instead of an icon: the Honey jar for the agent. */
+  glyph?: ReactNode;
   label: string;
   onPress: () => void;
   badge?: boolean;
@@ -43,7 +46,7 @@ export function HeaderShortcut({
         }}
         onPressOut={() => setHinting(false)}
       >
-        <IconSwap name={icon} size={23} color={c.textSecondary} />
+        {glyph ?? (icon ? <IconSwap name={icon} size={23} color={c.textSecondary} /> : null)}
         {badge && <NotificationBadge />}
       </PressableScale>
       <Tooltip label={label} visible={hinting} />

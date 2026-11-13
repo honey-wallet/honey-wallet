@@ -6,51 +6,78 @@ import { HEADER_BUTTON } from '@/components/wallet/parts';
 import { tap } from '@/lib/haptics';
 import { formatUsd } from '@/lib/mock-wallet';
 import { HIDDEN_AMOUNT, useSettings } from '@/lib/settings';
+import { WALLET } from '@/lib/surface';
+import { requireWallet, useHasWallet } from '@/lib/wallet-gate';
 import { useWalletView } from '@/lib/wallet-view';
 import { makeStyles, radius } from '@/theme';
 
 /**
- * Top-right of the Trade, Savings and Search tabs: your balance in dollars (opens
- * the balance sheet, where you can deposit more) and a bare settings gear, matching
- * Home's header icons. The gear opens the app's Settings unless the tab
- * passes its own (Trade opens the current product's settings).
+ * Top-right of the Search, Activity and Savings tabs: your balance in dollars, which
+ * opens your Wallet (or, while the wallet is still empty, the ways to deposit), the
+ * Thesis agent, and a bare settings gear. The gear opens the app's Settings unless the
+ * tab passes its own (Trade opens the current product's settings).
  */
 export function HeaderActions({
   settingsLabel = 'Settings',
   onSettings = () => router.push('/settings'),
   balance: showBalance = true,
+  gear = true,
+  deposit = false,
 }: {
   settingsLabel?: string;
   onSettings?: () => void;
   /** Off where the page's own number is the hero (Savings), so two totals don't compete. */
   balance?: boolean;
+  /** False where the header has its own settings gear (WalletHeader). */
+  gear?: boolean;
+  /** The pill always reads Deposit and opens the ways to add money (Wallet's header). */
+  deposit?: boolean;
 }) {
   const styles = useStyles();
   const { hideBalance } = useSettings();
-  const { usd } = useWalletView();
-  const balance = hideBalance ? HIDDEN_AMOUNT : formatUsd(usd);
+  const view = useWalletView();
+  const balance = hideBalance ? HIDDEN_AMOUNT : formatUsd(view.usd);
+  // Nothing in it yet: the pill is the way in ("Deposit"); after that it's your Wallet.
+  // Still reading balances counts as not empty, so the label doesn't flip on launch.
+  const depositFirst = deposit || (!!view.empty && !('loading' in view && view.loading));
+  // Browsing without a wallet (lib/intent): no $0.00, just the way in.
+  const walletHere = useHasWallet();
   return (
     <View style={styles.row}>
-      {showBalance ? (
+      {showBalance && !walletHere ? (
         <PressableScale
           accessibilityRole="button"
-          accessibilityLabel={
-            hideBalance ? 'Balance hidden. Deposit' : `Balance ${balance}. Deposit`
-          }
+          accessibilityLabel="Get started with Honey"
           scaleTo={0.97}
           onPress={() => {
             tap();
-            router.push('/balance');
+            requireWallet('see your balance', WALLET);
+          }}
+          style={[styles.balance, styles.start]}
+        >
+          <Text style={styles.startText}>Get started</Text>
+        </PressableScale>
+      ) : showBalance ? (
+        <PressableScale
+          accessibilityRole="button"
+          accessibilityLabel={`${hideBalance ? 'Balance hidden' : `Balance ${balance}`}. ${
+            depositFirst ? 'Deposit' : 'Open wallet'
+          }`}
+          scaleTo={0.97}
+          onPress={() => {
+            tap();
+            if (depositFirst) router.push('/balance');
+            else router.navigate(WALLET);
           }}
           style={styles.balance}
         >
           <Text style={styles.balanceText} numberOfLines={1}>
             {balance}
           </Text>
-          <Text style={styles.deposit}>Deposit</Text>
+          <Text style={styles.deposit}>{depositFirst ? 'Deposit' : 'Wallet'}</Text>
         </PressableScale>
       ) : null}
-      <HeaderShortcut icon="settings" label={settingsLabel} onPress={onSettings} />
+      {gear ? <HeaderShortcut icon="settings" label={settingsLabel} onPress={onSettings} /> : null}
     </View>
   );
 }
@@ -74,6 +101,14 @@ const useStyles = makeStyles((c) => ({
     color: c.text,
     fontSize: 15,
     fontWeight: '600',
+  },
+  start: {
+    backgroundColor: c.accentSurface,
+  },
+  startText: {
+    color: c.accentText,
+    fontSize: 15,
+    fontWeight: '700',
   },
   deposit: {
     color: c.primary,

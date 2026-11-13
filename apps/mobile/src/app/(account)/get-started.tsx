@@ -22,6 +22,7 @@ import {
 import { continueAfterSignIn, type IdentityMethod } from '@/lib/identity-onboarding';
 import { leaveSheetTo } from '@/lib/navigation';
 import { HERE, isWeb } from '@/lib/platform';
+import { EXTENSION_OFFERED } from '@/lib/surface';
 import { makeStyles, useTheme } from '@/theme';
 import { DURATION } from '@/theme/motion';
 
@@ -88,7 +89,7 @@ export default function GetStartedSheet() {
                 router.push({ pathname: '/pair-phone', params: { onboarding: '1' } });
               }}
             />
-          ) : (
+          ) : EXTENSION_OFFERED ? (
             // On the phone, the wallet you made in Honey for Chrome, by its QR code.
             <MoreRow
               disabled={!!busy}
@@ -101,7 +102,7 @@ export default function GetStartedSheet() {
                 router.push({ pathname: '/scan', params: { purpose: 'pair' } });
               }}
             />
-          )}
+          ) : null}
           {/* One button each for a phrase and a key (review); the backup, rarer, a
               link under them. Before: one "I have a recovery phrase or key" row. */}
           <MoreRow

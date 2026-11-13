@@ -17,6 +17,7 @@ import {
   pendingRequests,
   requestBalances,
 } from '@/lib/stealth-jar-flow';
+import { LANDING } from '@/lib/surface';
 import { showErrorToast, showToast } from '@/lib/toast';
 
 const short = (id: string) => `${id.slice(0, 6)}…${id.slice(-4)}`;
@@ -24,7 +25,7 @@ const POLL_MS = 3000;
 
 /** Approve-signing prompt for one private jar, plus its private balance. */
 export default function StealthJarApproveScreen() {
-  if (!stealthJarsEnabled) return <Redirect href="/home" />;
+  if (!stealthJarsEnabled) return <Redirect href={LANDING} />;
   return <ApproveContent />;
 }
 

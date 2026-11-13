@@ -26,10 +26,11 @@ vi.mock('expo-haptics', () => ({
     Segment_Tick: 'segment-tick',
     Keyboard_Tap: 'keyboard-tap',
     Drag_Start: 'drag-start',
+    Context_Click: 'context-click',
     Confirm: 'confirm',
     Reject: 'reject',
   },
-  ImpactFeedbackStyle: { Soft: 'soft', Light: 'light' },
+  ImpactFeedbackStyle: { Soft: 'soft', Light: 'light', Rigid: 'rigid' },
   NotificationFeedbackType: { Success: 'success', Error: 'error' },
   performAndroidHapticsAsync: native.android,
   selectionAsync: native.selection,
@@ -37,9 +38,9 @@ vi.mock('expo-haptics', () => ({
   notificationAsync: native.notification,
 }));
 
-import { failure, grab, keypress, success, tap } from '@/lib/haptics';
+import { failure, grab, keypress, limit, success, tap } from '@/lib/haptics';
 
-const actions = [tap, keypress, grab, success, failure];
+const actions = [tap, keypress, grab, limit, success, failure];
 
 beforeEach(() => {
   Object.assign(device, { os: 'ios', state: 'active', enabled: true });
@@ -50,7 +51,7 @@ describe('haptic feedback contract', () => {
   it('uses distinct iOS feedback for selection, input, pickup and outcomes', () => {
     for (const action of actions) action();
     expect(native.selection).toHaveBeenCalledExactlyOnceWith();
-    expect(native.impact.mock.calls).toEqual([['soft'], ['light']]);
+    expect(native.impact.mock.calls).toEqual([['soft'], ['light'], ['rigid']]);
     expect(native.notification.mock.calls).toEqual([['success'], ['error']]);
     expect(native.android).not.toHaveBeenCalled();
   });
@@ -62,6 +63,7 @@ describe('haptic feedback contract', () => {
       ['segment-tick'],
       ['keyboard-tap'],
       ['drag-start'],
+      ['context-click'],
       ['confirm'],
       ['reject'],
     ]);

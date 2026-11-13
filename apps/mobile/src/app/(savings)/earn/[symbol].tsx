@@ -29,6 +29,7 @@ import {
 import { useSigner } from '@/lib/multisig';
 import { followFix, useFailure } from '@/lib/outcomes';
 import { useWalletView } from '@/lib/wallet-view';
+import { Gate } from '@/lib/warnings';
 import { makeStyles, radius, useTheme } from '@/theme';
 
 /** Earn sheet after Uniswap's: headline rate, vault facts, details on demand, Deposit. */
@@ -60,7 +61,7 @@ function DemoEarnSheet() {
     return (
       <SheetScreen>
         <EmptyState
-          icon="sparkles"
+          icon="leaf"
           title={`No vault for ${symbol}`}
           hint="Honey doesn't offer earning on this token yet."
           action={{ label: 'Close', onPress: () => router.back() }}
@@ -193,10 +194,12 @@ function DemoEarnSheet() {
                 />
                 <StatRow label="Deployed" value={vault.deployed} />
               </View>
-              <Text style={styles.disclaimer}>
-                Rates change over time and aren't guaranteed. Deposits are lent out and can lose
-                value.
-              </Text>
+              <Gate id="earnRateDisclaimer">
+                <Text style={styles.disclaimer}>
+                  Rates change over time and aren't guaranteed. Deposits are lent out and can lose
+                  value.
+                </Text>
+              </Gate>
             </Accordion>
 
             <PillButton

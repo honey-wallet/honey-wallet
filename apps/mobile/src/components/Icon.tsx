@@ -23,6 +23,8 @@ const ICONS = {
   send: { ios: 'paperplane.fill', android: 'send', web: 'send' },
   receive: { ios: 'arrow.down.circle.fill', android: 'download', web: 'download' },
   buy: { ios: 'plus.circle.fill', android: 'add_circle', web: 'add_circle' },
+  /** Outline, for quiet action rows (a post's Buy). */
+  buyOutline: { ios: 'plus.circle', android: 'add_circle_outline', web: 'add_circle_outline' },
   sell: { ios: 'minus.circle.fill', android: 'do_not_disturb_on', web: 'do_not_disturb_on' },
   home: { ios: 'house', android: 'home', web: 'home' },
   trade: { ios: 'arrow.left.arrow.right', android: 'swap_horiz', web: 'swap_horiz' },
@@ -32,6 +34,7 @@ const ICONS = {
   search: { ios: 'magnifyingglass', android: 'search', web: 'search' },
   history: { ios: 'clock.arrow.circlepath', android: 'history', web: 'history' },
   plus: { ios: 'plus', android: 'add', web: 'add' },
+  minus: { ios: 'minus', android: 'remove', web: 'remove' },
   close: { ios: 'xmark', android: 'close', web: 'close' },
   check: { ios: 'checkmark', android: 'check', web: 'check' },
   theme: { ios: 'circle.lefthalf.filled', android: 'contrast', web: 'contrast' },
@@ -81,7 +84,6 @@ const ICONS = {
   },
   minusCircle: { ios: 'minus.circle.fill', android: 'remove_circle', web: 'remove_circle' },
   backspace: { ios: 'delete.left', android: 'backspace', web: 'backspace' },
-  sparkles: { ios: 'sparkles', android: 'auto_awesome', web: 'auto_awesome' },
   sun: { ios: 'sun.max.fill', android: 'light_mode', web: 'light_mode' },
   moon: { ios: 'moon.fill', android: 'dark_mode', web: 'dark_mode' },
   wrench: { ios: 'wrench.adjustable.fill', android: 'build', web: 'build' },
@@ -94,6 +96,11 @@ const ICONS = {
   warning: { ios: 'exclamationmark.triangle.fill', android: 'warning', web: 'warning' },
   pencil: { ios: 'pencil', android: 'edit', web: 'edit' },
   person: { ios: 'person.fill', android: 'person', web: 'person' },
+  /** Outline, to sit with share and the other outline icons in a menu. */
+  personOutline: { ios: 'person', android: 'person', web: 'person' },
+  /** Outline, to match the other stat-row icons (trendUp, clock). */
+  pieOutline: { ios: 'chart.pie', android: 'pie_chart_outline', web: 'pie_chart_outline' },
+  layersOutline: { ios: 'square.stack.3d.up', android: 'layers', web: 'layers' },
   eye: { ios: 'eye', android: 'visibility', web: 'visibility' },
   eyeSlash: { ios: 'eye.slash', android: 'visibility_off', web: 'visibility_off' },
   key: { ios: 'key.fill', android: 'key', web: 'key' },
@@ -132,6 +139,7 @@ export function Icon({ name, size = 22, color }: Props) {
     return <FilledIcon d={FILLED[name as keyof typeof FILLED]} size={size} color={color} />;
   }
   if (name === 'trade') return <TradeIcon size={size} color={color} />;
+  if (name === 'wallet') return <WalletIcon size={size} color={color} />;
   return <SymbolView name={ICONS[name]} size={size} tintColor={color} />;
 }
 
@@ -166,6 +174,33 @@ function TradeIcon({ size, color }: { size: number; color: string }) {
       <Path d="M2.7 9.2A9.7 9.7 0 0 1 19.5 5.9L17.2 7.3L22.1 9.6V4.1" {...stroke} />
       {/* Lower arc, arrowhead at the left */}
       <Path d="M21.3 14.8A9.7 9.7 0 0 1 4.5 18.1L6.8 16.7L1.9 14.4V19.9" {...stroke} />
+    </Svg>
+  );
+}
+
+/**
+ * Wallet: an outline billfold with a card tucked in and a clasp, drawn to match Trade's
+ * line weight. SF Symbols' filled wallet.bifold looked heavy in the tab bar (review).
+ */
+function WalletIcon({ size, color }: { size: number; color: string }) {
+  const stroke = {
+    stroke: color,
+    strokeWidth: 1.7,
+    strokeLinecap: 'round',
+    strokeLinejoin: 'round',
+  } as const;
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      {/* Body */}
+      <Path
+        d="M6 7.2h12.2a2.8 2.8 0 0 1 2.8 2.8v7.6a2.8 2.8 0 0 1-2.8 2.8H5.8A2.8 2.8 0 0 1 3 17.6V8.4"
+        {...stroke}
+      />
+      {/* Card tucked behind */}
+      <Path d="M3 8.4A2.4 2.4 0 0 1 5 6.1l9.6-2.5a1.8 1.8 0 0 1 2.2 1.3l.6 2.3" {...stroke} />
+      {/* Clasp */}
+      <Path d="M21 11.3h-3.6a2.3 2.3 0 0 0 0 4.6H21" {...stroke} />
+      <Circle cx={17.4} cy={13.6} r={0.9} fill={color} />
     </Svg>
   );
 }

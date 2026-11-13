@@ -1,6 +1,8 @@
 //! Prices, pool depth and new tokens from DexScreener and GeckoTerminal: free,
 //! keyless, and quick to list new pools. Every answer is cached briefly so the
 //! app stays well under their rate limits (DexScreener ~300/min, GeckoTerminal ~30/min).
+//! Token pages (About, links, logo, caps, charts) come from CoinGecko, by the CoinGecko id
+//! the 1Click list gives each asset, so a look-alike symbol never gets another coin's page.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -13,6 +15,24 @@ use tokio::sync::RwLock;
 
 const DEXSCREENER: &str = "https://api.dexscreener.com";
 const GECKOTERMINAL: &str = "https://api.geckoterminal.com/api/v2";
+/// Token pages: description, links, logo, caps and price history. Keyless works (a few
+/// calls a minute); `COINGECKO_API_KEY` (a free demo key) raises that to 30 a minute.
+const COINGECKO: &str = "https://api.coingecko.com/api/v3";
+/// Descriptions and links barely change; caps on the page may be this old.
+const INFO_TTL: Duration = Duration::from_secs(30 * 60);
+/// Logos barely change: one CoinGecko call a day covers every token 1Click lists.
+const LOGOS_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+/// After CoinGecko says "too many requests" without a usable Retry-After, ask nothing for
+/// this long (stale answers serve). A Retry-After is honoured between 1s and 10 minutes.
+const COINGECKO_COOLDOWN: Duration = Duration::from_secs(60);
+const MAX_COINGECKO_COOLDOWN: Duration = Duration::from_secs(600);
+/// CoinGecko answers are keyed by validated CoinGecko id (one per listed token, a few
+/// ranges each), so this only bounds a pathological token list; it is never cleared.
+const MAX_GECKO_ENTRIES: usize = 8_000;
+/// Longest description sent; the page shows three lines and "More".
+const MAX_DESCRIPTION: usize = 1_500;
+/// Points per chart: enough for a phone-width line, small enough to send often.
+const MAX_CHART_POINTS: usize = 200;
 const VENUE_TTL: Duration = Duration::from_secs(30);
 const NEW_POOLS_TTL: Duration = Duration::from_secs(60);
 const HISTORY_TTL: Duration = Duration::from_secs(600);
@@ -43,6 +63,33 @@ use crate::json_rpc::ONE_CLICK_ORIGIN as ONECLICK;
 const TOKENS_TTL: Duration = Duration::from_secs(300);
 /// Native SOL trades on Solana DEXes as wrapped SOL.
 const WRAPPED_SOL: &str = "So11111111111111111111111111111111111111112";
+
+/// A readable chain name for a 1Click blockchain id: Honey's name for its chains, else a
+/// fixed label for the delivery-only ones, else none (never echo an unknown id).
+pub fn oneclick_chain_label(id: &str) -> Option<&'static str> {
+    if let Some((name, _)) = chain_from_oneclick(id) {
+        return Some(name);
+    }
+    Some(match id {
+        "btc" => "Bitcoin",
+        "zec" => "Zcash",
+        "doge" => "Dogecoin",
+        "ltc" => "Litecoin",
+        "bch" => "Bitcoin Cash",
+        "xrp" => "XRP Ledger",
+        "tron" => "Tron",
+        "ton" => "TON",
+        "sui" => "Sui",
+        "aptos" => "Aptos",
+        "stellar" => "Stellar",
+        "cardano" => "Cardano",
+        "gnosis" => "Gnosis",
+        "bera" => "Berachain",
+        "monad" => "Monad",
+        "xlayer" => "X Layer",
+        _ => return None,
+    })
+}
 
 fn chain_from_oneclick(id: &str) -> Option<(&'static str, &'static str)> {
     CHAINS.iter().find(|c| c.3 == id).map(|c| (c.0, c.1))
@@ -210,6 +257,9 @@ enum Cached {
     Venues(Venues),
     New(Vec<NewPool>),
     History(History),
+    Info(Box<TokenInfo>),
+    Chart(TokenChart),
+    Logos(Arc<std::collections::BTreeMap<String, String>>),
 }
 
 pub struct MarketData {
@@ -217,7 +267,16 @@ pub struct MarketData {
     dexscreener: String,
     geckoterminal: String,
     oneclick: String,
+    coingecko: String,
+    coingecko_key: Option<String>,
+    /// Set when CoinGecko rate-limits us; until then only cached answers are served.
+    coingecko_quiet_until: std::sync::Mutex<Option<Instant>>,
     cache: RwLock<HashMap<String, (Instant, Cached)>>,
+    /// Token pages from CoinGecko, kept apart from the short-lived DEX cache so a flood
+    /// of other keys can never wipe the stale copies served while CoinGecko is limiting.
+    gecko: RwLock<HashMap<String, (Instant, Cached)>>,
+    /// One CoinGecko request per key at a time: concurrent misses wait for the first.
+    gecko_flights: std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 #[derive(Debug)]
@@ -231,12 +290,17 @@ impl MarketData {
             .redirect(reqwest::redirect::Policy::none())
             .user_agent("honey-wallet-server")
             .build()?;
-        Ok(Arc::new(Self::with_bases(
+        let mut market = Self::with_bases(
             client,
             DEXSCREENER.into(),
             GECKOTERMINAL.into(),
             ONECLICK.into(),
-        )))
+        );
+        market.coingecko_key = std::env::var("COINGECKO_API_KEY")
+            .ok()
+            .map(|k| k.trim().to_string())
+            .filter(|k| !k.is_empty());
+        Ok(Arc::new(market))
     }
 
     pub fn with_bases(
@@ -250,8 +314,245 @@ impl MarketData {
             dexscreener,
             geckoterminal,
             oneclick,
+            coingecko: COINGECKO.into(),
+            coingecko_key: None,
+            coingecko_quiet_until: std::sync::Mutex::new(None),
             cache: RwLock::new(HashMap::new()),
+            gecko: RwLock::new(HashMap::new()),
+            gecko_flights: std::sync::Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Points CoinGecko calls somewhere else (tests).
+    pub fn with_coingecko(mut self, base: String) -> Self {
+        self.coingecko = base;
+        self
+    }
+
+    /// Any cached CoinGecko answer, however old: served when it is down or rate-limited.
+    async fn gecko_stale(&self, key: &str) -> Option<Cached> {
+        self.gecko.read().await.get(key).map(|(_, v)| v.clone())
+    }
+
+    async fn gecko_cached(&self, key: &str, ttl: Duration) -> Option<Cached> {
+        self.gecko
+            .read()
+            .await
+            .get(key)
+            .filter(|(at, _)| at.elapsed() < ttl)
+            .map(|(_, v)| v.clone())
+    }
+
+    async fn gecko_store(&self, key: String, value: Cached) {
+        let mut gecko = self.gecko.write().await;
+        if gecko.len() >= MAX_GECKO_ENTRIES && !gecko.contains_key(&key) {
+            // Drop only the single oldest entry: the rest stay as stale fallbacks.
+            if let Some(oldest) = gecko
+                .iter()
+                .min_by_key(|(_, (at, _))| *at)
+                .map(|(k, _)| k.clone())
+            {
+                gecko.remove(&oldest);
+            }
+        }
+        gecko.insert(key, (Instant::now(), value));
+    }
+
+    /// The lock that makes concurrent misses for `key` wait for one request.
+    fn gecko_flight(&self, key: &str) -> Arc<tokio::sync::Mutex<()>> {
+        let mut flights = self.gecko_flights.lock().unwrap_or_else(|e| e.into_inner());
+        // Finished flights (only the map holds them) are dropped as new ones start.
+        flights.retain(|_, lock| Arc::strong_count(lock) > 1);
+        flights.entry(key.to_string()).or_default().clone()
+    }
+
+    async fn coingecko_get(&self, path: &str) -> Result<Value, Unavailable> {
+        let quiet = *self
+            .coingecko_quiet_until
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if quiet.is_some_and(|until| Instant::now() < until) {
+            return Err(Unavailable);
+        }
+        let mut request = self
+            .client
+            .get(format!("{}{path}", self.coingecko))
+            .header("Accept", "application/json");
+        if let Some(key) = &self.coingecko_key {
+            request = request.header("x-cg-demo-api-key", key);
+        }
+        let response = request.send().await.map_err(|error| {
+            tracing::warn!(%error, "coingecko request failed");
+            Unavailable
+        })?;
+        if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            let wait = retry_after(response.headers()).unwrap_or(COINGECKO_COOLDOWN);
+            tracing::warn!(
+                wait_secs = wait.as_secs(),
+                "coingecko rate limit reached; serving cached token data"
+            );
+            *self
+                .coingecko_quiet_until
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = Some(Instant::now() + wait);
+            return Err(Unavailable);
+        }
+        let response = response.error_for_status().map_err(|error| {
+            tracing::warn!(%error, "coingecko request failed");
+            Unavailable
+        })?;
+        response.json().await.map_err(|_| Unavailable)
+    }
+
+    /// The CoinGecko id for a symbol Honey lists: a curated id for the majors, else the
+    /// one the 1Click list gives that symbol. Unknown symbols have none (no name search).
+    async fn coingecko_id(&self, symbol: &str) -> Result<String, Unavailable> {
+        let tokens = self.tokens().await.ok();
+        coingecko_id(symbol, tokens.as_deref().map(Vec::as_slice).unwrap_or(&[])).ok_or(Unavailable)
+    }
+
+    /// A logo URL (https, CoinGecko's CDN) for every symbol 1Click lists, keyed by the
+    /// upper-case symbol. One `/coins/markets` call for all of them (≤250 ids a page),
+    /// cached a day; the last answer is served while CoinGecko is down or limiting us.
+    pub async fn token_logos(
+        &self,
+    ) -> Result<Arc<std::collections::BTreeMap<String, String>>, Unavailable> {
+        let key = "logos".to_string();
+        if let Some(Cached::Logos(logos)) = self.gecko_cached(&key, LOGOS_TTL).await {
+            return Ok(logos);
+        }
+        let flight = self.gecko_flight(&key);
+        let _turn = flight.lock().await;
+        if let Some(Cached::Logos(logos)) = self.gecko_cached(&key, LOGOS_TTL).await {
+            return Ok(logos);
+        }
+        let tokens = self.tokens().await?;
+        let mut ids: Vec<(String, String)> = Vec::new();
+        let mut seen = std::collections::BTreeSet::new();
+        for t in tokens.iter() {
+            let symbol = t.symbol.trim().to_ascii_uppercase();
+            if symbol.is_empty() || !seen.insert(symbol.clone()) {
+                continue;
+            }
+            if let Some(id) = coingecko_id(&symbol, &tokens) {
+                ids.push((symbol, id));
+            }
+        }
+        let mut logos = std::collections::BTreeMap::new();
+        let mut failed = false;
+        for page in ids.chunks(250) {
+            let list = page
+                .iter()
+                .map(|(_, id)| id.as_str())
+                .collect::<Vec<_>>()
+                .join(",");
+            let path = format!(
+                "/coins/markets?vs_currency=usd&ids={list}&per_page=250&page=1&sparkline=false"
+            );
+            match self.coingecko_get(&path).await {
+                Ok(body) => {
+                    let images: std::collections::BTreeMap<&str, &str> = body
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|coin| {
+                            Some((coin.get("id")?.as_str()?, coin.get("image")?.as_str()?))
+                        })
+                        .filter(|(_, url)| url.starts_with("https://") && url.len() <= 300)
+                        .collect();
+                    for (symbol, id) in page {
+                        if let Some(url) = images.get(id.as_str()) {
+                            logos.insert(symbol.clone(), (*url).to_string());
+                        }
+                    }
+                }
+                Err(_) => failed = true,
+            }
+        }
+        if failed && logos.is_empty() {
+            return match self.gecko_stale(&key).await {
+                Some(Cached::Logos(logos)) => Ok(logos),
+                _ => Err(Unavailable),
+            };
+        }
+        let logos = Arc::new(logos);
+        self.gecko_store(key, Cached::Logos(logos.clone())).await;
+        Ok(logos)
+    }
+
+    /// Name, About text, website, explorer, logo, caps and supply for one symbol.
+    pub async fn token_info(&self, symbol: &str) -> Result<TokenInfo, Unavailable> {
+        let symbol = symbol.trim().to_string();
+        let id = self.coingecko_id(&symbol).await?;
+        let key = format!("info:{id}");
+        if let Some(Cached::Info(info)) = self.gecko_cached(&key, INFO_TTL).await {
+            return Ok(TokenInfo { symbol, ..*info });
+        }
+        let flight = self.gecko_flight(&key);
+        let _turn = flight.lock().await;
+        // Someone else's request may have filled it while this one waited.
+        if let Some(Cached::Info(info)) = self.gecko_cached(&key, INFO_TTL).await {
+            return Ok(TokenInfo { symbol, ..*info });
+        }
+        let path = format!(
+            "/coins/{id}?localization=false&tickers=false&market_data=true\
+             &community_data=false&developer_data=false&sparkline=false"
+        );
+        match self.coingecko_get(&path).await {
+            Ok(body) => {
+                let info = parse_coin(&symbol, &id, &body).ok_or(Unavailable)?;
+                self.gecko_store(key, Cached::Info(Box::new(info.clone())))
+                    .await;
+                Ok(info)
+            }
+            Err(e) => match self.gecko_stale(&key).await {
+                Some(Cached::Info(info)) => Ok(TokenInfo { symbol, ..*info }),
+                _ => Err(e),
+            },
+        }
+    }
+
+    /// USD prices for one symbol over one range, oldest first.
+    pub async fn token_chart(
+        &self,
+        symbol: &str,
+        range: ChartRange,
+    ) -> Result<TokenChart, Unavailable> {
+        let symbol = symbol.trim().to_string();
+        let id = self.coingecko_id(&symbol).await?;
+        let days = range.days();
+        let key = format!("chart:{id}:{days}");
+        let fresh = self.gecko_cached(&key, range.ttl()).await;
+        let flight = self.gecko_flight(&key);
+        let _turn = match fresh {
+            Some(_) => None,
+            None => Some(flight.lock().await),
+        };
+        let fresh = match fresh {
+            Some(c) => Some(c),
+            None => self.gecko_cached(&key, range.ttl()).await,
+        };
+        let series = match fresh {
+            Some(Cached::Chart(c)) => c,
+            _ => {
+                let path = format!("/coins/{id}/market_chart?vs_currency=usd&days={days}");
+                match self.coingecko_get(&path).await {
+                    Ok(body) => {
+                        let chart = parse_market_chart(&body);
+                        if chart.prices.len() < 2 {
+                            return Err(Unavailable);
+                        }
+                        self.gecko_store(key, Cached::Chart(chart.clone())).await;
+                        chart
+                    }
+                    Err(e) => match self.gecko_stale(&key).await {
+                        Some(Cached::Chart(c)) => c,
+                        _ => return Err(e),
+                    },
+                }
+            }
+        };
+        Ok(series.for_range(symbol, range))
     }
 
     async fn cached(&self, key: &str, ttl: Duration) -> Option<Cached> {
@@ -267,7 +568,12 @@ impl MarketData {
         if cache.len() >= MAX_ENTRIES {
             cache.retain(|_, (at, _)| at.elapsed() < HISTORY_TTL);
             if cache.len() >= MAX_ENTRIES {
-                cache.clear();
+                // Still full of fresh entries: drop the older half, never everything
+                // (the 1Click token list lives here too).
+                let mut ages: Vec<Instant> = cache.values().map(|(at, _)| *at).collect();
+                ages.sort_unstable();
+                let cutoff = ages[ages.len() / 2];
+                cache.retain(|key, (at, _)| *at > cutoff || key == "tokens");
             }
         }
         cache.insert(key, (Instant::now(), value));
@@ -312,6 +618,14 @@ impl MarketData {
         }
         let tokens = self.tokens().await?;
         let variants = variants_of(&symbol, &tokens);
+        if variants.is_empty() {
+            // Not a symbol 1Click lists: answer without creating a cache entry for it.
+            return Ok(Venues {
+                symbol,
+                price_usd: None,
+                venues: Vec::new(),
+            });
+        }
         let price_usd = variants.iter().find_map(|t| t.price);
         let lookups = variants.iter().filter_map(|t| {
             let (_, dex_chain) = chain_from_oneclick(&t.blockchain)?;
@@ -416,6 +730,352 @@ impl MarketData {
         let history = parse_ohlcv(&self.get(&url).await?);
         self.store(key, Cached::History(history.clone())).await;
         Ok(history)
+    }
+}
+
+/// Honey's chart ranges. "All" is a year: keyless CoinGecko serves at most 365 days.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChartRange {
+    Hour,
+    Day,
+    Week,
+    Month,
+    Year,
+    All,
+}
+
+impl ChartRange {
+    pub fn parse(range: &str) -> Option<Self> {
+        Some(match range.to_ascii_uppercase().as_str() {
+            "1H" => Self::Hour,
+            "1D" => Self::Day,
+            "1W" => Self::Week,
+            "1M" => Self::Month,
+            "1Y" => Self::Year,
+            "ALL" => Self::All,
+            _ => return None,
+        })
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Hour => "1H",
+            Self::Day => "1D",
+            Self::Week => "1W",
+            Self::Month => "1M",
+            Self::Year => "1Y",
+            Self::All => "All",
+        }
+    }
+
+    /// CoinGecko's `days`: 1 is 5-minutely (the hour is its tail), 2-90 hourly, more daily.
+    fn days(self) -> &'static str {
+        match self {
+            Self::Hour | Self::Day => "1",
+            Self::Week => "7",
+            Self::Month => "30",
+            Self::Year | Self::All => "365",
+        }
+    }
+
+    fn ttl(self) -> Duration {
+        match self {
+            Self::Hour | Self::Day => Duration::from_secs(3 * 60),
+            Self::Week => Duration::from_secs(15 * 60),
+            Self::Month => Duration::from_secs(30 * 60),
+            Self::Year | Self::All => Duration::from_secs(3 * 60 * 60),
+        }
+    }
+}
+
+/// A link on a token page.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenLink {
+    pub label: String,
+    pub url: String,
+}
+
+/// What a token page shows below the chart. Mirrored in `packages/api-client/src/types.ts`
+/// (`TokenInfo`). Every number is optional: missing stays missing, never invented.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenInfo {
+    pub symbol: String,
+    /// CoinGecko id.
+    pub id: String,
+    pub name: String,
+    /// Plain text, paragraphs split by blank lines.
+    pub description: Option<String>,
+    /// Logo, https only.
+    pub image: Option<String>,
+    pub website: Option<TokenLink>,
+    pub explorer: Option<TokenLink>,
+    pub price_usd: Option<f64>,
+    /// In percent.
+    pub change_24h: Option<f64>,
+    pub market_cap: Option<f64>,
+    pub market_cap_rank: Option<u32>,
+    pub fdv: Option<f64>,
+    pub volume_24h: Option<f64>,
+    pub high_24h: Option<f64>,
+    pub low_24h: Option<f64>,
+    pub ath: Option<f64>,
+    pub atl: Option<f64>,
+    pub circulating_supply: Option<f64>,
+    pub total_supply: Option<f64>,
+    pub max_supply: Option<f64>,
+}
+
+/// USD prices for one range, oldest first. Mirrored in `packages/api-client/src/types.ts`
+/// (`TokenChart`).
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenChart {
+    pub symbol: String,
+    pub range: &'static str,
+    /// Unix milliseconds, one per price.
+    pub times: Vec<i64>,
+    pub prices: Vec<f64>,
+}
+
+impl TokenChart {
+    /// The range's slice of a cached series (the hour is the day's tail), thinned to at
+    /// most `MAX_CHART_POINTS` evenly spaced points, always keeping the last.
+    fn for_range(&self, symbol: String, range: ChartRange) -> TokenChart {
+        let len = self.times.len();
+        let start = match (range, self.times.last()) {
+            (ChartRange::Hour, Some(last)) => {
+                let from = last - 60 * 60 * 1000;
+                self.times.iter().position(|t| *t >= from).unwrap_or(0)
+            }
+            _ => 0,
+        };
+        let step = (len - start).div_ceil(MAX_CHART_POINTS).max(1);
+        let mut picks: Vec<usize> = (start..len).step_by(step).collect();
+        if len > 0 && picks.last() != Some(&(len - 1)) {
+            picks.push(len - 1);
+        }
+        TokenChart {
+            symbol,
+            range: range.label(),
+            times: picks.iter().map(|&i| self.times[i]).collect(),
+            prices: picks.iter().map(|&i| self.prices[i]).collect(),
+        }
+    }
+}
+
+/// Ids certain enough to hard-code: majors, and NEAR (1Click lists native NEAR as wNEAR).
+const COINGECKO_IDS: &[(&str, &str)] = &[
+    ("NEAR", "near"),
+    ("WNEAR", "wrapped-near"),
+    ("ETH", "ethereum"),
+    ("WETH", "weth"),
+    ("BTC", "bitcoin"),
+    ("WBTC", "wrapped-bitcoin"),
+    ("CBBTC", "coinbase-wrapped-btc"),
+    ("SOL", "solana"),
+    ("USDC", "usd-coin"),
+    ("USDT", "tether"),
+    ("DAI", "dai"),
+    ("ZEC", "zcash"),
+    ("PAXG", "pax-gold"),
+    ("TAO", "bittensor"),
+    ("RENDER", "render-token"),
+    ("XRP", "ripple"),
+    ("TRX", "tron"),
+    ("DOGE", "dogecoin"),
+    ("BNB", "binancecoin"),
+    ("AVAX", "avalanche-2"),
+    ("POL", "polygon-ecosystem-token"),
+    ("ARB", "arbitrum"),
+    ("OP", "optimism"),
+    ("AURORA", "aurora-near"),
+];
+
+/// A curated id, else the id most of the 1Click entries for this symbol carry.
+fn coingecko_id(symbol: &str, tokens: &[OneClickToken]) -> Option<String> {
+    let upper = symbol.trim().to_ascii_uppercase();
+    if let Some((_, id)) = COINGECKO_IDS.iter().find(|(s, _)| *s == upper) {
+        return Some((*id).to_string());
+    }
+    let mut counts: Vec<(&str, usize)> = Vec::new();
+    for t in tokens
+        .iter()
+        .filter(|t| t.symbol.eq_ignore_ascii_case(&upper))
+    {
+        let Some(id) = t
+            .coingecko_id
+            .as_deref()
+            .filter(|id| valid_coingecko_id(id))
+        else {
+            continue;
+        };
+        match counts.iter_mut().find(|(i, _)| *i == id) {
+            Some(entry) => entry.1 += 1,
+            None => counts.push((id, 1)),
+        }
+    }
+    // The first most-common id wins (max_by_key would take the last on a tie).
+    let best = counts.iter().map(|(_, n)| *n).max()?;
+    counts
+        .into_iter()
+        .find(|(_, n)| *n == best)
+        .map(|(id, _)| id.to_string())
+}
+
+/// CoinGecko ids are lowercase words joined by dashes; anything else never reaches a URL.
+fn valid_coingecko_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 100
+        && id
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
+/// A Retry-After in seconds (CoinGecko doesn't send dates), clamped to 1s–10 minutes.
+fn retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
+    let secs: u64 = headers
+        .get(reqwest::header::RETRY_AFTER)?
+        .to_str()
+        .ok()?
+        .trim()
+        .parse()
+        .ok()?;
+    Some(Duration::from_secs(secs).clamp(Duration::from_secs(1), MAX_COINGECKO_COOLDOWN))
+}
+
+fn https(v: &Value) -> Option<String> {
+    v.as_str()
+        .map(str::trim)
+        .filter(|u| u.starts_with("https://") && u.len() <= 500 && !u.contains(char::is_whitespace))
+        .map(str::to_string)
+}
+
+/// "https://www.etherscan.io/token/0x…" → "Etherscan".
+fn site_label(url: &str) -> String {
+    let host = url
+        .trim_start_matches("https://")
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or("")
+        .trim_start_matches("www.");
+    let name = host.split('.').next().unwrap_or("");
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => "Explorer".into(),
+    }
+}
+
+/// CoinGecko's description is HTML-ish: drop tags, decode the common entities, keep
+/// paragraph breaks, and cut long ones at a sentence end.
+fn plain_description(html: &str) -> Option<String> {
+    let mut text = String::with_capacity(html.len());
+    let mut in_tag = false;
+    for ch in html.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' if in_tag => in_tag = false,
+            _ if !in_tag => text.push(ch),
+            _ => {}
+        }
+    }
+    let text = text
+        .replace("&amp;", "&")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&nbsp;", " ")
+        .replace("\r\n", "\n")
+        .replace('\r', "\n");
+    let paragraphs: Vec<String> = text
+        .split("\n\n")
+        .map(|p| p.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|p| !p.is_empty())
+        .collect();
+    let mut out = paragraphs.join("\n\n");
+    if out.len() > MAX_DESCRIPTION {
+        let mut cut = MAX_DESCRIPTION;
+        while !out.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        let head = &out[..cut];
+        let end = head.rfind(". ").map(|i| i + 1).unwrap_or(cut);
+        out = head[..end].trim_end().to_string();
+    }
+    Some(out).filter(|s| !s.is_empty())
+}
+
+fn parse_coin(symbol: &str, id: &str, body: &Value) -> Option<TokenInfo> {
+    let name = body["name"].as_str()?.trim().to_string();
+    if name.is_empty() {
+        return None;
+    }
+    let md = &body["market_data"];
+    let usd = |field: &str| num(&md[field]["usd"]).filter(|v| *v > 0.0);
+    let plain = |field: &str| num(&md[field]).filter(|v| *v > 0.0);
+    let first_https = |field: &str| {
+        body["links"][field]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find_map(https)
+    };
+    Some(TokenInfo {
+        symbol: symbol.to_string(),
+        id: id.to_string(),
+        name,
+        description: body["description"]["en"]
+            .as_str()
+            .and_then(plain_description),
+        image: https(&body["image"]["large"]).or_else(|| https(&body["image"]["small"])),
+        website: first_https("homepage").map(|url| TokenLink {
+            label: "Website".into(),
+            url,
+        }),
+        explorer: first_https("blockchain_site").map(|url| TokenLink {
+            label: site_label(&url),
+            url,
+        }),
+        price_usd: usd("current_price"),
+        change_24h: num(&md["price_change_percentage_24h"]),
+        market_cap: usd("market_cap"),
+        market_cap_rank: body["market_cap_rank"]
+            .as_u64()
+            .and_then(|r| u32::try_from(r).ok()),
+        fdv: usd("fully_diluted_valuation"),
+        volume_24h: usd("total_volume"),
+        high_24h: usd("high_24h"),
+        low_24h: usd("low_24h"),
+        ath: usd("ath"),
+        atl: usd("atl"),
+        circulating_supply: plain("circulating_supply"),
+        total_supply: plain("total_supply"),
+        max_supply: plain("max_supply"),
+    })
+}
+
+/// `{"prices": [[ms, usd], …]}` → a series, oldest first, positive prices only.
+fn parse_market_chart(body: &Value) -> TokenChart {
+    let mut rows: Vec<(i64, f64)> = body["prices"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|r| {
+            let t = r.get(0)?.as_f64()? as i64;
+            let p = num(r.get(1)?)?;
+            (p > 0.0).then_some((t, p))
+        })
+        .collect();
+    rows.sort_by_key(|r| r.0);
+    rows.dedup_by_key(|r| r.0);
+    TokenChart {
+        symbol: String::new(),
+        range: "",
+        times: rows.iter().map(|r| r.0).collect(),
+        prices: rows.iter().map(|r| r.1).collect(),
     }
 }
 
@@ -750,6 +1410,189 @@ mod tests {
         assert_eq!(pools[0].chain, "Solana");
         assert_eq!(pools[0].token.as_deref(), Some("T1"));
         assert_eq!(pools[0].liquidity_usd, Some(52000.5));
+    }
+
+    #[test]
+    fn coingecko_ids_come_from_the_curated_list_then_1click() {
+        let tokens = vec![
+            token("a", "eth", "ABC", "abc-token"),
+            token("b", "base", "ABC", "abc-token"),
+            token("c", "sol", "ABC", "abc-lookalike"),
+            token("d", "eth", "BAD", "Not An Id"),
+        ];
+        assert_eq!(
+            coingecko_id("cbBTC", &tokens).as_deref(),
+            Some("coinbase-wrapped-btc")
+        );
+        assert_eq!(coingecko_id("near", &tokens).as_deref(), Some("near"));
+        assert_eq!(coingecko_id("abc", &tokens).as_deref(), Some("abc-token"));
+        // No name search: an unlisted symbol, or one without a clean id, has no page.
+        assert_eq!(coingecko_id("BAD", &tokens), None);
+        assert_eq!(coingecko_id("NOPE", &tokens), None);
+    }
+
+    #[test]
+    fn coin_details_are_plain_text_and_https_links() {
+        let body = json!({
+            "name": "Coinbase Wrapped BTC",
+            "market_cap_rank": 40,
+            "description": { "en": "Coinbase Wrapped BTC (<a href=\"https://x\">cbBTC</a>) is backed 1:1.\r\n\r\nIt&#39;s an ERC-20 &amp; SPL token." },
+            "image": { "large": "https://coin-images.coingecko.com/cbbtc.webp" },
+            "links": {
+                "homepage": ["", "javascript:alert(1)", "https://www.coinbase.com/"],
+                "blockchain_site": ["http://insecure.example", "https://www.etherscan.io/token/0xcbb7"]
+            },
+            "market_data": {
+                "current_price": { "usd": 74268.0 },
+                "price_change_percentage_24h": -0.66,
+                "market_cap": { "usd": 7.4e9 },
+                "fully_diluted_valuation": { "usd": 0 },
+                "total_volume": { "usd": 4.2e8 },
+                "ath": { "usd": 125954.0 },
+                "circulating_supply": 100708.27,
+                "max_supply": null
+            }
+        });
+        let info = parse_coin("cbBTC", "coinbase-wrapped-btc", &body).unwrap();
+        assert_eq!(
+            info.description.as_deref(),
+            Some("Coinbase Wrapped BTC (cbBTC) is backed 1:1.\n\nIt's an ERC-20 & SPL token.")
+        );
+        assert_eq!(info.website.unwrap().url, "https://www.coinbase.com/");
+        let explorer = info.explorer.unwrap();
+        assert_eq!(explorer.label, "Etherscan");
+        assert_eq!(explorer.url, "https://www.etherscan.io/token/0xcbb7");
+        assert_eq!(info.market_cap, Some(7.4e9));
+        assert_eq!(info.fdv, None, "zero means unknown, not zero");
+        assert_eq!(info.change_24h, Some(-0.66));
+        assert_eq!(info.circulating_supply, Some(100708.27));
+        assert_eq!(info.max_supply, None);
+        assert_eq!(info.market_cap_rank, Some(40));
+        assert!(parse_coin("X", "x", &json!({ "name": "" })).is_none());
+    }
+
+    #[test]
+    fn long_descriptions_end_at_a_sentence() {
+        let long = "Sentence one is here. ".repeat(200);
+        let out = plain_description(&long).unwrap();
+        assert!(out.len() <= MAX_DESCRIPTION);
+        assert!(out.ends_with("here."));
+    }
+
+    #[test]
+    fn charts_are_sorted_and_thinned_and_the_hour_is_the_days_tail() {
+        let minute = 60_000.0;
+        // 288 five-minute points over a day, newest first, plus a duplicate and a bad price.
+        let mut prices: Vec<Value> = (0..288)
+            .rev()
+            .map(|i| json!([f64::from(i) * 5.0 * minute, 100.0 + f64::from(i)]))
+            .collect();
+        prices.push(json!([0.0, 100.0]));
+        prices.push(json!([1.0, -5.0]));
+        let day = parse_market_chart(&json!({ "prices": prices }));
+        assert_eq!(day.prices.len(), 288);
+        assert!(day.times.windows(2).all(|w| w[0] < w[1]));
+
+        let d = day.for_range("ETH".into(), ChartRange::Day);
+        assert!(d.prices.len() <= MAX_CHART_POINTS + 1);
+        assert_eq!(d.prices.last(), day.prices.last(), "keeps the latest price");
+        assert_eq!(d.range, "1D");
+
+        let h = day.for_range("ETH".into(), ChartRange::Hour);
+        assert_eq!(
+            h.prices.len(),
+            13,
+            "an hour of five-minute points, both ends"
+        );
+        assert_eq!(h.prices.last(), day.prices.last());
+        assert_eq!(h.range, "1H");
+    }
+
+    #[test]
+    fn chart_ranges_parse_like_the_app_labels() {
+        assert_eq!(ChartRange::parse("1w"), Some(ChartRange::Week));
+        assert_eq!(ChartRange::parse("All"), Some(ChartRange::All));
+        assert_eq!(ChartRange::parse("5Y"), None);
+    }
+
+    #[tokio::test]
+    async fn token_pages_need_a_known_id_and_serve_stale_data_when_coingecko_is_down() {
+        let m = MarketData::with_bases(
+            reqwest::Client::new(),
+            "http://127.0.0.1:9".into(),
+            "http://127.0.0.1:9".into(),
+            "http://127.0.0.1:9".into(),
+        )
+        .with_coingecko("http://127.0.0.1:9".into());
+        // Not curated and no 1Click list reachable: no id, so no request at all.
+        assert!(m.token_info("ZZZQ").await.is_err());
+        assert!(m.token_chart("ZZZQ", ChartRange::Week).await.is_err());
+        // Curated, but CoinGecko is unreachable and nothing is cached.
+        assert!(m.token_info("ETH").await.is_err());
+        // An old cached series still serves.
+        let old = TokenChart {
+            symbol: String::new(),
+            range: "",
+            times: vec![1, 2],
+            prices: vec![10.0, 11.0],
+        };
+        m.gecko.write().await.insert(
+            "chart:ethereum:7".into(),
+            (
+                Instant::now() - Duration::from_secs(24 * 3600),
+                Cached::Chart(old),
+            ),
+        );
+        let chart = m.token_chart("ETH", ChartRange::Week).await.unwrap();
+        assert_eq!(chart.prices, vec![10.0, 11.0]);
+        assert_eq!(chart.symbol, "ETH");
+    }
+
+    #[test]
+    fn retry_after_is_clamped_and_ids_reject_dots() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        assert_eq!(retry_after(&headers), None);
+        headers.insert(reqwest::header::RETRY_AFTER, "30".parse().unwrap());
+        assert_eq!(retry_after(&headers), Some(Duration::from_secs(30)));
+        headers.insert(reqwest::header::RETRY_AFTER, "99999".parse().unwrap());
+        assert_eq!(retry_after(&headers), Some(MAX_COINGECKO_COOLDOWN));
+        headers.insert(reqwest::header::RETRY_AFTER, "0".parse().unwrap());
+        assert_eq!(retry_after(&headers), Some(Duration::from_secs(1)));
+        assert!(valid_coingecko_id("coinbase-wrapped-btc"));
+        assert!(!valid_coingecko_id("../x"));
+        assert!(!valid_coingecko_id("a.b"));
+    }
+
+    #[tokio::test]
+    async fn the_coingecko_cache_keeps_stale_entries_when_full() {
+        let m = MarketData::with_bases(
+            reqwest::Client::new(),
+            "http://127.0.0.1:9".into(),
+            "http://127.0.0.1:9".into(),
+            "http://127.0.0.1:9".into(),
+        );
+        let chart = || {
+            Cached::Chart(TokenChart {
+                symbol: String::new(),
+                range: "",
+                times: vec![1, 2],
+                prices: vec![1.0, 2.0],
+            })
+        };
+        for i in 0..MAX_GECKO_ENTRIES + 5 {
+            m.gecko_store(format!("chart:id{i}:7"), chart()).await;
+        }
+        let gecko = m.gecko.read().await;
+        assert_eq!(gecko.len(), MAX_GECKO_ENTRIES);
+        // Only the oldest few went; the newest are all there.
+        assert!(gecko.contains_key(&format!("chart:id{}:7", MAX_GECKO_ENTRIES + 4)));
+        // The DEX cache filling up never touches it.
+        drop(gecko);
+        for i in 0..MAX_ENTRIES + 5 {
+            m.store(format!("venues:X{i}"), chart()).await;
+        }
+        assert_eq!(m.gecko.read().await.len(), MAX_GECKO_ENTRIES);
+        assert!(m.cache.read().await.len() <= MAX_ENTRIES);
     }
 
     #[test]

@@ -43,10 +43,7 @@ function TradeSettingsSheet() {
     >
       {mode === 'Perps' && (
         <>
-          <SheetField
-            label="Default leverage"
-            hint="Where the order sheet starts. Markets with a lower maximum use their maximum."
-          >
+          <SheetField label="Default leverage" hint="Where the order sheet starts.">
             <OptionChips
               options={LEVERAGE}
               value={`${prefs.perpLeverage}x`}

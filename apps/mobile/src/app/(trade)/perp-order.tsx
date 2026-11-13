@@ -21,6 +21,7 @@ import { TRADING_CASH } from '@/lib/predict';
 import { useTradeModeAllowed } from '@/lib/trade-modes';
 import { PERP_LEVERAGE_STEPS, useTradePrefs } from '@/lib/trade-prefs';
 import { useWalletView } from '@/lib/wallet-view';
+import { Gate } from '@/lib/warnings';
 import { makeStyles, radius, useTheme } from '@/theme';
 
 /** Trading fee on the position's size (placeholder, Hyperliquid-like taker fee). */
@@ -167,7 +168,9 @@ function PerpOrderSheet() {
               )}
             </Text>
           </View>
-          <ExecutionUnavailable message="Prices and balance figures are indicative previews; account balance and fees are not verified. Hyperliquid order placement is unavailable, so no funds will move or position open." />
+          <Gate id="perpsUnavailableNote">
+            <ExecutionUnavailable message="Prices and balance figures are indicative previews; account balance and fees are not verified. Hyperliquid order placement is unavailable, so no funds will move or position open." />
+          </Gate>
           <PillButton
             label={demoLabel(
               'Order placement unavailable',

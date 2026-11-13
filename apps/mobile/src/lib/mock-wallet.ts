@@ -268,7 +268,14 @@ export function shortAddress(address: string, head = 6, tail = 4) {
 }
 
 export function formatUsd(value: number) {
-  return `$${value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  // Anything that rounds to zero is "$0.00": an empty wallet's sum came out as -0 and
+  // showed "$-0.00". Negatives read "-$1.00", not "$-1.00".
+  const v = Math.abs(value) < 0.005 ? 0 : value;
+  const digits = Math.abs(v).toLocaleString('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+  return `${v < 0 ? '-' : ''}$${digits}`;
 }
 
 /** Compact dollar amounts for volumes, e.g. $1.85B or $645.68M. */
@@ -462,16 +469,29 @@ export const TOKEN_INFO: Record<string, TokenInfo> = {
 };
 
 /** Every chain's logo, the unsupported ones too: old holdings and activity still name them. */
-const CHAIN_SYMBOLS: Record<Chain, string> = {
+const CHAIN_SYMBOLS: Record<string, string> = {
   Ethereum: 'ETH',
   Base: 'BASE',
   Solana: 'SOL',
   NEAR: 'NEAR',
   Tron: 'TRX',
   'XRP Ledger': 'XRP',
+  // Networks only swaps reach (NEAR Intents), for their badges.
+  Arbitrum: 'ARB',
+  Optimism: 'OP',
+  Polygon: 'POL',
+  'BNB Chain': 'BNB',
+  Avalanche: 'AVAX',
+  Gnosis: 'GNO',
+  Scroll: 'SCROLL',
+  Bitcoin: 'BTC',
 };
 
-export function chainSymbol(chain: Chain) {
+const CHAIN_NAMES = new Set<string>(['Ethereum', 'Base', 'Solana', 'NEAR', 'Tron', 'XRP Ledger']);
+/** Whether a network name is one the wallet itself knows (not just a swap destination). */
+export const isChain = (chain: string): chain is Chain => CHAIN_NAMES.has(chain);
+
+export function chainSymbol(chain: string) {
   // return CHAINS.find((c) => c.name === chain)?.symbol ?? 'GENERIC';
   return CHAIN_SYMBOLS[chain] ?? 'GENERIC';
 }

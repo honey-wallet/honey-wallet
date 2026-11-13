@@ -4,7 +4,8 @@
 use crate::{
     error::AppError,
     market_data::{
-        History, MarketData, MarketListToken, NewPool, TokenMarket, Venues, market_list,
+        ChartRange, History, MarketData, MarketListToken, NewPool, TokenChart, TokenInfo,
+        TokenMarket, Venues, market_list,
     },
 };
 use axum::{
@@ -22,12 +23,21 @@ pub fn router(market: Arc<MarketData>) -> Router {
         .route("/market/tokens", get(tokens))
         .route("/market/new-pools", get(new_pools))
         .route("/market/history", get(history))
+        .route("/market/info", get(info))
+        .route("/market/chart", get(chart))
+        .route("/market/logos", get(logos))
         .with_state(market)
 }
 
 #[derive(Deserialize)]
 struct SymbolQuery {
     symbol: String,
+}
+
+#[derive(Deserialize)]
+struct ChartQuery {
+    symbol: String,
+    range: String,
 }
 
 #[derive(Deserialize)]
@@ -43,6 +53,59 @@ struct PoolQuery {
 
 fn bad(message: &str) -> AppError {
     AppError::BadRequest(message.into())
+}
+
+/// A symbol as Honey lists them: 1-20 letters, digits, dots or dashes.
+fn valid_symbol(symbol: &str) -> Result<&str, AppError> {
+    let symbol = symbol.trim();
+    if symbol.is_empty()
+        || symbol.len() > 20
+        || !symbol
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+    {
+        return Err(bad("symbol must be 1-20 letters or digits"));
+    }
+    Ok(symbol)
+}
+
+/// `GET /market/info?symbol=cbBTC`: About text, website, explorer, logo, caps and supply
+/// (CoinGecko, by the id the 1Click list gives the token).
+async fn info(
+    State(market): State<Arc<MarketData>>,
+    Query(q): Query<SymbolQuery>,
+) -> Result<Json<TokenInfo>, AppError> {
+    market
+        .token_info(valid_symbol(&q.symbol)?)
+        .await
+        .map(Json)
+        .map_err(|_| AppError::Unsupported("no details for this token".into()))
+}
+
+/// `GET /market/logos`: a logo URL for every symbol 1Click lists, `{ "AAVE": "https://…" }`.
+async fn logos(
+    State(market): State<Arc<MarketData>>,
+) -> Result<Json<std::collections::BTreeMap<String, String>>, AppError> {
+    market
+        .token_logos()
+        .await
+        .map(|logos| Json((*logos).clone()))
+        .map_err(|_| AppError::Unsupported("token logos unavailable".into()))
+}
+
+/// `GET /market/chart?symbol=cbBTC&range=1W`: USD prices for 1H, 1D, 1W, 1M, 1Y or All.
+async fn chart(
+    State(market): State<Arc<MarketData>>,
+    Query(q): Query<ChartQuery>,
+) -> Result<Json<TokenChart>, AppError> {
+    let symbol = valid_symbol(&q.symbol)?;
+    let range = ChartRange::parse(q.range.trim())
+        .ok_or_else(|| bad("range must be 1H, 1D, 1W, 1M, 1Y or All"))?;
+    market
+        .token_chart(symbol, range)
+        .await
+        .map(Json)
+        .map_err(|_| AppError::Unsupported("no price history for this token".into()))
 }
 
 /// `GET /market/tokens`: every symbol 1Click can deliver on Honey's chains, with its

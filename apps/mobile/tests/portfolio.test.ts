@@ -2,9 +2,8 @@ import { expect, it, vi } from 'vitest';
 
 vi.mock('@/lib/api', () => ({ api: {} }));
 
-const { addressesOf, arrivals, recentRecipients, toActivity, toHoldings, toTokens } = await import(
-  '@/lib/portfolio'
-);
+const { addressesOf, arrivals, isLikelySpam, recentRecipients, toActivity, toHoldings, toTokens } =
+  await import('@/lib/portfolio');
 
 const h = (chain: string, symbol: string, amount: number, usd: number) => ({
   chain,
@@ -86,4 +85,31 @@ it('derives recents from real sends and reports arrivals', () => {
     '0.500 SOL arrived on Solana',
   ]);
   expect(arrivals([h('Solana', 'SOL', 1, 150)], [h('Solana', 'SOL', 1, 150)])).toEqual([]);
+});
+
+const item = (symbol: string, amount: number, direction: 'sent' | 'received' = 'received') => ({
+  chain: 'Ethereum',
+  hash: '0x1',
+  direction,
+  symbol,
+  amount,
+  counterparty: '0xabc',
+  timestamp: 1,
+  failed: false,
+  explorerUrl: 'https://etherscan.io/tx/0x1',
+});
+
+it('hides airdrop spam but never real coins or what you sent', () => {
+  const known = new Set(['ETH', 'USDC', 'PEPE']);
+  // Link bait, absurd amounts and unknown tokens are spam.
+  expect(isLikelySpam(item('Visit x.com to claim', 1), known)).toBe(true);
+  expect(isLikelySpam(item('ETHCAT', 5), known)).toBe(true);
+  expect(isLikelySpam(item('PEPE', 8.6e24), known)).toBe(true);
+  // Real coins, known tokens and anything you sent stay.
+  expect(isLikelySpam(item('ETH', 1), known)).toBe(false);
+  expect(isLikelySpam(item('PEPE', 1000), known)).toBe(false);
+  expect(isLikelySpam(item('ETHCAT', 5, 'sent'), known)).toBe(false);
+  // Without a known list yet, only the obvious cases are hidden.
+  expect(isLikelySpam(item('ETHCAT', 5))).toBe(false);
+  expect(isLikelySpam(item('www.free.io', 5))).toBe(true);
 });

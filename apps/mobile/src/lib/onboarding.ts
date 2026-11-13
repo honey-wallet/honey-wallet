@@ -4,10 +4,12 @@ import { forgetSavedBackendSession } from '@/lib/backend-session';
 import { forgetSites } from '@/lib/dapp';
 import { demoLabel } from '@/lib/demo-money-copy';
 import { signOutIdentity } from '@/lib/identity';
+import { takeIntent } from '@/lib/intent';
 import { persistence } from '@/lib/persistence';
 import { isWeb } from '@/lib/platform';
 import { setProfile } from '@/lib/profile';
 import { createStore } from '@/lib/store';
+import { EXTENSION, EXTENSION_OFFERED, LANDING } from '@/lib/surface';
 import { showToast } from '@/lib/toast';
 import { eraseVault } from '@/lib/vault';
 import { wallets } from '@/lib/wallets';
@@ -101,7 +103,12 @@ const BROWSER_ONLY: SetupStep[] = ['phone'];
 
 /** The checklist for this platform. (`method` is kept for callers; every way in has one.) */
 export function setupSteps(_method: SignInMethod | null) {
-  return ALL_STEPS.filter((s) => !(isWeb ? PHONE_ONLY : BROWSER_ONLY).includes(s.id));
+  return ALL_STEPS.filter(
+    (s) =>
+      !(isWeb ? PHONE_ONLY : BROWSER_ONLY).includes(s.id) &&
+      // No extension to pair with while it isn't offered.
+      (s.id !== 'browser' || EXTENSION_OFFERED),
+  );
 }
 
 /** The reward for finishing setup: credit against network fees. */
@@ -127,6 +134,7 @@ const onboarding = createStore<Onboarding>(
 );
 
 export const useOnboarding = onboarding.useValue;
+export const getOnboarding = onboarding.get;
 
 /** True once every setup step is done. */
 /** How many of this platform's steps are done (a browser has no Face ID step to count). */
@@ -159,7 +167,15 @@ export function finishOnboarding(
   if (name) setProfile({ name });
   else if (email) setProfile({ name: nameFromEmail(email) });
   router.dismissAll();
-  router.replace('/home');
+  // The phone opens on the Feed after onboarding; Honey for Chrome on the wallet.
+  router.replace(LANDING);
+  // Browse first (lib/intent): back to what they were doing when we asked for a wallet,
+  // e.g. the jar they were copying. After the replace lands, so it stacks on the tabs.
+  const intent = takeIntent();
+  if (intent?.href && intent.href !== LANDING) {
+    const href = intent.href;
+    setTimeout(() => router.push(href as never), 60);
+  }
 }
 
 /** "maya.lee@gmail.com" → "Maya". */
@@ -205,5 +221,6 @@ export async function signOut(confirmedAccountIds: readonly string[]) {
   wallets.set({ activeId: 'main', added: [] });
   setProfile({ name: 'Honey', photo: null, avatarSeed: randomAvatarSeed() });
   router.dismissAll();
-  router.replace('/welcome');
+  // The phone goes back to browsing (lib/intent); Honey for Chrome is a wallet, so Welcome.
+  router.replace(EXTENSION ? '/welcome' : LANDING);
 }

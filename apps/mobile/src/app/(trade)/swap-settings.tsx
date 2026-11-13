@@ -70,17 +70,8 @@ export default function SwapSettingsSheet() {
               accessory="chevron"
               onPress={() => go('slippage')}
             />
-            <SheetRow
-              title="Swap protection"
-              subtitle="Private submission isn't available yet"
-              accessory={
-                <Toggle
-                  accessibilityLabel="Swap protection"
-                  value={false}
-                  onValueChange={() => {}}
-                />
-              }
-            />
+            {/* No Swap protection row: private submission isn't built, and a dead toggle
+                only advertised it. */}
             <SheetRow
               title="Trade options"
               value={smartRouting ? 'Default' : 'Custom'}
@@ -104,8 +95,7 @@ export default function SwapSettingsSheet() {
           <View>
             <SheetHeader title="Max slippage" onBack={() => go('settings')} />
             <SheetText>
-              Your swap is cancelled if the price moves more than this before it goes through. For
-              swaps with several steps, it applies to each step.
+              Your swap is cancelled if the price moves more than this before it goes through.
             </SheetText>
             <View style={styles.stepper}>
               <PressableScale
@@ -147,7 +137,7 @@ export default function SwapSettingsSheet() {
             <SheetHeader title="Trade options" onBack={() => go('settings')} />
             <SheetRow
               title="Default"
-              subtitle="Honey picks the best route for each trade, counting the tokens you get and the network costs."
+              subtitle="Honey picks the best route for each trade"
               accessory={
                 <Toggle
                   accessibilityLabel="Default routing"

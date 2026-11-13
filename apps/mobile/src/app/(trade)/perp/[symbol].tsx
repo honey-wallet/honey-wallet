@@ -44,6 +44,7 @@ import {
 } from '@/lib/perps';
 import { useTradeModeAllowed } from '@/lib/trade-modes';
 import { useActiveWallet } from '@/lib/wallets';
+import { Gate } from '@/lib/warnings';
 import { makeStyles, radius, useTheme } from '@/theme';
 
 const CHART_HEIGHT = 240;
@@ -280,10 +281,12 @@ function PerpScreen() {
         </View>
       ) : null}
 
-      <Text style={[styles.gutter, styles.disclaimer]}>
-        Perps are high risk. Prices and funding come from the market and can move fast. Only trade
-        what you can afford to lose.
-      </Text>
+      <Gate id="perpsRiskDisclaimer">
+        <Text style={[styles.gutter, styles.disclaimer]}>
+          Perps are high risk. Prices and funding come from the market and can move fast. Only trade
+          what you can afford to lose.
+        </Text>
+      </Gate>
     </PushedScreen>
   );
 }

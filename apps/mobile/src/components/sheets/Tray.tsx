@@ -19,10 +19,12 @@ import {
   useState,
 } from 'react';
 import {
+  Keyboard,
   type LayoutChangeEvent,
   Modal,
   Pressable,
   StyleSheet,
+  TextInput,
   useWindowDimensions,
   View,
 } from 'react-native';
@@ -32,6 +34,7 @@ import Animated, {
   ReduceMotion,
   runOnJS,
   useAnimatedKeyboard,
+  useAnimatedRef,
   useAnimatedScrollHandler,
   useAnimatedStyle,
   useDerivedValue,
@@ -125,6 +128,24 @@ const STACK_LIFT = 14;
 const TrayContext = createContext(false);
 export const useInTray = () => useContext(TrayContext);
 
+/** Space under a tray's content, above the home indicator. */
+export const TRAY_BOTTOM = 20;
+/** Space between a tray's footer buttons and the keyboard. */
+const KEYBOARD_GAP = 12;
+/** A tray's side gutter, as the sheet frame's (SHEET.gutter). */
+const FOOTER_GUTTER = 20;
+/** Room kept around a focused field when scrolling it into view: covers its box's padding. */
+const REVEAL_MARGIN = 28;
+
+/**
+ * Where a sheet in a tray puts its footer buttons: pinned to the card's bottom edge, out
+ * of the scrolling content, so they sit just above the keyboard while you type and the
+ * content scrolls behind them. `owner` lets one screen clear only its own footer.
+ */
+type PlaceFooter = (owner: number, node: ReactNode | null) => void;
+const TrayFooterContext = createContext<PlaceFooter | null>(null);
+export const useTrayFooter = () => useContext(TrayFooterContext);
+
 /**
  * The tray itself: backdrop, floating card, close button, drag to dismiss. `open`
  * false plays the exit, then `onExited`. `onClose` is any request to close (button,
@@ -150,6 +171,27 @@ function TrayFrame({
   const { height: screen } = useWindowDimensions();
   const reduceMotion = useReducedMotion();
   const keyboard = useAnimatedKeyboard();
+  const scrollRef = useAnimatedRef<Animated.ScrollView>();
+  const contentRef = useRef<View>(null);
+
+  // The pinned footer (see TrayFooterContext) and its height without the space under it.
+  const [footer, setFooter] = useState<{ owner: number; node: ReactNode } | null>(null);
+  const placeFooter = useCallback<PlaceFooter>(
+    (owner, node) =>
+      setFooter((prev) => (node == null ? (prev?.owner === owner ? null : prev) : { owner, node })),
+    [],
+  );
+  const footerHeight = useSharedValue(0);
+  const hasFooter = useSharedValue(false);
+  useEffect(() => {
+    hasFooter.value = footer != null;
+    if (!footer) footerHeight.value = 0;
+  }, [footer, footerHeight, hasFooter]);
+  const homeIndicator = TRAY_BOTTOM + insets.bottom;
+  // Under the footer: the home indicator's room, or a small gap over the keyboard.
+  const footerPad = useDerivedValue(() =>
+    hasFooter.value ? (keyboard.height.value > 0 ? KEYBOARD_GAP : homeIndicator) : 0,
+  );
 
   const maxHeight = screen - insets.top - 24;
   const height = useSharedValue(0);
@@ -161,9 +203,11 @@ function TrayFrame({
   const contentHeight = useSharedValue(0);
   // Keep the top edge below the safe area when the keyboard lifts the card.
   // The scroll view takes over once the content no longer fits this viewport.
+  // The card sits flush on the keyboard, so its footer is just above the keys.
   const viewport = useDerivedValue(() => {
-    const lift = Math.max(0, keyboard.height.value + 8 - TRAY_INSET);
-    return Math.min(height.value, Math.max(1, maxHeight - lift));
+    const lift = Math.max(0, keyboard.height.value - TRAY_INSET);
+    const natural = height.value + footerHeight.value + footerPad.value;
+    return Math.min(natural, Math.max(1, maxHeight - lift));
   });
   const measured = useRef(false);
   const [trayId] = useState(() => nextTrayId++);
@@ -211,6 +255,33 @@ function TrayFrame({
     });
   }, [open, reduceMotion, shown]);
 
+  // When the keyboard comes up, scroll the field being typed in clear of it and the footer.
+  useEffect(() => {
+    const reveal = () => {
+      const input = TextInput.State.currentlyFocusedInput();
+      const content = contentRef.current;
+      if (!input || !content) return;
+      input.measureLayout(content, (_x, y, _w, h) => {
+        const visible = viewport.value - footerHeight.value - footerPad.value;
+        const top = scrollY.value;
+        const to =
+          y + h + REVEAL_MARGIN > top + visible
+            ? y + h + REVEAL_MARGIN - visible
+            : y - REVEAL_MARGIN < top
+              ? Math.max(0, y - REVEAL_MARGIN)
+              : null;
+        if (to != null) scrollRef.current?.scrollTo({ y: to, animated: true });
+      });
+    };
+    const subs = [
+      Keyboard.addListener('keyboardDidShow', reveal),
+      Keyboard.addListener('keyboardDidChangeFrame', reveal),
+    ];
+    return () => {
+      for (const sub of subs) sub.remove();
+    };
+  }, [footerHeight, footerPad, scrollRef, scrollY, viewport]);
+
   const nativeScroll = Gesture.Native();
   const pan = Gesture.Pan()
     .enabled(dismissible && open)
@@ -251,12 +322,17 @@ function TrayFrame({
     scrollY.value = e.contentOffset.y;
   });
 
+  const footerStyle = useAnimatedStyle(() => ({ paddingBottom: footerPad.value }));
+  // The content scrolls in the room above the footer, so a field the platform scrolls to
+  // on focus (Android does, moving between fields) lands above the footer, not under it.
+  const scrollArea = useAnimatedStyle(() => ({ bottom: footerHeight.value + footerPad.value }));
+
   const backdrop = useAnimatedStyle(() => ({
     opacity: shown.value * (1 - Math.min(1, Math.max(0, drag.value) / Math.max(1, viewport.value))),
   }));
   const card = useAnimatedStyle(() => {
     const offscreen = height.value + TRAY_INSET + 40;
-    const lift = keyboard.height.value > 0 ? keyboard.height.value + 8 : TRAY_INSET;
+    const lift = keyboard.height.value > 0 ? keyboard.height.value : TRAY_INSET;
     return {
       height: viewport.value,
       bottom: TRAY_INSET,
@@ -280,47 +356,64 @@ function TrayFrame({
 
   return (
     <TrayContext.Provider value>
-      <View style={StyleSheet.absoluteFill}>
-        <Animated.View style={[StyleSheet.absoluteFill, styles.backdrop, backdrop]}>
-          <Pressable
-            style={StyleSheet.absoluteFill}
-            onPress={dismissible ? onClose : undefined}
-            accessibilityRole="button"
-            accessibilityLabel="Close"
-          />
-        </Animated.View>
-        <GestureDetector gesture={pan}>
-          <Animated.View
-            accessibilityViewIsModal
-            onAccessibilityEscape={dismissible ? onClose : undefined}
-            style={[styles.card, card]}
-          >
-            <GestureDetector gesture={nativeScroll}>
-              <Animated.ScrollView
-                style={StyleSheet.absoluteFill}
-                onScroll={onScroll}
-                scrollEventThrottle={16}
-                bounces={false}
-                showsVerticalScrollIndicator={false}
-                keyboardShouldPersistTaps="handled"
-              >
-                <View onLayout={onContent}>{children}</View>
-              </Animated.ScrollView>
-            </GestureDetector>
-            {dismissible && TRAY_SHOWS_CLOSE ? (
-              <PressableScale
-                accessibilityRole="button"
-                accessibilityLabel="Close"
-                hitSlop={10}
-                onPress={onClose}
-                style={styles.close}
-              >
-                <Icon name="close" size={14} color={c.textSecondary} />
-              </PressableScale>
-            ) : null}
+      <TrayFooterContext.Provider value={placeFooter}>
+        <View style={StyleSheet.absoluteFill}>
+          <Animated.View style={[StyleSheet.absoluteFill, styles.backdrop, backdrop]}>
+            <Pressable
+              style={StyleSheet.absoluteFill}
+              onPress={dismissible ? onClose : undefined}
+              accessibilityRole="button"
+              accessibilityLabel="Close"
+            />
           </Animated.View>
-        </GestureDetector>
-      </View>
+          <GestureDetector gesture={pan}>
+            <Animated.View
+              accessibilityViewIsModal
+              onAccessibilityEscape={dismissible ? onClose : undefined}
+              style={[styles.card, card]}
+            >
+              <GestureDetector gesture={nativeScroll}>
+                <Animated.ScrollView
+                  ref={scrollRef}
+                  style={[styles.scroll, scrollArea]}
+                  onScroll={onScroll}
+                  scrollEventThrottle={16}
+                  bounces={false}
+                  showsVerticalScrollIndicator={false}
+                  keyboardShouldPersistTaps="handled"
+                >
+                  <View ref={contentRef} onLayout={onContent}>
+                    {children}
+                  </View>
+                </Animated.ScrollView>
+              </GestureDetector>
+              {footer ? (
+                <Animated.View style={[styles.footer, footerStyle]}>
+                  <View
+                    onLayout={(e) => {
+                      footerHeight.value = e.nativeEvent.layout.height;
+                    }}
+                    style={styles.footerInner}
+                  >
+                    {footer.node}
+                  </View>
+                </Animated.View>
+              ) : null}
+              {dismissible && TRAY_SHOWS_CLOSE ? (
+                <PressableScale
+                  accessibilityRole="button"
+                  accessibilityLabel="Close"
+                  hitSlop={10}
+                  onPress={onClose}
+                  style={styles.close}
+                >
+                  <Icon name="close" size={14} color={c.textSecondary} />
+                </PressableScale>
+              ) : null}
+            </Animated.View>
+          </GestureDetector>
+        </View>
+      </TrayFooterContext.Provider>
     </TrayContext.Provider>
   );
 }
@@ -443,6 +536,23 @@ export function FlowTray({ children }: { children: ReactNode }) {
 const useStyles = makeStyles((c) => ({
   backdrop: {
     backgroundColor: c.scheme === 'dark' ? 'rgba(0, 0, 0, 0.6)' : 'rgba(19, 19, 19, 0.32)',
+  },
+  scroll: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+  },
+  footer: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    paddingHorizontal: FOOTER_GUTTER,
+    backgroundColor: c.sheet,
+  },
+  footerInner: {
+    paddingTop: 12,
   },
   card: {
     position: 'absolute',

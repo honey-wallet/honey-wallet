@@ -230,160 +230,190 @@ type State = {
   aliases?: Record<string, string>;
 };
 
-const store = createStore<State>(
-  {
-    multisigs: {
-      family: {
-        walletId: 'family',
-        purpose: 'family',
-        protocol: 'safe',
-        network: { name: 'Base', chainId: 8453, native: 'ETH' },
-        members: [
-          you('You', '0x2D41b7c9E03f5a8D1e6B4c2F9a7d0E3b5C8f9a0c'),
-          person('maya', 'Maya', '0x41CDe2b7A9f03c5D8e1B76a4F2c9d7E0b3a5Cee3'),
-          person('dad', 'Dad', '0xBf32a8C1e5D9f0b7A62d74E3c8b1f0a9e92a4312'),
-        ],
-        threshold: 2,
-        dailyLimit: null,
-        spentToday: 0,
-        holdings: [
-          { symbol: 'USDC', chain: 'Base', amount: 80.2, usd: 80.2 },
-          { symbol: 'ETH', chain: 'Base', amount: 0.016, usd: 40.2 },
-        ],
-      },
-      team: {
-        walletId: 'team',
-        purpose: 'team',
-        protocol: 'safe',
-        network: { name: 'Ethereum', chainId: 1, native: 'ETH' },
-        members: TEAM_MEMBERS,
-        threshold: 3,
-        dailyLimit: 250,
-        spentToday: 40,
-        holdings: [
-          { symbol: 'USDC', chain: 'Ethereum', amount: 1200, usd: 1200 },
-          { symbol: 'ETH', chain: 'Ethereum', amount: 0.0876, usd: 220.06 },
-        ],
-      },
-      'team-base': {
-        walletId: 'team-base',
-        purpose: 'team',
-        protocol: 'safe',
-        network: { name: 'Base', chainId: 8453, native: 'ETH' },
-        members: TEAM_MEMBERS,
-        threshold: 3,
-        dailyLimit: 250,
-        spentToday: 0,
-        holdings: [{ symbol: 'USDC', chain: 'Base', amount: 310, usd: 310 }],
-      },
+/** The sample shared wallets, their proposals and history: test mode only. */
+const DEMO_STATE: State = {
+  multisigs: {
+    family: {
+      walletId: 'family',
+      purpose: 'family',
+      protocol: 'safe',
+      network: { name: 'Base', chainId: 8453, native: 'ETH' },
+      members: [
+        you('You', '0x2D41b7c9E03f5a8D1e6B4c2F9a7d0E3b5C8f9a0c'),
+        person('maya', 'Maya', '0x41CDe2b7A9f03c5D8e1B76a4F2c9d7E0b3a5Cee3'),
+        person('dad', 'Dad', '0xBf32a8C1e5D9f0b7A62d74E3c8b1f0a9e92a4312'),
+      ],
+      threshold: 2,
+      dailyLimit: null,
+      spentToday: 0,
+      holdings: [
+        { symbol: 'USDC', chain: 'Base', amount: 80.2, usd: 80.2 },
+        { symbol: 'ETH', chain: 'Base', amount: 0.016, usd: 40.2 },
+      ],
     },
-    proposals: [
-      {
-        id: 'p-rent',
-        walletId: 'family',
-        nonce: 7,
-        action: {
-          type: 'send',
-          symbol: 'USDC',
-          chain: 'Base',
-          amount: 50,
-          usd: 50,
-          to: '0x2E8f1a7B3c9D0e5F6a2b78C4d1E7f3A9b05e41Cd',
-        },
-        createdBy: 'maya',
-        createdAt: minutesAgo(25),
-        approvals: [{ memberId: 'maya', at: minutesAgo(25) }],
-        rejections: [],
-        status: 'pending',
-      },
-      {
-        id: 'p-swap',
-        walletId: 'team',
-        nonce: 41,
-        action: {
-          type: 'swap',
-          from: { symbol: 'USDC', amount: 500 },
-          to: { symbol: 'ETH', amount: 0.1992 },
-          usd: 500,
-          withApproval: true,
-        },
-        createdBy: 'arjun',
-        createdAt: minutesAgo(90),
-        approvals: [
-          { memberId: 'arjun', at: minutesAgo(90) },
-          { memberId: 'lena', at: minutesAgo(40) },
-        ],
-        rejections: [],
-        status: 'pending',
-      },
-      {
-        id: 'p-member',
-        walletId: 'team',
-        nonce: 42,
-        action: {
-          type: 'addMember',
-          member: person('priya', 'Priya', '0x7b4e91F0c3B7a2D8e4f67A1b5C9d3E7f2a8B6c45'),
-        },
-        createdBy: 'lena',
-        createdAt: minutesAgo(30),
-        approvals: [{ memberId: 'lena', at: minutesAgo(30) }],
-        rejections: [],
-        status: 'pending',
-      },
-      {
-        id: 'p-design',
-        walletId: 'team',
-        nonce: 40,
-        action: {
-          type: 'send',
-          symbol: 'USDC',
-          chain: 'Ethereum',
-          amount: 300,
-          usd: 300,
-          to: '0x6aB3c7a3F9c21b4E8d0a5C6f1E2B39d4a8C7e5F0',
-        },
-        createdBy: 'kai',
-        createdAt: minutesAgo(60 * 26),
-        approvals: [
-          { memberId: 'kai', at: minutesAgo(60 * 26) },
-          { memberId: YOU, at: minutesAgo(60 * 25) },
-          { memberId: 'sam', at: minutesAgo(60 * 24) },
-        ],
-        rejections: [],
-        status: 'executed',
-        doneAt: minutesAgo(60 * 24),
-      },
-    ],
-    // What already happened on the seeded wallets, so Notifications has history.
-    events: [
-      {
-        id: 'e-lena',
-        proposalId: 'p-swap',
-        kind: 'approved',
-        memberId: 'lena',
-        memberName: 'Lena',
-        at: minutesAgo(40),
-      },
-      {
-        id: 'e-design-done',
-        proposalId: 'p-design',
-        kind: 'executed',
-        memberId: '',
-        memberName: '',
-        at: minutesAgo(60 * 24),
-      },
-      {
-        id: 'e-design-sam',
-        proposalId: 'p-design',
-        kind: 'approved',
-        memberId: 'sam',
-        memberName: 'Sam',
-        at: minutesAgo(60 * 24 + 1),
-      },
-    ],
+    team: {
+      walletId: 'team',
+      purpose: 'team',
+      protocol: 'safe',
+      network: { name: 'Ethereum', chainId: 1, native: 'ETH' },
+      members: TEAM_MEMBERS,
+      threshold: 3,
+      dailyLimit: 250,
+      spentToday: 40,
+      holdings: [
+        { symbol: 'USDC', chain: 'Ethereum', amount: 1200, usd: 1200 },
+        { symbol: 'ETH', chain: 'Ethereum', amount: 0.0876, usd: 220.06 },
+      ],
+    },
+    'team-base': {
+      walletId: 'team-base',
+      purpose: 'team',
+      protocol: 'safe',
+      network: { name: 'Base', chainId: 8453, native: 'ETH' },
+      members: TEAM_MEMBERS,
+      threshold: 3,
+      dailyLimit: 250,
+      spentToday: 0,
+      holdings: [{ symbol: 'USDC', chain: 'Base', amount: 310, usd: 310 }],
+    },
   },
-  { persist: 'multisig' },
-);
+  proposals: [
+    {
+      id: 'p-rent',
+      walletId: 'family',
+      nonce: 7,
+      action: {
+        type: 'send',
+        symbol: 'USDC',
+        chain: 'Base',
+        amount: 50,
+        usd: 50,
+        to: '0x2E8f1a7B3c9D0e5F6a2b78C4d1E7f3A9b05e41Cd',
+      },
+      createdBy: 'maya',
+      createdAt: minutesAgo(25),
+      approvals: [{ memberId: 'maya', at: minutesAgo(25) }],
+      rejections: [],
+      status: 'pending',
+    },
+    {
+      id: 'p-swap',
+      walletId: 'team',
+      nonce: 41,
+      action: {
+        type: 'swap',
+        from: { symbol: 'USDC', amount: 500 },
+        to: { symbol: 'ETH', amount: 0.1992 },
+        usd: 500,
+        withApproval: true,
+      },
+      createdBy: 'arjun',
+      createdAt: minutesAgo(90),
+      approvals: [
+        { memberId: 'arjun', at: minutesAgo(90) },
+        { memberId: 'lena', at: minutesAgo(40) },
+      ],
+      rejections: [],
+      status: 'pending',
+    },
+    {
+      id: 'p-member',
+      walletId: 'team',
+      nonce: 42,
+      action: {
+        type: 'addMember',
+        member: person('priya', 'Priya', '0x7b4e91F0c3B7a2D8e4f67A1b5C9d3E7f2a8B6c45'),
+      },
+      createdBy: 'lena',
+      createdAt: minutesAgo(30),
+      approvals: [{ memberId: 'lena', at: minutesAgo(30) }],
+      rejections: [],
+      status: 'pending',
+    },
+    {
+      id: 'p-design',
+      walletId: 'team',
+      nonce: 40,
+      action: {
+        type: 'send',
+        symbol: 'USDC',
+        chain: 'Ethereum',
+        amount: 300,
+        usd: 300,
+        to: '0x6aB3c7a3F9c21b4E8d0a5C6f1E2B39d4a8C7e5F0',
+      },
+      createdBy: 'kai',
+      createdAt: minutesAgo(60 * 26),
+      approvals: [
+        { memberId: 'kai', at: minutesAgo(60 * 26) },
+        { memberId: YOU, at: minutesAgo(60 * 25) },
+        { memberId: 'sam', at: minutesAgo(60 * 24) },
+      ],
+      rejections: [],
+      status: 'executed',
+      doneAt: minutesAgo(60 * 24),
+    },
+  ],
+  // What already happened on the seeded wallets, so Notifications has history.
+  events: [
+    {
+      id: 'e-lena',
+      proposalId: 'p-swap',
+      kind: 'approved',
+      memberId: 'lena',
+      memberName: 'Lena',
+      at: minutesAgo(40),
+    },
+    {
+      id: 'e-design-done',
+      proposalId: 'p-design',
+      kind: 'executed',
+      memberId: '',
+      memberName: '',
+      at: minutesAgo(60 * 24),
+    },
+    {
+      id: 'e-design-sam',
+      proposalId: 'p-design',
+      kind: 'approved',
+      memberId: 'sam',
+      memberName: 'Sam',
+      at: minutesAgo(60 * 24 + 1),
+    },
+  ],
+};
+
+const EMPTY_STATE: State = { multisigs: {}, proposals: [], events: [] };
+
+const store = createStore<State>(TEST_MODE ? DEMO_STATE : EMPTY_STATE, { persist: 'multisig' });
+
+/**
+ * Outside test mode only NEAR shared jars (on chain, `dao`) are real. Earlier builds seeded
+ * the sample wallets (Family, Team Treasury) and their proposals into the live app's saved
+ * state, so they're dropped once it loads, with anything else that was only simulated.
+ */
+export function withoutSimulated(s: State): State {
+  const multisigs = Object.fromEntries(
+    Object.entries(s.multisigs).filter(([, m]) => !!m.dao),
+  ) as State['multisigs'];
+  const kept = (walletId: string) => walletId in multisigs;
+  const proposals = s.proposals.filter((p) => kept(p.walletId));
+  const ids = new Set(proposals.map((p) => p.id));
+  const events = s.events.filter((e) => ids.has(e.proposalId));
+  if (
+    Object.keys(multisigs).length === Object.keys(s.multisigs).length &&
+    proposals.length === s.proposals.length &&
+    events.length === s.events.length
+  )
+    return s;
+  return { ...s, multisigs, proposals, events };
+}
+if (!TEST_MODE)
+  void persistence.ready.then(() => {
+    const s = store.get();
+    const clean = withoutSimulated(s);
+    if (clean !== s) store.set(clean);
+  });
 
 export const useMultisigState = store.useValue;
 
@@ -829,7 +859,8 @@ export function propose(walletId: string, action: ProposalAction) {
       : prev.multisigs,
     proposals: [...prev.proposals, proposal],
   }));
-  if (!instant) demoApproval(proposal.id, m);
+  // Only test mode has simulated wallets whose other members can be made to approve.
+  if (!instant && TEST_MODE) demoApproval(proposal.id, m);
   return { proposal, executed: instant };
 }
 
@@ -879,7 +910,8 @@ let demoRequested = false;
  * launch, so the request notification (with Review and Reject) can be seen.
  */
 export function startDemoRequests() {
-  if (demoRequested) return;
+  // The live app never invents requests from other members.
+  if (!TEST_MODE || demoRequested) return;
   demoRequested = true;
   setTimeout(() => {
     const s = store.get();

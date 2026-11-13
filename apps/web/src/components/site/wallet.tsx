@@ -15,7 +15,6 @@ const POINTS = [
   'Send, receive, buy and sell.',
   'Ten EVM chains, from Ethereum and Base to Arbitrum and Polygon, plus Solana and NEAR.',
   'Your recovery phrase is made and kept on your phone. No account needed.',
-  'A Chrome extension that pairs with your phone and connects to websites.',
 ];
 
 export function Wallet() {

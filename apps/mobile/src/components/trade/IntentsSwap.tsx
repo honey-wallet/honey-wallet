@@ -1,6 +1,6 @@
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { type ReactNode, useEffect, useRef, useState } from 'react';
-import { Text, View } from 'react-native';
+import { Text, TextInput, View } from 'react-native';
 import { Icon } from '@/components/Icon';
 import { ContentSwap } from '@/components/motion/ContentSwap';
 import { PressableScale } from '@/components/motion/PressableScale';
@@ -11,33 +11,43 @@ import { SheetHeader } from '@/components/sheets/Sheet';
 import { InlineTray } from '@/components/sheets/Tray';
 import { PopularPairs } from '@/components/trade/PopularPairs';
 import { Spinner } from '@/components/trade/SwapReview';
+import { InFlightBar } from '@/components/wallet/InFlightBar';
 import { applyKey, Keypad, PercentChips, TypedAmount } from '@/components/wallet/Keypad';
 import { SCREEN, TokenIcon } from '@/components/wallet/parts';
 import { backendSession, backendSessionToken } from '@/lib/backend-session';
 import { success, tap } from '@/lib/haptics';
 import {
+  canBuyRef,
+  canSellRef,
   executeSwapPayment,
-  fetchSwapTokens,
+  FALLBACK_SWAP_TOKENS,
+  intentsSwaps,
   isFinal,
-  isSwapToken,
+  loadSwapTokens,
   MAX_INPUT_DECIMALS,
+  needsMemoWarning,
+  needsRecipient,
   prepareSwapPayment,
   quoteSwap,
-  refreshSwaps,
-  SWAP_TOKENS,
   type IntentsSwap as Swap,
   sameToken,
+  shownInWallet,
+  swapAssetOf,
   swapStage,
+  swapTokenList,
   unitsText,
   unsupportedReason,
   useIntentsSwaps,
 } from '@/lib/intents-swap';
 import { formatBalance, formatUsd } from '@/lib/mock-wallet';
 import type { SendPlan } from '@/lib/send';
+import { shareTrade } from '@/lib/social';
 import { type TokenRef, updateSwap, useSwap } from '@/lib/swap';
-import { explorerTx } from '@/lib/tx-receipt';
+import { explorerTxOn } from '@/lib/tx-receipt';
+import { requireWallet, useHasWallet } from '@/lib/wallet-gate';
 import { useWalletView } from '@/lib/wallet-view';
 import { useActiveWallet, wallets } from '@/lib/wallets';
+import { warningOn } from '@/lib/warnings';
 import { makeStyles, radius, useTheme } from '@/theme';
 
 /**
@@ -54,17 +64,22 @@ export function IntentsSwap() {
 const FALLBACK_SELL: TokenRef = { symbol: 'USDC', chain: 'Base' };
 /** A quote must leave this long before its deadline to still be reviewed. */
 const QUOTE_MARGIN_MS = 60_000;
-const POLL_MS = 10_000;
 const KEY_HEIGHT = 52;
+/** Heights of the popular pairs row and the pair preview card, with their margins. */
+const PAIRS_HEIGHT = 84;
+const PREVIEW_HEIGHT = 108;
 
-/** The pair from the shared swap store, moved onto supported tokens when it isn't. */
-function supportedPair(stored: { sell: TokenRef; buy: TokenRef }) {
-  const sell = isSwapToken(stored.sell) ? stored.sell : FALLBACK_SELL;
+/** The pair from the shared swap store, moved onto swappable tokens when it isn't. */
+function supportedPair(
+  stored: { sell: TokenRef; buy: TokenRef },
+  tokens: Parameters<typeof canSellRef>[1],
+) {
+  const sell = canSellRef(stored.sell, tokens) ? stored.sell : FALLBACK_SELL;
   const buy =
-    isSwapToken(stored.buy) && !sameToken(stored.buy, sell)
+    canBuyRef(stored.buy, tokens) && !sameToken(stored.buy, sell)
       ? stored.buy
-      : (SWAP_TOKENS.find((t) => t.chain === sell.chain && !sameToken(t, sell)) ??
-        SWAP_TOKENS.find((t) => !sameToken(t, sell)) ??
+      : (FALLBACK_SWAP_TOKENS.find((t) => t.chain === sell.chain && !sameToken(t, sell)) ??
+        FALLBACK_SWAP_TOKENS.find((t) => !sameToken(t, sell)) ??
         FALLBACK_SELL);
   return { sell, buy };
 }
@@ -103,7 +118,12 @@ function IntentsSwapForm() {
   const c = useTheme();
   const wallet = useActiveWallet();
   const stored = useSwap();
-  const { sell, buy } = supportedPair(stored);
+  // NEAR Intents' live token list: every token and network a swap can reach.
+  const { tokens } = swapTokenList.useValue();
+  useEffect(loadSwapTokens, []);
+  const { sell, buy } = supportedPair(stored, tokens);
+  const sellAsset = tokens ? swapAssetOf(tokens, sell) : null;
+  const buyAsset = tokens ? swapAssetOf(tokens, buy) : null;
   // Keep the store on the shown pair, so the pickers tick what's on screen.
   useEffect(() => {
     if (!sameToken(stored.sell, sell) || !sameToken(stored.buy, buy)) updateSwap({ sell, buy });
@@ -116,43 +136,43 @@ function IntentsSwapForm() {
   const view = useWalletView();
   const holdings = 'holdings' in view ? (view.holdings ?? []) : [];
   const balance = holdings.find((h) => sameToken(h, sell))?.amount ?? 0;
-  const maxDecimals = sell.symbol === 'USDC' ? 6 : MAX_INPUT_DECIMALS;
+  const maxDecimals = sellAsset
+    ? Math.min(MAX_INPUT_DECIMALS, sellAsset.decimals)
+    : sell.symbol === 'USDC'
+      ? 6
+      : MAX_INPUT_DECIMALS;
 
   // The typed amount belongs to the token being sold; picking another clears it.
-  const sellKey = `${sell.symbol}-${sell.chain}`;
+  // The asset id too: two 1Click assets can share a symbol on one chain, and a quote for
+  // one must never be paid with the other picked.
+  const sellKey = `${sell.symbol}-${sell.chain}-${sell.assetId ?? ''}`;
   const [entry, setEntry] = useState({ key: sellKey, amount: '' });
   const amount = entry.key === sellKey ? entry.amount : '';
   const setAmount = (next: string | ((prev: string) => string)) =>
     setEntry({ key: sellKey, amount: typeof next === 'function' ? next(amount) : next });
   const typed = Number(amount) || 0;
   const tooMuch = typed > balance;
+  // From the Feed's Buy sheet: dollars of USDC to sell, filled in once.
+  useEffect(() => {
+    if (!stored.presetAmount || sell.symbol !== 'USDC') return;
+    setEntry({ key: sellKey, amount: stored.presetAmount });
+    updateSwap({ presetAmount: null });
+  }, [stored.presetAmount, sell.symbol, sellKey]);
 
   // 1Click's own prices, for the dollar line before a quote.
-  const [prices, setPrices] = useState<Record<string, number>>({});
-  useEffect(() => {
-    let live = true;
-    void fetchSwapTokens()
-      .then((tokens) => {
-        if (!live) return;
-        const next: Record<string, number> = {};
-        for (const t of tokens) if (t.price) next[`${t.blockchain}:${t.symbol}`] = t.price;
-        setPrices(next);
-      })
-      .catch(() => undefined);
-    return () => {
-      live = false;
-    };
-  }, []);
-  const chainKey: Record<string, string> = {
-    Ethereum: 'eth',
-    Base: 'base',
-    Solana: 'sol',
-    NEAR: 'near',
-  };
-  const sellPrice = prices[`${chainKey[sell.chain]}:${sell.symbol}`];
+  const sellPrice = sellAsset?.price ?? undefined;
+  const buyPrice = buyAsset?.price ?? undefined;
+  // Before a quote: what the amount is worth in the other token at 1Click's prices,
+  // marked as an estimate (the quote, with fees and slippage, is what's paid).
+  const estimate = typed && sellPrice && buyPrice ? (typed * sellPrice) / buyPrice : null;
+
+  // Payouts on a network this wallet has no key for go to an address typed here.
+  const askAddress = !!buyAsset && needsRecipient(buyAsset.blockchain);
+  const [addresses, setAddresses] = useState<Record<string, string>>({});
+  const recipient = askAddress ? (addresses[buy.chain] ?? '').trim() : '';
 
   // A quote belongs to exactly the pair and amount it was asked for.
-  const quoteKey = `${sellKey}>${buy.symbol}-${buy.chain}:${amount}`;
+  const quoteKey = `${sellKey}>${buy.symbol}-${buy.chain}-${buy.assetId ?? ''}:${amount}>${recipient}`;
   const [quote, setQuote] = useState<{ key: string; swap: Swap } | null>(null);
   const [error, setError] = useState<{ key: string; text: string } | null>(null);
   const [quoting, setQuoting] = useState(false);
@@ -161,7 +181,7 @@ function IntentsSwapForm() {
   const now = useNow(asked ? 1000 : null);
   const left = asked ? Date.parse(asked.deadline) - QUOTE_MARGIN_MS - now : 0;
   const current = asked && left > 0 ? asked : null;
-  const reason = unsupportedReason(sell, buy);
+  const reason = unsupportedReason(sell, buy, tokens);
   const shownError =
     error?.key === quoteKey ? error.text : asked && !current ? 'Quote expired.' : null;
 
@@ -172,7 +192,12 @@ function IntentsSwapForm() {
     setQuoting(true);
     setError(null);
     try {
-      const swap = await quoteSwap({ sell, buy, amount });
+      const swap = await quoteSwap({
+        sell,
+        buy,
+        amount,
+        recipient: askAddress ? recipient : undefined,
+      });
       if (id === flight.current) setQuote({ key, swap });
     } catch (e) {
       if (id === flight.current) setError({ key, text: message(e, 'Couldn’t get a quote.') });
@@ -186,48 +211,87 @@ function IntentsSwapForm() {
     updateSwap({ sell: buy, buy: sell });
   };
 
-  // Swaps still moving are followed here every few seconds; they're kept by deposit
-  // address, so leaving and coming back picks them up again.
+  // Swaps are kept by deposit address and followed app-wide (lib/in-flight polls and
+  // toasts when they settle); moving ones show in the bar above, finished ones from the
+  // last hour as rows.
   const all = useIntentsSwaps();
   const mine = Object.values(all)
-    .filter((s) => s.walletId === wallet.id && (!isFinal(s) || now - (s.sentAt ?? 0) < 3600_000))
+    .filter((s) => s.walletId === wallet.id && isFinal(s) && now - (s.sentAt ?? 0) < 3600_000)
     .sort((a, b) => (b.sentAt ?? 0) - (a.sentAt ?? 0))
     .slice(0, 3);
-  const moving = mine.some((s) => !isFinal(s));
-  useEffect(() => {
-    if (!moving) return;
-    void refreshSwaps();
-    const timer = setInterval(() => void refreshSwaps(), POLL_MS);
-    return () => clearInterval(timer);
-  }, [moving]);
 
   const [tray, setTray] = useState<TrayState | null>(null);
+  // Opened from "1 swap in progress" elsewhere: straight to that swap's progress.
+  const { swap: openSwap } = useLocalSearchParams<{ swap?: string }>();
+  useEffect(() => {
+    const s = openSwap ? intentsSwaps.get()[openSwap] : undefined;
+    if (!s) return;
+    setTray({ kind: 'progress', swap: s });
+    router.setParams({ swap: undefined });
+  }, [openSwap]);
+  // Free height above the keypad, measured while the preview is hidden (the page scrolls,
+  // so with it shown the room would just grow to fit it), and whether popular pairs
+  // take some of it.
+  const [room, setRoom] = useState<number | null>(null);
+  const pairs = !amount && !askAddress;
+  const preview = room !== null && room >= (pairs ? PAIRS_HEIGHT : 0) + PREVIEW_HEIGHT;
   // One payment at a time: a second tap must never start a second send.
   const paying = useRef(false);
+  const walletHere = useHasWallet();
 
-  const cta = !signedIn
-    ? { label: 'Sign in to swap', onPress: () => router.push('/wallet-sign-in'), disabled: false }
-    : reason
-      ? { label: 'Pick another pair', onPress: () => undefined, disabled: true }
-      : !typed
-        ? { label: 'Enter an amount', onPress: () => undefined, disabled: true }
-        : tooMuch
-          ? { label: `Not enough ${sell.symbol}`, onPress: () => undefined, disabled: true }
-          : quoting
-            ? { label: 'Getting quote…', onPress: () => undefined, disabled: true }
-            : current
-              ? {
-                  label: 'Review swap',
-                  onPress: () => {
-                    tap();
-                    setTray({ kind: 'review', swap: current });
-                  },
-                  disabled: false,
-                }
-              : { label: 'Get quote', onPress: () => void getQuote(), disabled: false };
+  const cta = !walletHere
+    ? // Browsing without a wallet (lib/intent): get one, then come back to this swap.
+      {
+        label: 'Get started to swap',
+        onPress: () => {
+          tap();
+          requireWallet(`swap to ${buy.symbol}`, '/trade');
+        },
+        disabled: false,
+      }
+    : wallet.watchOnly
+      ? // Its keys aren't on this phone: nothing here could sign the deposit.
+        { label: 'Watch-only wallet can’t swap', onPress: () => undefined, disabled: true }
+      : !signedIn
+        ? {
+            label: 'Sign in to swap',
+            onPress: () => router.push('/wallet-sign-in'),
+            disabled: false,
+          }
+        : reason
+          ? { label: 'Pick another pair', onPress: () => undefined, disabled: true }
+          : !typed
+            ? { label: 'Enter an amount', onPress: () => undefined, disabled: true }
+            : tooMuch
+              ? { label: `Not enough ${sell.symbol}`, onPress: () => undefined, disabled: true }
+              : askAddress && !recipient
+                ? {
+                    label: `Enter a ${buy.chain} address`,
+                    onPress: () => undefined,
+                    disabled: true,
+                  }
+                : quoting
+                  ? { label: 'Getting quote…', onPress: () => undefined, disabled: true }
+                  : current
+                    ? {
+                        label: 'Review swap',
+                        onPress: () => {
+                          tap();
+                          setTray({ kind: 'review', swap: current });
+                        },
+                        disabled: false,
+                      }
+                    : { label: 'Get quote', onPress: () => void getQuote(), disabled: false };
 
   return (
     <View style={styles.flex}>
+      <InFlightBar
+        walletId={wallet.id}
+        onSwap={(id) => {
+          const s = all[id];
+          if (s) setTray({ kind: 'progress', swap: s });
+        }}
+      />
       {mine.map((s) => (
         <RecentSwap
           key={s.depositAddress}
@@ -292,7 +356,11 @@ function IntentsSwapForm() {
               numberOfLines={1}
               adjustsFontSizeToFit
             >
-              {current ? `≥ ${short(current.minAmountOut, current.buyDecimals)}` : '0'}
+              {current
+                ? `≥ ${short(current.minAmountOut, current.buyDecimals)}`
+                : estimate
+                  ? `≈ ${formatBalance(estimate)}`
+                  : '0'}
             </Text>
             <TokenPill side="buy" token={buy} />
           </View>
@@ -305,6 +373,10 @@ function IntentsSwapForm() {
               {current.usdOutMin !== null ? `≈ ${formatUsd(current.usdOutMin)} · ` : ''}
               {arrivesIn(current.timeEstimate)}
             </Text>
+          ) : estimate ? (
+            <Text style={styles.meta}>
+              {`Estimate · ${sell.chain === buy.chain ? buy.chain : `${sell.chain} → ${buy.chain}`}`}
+            </Text>
           ) : (
             <Text style={styles.meta}>
               {sell.chain === buy.chain ? buy.chain : `${sell.chain} → ${buy.chain}`}
@@ -312,29 +384,69 @@ function IntentsSwapForm() {
           )}
         </View>
       </View>
-
-      {reason || shownError ? (
+      {askAddress ? (
+        <TextInput
+          value={addresses[buy.chain] ?? ''}
+          onChangeText={(text) => setAddresses((prev) => ({ ...prev, [buy.chain]: text }))}
+          placeholder={`Your ${buy.chain} address to receive at`}
+          placeholderTextColor={c.placeholder}
+          autoCapitalize="none"
+          autoCorrect={false}
+          spellCheck={false}
+          accessibilityLabel={`${buy.chain} address to receive at`}
+          style={styles.addressInput}
+        />
+      ) : null}
+      {warningOn('memoExchangeWarning') && askAddress && needsMemoWarning(buy.chain) ? (
         <View style={styles.notice}>
           <Icon name="warning" size={14} color={c.error} />
-          <Text style={[styles.meta, styles.error, styles.flex]}>{reason ?? shownError}</Text>
+          <Text style={[styles.meta, styles.error, styles.flex]}>
+            {`Use your own ${buy.chain} wallet, not an exchange: a swap can’t add the memo or tag exchanges need, so funds sent there can be lost.`}
+          </Text>
         </View>
-      ) : current ? (
-        <View style={styles.details}>
-          <DetailRow label="Route" value="NEAR Intents" />
-          <DetailRow
-            label="You get at least"
-            value={`${short(current.minAmountOut, current.buyDecimals)} ${buy.symbol}`}
-          />
-          <DetailRow label="Arrives" value={arrivesIn(current.timeEstimate)} />
-          <DetailRow label="Max slippage" value={`${current.slippageBps / 100}%`} />
-          <DetailRow label="Quote good for" value={countdown(left)} />
-        </View>
-      ) : amount ? null : (
-        // Before an amount is typed, popular pairs fill the room above the keypad (review).
-        <PopularPairs current={{ sell, buy }} gutter={SCREEN.gutter} />
-      )}
+      ) : null}
 
-      <View style={styles.flex} />
+      {/* The room between the cards and the keypad; measured so the pair preview only
+          shows where it fits, keeping the keypad and the button pinned to the bottom. */}
+      <View
+        style={styles.flex}
+        onLayout={(e) => {
+          if (!preview) setRoom(e.nativeEvent.layout.height);
+        }}
+      >
+        {reason || shownError ? (
+          <View style={styles.notice}>
+            <Icon name="warning" size={14} color={c.error} />
+            <Text style={[styles.meta, styles.error, styles.flex]}>{reason ?? shownError}</Text>
+          </View>
+        ) : current ? (
+          <View style={styles.details}>
+            <DetailRow label="Route" value="NEAR Intents" />
+            <DetailRow
+              label="You get at least"
+              value={`${short(current.minAmountOut, current.buyDecimals)} ${buy.symbol}`}
+            />
+            <DetailRow label="Arrives" value={arrivesIn(current.timeEstimate)} />
+            <DetailRow label="Max slippage" value={`${current.slippageBps / 100}%`} />
+            <DetailRow label="Quote good for" value={countdown(left)} />
+          </View>
+        ) : (
+          <>
+            {/* Before an amount is typed, popular pairs and the pair's rate and route fill
+              the room above the keypad (review). */}
+            {pairs ? <PopularPairs current={{ sell, buy }} gutter={SCREEN.gutter} /> : null}
+            {preview ? (
+              <PairPreview
+                sell={sell}
+                buy={buy}
+                sellPrice={sellAsset?.price ?? null}
+                buyPrice={buyAsset?.price ?? null}
+                external={askAddress}
+              />
+            ) : null}
+          </>
+        )}
+      </View>
       <PercentChips
         balance={balance}
         decimals={maxDecimals}
@@ -497,6 +609,12 @@ function ReviewStep({
         If the swap can’t fill, NEAR Intents refunds your {swap.sell.symbol} to you on{' '}
         {swap.sell.chain}.
       </Text>
+      {swap.externalRecipient ? (
+        <Text style={[styles.small, styles.warn]}>
+          {swap.buy.symbol} goes to the {swap.buy.chain} address you entered, not this wallet. Check
+          it: a payout can’t be sent back.
+        </Text>
+      ) : null}
       {plan?.note ? <Text style={styles.small}>{plan.note}</Text> : null}
       {error || note ? <Text style={[styles.small, styles.error]}>{error ?? note}</Text> : null}
       <View style={styles.actions}>
@@ -540,9 +658,17 @@ function ProgressStep({ swap, error, onDone }: { swap: Swap; error?: string; onD
   const stage = swapStage(swap);
   const wasDone = useRef(stage === 'done');
   useEffect(() => {
-    if (stage === 'done' && !wasDone.current) success();
+    if (stage === 'done' && !wasDone.current) {
+      success();
+      // Into the feed only when "Share my trades" is on (checked inside), never for a
+      // payout to a typed-in address; the server verifies it with 1Click.
+      void shareTrade({
+        depositAddress: swap.depositAddress,
+        externalRecipient: swap.externalRecipient,
+      });
+    }
     wasDone.current = stage === 'done';
-  }, [stage]);
+  }, [stage, swap.depositAddress, swap.externalRecipient]);
   const pay = `${short(swap.amountIn, swap.sellDecimals)} ${swap.sell.symbol}`;
   const get = `${short(swap.minAmountOut, swap.buyDecimals)} ${swap.buy.symbol}`;
   const sentOk = !['quoted', 'sending'].includes(stage) && swap.status !== 'NOT_SENT';
@@ -558,7 +684,7 @@ function ProgressStep({ swap, error, onDone }: { swap: Swap; error?: string; onD
       link:
         swap.txHash && swap.explorerUrl ? (
           <ExplorerLink
-            name={explorerTx(swap.sell.chain, swap.txHash).name}
+            name={explorerTxOn(swap.sell.chain, swap.txHash)?.name ?? 'Explorer'}
             url={swap.explorerUrl}
           />
         ) : undefined,
@@ -580,9 +706,11 @@ function ProgressStep({ swap, error, onDone }: { swap: Swap; error?: string; onD
       : {
           label: `Receive ${swap.buy.symbol} on ${swap.buy.chain}`,
           state: stage === 'done' ? 'done' : stage === 'failed' ? 'failed' : 'waiting',
-          link: swap.destinationTxHashes?.[0] ? (
-            <ExplorerLink {...explorerTx(swap.buy.chain, swap.destinationTxHashes[0])} />
-          ) : undefined,
+          link: (() => {
+            const hash = swap.destinationTxHashes?.[0];
+            const link = hash ? explorerTxOn(swap.buy.chain, hash) : null;
+            return link ? <ExplorerLink {...link} /> : undefined;
+          })(),
         },
   ];
   const title = {
@@ -603,7 +731,13 @@ function ProgressStep({ swap, error, onDone }: { swap: Swap; error?: string; onD
     stage === 'sending'
       ? 'Confirm with Face ID or your password, then the deposit goes out.'
       : stage === 'done'
-        ? `It’s in your wallet on ${swap.buy.chain}.`
+        ? swap.externalRecipient
+          ? `It’s at the address you entered on ${swap.buy.chain}.`
+          : shownInWallet(swap.buy.chain)
+            ? `It’s in your wallet on ${swap.buy.chain}.`
+            : // Your EVM address on a chain Honey doesn't list yet (BNB Chain, Polygon…):
+              // the funds are yours, but Home won't show them.
+              `It’s at your address on ${swap.buy.chain}. Honey doesn’t show ${swap.buy.chain} balances yet: see it in an explorer or another wallet.`
         : stage === 'refunded'
           ? `Your ${swap.sell.symbol} went back to you on ${swap.sell.chain}.`
           : stage === 'failed'
@@ -705,6 +839,51 @@ function RecentSwap({ swap, onPress }: { swap: Swap; onPress: () => void }) {
       {isFinal(swap) ? null : <Spinner />}
       <Text style={styles.meta}>{label}</Text>
     </PressableScale>
+  );
+}
+
+/** "1 ETH ≈ 41.2 SOL", from NEAR Intents' prices; null when either isn't priced. */
+function rateText(
+  sell: TokenRef,
+  buy: TokenRef,
+  sellPrice: number | null,
+  buyPrice: number | null,
+) {
+  if (!sellPrice || !buyPrice) return null;
+  const rate = sellPrice / buyPrice;
+  const shown = rate >= 1000 ? rate.toFixed(0) : Number(rate.toPrecision(4)).toString();
+  return `1 ${sell.symbol} ≈ ${shown} ${buy.symbol}`;
+}
+
+/**
+ * Before a quote: the pair's rate at NEAR Intents' prices, the route and networks, and
+ * where refunds go, so the room above the keypad says what the swap will do (review).
+ * Shown only when it fits (see `room`).
+ */
+function PairPreview({
+  sell,
+  buy,
+  sellPrice,
+  buyPrice,
+  external,
+}: {
+  sell: TokenRef;
+  buy: TokenRef;
+  sellPrice: number | null;
+  buyPrice: number | null;
+  external: boolean;
+}) {
+  const styles = useStyles();
+  const rate = rateText(sell, buy, sellPrice, buyPrice);
+  return (
+    <View style={styles.details}>
+      <DetailRow label="Rate" value={rate ?? '—'} />
+      <DetailRow label="Route" value="NEAR Intents" />
+      <DetailRow
+        label={external ? 'Receive at' : 'If it can’t fill'}
+        value={external ? 'Address you enter' : `Refunded on ${sell.chain}`}
+      />
+    </View>
   );
 }
 
@@ -828,6 +1007,18 @@ const useStyles = makeStyles((c) => ({
   },
   error: {
     color: c.error,
+  },
+  warn: {
+    color: c.text,
+  },
+  addressInput: {
+    marginTop: 8,
+    height: 48,
+    paddingHorizontal: 12,
+    ...radius(16),
+    backgroundColor: c.card,
+    color: c.text,
+    fontSize: 15,
   },
   notice: {
     marginTop: 12,

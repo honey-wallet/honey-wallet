@@ -17,11 +17,12 @@ import { showToast } from '@/lib/toast';
 import { makeStyles, radius, useTheme } from '@/theme';
 import { DISTANCE, DURATION, EASE } from '@/theme/motion';
 
+// Only what Honey notifies about today: payments in and out, and shared jars waiting
+// for your vote (no price alerts or savings goals, which aren't live).
 const PREVIEW = [
-  { title: 'Maya wants to send 50 USDC', body: 'Family · needs your approval' },
   { title: 'You received USDC', body: 'Received 100 USDC from 0x8f3a…c21e' },
-  { title: 'ETH is up 5.6%', body: 'Ethereum (ETH) is up to $3,249.55' },
-  { title: 'Your Honey Jar hit 50%', body: 'Halfway to your "Summer trip" goal' },
+  { title: 'Sent 0.05 ETH', body: 'To 0x4b1d…92af on Base' },
+  { title: 'A shared jar needs your vote', body: 'Buy $200 of NEAR · 1 of 2 approved' },
 ];
 
 // The preview cards rise in turn, 80ms apart, once the sheet has settled: a one-off

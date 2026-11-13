@@ -24,6 +24,7 @@ import {
 } from '@/lib/earn-amount';
 import { signReviewedMorpho } from '@/lib/morpho-execution';
 import { useActiveWallet } from '@/lib/wallets';
+import { Gate } from '@/lib/warnings';
 import { makeStyles, radius } from '@/theme';
 
 type Pending = {
@@ -282,15 +283,15 @@ function MorphoExecutionForWallet() {
               editable={!busy}
             />
             <PillButton
-              label="Quote deposit"
-              disabled={busy || !session.profile}
-              onPress={() => void run(() => loadQuote('deposit'))}
-            />
-            <PillButton
               label="Quote share redemption"
               variant="secondary"
               disabled={busy || !session.profile}
               onPress={() => void run(() => loadQuote('redeem'))}
+            />
+            <PillButton
+              label="Quote deposit"
+              disabled={busy || !session.profile}
+              onPress={() => void run(() => loadQuote('deposit'))}
             />
             {quote ? (
               <>
@@ -305,10 +306,12 @@ function MorphoExecutionForWallet() {
                   <Text style={styles.note}>Minimum shares are set 0.1% below this estimate.</Text>
                 ) : (
                   <>
-                    <Text style={styles.note}>
-                      Redemption spends the exact shares entered. The contract has no minimum payout
-                      protection; the token amount may change before execution.
-                    </Text>
+                    <Gate id="morphoPayoutNote">
+                      <Text style={styles.note}>
+                        Redemption spends the exact shares entered. The contract has no minimum
+                        payout protection; the token amount may change before execution.
+                      </Text>
+                    </Gate>
                     <PillButton
                       label={
                         acknowledged ? 'Payout risk acknowledged' : 'Acknowledge variable payout'
@@ -421,7 +424,6 @@ function MorphoExecutionForWallet() {
               execute. Signature requests expire after two minutes; broadcast transactions can still
               settle later.
             </Text>
-            <PillButton label="Confirm and sign" disabled={busy} onPress={() => void run(sign)} />
             <PillButton
               label="Cancel review"
               variant="secondary"
@@ -431,6 +433,7 @@ function MorphoExecutionForWallet() {
                 setReview(null);
               }}
             />
+            <PillButton label="Confirm and sign" disabled={busy} onPress={() => void run(sign)} />
           </>
         ) : null}
         {terminal || (status === 'awaiting_signature' && operation?.preparation?.expired) ? (

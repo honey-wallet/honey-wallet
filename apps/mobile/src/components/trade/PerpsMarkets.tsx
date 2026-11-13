@@ -39,7 +39,7 @@ const SORT_ICON: Record<PerpSort, IconName> = {
   openInterest: 'layers',
   gainers: 'trendUp',
   losers: 'trendDown',
-  leverage: 'sparkles',
+  leverage: 'target',
 };
 
 /**

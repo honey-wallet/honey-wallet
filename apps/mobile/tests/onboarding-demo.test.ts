@@ -45,7 +45,8 @@ it('keeps the backup step for Apple / Google / email wallets: their phrase lives
   for (const method of ['apple', 'google', 'email', 'phrase'] as const) {
     const steps = setupSteps(method).map((s) => s.id);
     expect(steps).toContain('backup');
-    expect(steps).toContain('browser');
+    // Honey for Chrome isn't offered for now (lib/surface EXTENSION_OFFERED).
+    expect(steps).not.toContain('browser');
     expect(steps).not.toContain('phone');
   }
 });

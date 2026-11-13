@@ -6,10 +6,18 @@ import { SheetScreen } from '@/components/sheets/Sheet';
 import { tap } from '@/lib/haptics';
 import { leaveSheetTo } from '@/lib/navigation';
 // import { isWeb } from '@/lib/platform';
+import { TEST_MODE } from '@/lib/test-mode';
+import { useWalletRequired } from '@/lib/wallet-gate';
 import { makeStyles, radius, useTheme } from '@/theme';
 
 /** Buy (or sell) sheet: with cash, or by swapping what you already hold. */
-export default function BuySheet() {
+// Needs a wallet; browsing visitors are taken to "Get started" first (lib/wallet-gate).
+export default function BuySheetRoute() {
+  const walletHere = useWalletRequired('buy crypto');
+  return walletHere ? <BuySheet /> : null;
+}
+
+function BuySheet() {
   const { mode, symbol } = useLocalSearchParams<{ mode?: string; symbol?: string }>();
   const styles = useStyles();
   const c = useTheme();
@@ -20,7 +28,12 @@ export default function BuySheet() {
     {
       icon: 'bank',
       title: selling ? 'Sell for cash' : 'Buy with cash',
-      hint: selling ? `Send ${what} to your bank account` : 'Use a debit card or bank account',
+      // No card or bank provider is connected outside test mode yet: say so up front.
+      hint: !TEST_MODE
+        ? 'Coming soon'
+        : selling
+          ? `Send ${what} to your bank account`
+          : 'Use a debit card or bank account',
       onPress: () =>
         router.replace({
           pathname: '/buy-cash',

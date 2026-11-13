@@ -34,6 +34,16 @@ export function grab() {
   );
 }
 
+/**
+ * A hard stop: a stepper landing on (or pushed against) its first or last value. Firmer
+ * than the selection tick, so the edge is felt without looking.
+ */
+export function limit() {
+  play(Haptics.AndroidHaptics.Context_Click, () =>
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid),
+  );
+}
+
 /** A completed action, never the start of a request. */
 export function success() {
   play(Haptics.AndroidHaptics.Confirm, () =>

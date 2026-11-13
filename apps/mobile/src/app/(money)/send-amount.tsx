@@ -44,6 +44,7 @@ import { showErrorToast } from '@/lib/toast';
 import { txReceipt } from '@/lib/tx-receipt';
 import { useWalletView } from '@/lib/wallet-view';
 import { useActiveWallet, wallets } from '@/lib/wallets';
+import { warningOn } from '@/lib/warnings';
 import { makeStyles, radius, useTheme } from '@/theme';
 
 type Page = 'pick' | 'amount' | 'review' | 'sent' | 'failed';
@@ -248,8 +249,8 @@ export default function SendAmountSheet() {
           title="Nothing to send yet"
           hint={
             signer.multisig
-              ? `Fund this shared wallet first: send tokens to it on ${signer.multisig.network.name}.`
-              : 'Add money or receive tokens first, then come back to send them.'
+              ? `Send tokens to it on ${signer.multisig.network.name} first.`
+              : 'Add money or receive tokens first.'
           }
           action={
             signer.multisig
@@ -490,10 +491,14 @@ export default function SendAmountSheet() {
                     value={<Text style={styles.total}>{formatUsd(usdValue)}</Text>}
                   />
                 </View>
-                <Text style={[styles.note, styles.noteInTray]}>
-                  {plan?.note ? `${plan.note} ` : ''}Sends can't be undone. Check the address before
-                  you send.
-                </Text>
+                {plan?.note || warningOn('sendIrreversible') ? (
+                  <Text style={[styles.note, styles.noteInTray]}>
+                    {plan?.note ? `${plan.note} ` : ''}
+                    {warningOn('sendIrreversible')
+                      ? "Sends can't be undone. Check the address before you send."
+                      : ''}
+                  </Text>
+                ) : null}
                 <PillButton
                   label={busy ? 'Sending…' : signer.cta('Confirm send', action)}
                   disabled={busy}

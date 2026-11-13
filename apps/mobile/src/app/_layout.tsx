@@ -3,7 +3,15 @@ import '@/lib/walletconnect-compat';
 // Registers the NEAR shared-jar (Sputnik DAO) backend with the multisig store.
 import '@/lib/jar-dao';
 import * as Notifications from 'expo-notifications';
-import { DarkTheme, DefaultTheme, router, Stack, type Theme, ThemeProvider } from 'expo-router';
+import {
+  DarkTheme,
+  DefaultTheme,
+  router,
+  Stack,
+  type Theme,
+  ThemeProvider,
+  usePathname,
+} from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { AppGate } from '@/components/AppGate';
@@ -13,8 +21,10 @@ import { LaunchAnimation } from '@/components/LaunchAnimation';
 import { ToastHost } from '@/components/motion/ToastHost';
 import { Tray } from '@/components/sheets/Tray';
 import { appLock } from '@/lib/app-lock';
+import { useInFlightWatcher } from '@/lib/in-flight';
 import { createMultisig, reject, startDemoRequests } from '@/lib/multisig';
 import { ACTION_REJECT, setUpNotifications } from '@/lib/push';
+import { EXTENSION, hiddenHere, WALLET } from '@/lib/surface';
 import { showToast } from '@/lib/toast';
 import { walletConnect } from '@/lib/walletconnect';
 import { useTheme } from '@/theme';
@@ -58,6 +68,24 @@ function useNotificationResponses() {
 
 function NotificationResponses() {
   useNotificationResponses();
+  return null;
+}
+
+/**
+ * Honey for Chrome is only a wallet (lib/surface): a link or saved route into the Feed,
+ * profiles, Jars or the Thesis agent lands on the wallet instead.
+ */
+function ExtensionRoutes() {
+  const pathname = usePathname();
+  useEffect(() => {
+    if (hiddenHere(pathname)) router.replace(WALLET);
+  }, [pathname]);
+  return null;
+}
+
+/** Swaps and jar buys in flight: followed wherever you are, toasted when they settle. */
+function InFlightWatcher() {
+  useInFlightWatcher();
   return null;
 }
 
@@ -123,7 +151,9 @@ export default function RootLayout() {
         <ThemeProvider value={navigationTheme}>
           <AppGate>
             <NotificationResponses />
+            {EXTENSION ? <ExtensionRoutes /> : null}
             <WalletConnectSessions />
+            <InFlightWatcher />
             <BackendSessionLifecycle />
             <Stack
               screenOptions={{ headerShown: false }}
@@ -141,7 +171,7 @@ export default function RootLayout() {
               <Stack.Screen name="(onboarding)" />
               <Stack.Screen name="(wallet)" options={{ gestureEnabled: false }} />
               <Stack.Screen name="(settings)/settings" />
-              <Stack.Screen name="(account)/wallet-sign-in" />
+              <Stack.Screen name="(account)/wallet-sign-in" options={tray()} />
               <Stack.Screen name="(activity)/notifications" />
               <Stack.Screen name="(portfolio)/token/[symbol]" />
               <Stack.Screen name="(trade)/perp/[symbol]" />
@@ -183,18 +213,33 @@ export default function RootLayout() {
               <Stack.Screen name="(keys)/pair-phone" options={tray()} />
               {/* Honey for Chrome: websites' requests, in their own window */}
               <Stack.Screen name="(connect)/approve" />
-              <Stack.Screen name="(connect)/wc" />
+              <Stack.Screen name="(connect)/wc" options={tray()} />
               {/* The page's own back swipe goes back a page, not out of the browser. */}
               <Stack.Screen name="(connect)/browser" options={{ gestureEnabled: false }} />
               <Stack.Screen name="(settings)/connected-sites" options={tray()} />
               <Stack.Screen name="(keys)/restore-backup" options={tray()} />
               <Stack.Screen name="(keys)/watch-wallet" options={tray()} />
               <Stack.Screen name="(keys)/hardware-wallet" options={tray()} />
+              <Stack.Screen name="(keys)/hardware-accounts" options={tray()} />
               <Stack.Screen name="(savings)/jar-new" options={tray()} />
               <Stack.Screen name="(jars)/thesis-new" options={sheet([1])} />
-              <Stack.Screen name="(jars)/jars" />
+              <Stack.Screen name="(jars)/jar-amount" options={sheet([1])} />
+              <Stack.Screen name="(jars)/jar-build" />
+              <Stack.Screen name="(jars)/saved" />
+              <Stack.Screen name="(jars)/jar-create" options={tray()} />
               <Stack.Screen name="(jars)/thesis-chat" />
               <Stack.Screen name="(jars)/jar/[id]" />
+              {/* Social: public profiles, claiming a handle, followers */}
+              <Stack.Screen name="(social)/u/[handle]" />
+              <Stack.Screen name="(social)/claim-handle" options={tray()} />
+              <Stack.Screen name="(social)/people" options={tray()} />
+              <Stack.Screen name="(social)/find-people" />
+              <Stack.Screen name="(social)/compose" options={sheet([1])} />
+              <Stack.Screen name="(social)/post-buy" options={sheet([1])} />
+              <Stack.Screen name="(social)/pnl" options={tray()} />
+              <Stack.Screen name="(social)/holds" options={tray()} />
+              <Stack.Screen name="(social)/board-more" options={tray()} />
+              <Stack.Screen name="(settings)/settings-privacy" options={tray()} />
               <Stack.Screen name="(savings)/jar-move" options={sheet([1])} />
               {/* Shared wallets */}
               <Stack.Screen name="(shared)/multisig-new" options={tray()} />
@@ -203,6 +248,7 @@ export default function RootLayout() {
               {/* Settings pages (pushed) and pickers (sheets) */}
               <Stack.Screen name="(account)/profile-edit" options={tray()} />
               <Stack.Screen name="(account)/get-started" options={tray()} />
+              <Stack.Screen name="(account)/start" options={tray()} />
               <Stack.Screen name="(account)/setup" options={tray()} />
               <Stack.Screen name="(account)/sign-out" options={tray()} />
               <Stack.Screen name="(account)/delete-account" options={tray()} />
@@ -215,6 +261,10 @@ export default function RootLayout() {
               <Stack.Screen name="(settings)/settings-theme" options={tray()} />
               <Stack.Screen name="(settings)/settings-app-icon" options={tray()} />
               <Stack.Screen name="(settings)/settings-currency" options={tray()} />
+              <Stack.Screen name="(settings)/settings-copy-amount" options={tray()} />
+              <Stack.Screen name="(settings)/settings-jar-visibility" options={tray()} />
+              <Stack.Screen name="(settings)/settings-copy-fee" options={tray()} />
+              <Stack.Screen name="(settings)/settings-slippage" options={tray()} />
               <Stack.Screen name="(settings)/settings-language" options={tray()} />
               <Stack.Screen name="(settings)/settings-notifications" options={tray()} />
               <Stack.Screen name="(settings)/settings-balances" options={tray()} />

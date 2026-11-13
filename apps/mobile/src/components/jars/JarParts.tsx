@@ -2,22 +2,36 @@
 // rows are Explore's top-token rows, the sideways cards are Explore's favourites, and
 // the numbers are Perps' tile grid. HoldingRow is the chat and strategy's own row.
 import { router } from 'expo-router';
-import { useId } from 'react';
+import { type ReactNode, useId, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import Animated, { FadeInDown, useReducedMotion } from 'react-native-reanimated';
 import Svg, { Circle, Defs, LinearGradient, Path, Rect, Stop } from 'react-native-svg';
 import { Avatar } from '@/components/Avatar';
 import { DonutChart } from '@/components/charts/DonutChart';
+import { SplitBarArt, SplitRingArcs, useSweepOnce } from '@/components/charts/SplitArt';
 import { Icon } from '@/components/Icon';
 import { PressableRow } from '@/components/motion/PressableRow';
 import { PressableScale } from '@/components/motion/PressableScale';
-import { Change, Sparkline, TokenIcon } from '@/components/wallet/parts';
+import {
+  AssetRow,
+  Change,
+  HeaderIconButton,
+  hasAlias,
+  Sparkline,
+  TokenIcon,
+} from '@/components/wallet/parts';
 import { TOKEN_IMAGES } from '@/components/wallet/token-images';
 import { TOKEN_LOGOS } from '@/components/wallet/token-logos';
 import { tap } from '@/lib/haptics';
-import { formatUsd } from '@/lib/mock-wallet';
+import { useTokenInfo } from '@/lib/market';
+import { formatBalance, formatUsd, tokenName } from '@/lib/mock-wallet';
 import { useProfile } from '@/lib/profile';
+import { TEST_MODE } from '@/lib/test-mode';
 import { jarReturn, jarValue, type Pick, type ThesisJar } from '@/lib/thesis';
+import { tokenColor } from '@/lib/token-colors';
+import { useTokenLogo } from '@/lib/token-logos';
 import { makeStyles, radius, useTheme } from '@/theme';
+import { DURATION, EASE } from '@/theme/motion';
 
 /** A jar's holdings as layers of its jar (bottom first), or none when they're hidden. */
 export const layersOf = (jar: ThesisJar) =>
@@ -30,20 +44,26 @@ export const layersOf = (jar: ThesisJar) =>
  * biggest holding's logo in the middle. Hidden holdings show a grey ring and a lock. One
  * clean mark per jar, so jars tell apart at a glance in a list.
  */
-export function JarIcon({ jar, size = 40 }: { jar: ThesisJar; size?: number }) {
-  const c = useTheme();
-  const picks = layersOf(jar) ? jar.picks : [];
-  const stroke = Math.max(3, Math.round(size * 0.09));
+/** Arcs for a ring split by weight: rounded ends, a small gap between slices. */
+function ringArcs(slices: Slice[], size: number, stroke: number, tight?: boolean) {
   const r = (size - stroke) / 2;
   const mid = size / 2;
-  const total = picks.reduce((sum, p) => sum + p.weight, 0);
-  // A small gap between slices, in radians; none for a single slice.
-  const gap = picks.length > 1 ? Math.min(0.35, (stroke * 1.2) / r) : 0;
+  const total = slices.reduce((sum, p) => sum + p.weight, 0);
+  // A small gap between slices, in radians; none for a single slice. Round caps eat
+  // into it, so it's at least a stroke wide.
+  const gap =
+    slices.length < 2
+      ? 0
+      : tight
+        ? Math.min(0.35, (stroke * 1.2) / r)
+        : // Round caps reach half a stroke past each end, so this leaves a clear gap of a
+          // few points between slices at any size.
+          (stroke + Math.max(4, size * 0.035)) / r;
   let at = -Math.PI / 2;
-  const arcs = picks.map((p) => {
+  return slices.map((p) => {
     const sweep = (p.weight / (total || 1)) * Math.PI * 2;
     const a0 = at + gap / 2;
-    const a1 = at + sweep - gap / 2;
+    const a1 = at + Math.max(sweep - gap / 2, gap / 2 + 0.001);
     at += sweep;
     const x0 = mid + r * Math.cos(a0);
     const y0 = mid + r * Math.sin(a0);
@@ -52,8 +72,40 @@ export function JarIcon({ jar, size = 40 }: { jar: ThesisJar; size?: number }) {
     const large = a1 - a0 > Math.PI ? 1 : 0;
     return { key: p.symbol, color: p.color, d: `M${x0} ${y0} A${r} ${r} 0 ${large} 1 ${x1} ${y1}` };
   });
-  const inner = size - stroke * 2 - Math.max(2, size * 0.06) * 2;
-  const top = [...picks].sort((a, b) => b.weight - a.weight)[0];
+}
+
+/** A strategy's split as a ring of thick rounded slices, with anything in the middle. */
+export function SplitRing({
+  slices,
+  size,
+  stroke,
+  tight,
+  sweep,
+  children,
+}: {
+  slices: Slice[];
+  size: number;
+  stroke: number;
+  /** Hairline gaps, for small jar icons. */
+  tight?: boolean;
+  /**
+   * A hero ring that draws itself in, once per session for this id (e.g. "jars-hero").
+   * Rings that aren't tight icons always ease between splits (charts/SplitArt).
+   */
+  sweep?: string;
+  children?: ReactNode;
+}) {
+  const c = useTheme();
+  const mid = size / 2;
+  const r = (size - stroke) / 2;
+  const arcs = ringArcs(slices, size, stroke, tight);
+  if (!tight && slices.length)
+    return (
+      <View style={{ width: size, height: size, alignItems: 'center', justifyContent: 'center' }}>
+        <SplitRingArcs parts={slices} size={size} stroke={stroke} sweep={sweep} />
+        {children}
+      </View>
+    );
   return (
     <View style={{ width: size, height: size, alignItems: 'center', justifyContent: 'center' }}>
       <Svg width={size} height={size} style={StyleSheet.absoluteFill}>
@@ -81,6 +133,19 @@ export function JarIcon({ jar, size = 40 }: { jar: ThesisJar; size?: number }) {
           <Circle cx={mid} cy={mid} r={r} stroke={c.raised} strokeWidth={stroke} fill="none" />
         )}
       </Svg>
+      {children}
+    </View>
+  );
+}
+
+export function JarIcon({ jar, size = 40 }: { jar: ThesisJar; size?: number }) {
+  const c = useTheme();
+  const picks = layersOf(jar) ? jar.picks : [];
+  const stroke = Math.max(3, Math.round(size * 0.09));
+  const inner = size - stroke * 2 - Math.max(2, size * 0.06) * 2;
+  const top = [...picks].sort((a, b) => b.weight - a.weight)[0];
+  return (
+    <SplitRing slices={picks} size={size} stroke={stroke} tight>
       {top ? (
         <PickIcon pick={top} size={inner} />
       ) : (
@@ -97,7 +162,7 @@ export function JarIcon({ jar, size = 40 }: { jar: ThesisJar; size?: number }) {
           <Icon name="lock" size={inner * 0.45} color={c.accentText} />
         </View>
       )}
-    </View>
+    </SplitRing>
   );
 }
 
@@ -110,8 +175,9 @@ export const IDEAS: {
 }[] = [
   {
     title: 'AI keeps eating the world',
-    hint: '$500 across AI compute and model tokens',
-    art: { from: '#312E81', to: '#7C3AED', tokens: ['TAO', 'RENDER', 'NEAR'] },
+    hint: '$500 across AI tokens you can buy here',
+    // Only tokens NEAR Intents delivers (TAO and RENDER aren't on it).
+    art: { from: '#312E81', to: '#7C3AED', tokens: ['NEAR', 'KAITO', 'ETH'] },
   },
   {
     title: 'Privacy coins come back',
@@ -126,7 +192,7 @@ export const IDEAS: {
   {
     title: 'Gold over dollars',
     hint: 'Hedge a weaker dollar, low risk',
-    art: { from: '#B7791F', to: '#F6C453', tokens: ['PAXG', 'USDC'] },
+    art: { from: '#B7791F', to: '#F6C453', tokens: ['XAUT', 'USDC'] },
   },
 ];
 
@@ -146,9 +212,8 @@ function IdeaArt({ art, size = 68 }: { art: (typeof IDEAS)[number]['art']; size?
             <Stop offset="1" stopColor={art.to} />
           </LinearGradient>
         </Defs>
+        {/* Flat gradient, no glow in the corner (no highlight-card shine). */}
         <Rect width={size} height={size} fill={`url(#${uid})`} />
-        {/* A soft glow in the corner, so the tile reads as light on glass. */}
-        <Circle cx={size * 0.85} cy={size * 0.1} r={size * 0.45} fill="#FFFFFF" opacity={0.12} />
         {art.sun ? (
           <>
             {Array.from({ length: 16 }, (_, i) => {
@@ -369,7 +434,11 @@ export function Owners({ jar }: { jar: ThesisJar }) {
 
 /** A pick's logo: the token's own when Honey has one, else its initial on its colour. */
 export function PickIcon({ pick, size = 36 }: { pick: Pick; size?: number }) {
-  if (TOKEN_LOGOS[pick.symbol]) return <TokenIcon symbol={pick.symbol} size={size} />;
+  // Same logo resolution as everywhere else (bundled, wrapped → coin, then the server's
+  // CoinGecko list); only a token nobody has a logo for gets its letter.
+  const remote = useTokenLogo(pick.symbol);
+  if (TOKEN_LOGOS[pick.symbol] || hasAlias(pick.symbol) || remote)
+    return <TokenIcon symbol={pick.symbol} size={size} uri={remote} />;
   // Bitmap marks sit on a light coin: some (TAO's bare T) have no circle of their own.
   if (TOKEN_IMAGES[pick.symbol])
     return (
@@ -398,7 +467,7 @@ export function PickIcon({ pick, size = 36 }: { pick: Pick; size?: number }) {
 }
 
 /**
- * The chat and strategy's asset row (Aave's): logo, name and network, a bar for its share, then the dollars and
+ * The chat and strategy's asset row (Aave's): logo and name (no chain), a bar for its share, then the dollars and
  * the share. `onRemove` adds a remove button (editing a proposal).
  */
 export function HoldingRow({
@@ -418,8 +487,21 @@ export function HoldingRow({
 }) {
   const styles = useStyles();
   const c = useTheme();
+  // Outside editing, a holding opens its token's page.
+  const editing = !!onRemove || !!onStep;
+  const Row = editing ? View : PressableRow;
+  const rowProps = editing
+    ? {}
+    : {
+        accessibilityRole: 'button' as const,
+        accessibilityLabel: `${pick.symbol}, open token`,
+        onPress: () => {
+          tap();
+          router.push({ pathname: '/token/[symbol]', params: { symbol: pick.symbol } });
+        },
+      };
   return (
-    <View style={styles.holding}>
+    <Row style={styles.holding} {...rowProps}>
       <PickIcon pick={pick} />
       <View style={styles.flex}>
         <View style={styles.holdingTop}>
@@ -434,9 +516,7 @@ export function HoldingRow({
         </View>
         <View style={styles.holdingTop}>
           <Text style={styles.holdingSub} numberOfLines={1}>
-            {[pick.match === 'proxy' && 'Proxy', pick.name, pick.chain !== pick.name && pick.chain]
-              .filter(Boolean)
-              .join(' · ')}
+            {[pick.match === 'proxy' && 'Proxy', pick.name].filter(Boolean).join(' · ')}
           </Text>
           {onStep ? (
             <View style={styles.stepper}>
@@ -488,7 +568,46 @@ export function HoldingRow({
           <Icon name="close" size={14} color={c.textSecondary} />
         </PressableScale>
       ) : null}
-    </View>
+    </Row>
+  );
+}
+
+/**
+ * A holding on a jar page, as the Wallet lists tokens (AssetRow): the token's logo, its
+ * full name over the amount, then its dollars over its share. No network: tokens are
+ * one thing wherever they sit. Opens the token's page.
+ */
+export function JarHoldingRow({
+  pick,
+  total,
+  price,
+}: {
+  pick: Pick;
+  /** The jar's value; this holding is its share of it. */
+  total: number;
+  /** The token's live price, for the amount; without one the share stands in. */
+  price?: number;
+}) {
+  const info = useTokenInfo(pick.symbol, !TEST_MODE).info;
+  const name =
+    info?.name || (pick.name && pick.name !== pick.symbol ? pick.name : tokenName(pick.symbol));
+  const usd = (total * pick.weight) / 100;
+  const amount = price && price > 0 ? usd / price : null;
+  return (
+    <AssetRow
+      icon={<PickIcon pick={pick} size={40} />}
+      title={name}
+      subtitle={
+        amount === null ? `${pick.weight}% of the jar` : `${formatBalance(amount)} ${pick.symbol}`
+      }
+      value={formatUsd(usd)}
+      detail={amount === null ? undefined : `${pick.weight}%`}
+      accessibilityLabel={`${name}, open token`}
+      onPress={() => {
+        tap();
+        router.push({ pathname: '/token/[symbol]', params: { symbol: pick.symbol } });
+      }}
+    />
   );
 }
 
@@ -621,7 +740,16 @@ export function JarList({
  * tokens and name, the return big, and how many copied it. `gutter` lines the first
  * card up with the page while the row runs to the edges.
  */
-export function JarCarousel({ jars, gutter }: { jars: ThesisJar[]; gutter: number }) {
+export function JarCarousel({
+  jars,
+  gutter,
+  onOpen,
+}: {
+  jars: ThesisJar[];
+  gutter: number;
+  /** Where a card goes; the jar page by default. */
+  onOpen?: (jar: ThesisJar) => void;
+}) {
   const styles = useStyles();
   return (
     <ScrollView
@@ -637,7 +765,7 @@ export function JarCarousel({ jars, gutter }: { jars: ThesisJar[]; gutter: numbe
             key={jar.id}
             accessibilityRole="button"
             accessibilityLabel={`${jar.name}, ${signedPct(ret)}`}
-            onPress={() => openJar(jar.id)}
+            onPress={() => (onOpen ? onOpen(jar) : openJar(jar.id))}
             style={styles.feature}
           >
             <View style={styles.featureTop}>
@@ -667,25 +795,86 @@ export function JarCarousel({ jars, gutter }: { jars: ThesisJar[]; gutter: numbe
 const people = (jar: ThesisJar) =>
   jar.members.length === 1 ? 'Just you' : `${jar.members.length} people`;
 
-/** A jar's mix as one bar split by its holdings, with each one's share under it. */
-export function Mix({ picks }: { picks: Pick[] }) {
+/** A share of a strategy: a token, its weight and colour. */
+export type Slice = { symbol: string; weight: number; color: string };
+
+/**
+ * A strategy's split as one bar of rounded, striped segments with a gap between each
+ * (the hatched look of a sentiment bar), each as wide as its share.
+ */
+export function SplitBar({
+  slices,
+  height = 14,
+  labels = false,
+}: {
+  slices: Slice[];
+  height?: number;
+  /** Each segment's share written in its middle. */
+  labels?: boolean;
+}) {
+  const [width, setWidth] = useState(0);
+  // Drawn by charts/SplitArt: grows in from the left and eases between splits.
+  return (
+    <View style={{ height }} onLayout={(e) => setWidth(e.nativeEvent.layout.width)}>
+      {width > 0 ? (
+        <SplitBarArt parts={slices} width={width} height={height} labels={labels} />
+      ) : null}
+    </View>
+  );
+}
+
+/** The striped split bar, then each token's dot, symbol and share (or `extra`) under it. */
+export function Mix({
+  picks,
+  extra,
+  tappable,
+  trailing,
+}: {
+  picks: Slice[];
+  /** At the far right of the legend row, e.g. a post's fee. */
+  trailing?: ReactNode;
+  /** In place of the share, e.g. a thesis token's move since posting. */
+  extra?: (symbol: string) => ReactNode;
+  /** Each token in the legend opens its coin page (a jar page; not inside a pressable post). */
+  tappable?: boolean;
+}) {
   const styles = useStyles();
   return (
     <View style={styles.mix}>
-      <View style={styles.mixBar}>
-        {picks.map((p) => (
-          <View key={p.symbol} style={{ flex: p.weight, backgroundColor: p.color }} />
-        ))}
-      </View>
+      <SplitBar slices={picks} />
       <View style={styles.mixLegend}>
-        {picks.map((p) => (
-          <View key={p.symbol} style={styles.mixItem}>
-            <View style={[styles.dot, { backgroundColor: p.color }]} />
-            <Text style={styles.mixText}>
-              {p.symbol} <Text style={styles.mixPct}>{p.weight}%</Text>
-            </Text>
-          </View>
-        ))}
+        {picks.map((p) => {
+          const item = (
+            <>
+              <TokenIcon symbol={p.symbol} size={16} />
+              <Text style={styles.mixText}>
+                {p.symbol}
+                {extra ? <> {extra(p.symbol)}</> : null}
+              </Text>
+            </>
+          );
+          return tappable ? (
+            <PressableScale
+              key={p.symbol}
+              accessibilityRole="button"
+              accessibilityLabel={`${p.symbol}, open`}
+              scaleTo={0.94}
+              hitSlop={6}
+              onPress={() => {
+                tap();
+                router.push({ pathname: '/token/[symbol]', params: { symbol: p.symbol } });
+              }}
+              style={styles.mixItem}
+            >
+              {item}
+            </PressableScale>
+          ) : (
+            <View key={p.symbol} style={styles.mixItem}>
+              {item}
+            </View>
+          );
+        })}
+        {trailing ? <View style={styles.mixTrailing}>{trailing}</View> : null}
       </View>
     </View>
   );
@@ -734,6 +923,179 @@ export function JarCard({ jar }: { jar: ThesisJar }) {
 }
 
 /**
+ * The strategy an amount buys, small: its tokens, name and a quiet line, how it has done
+ * (someone else's jar), and the split as the same bar as a jar card. Tops the
+ * "How much?" sheets so you see what you're copying.
+ */
+export function StrategyCard({
+  jar,
+  picks,
+  name,
+  meta,
+  onStep,
+  nameSlot,
+  split,
+  children,
+}: {
+  jar?: ThesisJar;
+  picks: Pick[];
+  name: string;
+  meta?: string;
+  /** In place of the name, e.g. a field to rename the jar as you launch it. */
+  nameSlot?: ReactNode;
+  /** Show the striped split even for one token, as a Feed post's well does. */
+  split?: boolean;
+  /** Under the split, inside the card: e.g. the Feed's − Copy 5 + stepper. */
+  children?: ReactNode;
+  /** Your own picks: each token gets − and + to move its share (5% a tap). */
+  onStep?: (symbol: string, delta: number) => void;
+}) {
+  const styles = useStyles();
+  const c = useTheme();
+  const ret = jar && !jar.mine ? jarReturn(jar) : null;
+  const hidden = jar ? !layersOf(jar) : false;
+  const showSplit = (split ? picks.length > 0 : picks.length > 1) && !hidden;
+  // The − / + rows open on demand, so a long split never pushes the amount and its
+  // button off the screen.
+  const [stepping, setStepping] = useState(false);
+  // The same card a Feed post's strategy sits in: logos, name and return on top, then
+  // the striped split with each token's logo and share under it.
+  return (
+    <View style={styles.strategy}>
+      <View style={styles.strategyTop}>
+        {jar ? <JarIcon jar={jar} size={34} /> : <TokenStack picks={picks} size={26} />}
+        <View style={styles.flex}>
+          {nameSlot ?? (
+            <Text style={styles.strategyName} numberOfLines={1}>
+              {name}
+            </Text>
+          )}
+          {meta ? (
+            <Text style={styles.meta} numberOfLines={1}>
+              {meta}
+            </Text>
+          ) : null}
+        </View>
+        {ret != null ? (
+          <View
+            style={[
+              styles.retPill,
+              {
+                backgroundColor: `${ret < 0 ? c.error : c.success}${c.scheme === 'dark' ? '29' : '1F'}`,
+              },
+            ]}
+          >
+            <Text style={[styles.retText, ret < 0 ? styles.down : styles.up]}>
+              {signedPct(ret)}
+            </Text>
+          </View>
+        ) : null}
+        {showSplit && onStep ? (
+          <PressableScale
+            accessibilityRole="button"
+            accessibilityState={{ expanded: stepping }}
+            hitSlop={10}
+            scaleTo={0.95}
+            onPress={() => {
+              tap();
+              setStepping((v) => !v);
+            }}
+          >
+            <Text style={styles.stepToggle}>{stepping ? 'Done' : 'Edit split'}</Text>
+          </PressableScale>
+        ) : null}
+      </View>
+      {showSplit && onStep && stepping ? (
+        <View style={styles.mix}>
+          <SplitBar
+            slices={picks.map((p, i) => ({
+              symbol: p.symbol,
+              weight: p.weight,
+              color: tokenColor(p.symbol, i),
+            }))}
+          />
+          <View style={styles.stepRows}>
+            {picks.map((p) => (
+              <View key={p.symbol} style={styles.stepRow}>
+                <TokenIcon symbol={p.symbol} size={24} />
+                <Text style={styles.stepSymbol} numberOfLines={1}>
+                  {p.symbol}
+                </Text>
+                <View style={p.weight <= SPLIT_MIN ? styles.stepOff : null}>
+                  <HeaderIconButton
+                    icon="minus"
+                    label={`Less ${p.symbol}`}
+                    size={30}
+                    accessibilityState={{ disabled: p.weight <= SPLIT_MIN }}
+                    onPress={() => onStep(p.symbol, -SPLIT_STEP)}
+                  />
+                </View>
+                <Text style={styles.stepPct}>{p.weight}%</Text>
+                <View
+                  style={p.weight >= 100 - SPLIT_MIN * (picks.length - 1) ? styles.stepOff : null}
+                >
+                  <HeaderIconButton
+                    icon="plus"
+                    label={`More ${p.symbol}`}
+                    size={30}
+                    accessibilityState={{
+                      disabled: p.weight >= 100 - SPLIT_MIN * (picks.length - 1),
+                    }}
+                    onPress={() => onStep(p.symbol, SPLIT_STEP)}
+                  />
+                </View>
+              </View>
+            ))}
+          </View>
+        </View>
+      ) : showSplit ? (
+        <Mix
+          picks={picks.map((p, i) => ({
+            symbol: p.symbol,
+            weight: p.weight,
+            color: tokenColor(p.symbol, i),
+          }))}
+        />
+      ) : null}
+      {children}
+    </View>
+  );
+}
+
+/** A split moves 5% a tap, anywhere from 0% to 100% (no floor or cap, 2026-11-13). */
+export const SPLIT_STEP = 5;
+export const SPLIT_MIN = 0;
+
+/**
+ * Moves `symbol`'s share by `delta`, taking from (or giving to) the others one point at
+ * a time, largest first when taking and smallest first when giving, so it stays at 100%.
+ */
+export function stepSplit(weights: number[], index: number, delta: number): number[] {
+  const n = weights.length;
+  const next = [...weights];
+  const target = Math.min(
+    100 - SPLIT_MIN * (n - 1),
+    Math.max(SPLIT_MIN, (next[index] ?? 0) + delta),
+  );
+  let move = target - (next[index] ?? 0);
+  next[index] = target;
+  while (move !== 0) {
+    let pick = -1;
+    for (let k = 0; k < n; k++) {
+      if (k === index) continue;
+      const w = next[k] ?? 0;
+      if (move > 0 && w <= SPLIT_MIN) continue;
+      if (pick < 0) pick = k;
+      else if (move > 0 ? w > (next[pick] ?? 0) : w < (next[pick] ?? 0)) pick = k;
+    }
+    if (pick < 0) break;
+    next[pick] = (next[pick] ?? 0) + (move > 0 ? -1 : 1);
+    move += move > 0 ? -1 : 1;
+  }
+  return next;
+}
+
+/**
  * What you own across all your jars, token by token: each jar's value split by its
  * mix and added up, largest first. Hidden jars are yours, so they count too.
  */
@@ -763,8 +1125,65 @@ export function Exposure({ jars }: { jars: ThesisJar[] }) {
   );
 }
 
-/** Ideas to start a jar from, one card each with its picture; each opens the chat with it asked. */
-export function IdeaGrid() {
+/** What you own across jars as slices for a ring: each token's share of the total value. */
+export function exposureSlices(jars: ThesisJar[]): Slice[] {
+  const by = new Map<string, number>();
+  for (const jar of jars) {
+    const v = jarValue(jar);
+    for (const p of jar.picks) by.set(p.symbol, (by.get(p.symbol) ?? 0) + (v * p.weight) / 100);
+  }
+  const total = [...by.values()].reduce((s, v) => s + v, 0);
+  if (!total) return [];
+  return [...by.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([symbol, value], i) => ({
+      symbol,
+      weight: Math.round((value / total) * 100),
+      color: tokenColor(symbol, i),
+    }));
+}
+
+/** A ring's key in a card: each slice's dot and symbol over its share, side by side. */
+export function RingLegend({ slices, sweep }: { slices: Slice[]; sweep?: string }) {
+  const styles = useStyles();
+  // With its ring's sweep (the same id): each key rises 4pt in as the ring lands, the
+  // first four 40ms apart. Otherwise, and under Reduce Motion, it's simply there.
+  const sweeping = useSweepOnce(sweep);
+  const reduced = useReducedMotion();
+  const follow = sweeping && !reduced;
+  return (
+    <View style={styles.ringKey}>
+      {slices.slice(0, 8).map((s, i) => (
+        <Animated.View
+          key={s.symbol}
+          entering={
+            follow
+              ? FadeInDown.duration(DURATION.medium)
+                  .delay(250 + Math.min(i, 3) * DURATION.stagger)
+                  .easing(EASE.smoothOut)
+                  .withInitialValues({ transform: [{ translateY: 4 }] })
+              : undefined
+          }
+          style={styles.ringKeyItem}
+        >
+          <View style={styles.ringKeyName}>
+            <TokenIcon symbol={s.symbol} size={18} />
+            <Text style={styles.ringKeySymbol} numberOfLines={1}>
+              {s.symbol}
+            </Text>
+          </View>
+          <Text style={styles.ringKeyPct}>{s.weight}%</Text>
+        </Animated.View>
+      ))}
+    </View>
+  );
+}
+
+/**
+ * Ideas to start a jar from, one card each with its picture; each opens the chat with it
+ * asked, or, inside the chat, `onPick` asks it there.
+ */
+export function IdeaGrid({ onPick }: { onPick?: (title: string) => void } = {}) {
   const styles = useStyles();
   return (
     <View style={styles.ideas}>
@@ -775,7 +1194,8 @@ export function IdeaGrid() {
           scaleTo={0.97}
           onPress={() => {
             tap();
-            router.push({ pathname: '/thesis-chat', params: { idea: idea.title } });
+            if (onPick) onPick(idea.title);
+            else router.push({ pathname: '/thesis-chat', params: { idea: idea.title } });
           }}
           style={styles.idea}
         >
@@ -804,7 +1224,7 @@ const useStyles = makeStyles((c) => ({
   // Perps' market row.
   // Explore's market row.
   row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10 },
-  rank: { width: 18, color: c.textSecondary, fontSize: 15 },
+  rank: { width: 22, color: c.textSecondary, fontSize: 15, textAlign: 'center' },
   name: { color: c.text, fontSize: 16, fontWeight: '500' },
   meta: { marginTop: 2, color: c.textSecondary, fontSize: 14 },
   end: { alignItems: 'flex-end', gap: 2 },
@@ -827,12 +1247,48 @@ const useStyles = makeStyles((c) => ({
   down: { color: c.error },
   // Your jars, as cards.
   card: { padding: 16, gap: 14, ...radius(22), backgroundColor: c.card },
+  strategy: { padding: 14, gap: 12, ...radius(18), backgroundColor: c.card },
+  retPill: { height: 22, paddingHorizontal: 7, borderRadius: 6, justifyContent: 'center' },
+  retText: { fontSize: 13, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  strategyBody: { gap: 10 },
+  ringKey: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    rowGap: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 8,
+    ...radius(18),
+    backgroundColor: c.card,
+  },
+  ringKeyItem: { width: '25%', alignItems: 'center', gap: 4 },
+  ringKeyName: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  ringKeySymbol: { color: c.text, fontSize: 14, fontWeight: '500', flexShrink: 1 },
+  ringKeyPct: { color: c.textSecondary, fontSize: 14, fontVariant: ['tabular-nums'] },
+  ringCount: { color: c.text, fontSize: 20, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  ringLabel: { color: c.textSecondary, fontSize: 11, marginTop: -2 },
+  ringLegend: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 12, rowGap: 6 },
+  strategyTop: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  strategyName: { color: c.text, fontSize: 16, fontWeight: '600' },
   cardTop: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   cardName: { color: c.text, fontSize: 17, fontWeight: '600' },
   cardValue: { color: c.text, fontSize: 17, fontWeight: '600', fontVariant: ['tabular-nums'] },
   cardNote: { color: c.accentText, fontSize: 13, fontWeight: '500' },
+  mixTrailing: { marginLeft: 'auto', alignSelf: 'center' },
+  stepRows: { gap: 4 },
+  stepToggle: { color: c.accentText, fontSize: 15, fontWeight: '600' },
+  stepRow: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 40 },
+  stepSymbol: { flex: 1, color: c.text, fontSize: 16, fontWeight: '600' },
+  stepPct: {
+    width: 48,
+    textAlign: 'center',
+    color: c.text,
+    fontSize: 16,
+    fontWeight: '600',
+    fontVariant: ['tabular-nums'],
+  },
+  stepOff: { opacity: 0.4 },
   mix: { gap: 10 },
-  mixBar: { flexDirection: 'row', height: 8, gap: 2, borderRadius: 4, overflow: 'hidden' },
   mixLegend: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 14, rowGap: 6 },
   mixItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   mixText: { color: c.text, fontSize: 13, fontWeight: '500' },

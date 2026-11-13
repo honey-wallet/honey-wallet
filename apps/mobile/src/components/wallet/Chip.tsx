@@ -8,6 +8,8 @@ type Props = {
   label: string;
   /** A token logo or icon before the label. */
   leading?: ReactNode;
+  /** After the label, e.g. a remove ×. */
+  trailing?: ReactNode;
   selected?: boolean;
   /** `outline` (bordered) or `filled` (grey); either way the selected chip turns honey. */
   variant?: 'outline' | 'filled';
@@ -22,6 +24,7 @@ type Props = {
 export function Chip({
   label,
   leading,
+  trailing,
   selected = false,
   variant = 'outline',
   onPress,
@@ -33,6 +36,7 @@ export function Chip({
   const style = [
     styles.chip,
     leading ? styles.withLeading : null,
+    trailing ? styles.withTrailing : null,
     filled ? styles.filled : styles.outline,
     selected && (filled ? styles.filledSelected : styles.outlineSelected),
   ];
@@ -40,6 +44,7 @@ export function Chip({
     <>
       {leading}
       <Text style={[styles.label, selected && styles.labelSelected]}>{label}</Text>
+      {trailing}
     </>
   );
   if (!onPress) return <View style={style}>{content}</View>;
@@ -71,6 +76,10 @@ const useStyles = makeStyles((c) => ({
   },
   withLeading: {
     paddingLeft: 7,
+  },
+  withTrailing: {
+    paddingRight: 10,
+    gap: 6,
   },
   outline: {
     borderWidth: 1,

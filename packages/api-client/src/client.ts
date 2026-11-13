@@ -30,6 +30,9 @@ import {
   isChainActivity,
   isMarketListTokens,
   isPortfolio,
+  isTokenChart,
+  isTokenInfo,
+  isTokenLogos,
   isTokenMarket,
   portfolioQuery,
 } from './portfolio';
@@ -52,6 +55,7 @@ import type {
   AaveIntent,
   ApiErrorBody,
   Capabilities,
+  ChartRangeId,
   Health,
   HyperliquidPerpsAccountState,
   JarBuyQuote,
@@ -66,6 +70,23 @@ import type {
   PairMessage,
   PairSlot,
   PortfolioAddresses,
+  SocialFeed,
+  SocialFeedScope,
+  SocialHandleStatus,
+  SocialHolders,
+  SocialJar,
+  SocialJarSort,
+  SocialLeaderboardWindow,
+  SocialPost,
+  SocialPostRequest,
+  SocialPrivacy,
+  SocialPrivacyRequest,
+  SocialProfile,
+  SocialProfileCard,
+  SocialProfileRequest,
+  SocialPublishJarRequest,
+  SocialTradeRequest,
+  SocialTradeResult,
   StartThesis,
   StealthJarBoxAccess,
   StealthJarBoxRequest,
@@ -187,6 +208,13 @@ export function createApiClient({ baseUrl, fetch: fetchImpl = fetch }: ApiClient
     return authorized(token, jsonRequest(body, init, additionalHeaders));
   }
 
+  /** Social reads work signed out; a session adds "followed by me" and Following. */
+  function maybeAuthorized(token: string | null | undefined, init?: RequestInit): RequestInit {
+    return token ? authorized(token, init) : { ...init, credentials: 'omit' };
+  }
+  const handlePath = (handle: string) =>
+    `/api/v1/social/profiles/${encodeURIComponent(handle.replace(/^@/, '').toLowerCase())}`;
+
   // The token goes in a header, never the URL, so it stays out of access logs.
   const pairPath = ({ channel }: PairChannel, slot: PairSlot) =>
     `/api/v1/pairing/${encodeURIComponent(channel)}/${slot}`;
@@ -244,6 +272,18 @@ export function createApiClient({ baseUrl, fetch: fetchImpl = fetch }: ApiClient
     /** Price, 24h change, volume, liquidity and caps for a symbol. Public. */
     tokenMarket: (symbol: string, init?: RequestInit) =>
       validated(`/api/v1/market/token?symbol=${encodeURIComponent(symbol)}`, isTokenMarket, init),
+    /** About text, links, logo, caps and supply for a symbol (CoinGecko). Public. */
+    tokenInfo: (symbol: string, init?: RequestInit) =>
+      validated(`/api/v1/market/info?symbol=${encodeURIComponent(symbol)}`, isTokenInfo, init),
+    /** USD prices for one range of a symbol's chart, oldest first. Public. */
+    /** A logo URL for every token NEAR Intents lists, by upper-case symbol. Public. */
+    tokenLogos: (init?: RequestInit) => validated('/api/v1/market/logos', isTokenLogos, init),
+    tokenChart: (symbol: string, range: ChartRangeId, init?: RequestInit) =>
+      validated(
+        `/api/v1/market/chart?symbol=${encodeURIComponent(symbol)}&range=${encodeURIComponent(range)}`,
+        isTokenChart,
+        init,
+      ),
     /** Balances on every supported chain for these public addresses, priced in USD. Public. */
     portfolioBalances: (addresses: PortfolioAddresses, init?: RequestInit) =>
       validated(`/api/v1/portfolio/balances?${portfolioQuery(addresses)}`, isPortfolio, init),
@@ -642,6 +682,118 @@ export function createApiClient({ baseUrl, fetch: fetchImpl = fetch }: ApiClient
         throw new ApiError(200, 'invalid_response', 'Invalid capabilities response');
       return value;
     },
+    /** Whether a handle is well-formed and free to claim. Public. */
+    socialHandle: (handle: string, init?: RequestInit) =>
+      request<SocialHandleStatus>(
+        `/api/v1/social/handles/${encodeURIComponent(handle.replace(/^@/, '').toLowerCase())}`,
+        init,
+      ),
+    /** Your social profile, or null before you've claimed a handle. */
+    socialMe: async (accessToken: string) => {
+      try {
+        return await request<SocialProfile>('/api/v1/social/me', authorized(accessToken));
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 404) return null;
+        throw error;
+      }
+    },
+    /** Claims a handle or updates your profile (409 when the handle is taken). */
+    socialSaveMe: (accessToken: string, profile: SocialProfileRequest) =>
+      request<SocialProfile>('/api/v1/social/me', {
+        ...authorizedJson(accessToken, profile),
+        method: 'PUT',
+      }),
+    /** Your privacy settings (404 before you've claimed a handle). */
+    socialPrivacy: (accessToken: string) =>
+      request<SocialPrivacy>('/api/v1/social/me/privacy', authorized(accessToken)),
+    /** Changes the privacy settings given; returns them all (409 before a handle). */
+    socialSavePrivacy: (accessToken: string, privacy: SocialPrivacyRequest) =>
+      request<SocialPrivacy>('/api/v1/social/me/privacy', {
+        ...authorizedJson(accessToken, privacy),
+        method: 'PUT',
+      }),
+    socialProfile: (handle: string, accessToken?: string | null) =>
+      request<SocialProfile>(handlePath(handle), maybeAuthorized(accessToken)),
+    socialFollow: (accessToken: string, handle: string) =>
+      request<SocialProfile>(`${handlePath(handle)}/follow`, authorizedJson(accessToken, {})),
+    socialUnfollow: (accessToken: string, handle: string) =>
+      request<SocialProfile>(`${handlePath(handle)}/follow`, {
+        ...authorized(accessToken),
+        method: 'DELETE',
+      }),
+    socialFollowers: (handle: string) =>
+      request<SocialProfileCard[]>(`${handlePath(handle)}/followers`),
+    socialFollowing: (handle: string) =>
+      request<SocialProfileCard[]>(`${handlePath(handle)}/following`),
+    socialJars: (sort: SocialJarSort = 'trending', accessToken?: string | null) =>
+      request<SocialJar[]>(`/api/v1/social/jars?sort=${sort}`, maybeAuthorized(accessToken)),
+    socialJar: (id: string, accessToken?: string | null) =>
+      request<SocialJar>(
+        `/api/v1/social/jars/${encodeURIComponent(id)}`,
+        maybeAuthorized(accessToken),
+      ),
+    /** Publishes (or updates) a jar by its id on this phone. */
+    socialPublishJar: (accessToken: string, jar: SocialPublishJarRequest) =>
+      request<SocialJar>('/api/v1/social/jars', authorizedJson(accessToken, jar)),
+    socialUnpublishJar: async (accessToken: string, id: string) => {
+      await send(`/api/v1/social/jars/${encodeURIComponent(id)}`, {
+        ...authorized(accessToken),
+        method: 'DELETE',
+      });
+    },
+    socialRecordCopy: (accessToken: string, id: string) =>
+      request<{ copies: number }>(
+        `/api/v1/social/jars/${encodeURIComponent(id)}/copies`,
+        authorizedJson(accessToken, {}),
+      ),
+    socialFeed: (scope: SocialFeedScope, accessToken?: string | null, cursor?: string | null) =>
+      request<SocialFeed>(
+        `/api/v1/social/feed?scope=${scope}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`,
+        maybeAuthorized(accessToken),
+      ),
+    socialLeaderboard: (window: SocialLeaderboardWindow = '7d', accessToken?: string | null) =>
+      request<SocialJar[]>(
+        `/api/v1/social/leaderboard?window=${window}`,
+        maybeAuthorized(accessToken),
+      ),
+    /**
+     * Shares one of your finished NEAR Intents swaps, by its deposit address: the server
+     * verifies it with 1Click (succeeded, paid from or to a wallet you signed in with) and
+     * posts 1Click's amounts. 409 while trade sharing is off or the swap isn't finished,
+     * 403 when it isn't yours.
+     */
+    socialShareTrade: (accessToken: string, trade: SocialTradeRequest) =>
+      request<SocialTradeResult>(
+        '/api/v1/social/trades',
+        authorizedJson(accessToken, { depositAddress: trade.depositAddress }),
+      ),
+    /** Posts a thesis about 1–10 buyable tokens (prices snapshotted now). */
+    socialPost: (accessToken: string, post: SocialPostRequest) =>
+      request<SocialPost>('/api/v1/social/posts', authorizedJson(accessToken, post)),
+    /** One thesis, for its share link. Public. */
+    socialGetPost: (id: string, accessToken?: string | null) =>
+      request<SocialPost>(
+        `/api/v1/social/posts/${encodeURIComponent(id)}`,
+        maybeAuthorized(accessToken),
+      ),
+    socialDeletePost: async (accessToken: string, id: string) => {
+      await send(`/api/v1/social/posts/${encodeURIComponent(id)}`, {
+        ...authorized(accessToken),
+        method: 'DELETE',
+      });
+    },
+    /** Recent theses about a token, newest first. Public. */
+    socialPostsAbout: (symbol: string, accessToken?: string | null) =>
+      request<SocialPost[]>(
+        `/api/v1/social/posts?symbol=${encodeURIComponent(symbol)}`,
+        maybeAuthorized(accessToken),
+      ),
+    /** People you follow who hold this token (public jars or shared buys). */
+    socialHolders: (symbol: string, accessToken?: string | null) =>
+      request<SocialHolders>(
+        `/api/v1/social/holders?symbol=${encodeURIComponent(symbol)}`,
+        maybeAuthorized(accessToken),
+      ),
     /** Opens a blind relay session for a stealth-jar DKG or signing round. */
     stealthJarCreate: (accessToken: string, members: number) =>
       request<StealthJarSession>(

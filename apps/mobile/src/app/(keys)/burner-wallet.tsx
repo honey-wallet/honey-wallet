@@ -7,6 +7,7 @@ import { Guide, riseIn } from '@/components/wallet/Guide';
 import { showErrorToast, showToast } from '@/lib/toast';
 import { createAccount } from '@/lib/vault';
 import { addVaultWallet, nextBurnerLabel } from '@/lib/wallets';
+import { warningOn } from '@/lib/warnings';
 import { makeStyles, useTheme } from '@/theme';
 
 /** A honey icon on a soft honey disc, rising into place. */
@@ -54,11 +55,15 @@ export default function BurnerWalletSheet() {
           body: 'Burners are disposable. If a site looks suspicious, throw this one away and create a fresh one.',
           art: <Art icon="trash" />,
         },
-        {
-          title: 'Keep it light',
-          body: 'Only move small amounts into a burner, just what you need for that site.',
-          art: <Art icon="leaf" />,
-        },
+        ...(warningOn('burnerSmallAmounts')
+          ? [
+              {
+                title: 'Keep it light',
+                body: 'Only move small amounts into a burner, just what you need for that site.',
+                art: <Art icon="leaf" />,
+              },
+            ]
+          : []),
       ]}
     />
   );

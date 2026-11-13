@@ -11,6 +11,7 @@ import { router as nav } from 'expo-router';
 import { emitToBrowsers } from '@/lib/browser';
 import { requestJsonRpc } from '@/lib/json-rpc';
 import { showErrorToast, showToast } from '@/lib/toast';
+import { isWalletConnectUri } from '@/lib/walletconnect-uri';
 import { wallets } from '@/lib/wallets';
 
 /**
@@ -188,10 +189,20 @@ const providerError = (error: unknown) =>
     : { code: -32603, message: 'Something went wrong in Honey.' };
 
 let kit: Promise<IWalletKit | null> | null = null;
+let lastRelayError: string | null = null;
+
+/** Why the relay last refused or dropped us, if it did (shown in dev builds). */
+export const walletConnectRelayError = () => lastRelayError;
 
 /** Starts WalletConnect once (after the app's wallets load); null when there's no project id. */
 export function walletConnect() {
-  if (!kit) kit = start();
+  if (!kit) {
+    // A failed start (offline at launch, say) mustn't stick until the app restarts.
+    kit = start().catch((error) => {
+      kit = null;
+      throw error;
+    });
+  }
   return kit;
 }
 
@@ -199,6 +210,17 @@ async function start(): Promise<IWalletKit | null> {
   if (!PROJECT_ID) return null;
   topics = JSON.parse((await AsyncStorage.getItem(STORE.topics)) ?? '{}');
   const core = new Core({ projectId: PROJECT_ID });
+  // Keep the relay's last refusal (e.g. "origin not allowed" when this app isn't on the
+  // project's allowlist) so the link screen can say why instead of waiting forever.
+  const remember = (reason: unknown) => {
+    const text =
+      reason && typeof reason === 'object' && 'message' in reason
+        ? String((reason as { message: unknown }).message)
+        : String(reason ?? '');
+    if (text) lastRelayError = text;
+  };
+  core.relayer?.on?.('relayer_error', remember);
+  core.relayer?.on?.('relayer_transport_closed', remember);
   const walletkit = await WalletKit.init({
     core,
     metadata: {
@@ -210,16 +232,23 @@ async function start(): Promise<IWalletKit | null> {
     },
   });
 
-  // Revoke restored sessions whose accounts were only simulated or have been removed.
-  const origins = new Set((await router.sites()).map((site) => site.origin));
-  for (const [topic, entry] of Object.entries(topics)) {
-    if (origins.has(entry.key)) continue;
-    delete topics[topic];
-    await walletkit
-      .disconnectSession({ topic, reason: getSdkError('USER_DISCONNECTED') })
-      .catch(() => {});
+  try {
+    // Revoke restored sessions whose accounts were only simulated or have been removed.
+    const origins = new Set((await router.sites()).map((site) => site.origin));
+    for (const [topic, entry] of Object.entries(topics)) {
+      if (origins.has(entry.key)) continue;
+      delete topics[topic];
+      await walletkit
+        .disconnectSession({ topic, reason: getSdkError('USER_DISCONNECTED') })
+        .catch(() => {});
+    }
+    await saveTopics();
+  } catch (error) {
+    // The retry builds a new Core: close this one's relay socket first, or it stays
+    // connected with no listeners next to the new one.
+    await core.relayer.transportClose().catch(() => {});
+    throw error;
   }
-  await saveTopics();
 
   walletkit.on('session_proposal', async (proposal) => {
     const { id, params } = proposal;
@@ -374,13 +403,27 @@ async function answer(entry: Entry, chainId: string, request: { method: string; 
 }
 
 /** A `wc:` link from the scanner or the clipboard. */
-export async function pairWalletConnect(uri: string) {
-  const walletkit = await walletConnect();
-  if (!walletkit) throw new Error('WalletConnect isn’t set up in this build');
-  await walletkit.pair({ uri });
+export async function pairWalletConnect(uri: string, timeoutMs = 15_000) {
+  lastRelayError = null;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error('timeout: no answer from the relay')), timeoutMs);
+  });
+  try {
+    await Promise.race([
+      (async () => {
+        const walletkit = await walletConnect();
+        if (!walletkit) throw new Error('WalletConnect isn’t set up in this build');
+        await walletkit.pair({ uri: uri.trim() });
+      })(),
+      timeout,
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
-export const isWalletConnectUri = (text: string) => /^wc:[0-9a-f]{64}@2\?/i.test(text.trim());
+export { isWalletConnectUri };
 
 // What the approval screen and Settings › Connected apps use (lib/dapp.ts).
 

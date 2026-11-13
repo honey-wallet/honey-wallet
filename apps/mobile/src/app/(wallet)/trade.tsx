@@ -2,12 +2,17 @@
 import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import { Keyboard, Text, useWindowDimensions, View } from 'react-native';
-import Animated from 'react-native-reanimated';
+import Animated, {
+  useAnimatedStyle,
+  useReducedMotion,
+  useSharedValue,
+  withTiming,
+} from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Icon } from '@/components/Icon';
 import { Accordion, AccordionChevron } from '@/components/motion/Accordion';
 import { ContentSwap } from '@/components/motion/ContentSwap';
-import { useErrorShake } from '@/components/motion/ErrorShake';
+import { useOverShake } from '@/components/motion/ErrorShake';
 import { MatrixLoader } from '@/components/motion/MatrixLoader';
 import { PanelReveal } from '@/components/motion/PanelReveal';
 import { PressableScale } from '@/components/motion/PressableScale';
@@ -33,6 +38,7 @@ import {
   Summary,
 } from '@/components/trade/TradeForm';
 import { HeaderActions } from '@/components/wallet/HeaderActions';
+import { HeaderShortcut } from '@/components/wallet/HeaderShortcut';
 import {
   applyKey,
   Keypad,
@@ -40,29 +46,35 @@ import {
   TypedAmount,
   trimNumber,
 } from '@/components/wallet/Keypad';
-import { EmptyState, HeaderIconButton, SCREEN, TokenIcon } from '@/components/wallet/parts';
+import { EmptyState, SCREEN, TokenIcon } from '@/components/wallet/parts';
 import { SearchField } from '@/components/wallet/SearchField';
 import { TabScreen } from '@/components/wallet/TabScreen';
+import { TopRow } from '@/components/wallet/TopRow';
 import { tap } from '@/lib/haptics';
 import { LOADS } from '@/lib/loads';
+import { useTokenMarkets } from '@/lib/market';
 import {
   type Chain,
   formatBalance,
   formatPrice,
   formatUsd,
   holdingAmount,
+  isChain,
   priceOf,
 } from '@/lib/mock-wallet';
 import { type Multisig, useActiveMultisig, useSigner } from '@/lib/multisig';
 import { goBackOr } from '@/lib/navigation';
 import { isWeb } from '@/lib/platform';
 import type { TradeMode } from '@/lib/settings';
+import { LANDING } from '@/lib/surface';
 import { type TokenRef, updateSwap, useSwap } from '@/lib/swap';
 import { showDemoToast } from '@/lib/toast';
 import { SHARED_WALLET_MODES, useTradeTabs } from '@/lib/trade-modes';
 import { EXPIRIES, type Expiry, useTradePrefs } from '@/lib/trade-prefs';
 import { useWalletView } from '@/lib/wallet-view';
+import { Gate } from '@/lib/warnings';
 import { makeStyles, radius, useTheme } from '@/theme';
+import { DURATION, EASE } from '@/theme/motion';
 
 /**
  * Trading, kept simple: Swap (which also bridges across networks), Perps and
@@ -103,15 +115,14 @@ function TradeScreen() {
   const [query, setQuery] = useState('');
   const liveSwap = mode === 'Swap' && !wallet.demo;
   return (
-    // Trade is a focused flow with no tab bar; Back returns to where you came from. Its
-    // top bar matches Search's: a search field, then the balance and settings.
+    // Its own page, as it was (2026-11-13): Back, "Swap" centred and its settings, no
+    // tab bar; the review button sits at the bottom.
     <TabScreen tabBar={false} scroll={!isWeb}>
-      <View style={styles.top}>
-        <HeaderIconButton bare icon="chevronLeft" label="Back" onPress={() => goBackOr('/home')} />
-        <View style={styles.flex}>
-          {liveSwap ? (
-            <Text style={styles.detailValue}>Swap</Text>
-          ) : (
+      <TopRow
+        onBack={() => goBackOr(LANDING)}
+        title={liveSwap ? 'Swap' : undefined}
+        center={
+          liveSwap ? null : (
             <SearchField
               value={mode === 'Swap' ? '' : query}
               onChangeText={setQuery}
@@ -127,19 +138,27 @@ function TradeScreen() {
                   : undefined
               }
             />
-          )}
-        </View>
-        {!liveSwap && (
-          <HeaderActions
-            settingsLabel={`${mode} settings`}
-            onSettings={() =>
-              mode === 'Swap'
-                ? router.push('/swap-settings')
-                : router.push({ pathname: '/trade-settings', params: { mode } })
-            }
-          />
-        )}
-      </View>
+          )
+        }
+        right={
+          liveSwap ? (
+            <HeaderShortcut
+              icon="settings"
+              label="Swap settings"
+              onPress={() => router.push('/swap-settings')}
+            />
+          ) : (
+            <HeaderActions
+              settingsLabel={`${mode} settings`}
+              onSettings={() =>
+                mode === 'Swap'
+                  ? router.push('/swap-settings')
+                  : router.push({ pathname: '/trade-settings', params: { mode } })
+              }
+            />
+          )
+        }
+      />
       {/* The products you've chosen, sharing the row equally; edit them from settings.
           With a single product there's nothing to switch between, so no tabs. */}
       {tabs.length > 1 && (
@@ -158,7 +177,7 @@ function TradeScreen() {
           <EmptyState
             icon="multisig"
             title={`${wallet.label} can only swap`}
-            hint={`${mode} needs quick calls as prices move, which a round of approvals can’t keep up with. Switch to your own wallet to use it.`}
+            hint={`Switch to your own wallet to use ${mode}.`}
             action={{ label: 'Switch wallet', onPress: () => router.push('/wallets') }}
           />
         ) : (
@@ -179,12 +198,13 @@ function TradeScreen() {
 
 /** How long a fresh quote takes before the rate shows. */
 const QUOTE_MS = 700;
+const FLIP_TURN = { duration: DURATION.medium, easing: EASE.inOut } as const;
 
 /**
  * The swap pair for a shared wallet: kept if both sides are on its network, else its
  * largest balance into USDC (or ETH, if that's what it holds most of).
  */
-function onNetwork(pair: ReturnType<typeof useSwap>, multisig: Multisig) {
+function onNetwork(pair: ReturnType<typeof onWalletChains>, multisig: Multisig) {
   const chain = multisig.network.name as Chain;
   if (pair.sell.chain === chain && pair.buy.chain === chain) return pair;
   const sell = multisig.holdings[0]?.symbol ?? 'ETH';
@@ -195,10 +215,21 @@ function onNetwork(pair: ReturnType<typeof useSwap>, multisig: Multisig) {
   };
 }
 
+/** The demo form trades the wallet's own networks; a real swap may have left another. */
+function onWalletChains(pair: ReturnType<typeof useSwap>) {
+  const known = (t: TokenRef, fallback: { symbol: string; chain: Chain }) =>
+    isChain(t.chain) ? { symbol: t.symbol, chain: t.chain } : fallback;
+  return {
+    ...pair,
+    sell: known(pair.sell, { symbol: 'ETH', chain: 'Ethereum' }),
+    buy: known(pair.buy, { symbol: 'SOL', chain: 'Solana' }),
+  };
+}
+
 function SwapForm() {
   const styles = useStyles();
   const c = useTheme();
-  const stored = useSwap();
+  const stored = onWalletChains(useSwap());
   // A shared wallet swaps only on its own network, from its own balances.
   const { multisig, walletId } = useSigner();
   // A new wallet holds nothing until its first deposit.
@@ -227,10 +258,14 @@ function SwapForm() {
   // you want to get, and the other side is worked out. Below, `value` is always the
   // sell amount in the token and `out` the buy amount.
   const [side, setSide] = useState<'sell' | 'buy'>('sell');
+  const reduceMotion = useReducedMotion();
   const [unit, setUnit] = useState<'token' | 'usd'>('token');
-  const price = priceOf(sell) || 1;
+  // Test mode keeps live prices (lib/test-mode): the sample table is only a fallback.
+  const live = useTokenMarkets([sell, buy]);
+  const priceNow = (symbol: string) => live[symbol]?.market?.priceUsd || priceOf(symbol);
+  const price = priceNow(sell) || 1;
   const typed = Number(amount) || 0;
-  const rate = priceOf(sell) / (priceOf(buy) || 1);
+  const rate = priceNow(sell) / (priceNow(buy) || 1);
   const value = side === 'buy' ? typed / rate : unit === 'usd' ? typed / price : typed;
   const out = side === 'buy' ? typed : value * rate;
   const usd = value * price;
@@ -298,16 +333,18 @@ function SwapForm() {
     return () => clearTimeout(done);
   }, [quoteKey]);
 
-  // Shake the amount once when it first runs past the balance, not on every key.
-  const { shake, style: shakeStyle } = useErrorShake();
-  const wasTooMuch = useRef(false);
-  useEffect(() => {
-    if (tooMuch && !wasTooMuch.current) shake();
-    wasTooMuch.current = tooMuch;
-  }, [tooMuch, shake]);
+  // Shake the amount once when it first runs past the balance (with the error haptic),
+  // not on every key.
+  const shakeStyle = useOverShake(tooMuch);
 
+  // Switching tokens turns the arrows half a turn (250ms, ease-in-out: it turns in
+  // place), adding up so quick repeat taps keep turning the same way. Still under
+  // Reduce Motion.
+  const turn = useSharedValue(0);
+  const turned = useAnimatedStyle(() => ({ transform: [{ rotate: `${turn.get()}deg` }] }));
   const flip = () => {
     tap();
+    if (!reduceMotion) turn.set(withTiming(Math.round(turn.get() / 180) * 180 + 180, FLIP_TURN));
     setSide('sell');
     updateSwap({ sell: pair.buy, buy: pair.sell });
   };
@@ -419,7 +456,9 @@ function SwapForm() {
           onPress={flip}
           style={styles.flip}
         >
-          <Icon name="swapVertical" size={18} color={c.text} />
+          <Animated.View style={turned}>
+            <Icon name="swapVertical" size={18} color={c.text} />
+          </Animated.View>
         </PressableScale>
 
         <View style={[styles.card, styles.stacked, side === 'sell' && styles.cardIdle]}>
@@ -575,7 +614,7 @@ function SwapForm() {
           amount: Number(out.toPrecision(6)).toString(),
           symbol: buy,
           chain: pair.buy.chain,
-          usd: formatUsd(out * priceOf(buy)),
+          usd: formatUsd(out * priceNow(buy)),
         }}
         route={route}
         networkCost={networkCost}
@@ -662,7 +701,9 @@ function FuturesForm() {
         onPress={() => showDemoToast(`opened an ETH ${expiry} ${side.toLowerCase()}`)}
         style={styles.cta}
       />
-      <Risk text="Futures settle on the expiry date at the market price." />
+      <Gate id="futuresRiskNote">
+        <Risk text="Futures settle on the expiry date at the market price." />
+      </Gate>
     </>
   );
 }
@@ -710,7 +751,9 @@ function OptionsForm() {
         onPress={() => showDemoToast(`bought ${amount} ETH ${strike} ${kind.toLowerCase()}`)}
         style={styles.cta}
       />
-      <Risk text="Options can expire worthless. The most you can lose is the premium." />
+      <Gate id="optionsRiskNote">
+        <Risk text="Options can expire worthless. The most you can lose is the premium." />
+      </Gate>
     </>
   );
 }
@@ -725,12 +768,6 @@ const SCREEN_BOTTOM = 8;
 const useStyles = makeStyles((c) => ({
   flex: {
     flex: 1,
-  },
-  top: {
-    marginBottom: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
   },
   modes: {
     marginBottom: 20,

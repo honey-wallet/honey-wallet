@@ -9,7 +9,6 @@ import { tap } from '@/lib/haptics';
 import { leaveSheetTo } from '@/lib/navigation';
 import { HERE, isWeb } from '@/lib/platform';
 import { getProfile } from '@/lib/profile';
-import { TEST_MODE } from '@/lib/test-mode';
 import { showErrorToast, showToast } from '@/lib/toast';
 import { createAccount } from '@/lib/vault';
 import { addVaultWallet, nextWalletLabel } from '@/lib/wallets';
@@ -18,12 +17,17 @@ import { makeStyles, useTheme } from '@/theme';
 type Page = 'main' | 'import' | 'hardware';
 const ORDER: Page[] = ['main', 'import', 'hardware'];
 
-type Option = { icon: IconName; title: string; hint: string; onPress: () => void };
+type Option = {
+  icon: IconName;
+  title: string;
+  hint: string;
+  onPress: () => void;
+};
 
 /**
  * Add wallet, in one sheet whose pages slide side by side: create (a normal or a
  * burner wallet), import (recovery phrase or private key), watch, or connect hardware
- * (Ledger or Keystone).
+ * (Keystone and other QR wallets).
  */
 export default function AddWalletSheet() {
   const [page, setPage] = useState<Page>('main');
@@ -88,17 +92,14 @@ export default function AddWalletSheet() {
                 onPress: open('/pair-phone'),
               },
             ]
-          : TEST_MODE
-            ? [
-                {
-                  icon: 'hardware' as const,
-                  title: 'Connect hardware wallet',
-                  hint: 'Ledger or Keystone',
-                  onPress: go('hardware'),
-                },
-              ]
-            : // Hardware wallets are a demo until the Bluetooth flow ships.
-              []),
+          : [
+              {
+                icon: 'hardware' as const,
+                title: 'Connect hardware wallet',
+                hint: 'Keystone and other QR wallets',
+                onPress: go('hardware'),
+              },
+            ]),
       ],
     },
     import: {
@@ -128,16 +129,16 @@ export default function AddWalletSheet() {
       title: 'Connect hardware wallet',
       options: [
         {
-          icon: 'hardware',
-          title: 'Ledger',
-          hint: 'Pair your Ledger over Bluetooth',
-          onPress: open({ pathname: '/hardware-wallet', params: { device: 'ledger' } }),
+          icon: 'qr',
+          title: 'Keystone',
+          hint: 'Scan its account code',
+          onPress: open({ pathname: '/hardware-wallet', params: { device: 'keystone' } }),
         },
         {
           icon: 'qr',
-          title: 'Keystone',
-          hint: 'Scan your Keystone to connect',
-          onPress: open({ pathname: '/hardware-wallet', params: { device: 'keystone' } }),
+          title: 'Other QR wallets',
+          hint: 'OneKey, NGRAVE, AirGap Vault',
+          onPress: open({ pathname: '/hardware-wallet', params: { device: 'qr' } }),
         },
       ],
     },

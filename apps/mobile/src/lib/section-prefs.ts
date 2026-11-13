@@ -16,6 +16,10 @@ type SectionPrefs = {
   searchNetwork: Chain | null;
   searchShowFavorites: boolean;
   searchShowEarn: boolean;
+  /** People to follow cards on Search. */
+  searchShowPeople: boolean;
+  /** Which list Search's Top section opens on. */
+  searchTop: 'Tokens' | 'People';
   savingsJarToken: 'USDC' | 'USDT';
   savingsShowEarn: boolean;
   activityFilter: ActivityFilter;
@@ -28,6 +32,8 @@ const prefs = createStore<SectionPrefs>(
     searchNetwork: null,
     searchShowFavorites: true,
     searchShowEarn: true,
+    searchShowPeople: true,
+    searchTop: 'Tokens',
     savingsJarToken: 'USDC',
     savingsShowEarn: true,
     activityFilter: 'All',

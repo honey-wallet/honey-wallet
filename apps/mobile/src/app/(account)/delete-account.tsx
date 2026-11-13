@@ -9,6 +9,7 @@ import { confirmOwner } from '@/lib/auth';
 import { failure, tap } from '@/lib/haptics';
 import { RecentSignInRequired } from '@/lib/identity';
 import { showErrorToast } from '@/lib/toast';
+import { Gate } from '@/lib/warnings';
 import { makeStyles, useTheme } from '@/theme';
 
 const POLICY_URL = 'https://honeywallet.org/delete-account';
@@ -43,14 +44,18 @@ export default function DeleteAccountSheet() {
 
   return (
     <SheetScreen>
-      <View style={styles.tile}>
-        <Icon name="warning" size={22} color={c.error} />
-      </View>
+      <Gate id="deleteAccountRecoveryWarning">
+        <View style={styles.tile}>
+          <Icon name="warning" size={22} color={c.error} />
+        </View>
+      </Gate>
       <Text style={styles.title}>Delete your account?</Text>
-      <Text style={styles.body}>
-        Deleting Honey does not delete your funds, which stay on the blockchain. But without your
-        recovery phrase, nobody, including us, can restore access to them.
-      </Text>
+      <Gate id="deleteAccountRecoveryWarning">
+        <Text style={styles.body}>
+          Deleting Honey does not delete your funds, which stay on the blockchain. But without your
+          recovery phrase, nobody, including us, can restore access to them.
+        </Text>
+      </Gate>
       <Text style={styles.body}>
         We delete your waitlist email, your sign-in account and the data our servers hold for it,
         then your wallets, keys, settings and profile on this device. Transactions on public

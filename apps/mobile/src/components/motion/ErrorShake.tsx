@@ -2,6 +2,7 @@
 // 50ms each (300ms in all), every leg ease-in-out since the field is moving in place.
 // Skipped under Reduce Motion: it's pure movement, and the error colour already says
 // what happened.
+import { useEffect, useRef } from 'react';
 import {
   useAnimatedStyle,
   useReducedMotion,
@@ -9,6 +10,7 @@ import {
   withSequence,
   withTiming,
 } from 'react-native-reanimated';
+import { failure } from '@/lib/haptics';
 import { EASE } from '@/theme/motion';
 
 /** Alternating offsets that shrink each leg, like a struck object settling. */
@@ -25,4 +27,22 @@ export function useErrorShake() {
   };
   const style = useAnimatedStyle(() => ({ transform: [{ translateX: x.value }] }));
   return { shake, style };
+}
+
+/**
+ * For an amount that can run past what you have: the moment `over` turns true (a key
+ * took it past the balance), the field shakes once with the error haptic. Further keys
+ * while it's still over stay quiet, and coming back under is silent.
+ */
+export function useOverShake(over: boolean) {
+  const { shake, style } = useErrorShake();
+  const was = useRef(over);
+  useEffect(() => {
+    if (over && !was.current) {
+      failure();
+      shake();
+    }
+    was.current = over;
+  }, [over, shake]);
+  return style;
 }

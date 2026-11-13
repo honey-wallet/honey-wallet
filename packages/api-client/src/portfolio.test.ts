@@ -1,6 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createApiClient } from './client';
-import { isChainActivity, isPortfolio, isTokenMarket, portfolioQuery } from './portfolio';
+import {
+  isChainActivity,
+  isPortfolio,
+  isTokenChart,
+  isTokenInfo,
+  isTokenMarket,
+  portfolioQuery,
+} from './portfolio';
 
 const holding = {
   chain: 'Base',
@@ -59,6 +66,45 @@ describe('portfolio', () => {
     expect(isTokenMarket({ ...m, change24h: 'x' })).toBe(false);
   });
 
+  it('validates token details and keeps links https', () => {
+    const info = {
+      symbol: 'cbBTC',
+      id: 'coinbase-wrapped-btc',
+      name: 'Coinbase Wrapped BTC',
+      description: 'Backed 1:1 by bitcoin.',
+      image: 'https://coin-images.coingecko.com/cbbtc.webp',
+      website: { label: 'Website', url: 'https://www.coinbase.com/' },
+      explorer: { label: 'Etherscan', url: 'https://etherscan.io/token/0xcbb7' },
+      priceUsd: 74268,
+      change24h: 1.3,
+      marketCap: 7.4e9,
+      marketCapRank: 40,
+      fdv: 7.4e9,
+      volume24h: 4.2e8,
+      high24h: 74593,
+      low24h: 73000,
+      ath: 125954,
+      atl: 57439,
+      circulatingSupply: 100708,
+      totalSupply: 100708,
+      maxSupply: null,
+    };
+    expect(isTokenInfo(info)).toBe(true);
+    expect(isTokenInfo({ ...info, description: null, website: null, image: null })).toBe(true);
+    expect(isTokenInfo({ ...info, image: 'http://x/logo.png' })).toBe(false);
+    expect(
+      isTokenInfo({ ...info, website: { label: 'Website', url: 'javascript:alert(1)' } }),
+    ).toBe(false);
+    expect(isTokenInfo({ ...info, marketCap: 'big' })).toBe(false);
+  });
+
+  it('validates token charts', () => {
+    const chart = { symbol: 'ETH', range: '1W', times: [1, 2], prices: [2000, 2010] };
+    expect(isTokenChart(chart)).toBe(true);
+    expect(isTokenChart({ ...chart, prices: [2000] })).toBe(false);
+    expect(isTokenChart({ ...chart, prices: [2000, Number.NaN] })).toBe(false);
+  });
+
   it('calls the portfolio and deletion endpoints', async () => {
     const fetch = vi.fn<typeof globalThis.fetch>(async (input) => {
       const url = String(input);
@@ -86,5 +132,15 @@ describe('portfolio', () => {
     const [url, init] = fetch.mock.calls[2] ?? [];
     expect(String(url)).toBe('http://api.test/api/v1/me/account');
     expect(init?.method).toBe('DELETE');
+  });
+});
+
+describe('isTokenLogos', () => {
+  it('accepts https logos and refuses anything else', async () => {
+    const { isTokenLogos } = await import('./portfolio');
+    expect(isTokenLogos({ AAVE: 'https://coin-images.coingecko.com/aave.png' })).toBe(true);
+    expect(isTokenLogos({ AAVE: 'http://x/aave.png' })).toBe(false);
+    expect(isTokenLogos({ AAVE: 'javascript:alert(1)' })).toBe(false);
+    expect(isTokenLogos(['https://x'])).toBe(false);
   });
 });

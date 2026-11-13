@@ -15,15 +15,20 @@ vi.mock('@/lib/profile', () => ({
 
 const {
   assetFor,
+  canSell,
+  canSellRef,
   checkSwapQuote,
   executeSwapPayment,
   intentsSwaps,
+  needsMemoWarning,
   parseOneClickTokens,
   prepareSwapPayment,
   quoteSwap,
   refreshSwap,
-  SWAP_TOKENS,
+  FALLBACK_SWAP_TOKENS,
+  shownInWallet,
   swapStage,
+  tokenRef,
   unsupportedReason,
   verifySwapWithOneClick,
 } = await import('@/lib/intents-swap');
@@ -105,14 +110,18 @@ const TOKENS = parseOneClickTokens([
     price: 3.6,
     contractAddress: 'wrap.near',
   },
+  // A network this wallet has no key for: payouts go to an address typed in.
+  { assetId: 'nep141:btc.omft.near', decimals: 8, blockchain: 'btc', symbol: 'BTC', price: 1e5 },
 ]);
+const BTC = 'nep141:btc.omft.near';
+const MY_BTC = 'bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq';
 const BASE_USDC = 'nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near';
 const BASE_ETH = 'nep141:base.omft.near';
 const SOL = 'nep141:sol.omft.near';
 
 describe('asset mapping', () => {
   it('maps every supported token to 1Click’s asset by chain and contract', () => {
-    const ids = SWAP_TOKENS.map((t) => assetFor(TOKENS, t).assetId);
+    const ids = FALLBACK_SWAP_TOKENS.map((t) => assetFor(TOKENS, t).assetId);
     expect(ids).toEqual([
       'nep141:eth.omft.near',
       'nep141:eth-0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48.omft.near',
@@ -139,14 +148,78 @@ describe('asset mapping', () => {
       unsupportedReason({ symbol: 'NEAR', chain: 'NEAR' }, { symbol: 'ETH', chain: 'Base' }),
     ).toMatch(/from NEAR/);
     expect(
-      unsupportedReason({ symbol: 'ETH', chain: 'Base' }, { symbol: 'TRX', chain: 'Tron' }),
+      unsupportedReason({ symbol: 'ETH', chain: 'Base' }, { symbol: 'TRX', chain: 'Tron' }, TOKENS),
     ).toMatch(/Getting TRX on Tron/);
+    // Before NEAR Intents' list loads, any destination is assumed; the source must be payable.
+    expect(
+      unsupportedReason({ symbol: 'ETH', chain: 'Base' }, { symbol: 'TRX', chain: 'Tron' }),
+    ).toBeNull();
+    expect(
+      unsupportedReason({ symbol: 'BTC', chain: 'Bitcoin' }, { symbol: 'ETH', chain: 'Base' }),
+    ).toMatch(/from BTC on Bitcoin/);
     expect(
       unsupportedReason({ symbol: 'ETH', chain: 'Base' }, { symbol: 'ETH', chain: 'Base' }),
     ).toMatch(/two different/);
     expect(
       unsupportedReason({ symbol: 'ETH', chain: 'Base' }, { symbol: 'SOL', chain: 'Solana' }),
     ).toBeNull();
+  });
+});
+
+describe('every NEAR Intents token', () => {
+  const MORE = parseOneClickTokens([
+    ...TOKENS.map((t) => ({ ...t })),
+    {
+      assetId: 'nep141:eth-0xdac17f958d2ee523a2206206994597c13d831ec7.omft.near',
+      decimals: 6,
+      blockchain: 'eth',
+      symbol: 'USDT',
+      price: 1,
+      contractAddress: '0xdac17f958d2ee523a2206206994597c13d831ec7',
+    },
+    { assetId: 'nep141:btc.omft.near', decimals: 8, blockchain: 'btc', symbol: 'BTC', price: 1e5 },
+    {
+      assetId: 'nep141:arb.omft.near',
+      decimals: 18,
+      blockchain: 'arb',
+      symbol: 'ETH',
+      price: 2000,
+    },
+    {
+      assetId: 'nep141:sol-c800a4bd850783ccb82c2b2c7e84175443606352.omft.near',
+      decimals: 6,
+      blockchain: 'sol',
+      symbol: 'USDT',
+      price: 1,
+      contractAddress: 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB',
+    },
+  ]);
+  const byId = (id: string) => MORE.find((t) => t.assetId === id) as (typeof MORE)[number];
+
+  it('sells any token on the four networks this wallet pays from, buys any token', () => {
+    expect(canSell(byId('nep141:eth-0xdac17f958d2ee523a2206206994597c13d831ec7.omft.near'))).toBe(
+      true,
+    );
+    expect(canSell(byId('nep141:sol-c800a4bd850783ccb82c2b2c7e84175443606352.omft.near'))).toBe(
+      true,
+    );
+    expect(canSell(byId('nep141:wrap.near'))).toBe(true);
+    expect(canSell(byId('nep141:btc.omft.near'))).toBe(false);
+    expect(canSell(byId('nep141:arb.omft.near'))).toBe(false);
+    const btc = tokenRef(byId('nep141:btc.omft.near'));
+    expect(btc).toEqual({ symbol: 'BTC', chain: 'Bitcoin', assetId: 'nep141:btc.omft.near' });
+    expect(canSellRef(btc, MORE)).toBe(false);
+    expect(unsupportedReason({ symbol: 'ETH', chain: 'Base' }, btc, MORE)).toBeNull();
+    expect(assetFor(MORE, btc).decimals).toBe(8);
+  });
+
+  it('refuses a stored asset id whose symbol or network was changed', () => {
+    expect(() =>
+      assetFor(MORE, { symbol: 'ETH', chain: 'Bitcoin', assetId: 'nep141:btc.omft.near' }),
+    ).toThrow('isn’t available');
+    expect(() =>
+      assetFor(MORE, { symbol: 'BTC', chain: 'Arbitrum', assetId: 'nep141:btc.omft.near' }),
+    ).toThrow('isn’t available');
   });
 });
 
@@ -379,6 +452,78 @@ describe('quote → pay', () => {
       ).rejects.toThrow('The quote changed');
   });
 
+  it('pays out on a network without a key here only to the address entered', async () => {
+    const btc = { symbol: 'BTC', chain: 'Bitcoin', assetId: BTC };
+    const input = { sell: { symbol: 'ETH', chain: 'Base' }, buy: btc, amount: '0.002' };
+    const ask = vi.fn(async () => quote([leg({ destinationAsset: BTC, recipient: MY_BTC })]));
+    const deps = {
+      fetcher: oneClick({ destinationAsset: BTC, recipient: MY_BTC }),
+      quote: ask,
+      now: () => NOW,
+    };
+    await expect(quoteSwap(input, deps)).rejects.toThrow('Enter your Bitcoin address');
+    await expect(quoteSwap({ ...input, recipient: 'bc1 q' }, deps)).rejects.toThrow(
+      'isn’t a Bitcoin address',
+    );
+    expect(ask).not.toHaveBeenCalled();
+    const result = await quoteSwap({ ...input, recipient: ` ${MY_BTC} ` }, deps);
+    expect(ask).toHaveBeenCalledWith('session', {
+      originAsset: BASE_ETH,
+      refundTo: ME,
+      slippageBps: 100,
+      legs: [{ destinationAsset: BTC, amount: '2000000000000000', recipient: MY_BTC }],
+    });
+    expect(result).toMatchObject({ recipient: MY_BTC, externalRecipient: true, buy: btc });
+    // On a network this wallet has keys for, a typed address is ignored: it pays you.
+    const own = vi.fn(async () => quote());
+    await quoteSwap(
+      { ...input, buy: { symbol: 'SOL', chain: 'Solana' }, recipient: OTHER_SOL },
+      { ...deps, fetcher: oneClick(), quote: own },
+    );
+    expect(own).toHaveBeenCalledWith(
+      'session',
+      expect.objectContaining({ legs: [expect.objectContaining({ recipient: MY_SOL })] }),
+    );
+  });
+
+  it('never pays a quote whose payout left this wallet on a network it has keys for', async () => {
+    const prepare = vi.fn();
+    await expect(
+      prepareSwapPayment(swap({ recipient: OTHER_SOL, externalRecipient: true }), {
+        fetcher: oneClick({ recipient: OTHER_SOL }),
+        prepare,
+        now: () => NOW,
+      }),
+    ).rejects.toThrow('The quote changed');
+    expect(prepare).not.toHaveBeenCalled();
+  });
+
+  it('pays a token by its contract and NEAR Intents’ decimals', async () => {
+    const prepare = vi.fn(async () => plan({ symbol: 'USDC', amount: '5' }));
+    const contract = '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913';
+    await prepareSwapPayment(
+      swap({
+        sell: { symbol: 'USDC', chain: 'Base', assetId: BASE_USDC },
+        originAsset: BASE_USDC,
+        sellDecimals: 6,
+        sellContract: contract,
+        amountIn: '5000000',
+      }),
+      {
+        fetcher: oneClick({ originAsset: BASE_USDC, amount: '5000000' }, { amountIn: '5000000' }),
+        prepare,
+        now: () => NOW,
+      },
+    );
+    expect(prepare).toHaveBeenCalledWith(expect.objectContaining({ id: 'seed-0' }), {
+      chain: 'Base',
+      symbol: 'USDC',
+      to: DEPOSIT,
+      amount: '5',
+      token: { contract, decimals: 6 },
+    });
+  });
+
   it('won’t start a swap to NEAR USDC an account can’t receive', async () => {
     const ask = vi.fn();
     await expect(
@@ -388,7 +533,7 @@ describe('quote → pay', () => {
           buy: { symbol: 'USDC', chain: 'NEAR' },
           amount: '5',
         },
-        { fetcher: oneClick(), quote: ask, nearUsdcReady: async () => false, now: () => NOW },
+        { fetcher: oneClick(), quote: ask, nearFtReady: async () => false, now: () => NOW },
       ),
     ).rejects.toThrow('isn’t set up for USDC');
     expect(ask).not.toHaveBeenCalled();
@@ -506,5 +651,21 @@ describe('quote → pay', () => {
     expect(
       (await refreshSwap(unpaid, { ...late, fetcher: status('PENDING_DEPOSIT') })).status,
     ).toBe('EXPIRED');
+  });
+});
+
+describe('payout wording', () => {
+  it('only claims a buy is in the wallet on chains the wallet shows', () => {
+    expect(shownInWallet('Base')).toBe(true);
+    expect(shownInWallet('Solana')).toBe(true);
+    expect(shownInWallet('BNB Chain')).toBe(false);
+    expect(shownInWallet('Polygon')).toBe(false);
+  });
+
+  it('warns about exchange memos on chains that use them', () => {
+    expect(needsMemoWarning('XRP Ledger')).toBe(true);
+    expect(needsMemoWarning('Stellar')).toBe(true);
+    expect(needsMemoWarning('TON')).toBe(true);
+    expect(needsMemoWarning('Bitcoin')).toBe(false);
   });
 });

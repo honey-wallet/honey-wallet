@@ -6,6 +6,7 @@ import { SkeletonBar } from '@/components/motion/Skeleton';
 import { SheetHeader, SheetScreen } from '@/components/sheets/Sheet';
 import { TabScreen } from '@/components/wallet/TabScreen';
 import { api } from '@/lib/api';
+import { Gate } from '@/lib/warnings';
 import { makeStyles, radius } from '@/theme';
 import { AaveExecution } from './AaveExecution';
 import { MorphoExecution } from './MorphoExecution';
@@ -113,10 +114,12 @@ export function LiveEarnMarkets({ symbol }: { symbol?: string }) {
           ) : null}
         </View>
       ))}
-      <Text style={styles.note}>
-        Deposits and withdrawals are not available yet. Rates vary; indexed liquidity is not a
-        withdrawal guarantee.
-      </Text>
+      <Gate id="earnMarketsNote">
+        <Text style={styles.note}>
+          Deposits and withdrawals are not available yet. Rates vary; indexed liquidity is not a
+          withdrawal guarantee.
+        </Text>
+      </Gate>
     </View>
   );
 }

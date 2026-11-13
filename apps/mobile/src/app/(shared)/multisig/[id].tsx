@@ -188,26 +188,26 @@ export default function MultisigScreen() {
         ) : null}
       </SkeletonReveal>
 
-      {/* Waiting for approval */}
-      <Sticky id="waiting" style={styles.sectionGap}>
-        <Text style={styles.section}>Waiting for approval</Text>
-      </Sticky>
-      {proposalsLoading ? (
-        <ProposalRowSkeleton count={1} />
-      ) : pending.length ? (
-        pending.map((p) => (
-          <ProposalRow
-            key={p.id}
-            multisig={multisig}
-            proposal={p}
-            onPress={() => openProposal(p.id)}
-          />
-        ))
-      ) : (
-        <Text style={styles.hint}>
-          Nothing waiting. Anything sent from here starts as a proposal.
-        </Text>
-      )}
+      {/* Waiting for approval: left out when nothing is, rather than a line saying so. */}
+      {proposalsLoading || pending.length ? (
+        <>
+          <Sticky id="waiting" style={styles.sectionGap}>
+            <Text style={styles.section}>Waiting for approval</Text>
+          </Sticky>
+          {proposalsLoading ? (
+            <ProposalRowSkeleton count={1} />
+          ) : (
+            pending.map((p) => (
+              <ProposalRow
+                key={p.id}
+                multisig={multisig}
+                proposal={p}
+                onPress={() => openProposal(p.id)}
+              />
+            ))
+          )}
+        </>
+      ) : null}
 
       {/* Members */}
       <Sticky id="members" style={styles.sectionGap}>
@@ -255,26 +255,26 @@ export default function MultisigScreen() {
         />
       )}
 
-      {/* History */}
-      <Sticky id="history" style={styles.sectionGap}>
-        <Text style={styles.section}>History</Text>
-      </Sticky>
-      {proposalsLoading ? (
-        <ProposalRowSkeleton count={2} />
-      ) : history.length ? (
-        history.map((p) => (
-          <ProposalRow
-            key={p.id}
-            multisig={multisig}
-            proposal={p}
-            onPress={() => openProposal(p.id)}
-          />
-        ))
-      ) : (
-        <Text style={styles.hint}>
-          No transactions yet. Approved and rejected proposals land here.
-        </Text>
-      )}
+      {/* History, once there is some. */}
+      {proposalsLoading || history.length ? (
+        <>
+          <Sticky id="history" style={styles.sectionGap}>
+            <Text style={styles.section}>History</Text>
+          </Sticky>
+          {proposalsLoading ? (
+            <ProposalRowSkeleton count={2} />
+          ) : (
+            history.map((p) => (
+              <ProposalRow
+                key={p.id}
+                multisig={multisig}
+                proposal={p}
+                onPress={() => openProposal(p.id)}
+              />
+            ))
+          )}
+        </>
+      ) : null}
 
       <PressableScale onPress={viewOnline} scaleTo={0.98} style={styles.external}>
         <Text style={styles.externalText}>View on {protocolName(multisig.protocol)}</Text>
@@ -368,12 +368,6 @@ const useStyles = makeStyles((c) => ({
     paddingBottom: 4,
     color: c.textSecondary,
     fontSize: 15,
-  },
-  hint: {
-    paddingVertical: 8,
-    color: c.textSecondary,
-    fontSize: 14,
-    lineHeight: 19,
   },
   member: {
     flexDirection: 'row',

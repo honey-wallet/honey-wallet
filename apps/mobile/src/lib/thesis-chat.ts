@@ -1,5 +1,6 @@
 import { createStore } from '@/lib/store';
 import { type Proposal, type Risk, runThesis, STAGES, withAmount, withoutPick } from '@/lib/thesis';
+import { warningOn } from '@/lib/warnings';
 
 /**
  * The idea chat: you talk to the agent, and every answer can carry something to act on
@@ -103,7 +104,9 @@ export async function reply(
           type: 'text',
           text: current.picks.map((p) => `${p.symbol} (${p.weight}%): ${p.reason}.`).join('\n'),
         },
-        { type: 'text', text: current.caution },
+        ...(warningOn('proposalCaution') && current.caution
+          ? [{ type: 'text' as const, text: current.caution }]
+          : []),
         { type: 'replies', options: ['Show a projection', 'Make it safer'] },
       ]);
       return current;

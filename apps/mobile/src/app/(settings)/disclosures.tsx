@@ -1,6 +1,7 @@
 import { router } from 'expo-router';
 import { Linking, Text } from 'react-native';
 import { PushedScreen } from '@/components/wallet/parts';
+import { Gate } from '@/lib/warnings';
 import { makeStyles } from '@/theme';
 
 const TERMS_URL = 'https://honeywallet.org/terms';
@@ -27,21 +28,25 @@ export default function DisclosuresScreen() {
         wallet.
       </Text>
 
-      <Text style={styles.heading}>What Honey is not</Text>
-      <Text style={styles.body}>
-        Honey is software that helps you prepare and sign transactions on public blockchains. It
-        isn't a bank, broker-dealer, exchange, money transmitter or investment adviser, and nothing
-        in the app is financial, legal or tax advice. Balances in Honey aren't deposits and aren't
-        covered by any deposit insurance or investor protection scheme. Some assets and features may
-        not be available where you live.
-      </Text>
+      <Gate id="disclosuresNotAdvice">
+        <Text style={styles.heading}>What Honey is not</Text>
+        <Text style={styles.body}>
+          Honey is software that helps you prepare and sign transactions on public blockchains. It
+          isn't a bank, broker-dealer, exchange, money transmitter or investment adviser, and
+          nothing in the app is financial, legal or tax advice. Balances in Honey aren't deposits
+          and aren't covered by any deposit insurance or investor protection scheme. Some assets and
+          features may not be available where you live.
+        </Text>
+      </Gate>
 
-      <Text style={styles.heading}>Risk</Text>
-      <Text style={styles.body}>
-        Crypto assets are volatile: prices can move sharply and you can lose some or all of what you
-        hold. Past performance doesn't predict future results. Only use money you can afford to
-        lose, and check every address and amount before you confirm.
-      </Text>
+      <Gate id="disclosuresRisk">
+        <Text style={styles.heading}>Risk</Text>
+        <Text style={styles.body}>
+          Crypto assets are volatile: prices can move sharply and you can lose some or all of what
+          you hold. Past performance doesn't predict future results. Only use money you can afford
+          to lose, and check every address and amount before you confirm.
+        </Text>
+      </Gate>
 
       <Text style={styles.heading}>Network fees</Text>
       <Text style={styles.body}>
@@ -50,19 +55,24 @@ export default function DisclosuresScreen() {
         before you confirm can differ from the final fee.
       </Text>
 
-      <Text style={styles.heading}>Third-party protocols</Text>
-      <Text style={styles.body}>
-        Swaps, Honey Jars and connected apps may use smart contracts and services run by third
-        parties. Honey doesn't own or control them and can't guarantee their security, availability
-        or results. Smart contracts can contain bugs, and interacting with them is at your own risk.
-      </Text>
+      <Gate id="disclosuresThirdParty">
+        <Text style={styles.heading}>Third-party protocols</Text>
+        <Text style={styles.body}>
+          Swaps, Honey Jars and connected apps may use smart contracts and services run by third
+          parties. Honey doesn't own or control them and can't guarantee their security,
+          availability or results. Smart contracts can contain bugs, and interacting with them is at
+          your own risk.
+        </Text>
+      </Gate>
 
-      <Text style={styles.heading}>Honey Jars</Text>
-      <Text style={styles.body}>
-        Yields shown for Honey Jars are variable, estimated from recent on-chain rates, and are not
-        guaranteed. Rates can fall to zero, and the value of what you deposit can go down as well as
-        up.
-      </Text>
+      <Gate id="disclosuresJarsYield">
+        <Text style={styles.heading}>Honey Jars</Text>
+        <Text style={styles.body}>
+          Yields shown for Honey Jars are variable, estimated from recent on-chain rates, and are
+          not guaranteed. Rates can fall to zero, and the value of what you deposit can go down as
+          well as up.
+        </Text>
+      </Gate>
 
       <Text style={styles.heading}>More</Text>
       <Text style={styles.body}>

@@ -7,7 +7,7 @@ import { useEffect } from 'react';
 import { View } from 'react-native';
 import Animated, {
   cancelAnimation,
-  useAnimatedStyle,
+  useAnimatedProps,
   useReducedMotion,
   useSharedValue,
   withDelay,
@@ -15,12 +15,20 @@ import Animated, {
   withSequence,
   withTiming,
 } from 'react-native-reanimated';
-import Svg, { Path } from 'react-native-svg';
+import Svg, { G, Path } from 'react-native-svg';
 import { EYES_PATH, MARK_VIEWBOX, RING_PATH } from '@/components/logo/paths';
 import { useTheme } from '@/theme';
 import { EASE } from '@/theme/motion';
 
 const EYES = '#4B2817';
+
+// The eyes move inside the one drawing. They used to be a second Svg on an Animated.View
+// stacked over the ring, and Android painted that transformed layer as a grey box.
+const AnimatedG = Animated.createAnimatedComponent(G);
+// MARK_VIEWBOX is '244 203 400 350': the eyes' centre in those units.
+const VIEW_WIDTH = 400;
+const EYES_X = 444;
+const EYES_Y = 245;
 
 /** How far the eyes travel when they glance, as a fraction of the mark's width. */
 const GLANCE = 0.035;
@@ -66,26 +74,21 @@ export function HoneyMascot({ width = 160 }: { width?: number }) {
     };
   }, [reduceMotion, glance, x, blink]);
 
-  const eyes = useAnimatedStyle(() => ({
-    transform: [{ translateX: x.value }, { scaleY: blink.value }],
+  // The glance in the drawing's own units, so it's the same at any size.
+  const unit = VIEW_WIDTH / width;
+  const eyes = useAnimatedProps(() => ({
+    translateX: x.value * unit,
+    scaleY: blink.value,
   }));
 
   return (
     <View style={{ width, height }} accessible accessibilityLabel="Honey">
       <Svg width={width} height={height} viewBox={MARK_VIEWBOX}>
         <Path fill={c.brandYellow} fillRule="evenodd" d={RING_PATH} />
-      </Svg>
-      {/* Eyes on their own layer so they can move and blink; origin at their centre. */}
-      <Animated.View
-        style={[
-          { position: 'absolute', top: 0, left: 0, transformOrigin: ['50%', '12%', 0] },
-          eyes,
-        ]}
-      >
-        <Svg width={width} height={height} viewBox={MARK_VIEWBOX}>
+        <AnimatedG originX={EYES_X} originY={EYES_Y} animatedProps={eyes}>
           <Path fill={EYES} d={EYES_PATH} />
-        </Svg>
-      </Animated.View>
+        </AnimatedG>
+      </Svg>
     </View>
   );
 }

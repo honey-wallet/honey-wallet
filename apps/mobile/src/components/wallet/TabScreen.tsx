@@ -1,24 +1,36 @@
 import { usePathname } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { type ReactNode, useState } from 'react';
-import { Text, View } from 'react-native';
+import { type ReactElement, type ReactNode, useCallback, useState } from 'react';
+import { type RefreshControlProps, Text, useWindowDimensions, View } from 'react-native';
 import Animated, {
+  useAnimatedReaction,
   useAnimatedRef,
   useAnimatedScrollHandler,
+  useAnimatedStyle,
   useReducedMotion,
   useSharedValue,
+  withSpring,
+  withTiming,
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { scheduleOnRN } from 'react-native-worklets';
+import { Icon } from '@/components/Icon';
+import { PressableScale } from '@/components/motion/PressableScale';
 import { Entrance, Rise } from '@/components/motion/Rise';
 import { StickyArea } from '@/components/motion/Sticky';
 import { TAB_BAR_HEIGHT } from '@/components/wallet/TabBar';
+import { tap } from '@/lib/haptics';
 import { useTabReselect } from '@/lib/tab-reselect';
-import { makeStyles } from '@/theme';
+import { makeStyles, useTheme } from '@/theme';
+import { DURATION, EASE, SPRING } from '@/theme/motion';
 
 /** Gap between the top bar and the content. */
 const BAR_GAP = 8;
 /** First-frame guess at the bar's height (title row ~44pt), until it's measured. */
 const BAR_GUESS = 12 + 44 + BAR_GAP;
+/** Scroll to top shows once you're this many screens down. */
+const TO_TOP_AFTER = 1.5;
+const TO_TOP_SIZE = 44;
 
 /**
  * Scrolling tab screen with an optional title bar (`leading` before the title, e.g. a
@@ -34,6 +46,7 @@ export function TabScreen({
   right,
   tabBar = true,
   scroll = true,
+  refreshControl,
   children,
 }: {
   title?: string;
@@ -43,6 +56,8 @@ export function TabScreen({
   tabBar?: boolean;
   /** False for a page laid out to fit (Trade in the extension popup): no scroll or bounce. */
   scroll?: boolean;
+  /** Pull to refresh (Feed). */
+  refreshControl?: ReactElement<RefreshControlProps>;
   children: ReactNode;
 }) {
   const insets = useSafeAreaInsets();
@@ -57,6 +72,10 @@ export function TabScreen({
     scrollY.value = e.contentOffset.y;
   });
   const [barHeight, setBarHeight] = useState(insets.top + BAR_GUESS);
+  const scrollTo = useCallback(
+    (y: number) => scrollRef.current?.scrollTo({ y, animated: !reduceMotion }),
+    [scrollRef, reduceMotion],
+  );
   return (
     <Entrance id={`tab:${title ?? 'untitled'}`}>
       {/* `Sticky` content (search, tabs, section headers) pins under the status bar, or under the title bar. */}
@@ -84,6 +103,7 @@ export function TabScreen({
           scrollEventThrottle={16}
           keyboardShouldPersistTaps="handled"
           scrollEnabled={scroll}
+          refreshControl={refreshControl}
           contentContainerStyle={{
             paddingTop: title ? BAR_GAP : insets.top + 12,
             flexGrow: 1,
@@ -98,12 +118,100 @@ export function TabScreen({
         </Animated.ScrollView>
         {/* Keeps scrolled content from running under the status bar. */}
         {title ? null : <View style={[styles.statusCover, { height: insets.top }]} />}
+        {scroll ? (
+          <ToTop
+            scrollY={scrollY}
+            // 12pt above the floating tab bar (and its honey button or Sign in), else the edge.
+            bottom={tabBar ? Math.max(insets.bottom, 12) + 8 + 58 + 12 : insets.bottom + 12}
+            onPress={() => scrollTo(0)}
+          />
+        ) : null}
       </StickyArea>
     </Entrance>
   );
 }
 
+/**
+ * Scroll to top, once a long page is well underway: it springs in (fades only under
+ * Reduce Motion) bottom-right, and goes again back near the top. Driven by the scroll
+ * on the UI thread.
+ */
+function ToTop({
+  scrollY,
+  bottom,
+  onPress,
+}: {
+  scrollY: ReturnType<typeof useSharedValue<number>>;
+  bottom: number;
+  onPress: () => void;
+}) {
+  const styles = useStyles();
+  const c = useTheme();
+  const reduceMotion = useReducedMotion();
+  const { height } = useWindowDimensions();
+  const after = height * TO_TOP_AFTER;
+  const shown = useSharedValue(0);
+  const [live, setLive] = useState(false);
+  useAnimatedReaction(
+    () => scrollY.value > after,
+    (now, before) => {
+      if (now === before) return;
+      const to = now ? 1 : 0;
+      shown.value = reduceMotion
+        ? withTiming(to, { duration: DURATION.fast, easing: EASE.ease })
+        : withSpring(to, SPRING.ui);
+      scheduleOnRN(setLive, now);
+    },
+    [after, reduceMotion],
+  );
+  const style = useAnimatedStyle(() => ({
+    opacity: Math.min(1, Math.max(0, shown.value)),
+    transform: [{ scale: reduceMotion ? 1 : 0.6 + 0.4 * shown.value }],
+  }));
+  return (
+    <Animated.View
+      pointerEvents={live ? 'box-none' : 'none'}
+      accessibilityElementsHidden={!live}
+      importantForAccessibility={live ? 'auto' : 'no-hide-descendants'}
+      style={[styles.toTop, { bottom }, style]}
+    >
+      <PressableScale
+        accessibilityRole="button"
+        accessibilityLabel="Scroll to top"
+        hitSlop={6}
+        scaleTo={0.92}
+        onPress={() => {
+          tap();
+          onPress();
+        }}
+        style={styles.toTopButton}
+      >
+        <Icon name="arrowUp" size={18} color={c.text} />
+      </PressableScale>
+    </Animated.View>
+  );
+}
+
 const useStyles = makeStyles((c) => ({
+  toTop: {
+    position: 'absolute',
+    right: 18,
+  },
+  toTopButton: {
+    width: TO_TOP_SIZE,
+    height: TO_TOP_SIZE,
+    borderRadius: TO_TOP_SIZE / 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: c.raised,
+    borderWidth: 1,
+    borderColor: c.divider,
+    shadowColor: '#000',
+    shadowOpacity: c.navShadow,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 6,
+  },
   root: {
     flex: 1,
     backgroundColor: c.canvas,

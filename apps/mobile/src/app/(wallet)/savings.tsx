@@ -16,7 +16,7 @@ import { PillButton } from '@/components/onboarding/PillButton';
 import { DemoMoneyNotice } from '@/components/savings/DemoMoneyNotice';
 import { LiveSavingsScreen } from '@/components/savings/LiveEarnMarkets';
 import { HeaderActions } from '@/components/wallet/HeaderActions';
-import { EmptyState, TokenIcon } from '@/components/wallet/parts';
+import { TokenIcon } from '@/components/wallet/parts';
 import { TabScreen } from '@/components/wallet/TabScreen';
 import { POSITIONS } from '@/lib/collectibles';
 import { tap } from '@/lib/haptics';
@@ -119,15 +119,8 @@ function DemoSavingsScreen() {
                   ))}
                 </View>
               </SkeletonReveal>
-            ) : (
-              // Create new jar sits right under this, so no second button here.
-              <EmptyState
-                compact
-                icon="target"
-                title="No jars yet"
-                hint="Set crypto aside for a goal and keep it out of your everyday balance."
-              />
-            )}
+            ) : // No jars: just Create new jar under the label, no "No jars yet" card.
+            null}
             <PressableScale
               accessibilityRole="button"
               scaleTo={0.98}
@@ -242,21 +235,22 @@ function JarCard({ jar }: { jar: Jar }) {
       </PressableScale>
       {
         <Accordion open={open}>
+          {/* Secondary on the left, the main action on the right. */}
           <View style={styles.actions}>
-            <PillButton
-              label="Add funds"
-              onPress={() => {
-                tap();
-                router.push({ pathname: '/jar-move', params: { id: jar.id, mode: 'add' } });
-              }}
-              style={styles.action}
-            />
             <PillButton
               label="Withdraw"
               variant="secondary"
               onPress={() => {
                 tap();
                 router.push({ pathname: '/jar-move', params: { id: jar.id, mode: 'withdraw' } });
+              }}
+              style={styles.action}
+            />
+            <PillButton
+              label="Add funds"
+              onPress={() => {
+                tap();
+                router.push({ pathname: '/jar-move', params: { id: jar.id, mode: 'add' } });
               }}
               style={styles.action}
             />

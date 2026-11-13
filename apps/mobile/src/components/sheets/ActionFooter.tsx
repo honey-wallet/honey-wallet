@@ -35,7 +35,8 @@ export function ActionFooter({
   menu,
   send,
 }: {
-  actions: [FooterAction, FooterAction];
+  /** One or two; a watched wallet only gets Buy. */
+  actions: [FooterAction] | [FooterAction, FooterAction];
   menu?: { open: boolean; onToggle: () => void };
   /** Send in the square instead of the grid (review: where people look for it). */
   send?: () => void;

@@ -62,6 +62,7 @@ function NewJarSheetContent() {
           placeholderTextColor={c.placeholder}
           maxLength={32}
           returnKeyType="done"
+          onSubmitEditing={() => name.trim() && value && create()}
           style={styles.input}
         />
       </View>

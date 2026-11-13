@@ -2,7 +2,7 @@ import { expect, it, vi } from 'vitest';
 
 vi.mock('@/lib/api', () => ({ api: {} }));
 
-const { dayChange, liveMarketList, rangeSeries } = await import('@/lib/market');
+const { dayChange, liveMarketList, seriesChange } = await import('@/lib/market');
 
 const m = (change24h: number | null, priceUsd: number | null = 1) => ({
   market: {
@@ -29,11 +29,13 @@ it('computes the 24h move of holdings from each token’s price change', () => {
   expect(change).toBeCloseTo(10);
 });
 
-it('charts ranges from daily closes, ending at the live price', () => {
-  expect(rangeSeries([1, 2, 3], 4, '1H', 5)).toEqual([4, 4]);
-  expect(rangeSeries([1, 2, 3], 4, '1D', 100)).toEqual([2, 4]);
-  expect(rangeSeries([1, 2, 3, 4, 5, 6, 7, 8], 9, '1W', 0)).toEqual([2, 3, 4, 5, 6, 7, 8, 9]);
-  expect(rangeSeries(undefined, 9, '1M', null)).toEqual([9, 9]);
+it('measures a chart’s change across its real series, never an invented one', () => {
+  // Across the series: from 100 to the price shown (live, or under the finger).
+  expect(seriesChange([100, 90, 110], 110, '1W', 5)).toBeCloseTo(10);
+  // No series: 1D falls back to the 24h change; other ranges are unknown.
+  expect(seriesChange([], 74000, '1D', -0.66)).toBe(-0.66);
+  expect(seriesChange([74000], 74000, '1W', -0.66)).toBeNull();
+  expect(seriesChange([], 74000, '1D', null)).toBeNull();
 });
 
 it('lists every 1Click token on a Honey chain, with live numbers where loaded', () => {

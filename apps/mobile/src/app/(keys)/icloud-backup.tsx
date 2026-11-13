@@ -1,5 +1,5 @@
 import { MIN_PASSWORD_LENGTH } from '@honey-wallet/keyring';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Text, TextInput, View } from 'react-native';
 import Animated, { FadeIn } from 'react-native-reanimated';
 import { CloudLogo } from '@/components/logo/CloudLogo';
@@ -41,6 +41,7 @@ export default function CloudBackupScreen() {
   const showForm = editing || hasPhrase === false;
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
+  const confirmRef = useRef<TextInput>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -160,10 +161,14 @@ export default function CloudBackupScreen() {
               autoCapitalize="none"
               autoCorrect={false}
               editable={!busy}
+              returnKeyType="next"
+              submitBehavior="submit"
+              onSubmitEditing={() => confirmRef.current?.focus()}
               style={styles.input}
             />
             <View style={styles.divider} />
             <TextInput
+              ref={confirmRef}
               value={confirm}
               onChangeText={setConfirm}
               placeholder="Confirm password"

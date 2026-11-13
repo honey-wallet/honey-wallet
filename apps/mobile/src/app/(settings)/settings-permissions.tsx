@@ -11,7 +11,7 @@ export default function PermissionsSheet() {
     <SheetScreen title="Permissions">
       <SheetRow
         title="App analytics"
-        subtitle="We use anonymous usage data to improve Honey. When off, we only track errors and essential usage."
+        subtitle="Anonymous usage data that helps improve Honey"
         accessory={
           <Toggle
             accessibilityLabel="App analytics"

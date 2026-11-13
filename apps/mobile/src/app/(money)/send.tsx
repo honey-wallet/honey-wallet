@@ -14,11 +14,18 @@ import { RECENT_RECIPIENTS, shortAddress } from '@/lib/mock-wallet';
 import { isWeb } from '@/lib/platform';
 import { recentRecipients, usePortfolio } from '@/lib/portfolio';
 import { recipientChains } from '@/lib/send';
+import { useWalletRequired } from '@/lib/wallet-gate';
 import { isEvmAddress, useActiveWallet } from '@/lib/wallets';
 import { makeStyles, radius, useTheme } from '@/theme';
 
 /** Send, step one: pick who to pay. */
-export default function SendSheet() {
+// Needs a wallet; browsing visitors are taken to "Get started" first (lib/wallet-gate).
+export default function SendSheetRoute() {
+  const walletHere = useWalletRequired('send crypto');
+  return walletHere ? <SendSheet /> : null;
+}
+
+function SendSheet() {
   const styles = useStyles();
   const c = useTheme();
   const [query, setQuery] = useState('');
@@ -34,6 +41,8 @@ export default function SendSheet() {
     (r) => !q || r.address.toLowerCase().includes(q) || r.label?.toLowerCase().includes(q),
   );
 
+  const noRecents = !loading && recents.length === 0;
+
   // A full address that isn't a saved recipient can be sent to directly.
   const typed = query.trim();
   // Real wallets can also pay a Solana address or a NEAR account.
@@ -48,6 +57,20 @@ export default function SendSheet() {
     router.push({ pathname: '/send-amount', params: { to } });
   };
 
+  // A watched wallet has no keys on this phone: say so instead of a send that can't sign.
+  if (wallet.watchOnly)
+    return (
+      <SheetScreen title="Send">
+        <EmptyState
+          compact
+          icon="eye"
+          title={`${wallet.label} is watch-only`}
+          hint="Its keys aren’t on this phone, so it can’t send."
+          action={{ label: 'Switch wallet', onPress: () => router.replace('/wallets') }}
+        />
+      </SheetScreen>
+    );
+
   return (
     <SheetScreen title="Select recipient" scroll>
       <View style={styles.field}>
@@ -59,6 +82,8 @@ export default function SendSheet() {
           placeholderTextColor={c.textSecondary}
           autoCapitalize="none"
           autoCorrect={false}
+          returnKeyType="go"
+          onSubmitEditing={() => direct && choose(direct)}
           style={styles.input}
         />
         {isWeb ? null : (
@@ -90,41 +115,41 @@ export default function SendSheet() {
         ) : null}
       </ContentSwap>
 
-      <SheetSection title="Recent" />
-      <SkeletonReveal
-        loading={loading}
-        skeleton={<SheetRowSkeletons count={4} icon={38} trailing={false} />}
-      >
-        <ContentSwap id={q ? 'search' : 'recent'}>
-          {results.map((r) => (
-            <SheetRow
-              key={r.id}
-              leading={<Avatar name={r.label ?? r.address} size={38} seed={r.label ?? r.address} />}
-              title={r.label ?? shortAddress(r.address, 8, 6)}
-              subtitle={r.label ? shortAddress(r.address, 8, 6) : undefined}
-              onPress={() => choose(r.label ?? r.address)}
-            />
-          ))}
-          {results.length === 0 &&
-            !direct &&
-            (q ? (
-              <EmptyState
-                compact
-                icon="search"
-                title="No matches"
-                hint="Paste a full address to send to it."
-                action={{ label: 'Clear search', onPress: () => setQuery('') }}
-              />
-            ) : (
-              <EmptyState
-                compact
-                icon="send"
-                title="No one yet"
-                hint="People you pay show up here. Paste an address or scan a QR code to start."
-              />
-            ))}
-        </ContentSwap>
-      </SkeletonReveal>
+      {/* No recents yet: the section is left out rather than a "No one yet" taking space. */}
+      {noRecents ? null : (
+        <>
+          <SheetSection title="Recent" />
+          <SkeletonReveal
+            loading={loading}
+            skeleton={<SheetRowSkeletons count={4} icon={38} trailing={false} />}
+          >
+            <ContentSwap id={q ? 'search' : 'recent'}>
+              {results.map((r) => (
+                <SheetRow
+                  key={r.id}
+                  leading={
+                    <Avatar name={r.label ?? r.address} size={38} seed={r.label ?? r.address} />
+                  }
+                  title={r.label ?? shortAddress(r.address, 8, 6)}
+                  subtitle={r.label ? shortAddress(r.address, 8, 6) : undefined}
+                  onPress={() => choose(r.label ?? r.address)}
+                />
+              ))}
+              {results.length === 0 &&
+                !direct &&
+                (q ? (
+                  <EmptyState
+                    compact
+                    icon="search"
+                    title="No matches"
+                    hint="Paste a full address to send to it."
+                    action={{ label: 'Clear search', onPress: () => setQuery('') }}
+                  />
+                ) : null)}
+            </ContentSwap>
+          </SkeletonReveal>
+        </>
+      )}
     </SheetScreen>
   );
 }

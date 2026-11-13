@@ -225,6 +225,71 @@ it('skips registration for registered receivers and refuses overdrafts', async (
   ).rejects.toThrow('0.0023 NEAR');
 });
 
+it('sends any NEP-141 token a swap names, after checking its decimals and storage cost', async () => {
+  const view = (v: unknown) => ({ result: [...new TextEncoder().encode(JSON.stringify(v))] });
+  const rpc =
+    (decimals: number, min = '1250000000000000000000') =>
+    async (method: string, params: unknown) => {
+      const p = params as { request_type?: string; method_name?: string; account_id?: string };
+      if (method === 'query' && p.request_type === 'view_access_key')
+        return {
+          nonce: 7,
+          block_hash: '11111111111111111111111111111111',
+          permission: 'FullAccess',
+        };
+      if (p.account_id !== 'wrap.near') throw new Error('wrong contract');
+      if (p.method_name === 'ft_balance_of') return view((10n ** 24n).toString());
+      if (p.method_name === 'storage_balance_of') return view(null);
+      if (p.method_name === 'ft_metadata') return view({ decimals });
+      if (p.method_name === 'storage_balance_bounds') return view({ min, max: min });
+      throw new Error(`unexpected ${method}`);
+    };
+  const sendNearCall = vi.fn(async () => 'uh');
+  const input = {
+    chain: 'NEAR' as const,
+    symbol: 'wNEAR',
+    to: 'a'.repeat(64),
+    amount: '0.5',
+    token: { contract: 'wrap.near', decimals: 24 },
+  };
+  const deps = {
+    nearRpc: () => rpc(24),
+    nearClient: nearAccount(10n ** 23n),
+    sendNearCall: sendNearCall as never,
+    confirm: async () => true,
+  };
+  const plan = await prepareSend(wallet, input, deps);
+  expect(plan.note).toMatch(/0.00125 NEAR registers it/);
+  await plan.execute(() => true);
+  const tx = (sendNearCall.mock.calls[0] as unknown[])[2] as {
+    receiverId: string;
+    actions: { methodName: string }[];
+  };
+  expect(tx.receiverId).toBe('wrap.near');
+  expect(tx.actions.map((a) => a.methodName)).toEqual(['storage_deposit', 'ft_transfer']);
+  await expect(prepareSend(wallet, input, { ...deps, nearRpc: () => rpc(18) })).rejects.toThrow(
+    'decimals',
+  );
+  await expect(
+    prepareSend(wallet, input, { ...deps, nearRpc: () => rpc(24, (10n ** 23n).toString()) }),
+  ).rejects.toThrow('isn’t supported yet');
+});
+
+it('pays an ERC-20 by contract only after the token confirms its decimals', async () => {
+  await expect(
+    prepareSend(wallet, {
+      chain: 'Base',
+      symbol: 'USDT',
+      to: TO,
+      amount: '1',
+      token: { contract: 'not-an-address', decimals: 6 },
+    }),
+  ).rejects.toThrow('isn’t supported yet');
+  await expect(
+    prepareSend(wallet, { chain: 'Base', symbol: 'USDT', to: TO, amount: '1' }),
+  ).rejects.toThrow('isn’t supported yet');
+});
+
 it('refuses sample, watched and wrong-network sends', async () => {
   await expect(
     prepareSend({ ...wallet, demo: true }, { chain: 'Base', symbol: 'ETH', to: TO, amount: '1' }),

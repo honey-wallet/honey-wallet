@@ -8,7 +8,7 @@ use sqlx_core::migrate::{Migration, MigrationSource, MigrationType, Migrator};
 /// Latest schema version required before authenticated endpoints are ready.
 /// Keep this attached to the final embedded migration so readiness cannot drift
 /// from the migration list when the schema advances.
-pub const LATEST_SCHEMA_VERSION: i64 = 202611090002;
+pub const LATEST_SCHEMA_VERSION: i64 = 202611130001;
 const AUTH_CLEANUP_LOCK: i64 = 0x484f_4e45_5941_5554;
 
 #[derive(Debug)]
@@ -123,9 +123,21 @@ impl MigrationSource<'static> for EmbeddedMigrations {
                     false,
                 ),
                 migration(
-                    LATEST_SCHEMA_VERSION,
+                    202611090002,
                     "waitlist invites",
                     include_str!("../migrations/202611090002_waitlist_invites.sql"),
+                    false,
+                ),
+                migration(
+                    202611120001,
+                    "social layer",
+                    include_str!("../migrations/202611120001_social.sql"),
+                    false,
+                ),
+                migration(
+                    LATEST_SCHEMA_VERSION,
+                    "profile privacy",
+                    include_str!("../migrations/202611130001_profile_privacy.sql"),
                     false,
                 ),
             ])

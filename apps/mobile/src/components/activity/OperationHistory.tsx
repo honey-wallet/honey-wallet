@@ -6,7 +6,7 @@ import {
 } from '@honey-wallet/api-client';
 import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useRef, useState } from 'react';
-import { AppState, Text, View } from 'react-native';
+import { AppState, type StyleProp, Text, View, type ViewStyle } from 'react-native';
 import { PillButton } from '@/components/onboarding/PillButton';
 import { Copyable } from '@/components/sheets/Details';
 import { api } from '@/lib/api';
@@ -32,6 +32,13 @@ const labels: Record<OperationRecovery['operation']['state'], string> = {
 type Props = {
   onResume?: (operation: OperationRecovery) => Promise<void>;
   resumeProvider?: 'aave_v3' | 'morpho_vault_v2' | 'uniswap';
+  /**
+   * Inside Activity: shown only once there are requests. Signed out it's left out too,
+   * since signing in is the tab bar's button, not a second prompt here.
+   */
+  quiet?: boolean;
+  /** Around the card, e.g. Activity's margin, so nothing is left when it's hidden. */
+  style?: StyleProp<ViewStyle>;
 };
 export function OperationHistory(props: Props) {
   const profile = backendSession.useValue().profile;
@@ -46,6 +53,8 @@ function ScopedHistory({
   onResume,
   walletId,
   resumeProvider = 'aave_v3',
+  quiet = false,
+  style,
 }: Props & { walletId: string | undefined }) {
   const styles = useStyles();
   const [cursor, setCursor] = useState<string | undefined>();
@@ -151,9 +160,12 @@ function ScopedHistory({
       resumeBusy.current = false;
     }
   }
+  if (!walletId && quiet) return null;
+  // Nothing to show yet: no card saying so in Activity.
+  if (quiet && !selected && !error && !cursor && !page?.items.length) return null;
   if (!walletId)
     return (
-      <View style={styles.card}>
+      <View style={[styles.card, style]}>
         <Text style={styles.title}>Your Honey requests</Text>
         <Text style={styles.note}>Sign in to recover requests from previous sessions.</Text>
         <PillButton
@@ -164,7 +176,7 @@ function ScopedHistory({
       </View>
     );
   return (
-    <View style={styles.card}>
+    <View style={[styles.card, style]}>
       <Text style={styles.title}>Your Honey requests</Text>
       <Text style={styles.note}>
         Requests made through Honey. This does not include all on-chain activity.
@@ -226,20 +238,6 @@ function ScopedHistory({
                     : 'transactions finalized.'}
                 </Text>
               ) : null}
-              {onResume &&
-              ((resumeProvider === 'uniswap' &&
-                detail.operation.action === 'swap' &&
-                ['created', 'awaiting_permit', 'building_swap'].includes(detail.operation.state) &&
-                detail.intentAvailable) ||
-                (detail.operation.state === 'awaiting_signature' &&
-                  detail.preparation?.provider === resumeProvider &&
-                  !detail.preparation.expired)) ? (
-                <PillButton
-                  label="Review unsigned request"
-                  disabled={busy}
-                  onPress={() => void resume()}
-                />
-              ) : null}
             </>
           ) : null}
           <PillButton
@@ -250,6 +248,22 @@ function ScopedHistory({
               setDetail(null);
             }}
           />
+          {/* Below Back: the bottom button is the one thumbs reach for. */}
+          {detail &&
+          onResume &&
+          ((resumeProvider === 'uniswap' &&
+            detail.operation.action === 'swap' &&
+            ['created', 'awaiting_permit', 'building_swap'].includes(detail.operation.state) &&
+            detail.intentAvailable) ||
+            (detail.operation.state === 'awaiting_signature' &&
+              detail.preparation?.provider === resumeProvider &&
+              !detail.preparation.expired)) ? (
+            <PillButton
+              label="Review unsigned request"
+              disabled={busy}
+              onPress={() => void resume()}
+            />
+          ) : null}
         </>
       ) : (
         <>

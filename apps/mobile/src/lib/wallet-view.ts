@@ -37,7 +37,11 @@ export function useWalletView() {
       empty: tokens.length === 0,
       /** Per-network balances, for Send. */
       holdings: toHoldings(holdings),
+      /** Every network's balance, including ones Send can't pay from (token breakdowns). */
+      allHoldings: holdings.filter((h) => h.amount > 0),
       loading: live.loading,
+      /** The balances couldn't be read (and none were read before). */
+      error: !!live.error && !live.portfolio,
       live: true as const,
     };
   }

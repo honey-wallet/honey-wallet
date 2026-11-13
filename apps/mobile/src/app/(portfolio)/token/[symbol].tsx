@@ -2,16 +2,15 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
 import { Linking, Pressable, Text, useWindowDimensions, View } from 'react-native';
 import Animated from 'react-native-reanimated';
-// import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PriceChart } from '@/components/charts/PriceChart';
 import { Icon, type IconName } from '@/components/Icon';
 import { Accordion, AccordionChevron } from '@/components/motion/Accordion';
 import { ActionMenu } from '@/components/motion/ActionMenu';
-import { LikeButton } from '@/components/motion/LikeButton';
 import { NumberPopIn } from '@/components/motion/NumberPopIn';
 // import { PopoverMenu } from '@/components/motion/PopoverMenu';
 import { PressableScale } from '@/components/motion/PressableScale';
 import { RESIZE } from '@/components/motion/resize';
+import { SaveButton } from '@/components/motion/SaveButton';
 import { SegmentedTabs } from '@/components/motion/SegmentedTabs';
 import {
   SkeletonBar,
@@ -21,17 +20,26 @@ import {
 } from '@/components/motion/Skeleton';
 import { TextSwap } from '@/components/motion/TextSwap';
 // import { ACTION_FOOTER_HEIGHT, ActionFooter } from '@/components/sheets/ActionFooter';
-import { ActionFooter } from '@/components/sheets/ActionFooter';
+import { ActionFooter, type FooterAction } from '@/components/sheets/ActionFooter';
 import { Description } from '@/components/sheets/Description';
 import { StatRow } from '@/components/sheets/Sheet';
+// import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { FriendsHolding } from '@/components/social/FriendsHolding';
+import { TokenTheses } from '@/components/social/TokenTheses';
 import { Change, EmptyState, PushedScreen, TokenIcon } from '@/components/wallet/parts';
-import { toggleFavorite, useFavorites } from '@/lib/favorites';
 import { tap } from '@/lib/haptics';
 import { LOADS } from '@/lib/loads';
-import { rangeSeries, useTokenMarkets } from '@/lib/market';
+import {
+  retryMarket,
+  seriesChange,
+  useTokenChart,
+  useTokenInfo,
+  useTokenMarkets,
+} from '@/lib/market';
 import {
   CHAINS,
   chainSymbol,
+  formatBalance,
   formatCompactUsd,
   formatPrice,
   formatUsd,
@@ -43,8 +51,11 @@ import {
   TOKEN_INFO,
   VAULTS,
 } from '@/lib/mock-wallet';
+import { toggleSavedToken, useSavedTokens } from '@/lib/saved';
+import { SOCIAL } from '@/lib/surface';
 import { TEST_MODE } from '@/lib/test-mode';
 import { showToast } from '@/lib/toast';
+import { requireSignIn, requireWallet, useHasWallet } from '@/lib/wallet-gate';
 import { useWalletView } from '@/lib/wallet-view';
 import { makeStyles, radius, useTheme } from '@/theme';
 import { LAYOUT_MOVE } from '@/theme/motion';
@@ -54,6 +65,11 @@ const CHART_HEIGHT = 230;
 /** A dollar figure, or a dash when the source doesn't have it (never a made-up number). */
 const compactOrDash = (v: number | null | undefined) =>
   v == null || !Number.isFinite(v) ? '—' : formatCompactUsd(v);
+const priceOrDash = (v: number | null | undefined) =>
+  v == null || !Number.isFinite(v) ? '—' : formatPrice(v);
+/** A token count, compact: 100.7K, 19.9M. */
+const supplyOrDash = (v: number | null | undefined, symbol: string) =>
+  v == null || !Number.isFinite(v) ? '—' : `${formatCompactUsd(v).replace('$', '')} ${symbol}`;
 
 export default function TokenScreen() {
   const { symbol = 'ETH' } = useLocalSearchParams<{ symbol: string }>();
@@ -61,48 +77,87 @@ export default function TokenScreen() {
   const { width } = useWindowDimensions();
   const styles = useStyles();
   const c = useTheme();
-  const favorites = useFavorites();
+  const savedTokens = useSavedTokens();
 
-  // Outside test mode every number here is live (see lib/market); the fixture keeps only
-  // the token's name, network and static About/links text.
+  // Outside test mode every number here is live: the price Honey quotes (1Click, lib/market)
+  // and the token's details and chart (CoinGecko). The samples are test mode's only.
   const liveMarkets = useTokenMarkets([symbol], !TEST_MODE);
   const live = TEST_MODE ? undefined : liveMarkets[symbol];
+  const details = useTokenInfo(symbol, !TEST_MODE);
+  const about = details.info;
   const fixture = MARKET.find((t) => t.symbol === symbol);
   const market = TEST_MODE
     ? fixture
     : live?.market?.priceUsd != null
       ? {
           symbol,
-          name: fixture?.name ?? symbol,
-          chain: fixture?.chain ?? 'Ethereum',
+          name: about?.name ?? fixture?.name ?? symbol,
+          chain: fixture?.chain,
           price: live.market.priceUsd,
-          change: live.market.change24h ?? 0,
-          volume: live.market.volume24h ?? Number.NaN,
-          marketCap: live.market.marketCap ?? Number.NaN,
+          change: about?.change24h ?? live.market.change24h ?? 0,
+          // Whole-market numbers (CoinGecko) only. One pool's figures (DexScreener) can be
+          // far off for coins traded everywhere (ETH showed a $5M market cap from a NEAR
+          // pool), so without CoinGecko these show a dash rather than a wrong number.
+          volume: about?.volume24h ?? Number.NaN,
+          marketCap: about?.marketCap ?? Number.NaN,
         }
       : undefined;
-  const info = TOKEN_INFO[symbol];
+  // The sample portfolio's extras (performance, per-chain split) are test mode's only.
+  const info = TEST_MODE ? TOKEN_INFO[symbol] : undefined;
+  // About and links: live details, else (test mode) the samples.
+  const aboutText = TEST_MODE ? info?.about : about?.description;
+  const website = TEST_MODE ? info?.website : about?.website?.url;
+  const explorer = TEST_MODE ? info?.explorer : (about?.explorer ?? undefined);
   // What the wallet in use holds: none for a new wallet, its own for a shared one.
   const view = useWalletView();
+  const buyAction: FooterAction = {
+    label: 'Buy',
+    tone: 'primary',
+    onPress: () => {
+      // Browsing without a wallet: get one, then back to this token.
+      if (!requireWallet(`buy ${symbol}`, `/token/${symbol}`)) return;
+      router.push({ pathname: '/buy', params: { symbol } });
+    },
+  };
+  // No wallet yet: just Buy (the way in); nothing to sell or send.
+  const walletHere = useHasWallet();
   const held = view.tokens.find((t) => t.symbol === symbol && t.amount > 0);
   const vault = Object.hasOwn(VAULTS, symbol) ? VAULTS[symbol] : undefined;
   // Per-network balances: live for a real wallet, the fixture's for sample ones.
+  // Every network the balance is on, so the rows add up to the total above.
   const breakdown =
     'live' in view
-      ? (view.holdings ?? []).filter((h) => h.symbol === symbol)
+      ? (view.allHoldings ?? []).filter((h) => h.symbol === symbol && h.amount > 0)
       : (info?.holdings ?? []);
 
   const [range, setRange] = useState<Range>('1D');
   const [scrub, setScrub] = useState<number | null>(null);
+  const chart = useTokenChart(symbol, range, !TEST_MODE);
   const firstLoad = useFirstLoad(LOADS.token(symbol));
   const loading = firstLoad || (!TEST_MODE && !live?.market && live?.loading !== false);
+  const detailsLoading = !TEST_MODE && details.loading;
   const [showBreakdown, setShowBreakdown] = useState(true);
   // const [menuOpen, setMenuOpen] = useState(false);
 
   if (!market && loading) {
     return (
-      <PushedScreen title={symbol} contentStyle={styles.gutter}>
+      // The page's own shape: name, price and change, then the chart and its ranges.
+      <PushedScreen title={symbol}>
+        <View style={styles.gutter}>
+          <View style={styles.name}>
+            <SkeletonBar width={90} height={15} />
+          </View>
+          <View style={styles.priceSkeleton}>
+            <SkeletonBar width={170} height={34} radius={10} />
+          </View>
+          <View style={styles.changeRow}>
+            <SkeletonBar width={110} height={15} />
+          </View>
+        </View>
         <SkeletonChart height={CHART_HEIGHT} />
+        <View style={[styles.ranges, styles.gutter]}>
+          <SkeletonBar width="100%" height={32} radius={16} />
+        </View>
       </PushedScreen>
     );
   }
@@ -115,62 +170,89 @@ export default function TokenScreen() {
             <Text style={styles.balance}>
               {formatUsd(held.usd)}{' '}
               <Text style={styles.balanceAmount}>
-                {held.amount.toLocaleString('en-US')} {symbol}
+                {formatBalance(held.amount)} {symbol}
               </Text>
             </Text>
           </>
         )}
-        <EmptyState
-          icon="warning"
-          title="No market data"
-          hint={`Honey doesn't have prices for ${symbol} yet. It's hidden from your balance.`}
-        />
+        {live?.offline ? (
+          <EmptyState
+            icon="refresh"
+            title="Couldn’t load prices"
+            hint="Check your connection and try again."
+            action={{ label: 'Try again', onPress: () => retryMarket(symbol) }}
+          />
+        ) : (
+          <EmptyState
+            icon="warning"
+            title="No market data"
+            hint={`No prices for ${symbol} yet, so it's left out of your balance.`}
+          />
+        )}
       </PushedScreen>
     );
   }
 
   const data = TEST_MODE
     ? series(symbol, range, market.price, range === '1D' ? market.change : undefined)
-    : rangeSeries(live?.closes, market.price, range, live?.market?.change24h);
+    : chart.prices;
   const shown = scrub === null ? market.price : data[scrub];
-  const change = ((shown - data[0]) / data[0]) * 100;
+  const change = seriesChange(data, shown, range, market.change);
 
   return (
     <PushedScreen
       title={
         <>
-          <TokenIcon symbol={symbol} size={18} />
+          <TokenIcon symbol={symbol} size={18} uri={about?.image} />
           <Text style={styles.headerSymbol}>{symbol}</Text>
         </>
       }
       right={
         <>
+          {/* The header pair used everywhere: the heart, then •••. */}
+          <SaveButton
+            saved={savedTokens.includes(symbol)}
+            onToggle={() => toggleSavedToken(symbol)}
+            allow={() => requireSignIn(`save ${symbol}`, `/token/${symbol}`)}
+          />
           <ActionMenu
             bare
             actions={[
-              { label: 'Receive', icon: 'qr', onPress: () => router.push('/receive') },
+              // Without a wallet there's nothing to receive into or hide from.
+              ...(walletHere
+                ? [
+                    {
+                      label: 'Receive',
+                      icon: 'qr' as const,
+                      onPress: () => router.push('/receive'),
+                    },
+                  ]
+                : []),
               {
                 label: 'Share',
                 icon: 'link',
                 onPress: () => router.push({ pathname: '/share-token', params: { symbol, range } }),
               },
-              ...(info
+              ...(explorer
                 ? [
                     {
-                      label: `View on ${info.explorer.label}`,
+                      label: `View on ${explorer.label}`,
                       icon: 'globe' as const,
-                      onPress: () => Linking.openURL(info.explorer.url),
+                      onPress: () => Linking.openURL(explorer.url),
                     },
                   ]
                 : []),
-              {
-                label: 'Hide token',
-                icon: 'eyeSlash',
-                onPress: () => showToast(`${symbol} hidden`),
-              },
+              ...(walletHere
+                ? [
+                    {
+                      label: 'Hide token',
+                      icon: 'eyeSlash' as const,
+                      onPress: () => showToast(`${symbol} hidden`),
+                    },
+                  ]
+                : []),
             ]}
           />
-          <LikeButton liked={favorites.includes(symbol)} onToggle={() => toggleFavorite(symbol)} />
         </>
       }
       // The footer's square is Send now (review); Receive is in the ⋯ menu above, and the
@@ -203,20 +285,23 @@ export default function TokenScreen() {
       */
       footer={
         <ActionFooter
-          actions={[
-            {
-              label: 'Buy',
-              tone: 'primary',
-              onPress: () => router.push({ pathname: '/buy', params: { symbol } }),
-            },
-            {
-              label: 'Sell',
-              tone: 'secondary',
-              onPress: () => router.push({ pathname: '/buy', params: { symbol, mode: 'sell' } }),
-            },
-          ]}
+          actions={
+            // A watched wallet has no keys here: nothing to sell or send from. Sell on
+            // the left, Buy (the main action) on the right.
+            view.wallet.watchOnly || !walletHere
+              ? [buyAction]
+              : [
+                  {
+                    label: 'Sell',
+                    tone: 'secondary',
+                    onPress: () =>
+                      router.push({ pathname: '/buy', params: { symbol, mode: 'sell' } }),
+                  },
+                  buyAction,
+                ]
+          }
           // menu={{ open: menuOpen, onToggle: () => setMenuOpen((o) => !o) }}
-          send={() => router.push('/send')}
+          send={view.wallet.watchOnly || !walletHere ? undefined : () => router.push('/send')}
         />
       }
     >
@@ -230,26 +315,38 @@ export default function TokenScreen() {
           <Text style={styles.price}>{formatPrice(shown)}</Text>
         )}
         <View style={styles.changeRow}>
-          <Change value={change} />
+          {change !== null && <Change value={change} />}
           <TextSwap text={scrub === null ? RANGE_LABEL[range] : ''} style={styles.changeLabel} />
         </View>
       </View>
 
-      <SkeletonReveal loading={loading} skeleton={<SkeletonChart height={CHART_HEIGHT} />}>
-        <PriceChart data={data} width={width} height={CHART_HEIGHT} onScrub={setScrub} />
+      {/* A range's real series, or "No price history yet": never a line drawn in. */}
+      <SkeletonReveal
+        loading={loading || chart.loading}
+        skeleton={<SkeletonChart height={CHART_HEIGHT} />}
+      >
+        <PriceChart
+          data={data}
+          width={width}
+          height={CHART_HEIGHT}
+          onScrub={setScrub}
+          endIcon={<TokenIcon symbol={symbol} size={22} uri={about?.image} />}
+        />
       </SkeletonReveal>
       <View style={styles.ranges}>
         <SegmentedTabs bare options={RANGES} value={range} onChange={setRange} />
       </View>
+      {SOCIAL ? <FriendsHolding symbol={symbol} /> : null}
+      {SOCIAL ? <TokenTheses symbol={symbol} chain={market?.chain} /> : null}
 
       {/* Your balance and where it lives */}
-      {held && info && (
+      {held && (
         <View style={[styles.section, styles.gutter]}>
           <Text style={styles.label}>Your balance</Text>
           <Text style={styles.balance}>
             {formatUsd(held.usd)}{' '}
             <Text style={styles.balanceAmount}>
-              {held.amount} {symbol}
+              {formatBalance(held.amount)} {symbol}
             </Text>
           </Text>
           {/* One chain would only repeat the balance above. A shared wallet lives on one
@@ -274,7 +371,7 @@ export default function TokenScreen() {
                     <TokenIcon symbol={chainSymbol(h.chain)} size={22} />
                     <Text style={styles.holdingUsd}>{formatUsd(h.usd)}</Text>
                     <Text style={styles.holdingChain}>{h.chain}</Text>
-                    <Text style={styles.holdingAmount}>{h.amount}</Text>
+                    <Text style={styles.holdingAmount}>{formatBalance(h.amount)}</Text>
                   </View>
                 ))}
               </Accordion>
@@ -296,7 +393,7 @@ export default function TokenScreen() {
             style={[styles.earn, styles.gutterMargin]}
           >
             <View style={styles.earnIcon}>
-              <Icon name="sparkles" size={18} color={c.accentText} />
+              <Icon name="leaf" size={18} color={c.accentText} />
             </View>
             <View style={styles.flex}>
               <Text style={styles.earnTitle}>
@@ -335,14 +432,18 @@ export default function TokenScreen() {
       )}
 
       {/* About */}
-      {info && (
+      {(aboutText || detailsLoading) && (
         <Animated.View layout={LAYOUT_MOVE} style={[styles.section, styles.gutter]}>
-          <Description title={`About ${market.name}`} text={info.about} loading={loading} />
+          <Description
+            title={`About ${market.name}`}
+            text={aboutText ?? ''}
+            loading={loading || detailsLoading}
+          />
         </Animated.View>
       )}
 
-      {/* Stats */}
-      {info && (
+      {/* Stats: test mode's samples, else the live market and its details */}
+      {info ? (
         <View style={[styles.section, styles.gutter]}>
           <Text style={styles.heading}>Stats</Text>
           <SkeletonReveal
@@ -360,37 +461,62 @@ export default function TokenScreen() {
             <Stat
               icon="layers"
               label="Fully diluted valuation"
-              value={TEST_MODE ? formatCompactUsd(info.fdv) : compactOrDash(live?.market?.fdv)}
+              value={formatCompactUsd(info.fdv)}
             />
             <Stat icon="chart" label="24h volume" value={compactOrDash(market.volume)} />
-            {TEST_MODE ? (
-              <>
-                <Stat icon="trendUp" label="52W high" value={formatPrice(info.high52)} />
-                <Stat icon="trendDown" label="52W low" value={formatPrice(info.low52)} />
-              </>
-            ) : (
-              <Stat
-                icon="layers"
-                label="Liquidity"
-                value={compactOrDash(live?.market?.liquidityUsd)}
-              />
-            )}
+            <Stat icon="trendUp" label="52W high" value={formatPrice(info.high52)} />
+            <Stat icon="trendDown" label="52W low" value={formatPrice(info.low52)} />
             <Stat
               icon="globe"
               label="Network"
-              value={CHAINS.find((ch) => ch.name === market.chain)?.name ?? market.chain}
+              value={
+                CHAINS.find((ch) => ch.name === market.chain)?.name ?? market.chain ?? 'Ethereum'
+              }
             />
           </SkeletonReveal>
         </View>
+      ) : (
+        !TEST_MODE && (
+          <View style={[styles.section, styles.gutter]}>
+            <Text style={styles.heading}>Stats</Text>
+            <SkeletonReveal
+              loading={loading || detailsLoading}
+              skeleton={LIVE_STAT_LABELS.map(({ icon, label }) => (
+                <StatRow
+                  key={label}
+                  icon={<Icon name={icon} size={15} color={c.textSecondary} />}
+                  label={label}
+                  value={<SkeletonBar width={72} />}
+                />
+              ))}
+            >
+              <Stat icon="pie" label="Market cap" value={compactOrDash(market.marketCap)} />
+              <Stat
+                icon="layers"
+                label="Fully diluted valuation"
+                // CoinGecko only: a single pool's FDV can be far off (ETH showed $5M).
+                value={compactOrDash(about?.fdv)}
+              />
+              <Stat icon="chart" label="24h volume" value={compactOrDash(market.volume)} />
+              <Stat
+                icon="box"
+                label="Circulating supply"
+                value={supplyOrDash(about?.circulatingSupply, symbol)}
+              />
+              <Stat icon="trendUp" label="All-time high" value={priceOrDash(about?.ath)} />
+              <Stat icon="trendDown" label="All-time low" value={priceOrDash(about?.atl)} />
+            </SkeletonReveal>
+          </View>
+        )
       )}
 
       {/* Links */}
-      {info && (
+      {(website || explorer) && (
         <View style={[styles.section, styles.gutter]}>
           <Text style={styles.heading}>Links</Text>
           <View style={styles.links}>
-            <LinkPill icon="globe" label="Website" url={info.website} />
-            <LinkPill icon="link" label={info.explorer.label} url={info.explorer.url} />
+            {website && <LinkPill icon="globe" label="Website" url={website} />}
+            {explorer && <LinkPill icon="link" label={explorer.label} url={explorer.url} />}
           </View>
         </View>
       )}
@@ -422,6 +548,16 @@ const STAT_LABELS: { icon: IconName; label: string }[] = [
   { icon: 'trendUp', label: '52W high' },
   { icon: 'trendDown', label: '52W low' },
   { icon: 'globe', label: 'Network' },
+];
+
+/** The live Stats rows (keep in step with the rows above). */
+const LIVE_STAT_LABELS: { icon: IconName; label: string }[] = [
+  { icon: 'pie', label: 'Market cap' },
+  { icon: 'layers', label: 'Fully diluted valuation' },
+  { icon: 'chart', label: '24h volume' },
+  { icon: 'box', label: 'Circulating supply' },
+  { icon: 'trendUp', label: 'All-time high' },
+  { icon: 'trendDown', label: 'All-time low' },
 ];
 
 function Stat({ icon, label, value }: { icon: IconName; label: string; value: string }) {
@@ -479,6 +615,7 @@ const useStyles = makeStyles((c) => ({
     fontWeight: '500',
     letterSpacing: -0.6,
   },
+  priceSkeleton: { height: 43, justifyContent: 'center' },
   changeRow: {
     marginTop: 2,
     marginBottom: 12,

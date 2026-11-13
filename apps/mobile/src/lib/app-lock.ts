@@ -11,8 +11,11 @@ export const appLock = createStore({
   busy: false,
   error: false,
 });
+// Bumped whenever the app goes to the background: a Face ID result from before that
+// doesn't count. Only the background does this. The Face ID dialog makes iOS "inactive",
+// and authentication can resolve before the app reports "active" again, so treating
+// inactive as "not in front" threw away every successful toggle.
 let generation = 0;
-let foreground = true;
 
 export async function loadAppLock() {
   try {
@@ -25,7 +28,6 @@ export async function loadAppLock() {
 }
 
 export function appVisibility(state: string) {
-  foreground = state === 'active';
   const lock = appLock.get();
   // The authentication dialog itself may make iOS inactive. Background always invalidates it.
   if (state === 'background' || (state === 'inactive' && !lock.busy && !isAuthenticatingOwner())) {
@@ -41,8 +43,7 @@ export async function unlockApp() {
   appLock.set((s) => ({ ...s, busy: true, error: false }));
   try {
     const accepted = await confirmOwner('Unlock Honey', true);
-    if (accepted && current === generation && foreground)
-      appLock.set((s) => ({ ...s, unlocked: true }));
+    if (accepted && current === generation) appLock.set((s) => ({ ...s, unlocked: true }));
   } catch {
     appLock.set((s) => ({ ...s, error: true }));
   } finally {
@@ -56,10 +57,11 @@ export async function setAppLock(enabled: boolean) {
   appLock.set((s) => ({ ...s, busy: true }));
   try {
     if (!(await confirmOwner('Change app access protection', true))) return false;
-    if (current !== generation || !foreground) return false;
+    if (current !== generation) return false;
     await SecureStore.setItemAsync(KEY, String(enabled));
     updateSettings({ faceIdAppAccess: enabled });
-    appLock.set((s) => ({ ...s, enabled, unlocked: current === generation && foreground }));
+    // Left the app while the setting was saving: it's saved, but the app stays locked.
+    appLock.set((s) => ({ ...s, enabled, unlocked: current === generation }));
     return true;
   } finally {
     appLock.set((s) => ({ ...s, busy: false }));

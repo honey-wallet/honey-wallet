@@ -57,7 +57,11 @@ import { demoAddress, isEvmAddress } from '@/lib/wallets';
 import { makeStyles, radius, useTheme } from '@/theme';
 
 type Page = 'name' | 'network' | 'members' | 'rule' | 'review' | 'done' | 'failed';
-const PAGES: Page[] = ['name', 'network', 'members', 'rule', 'review', 'done', 'failed'];
+const ALL_PAGES: Page[] = ['name', 'network', 'members', 'rule', 'review', 'done', 'failed'];
+// Outside test mode NEAR is the only network, so there's nothing to choose: no Network
+// page (2026-11-13). Test mode keeps it for the EVM samples.
+const PAGES: Page[] = TEST_MODE ? ALL_PAGES : ALL_PAGES.filter((p) => p !== 'network');
+const AFTER_NAME: Page = TEST_MODE ? 'network' : 'members';
 
 const TITLES: Record<Page, string> = {
   name: 'New shared wallet',
@@ -143,6 +147,13 @@ export default function NewMultisigSheet() {
   const [query, setQuery] = useState('');
   const [walletId, setWalletId] = useState<string | null>(null);
 
+  // On NEAR (outside test mode) only you and the people you add are members.
+  const nearOnly = !TEST_MODE && protocolFor(network) === 'sputnik';
+  const memberCount = nearOnly
+    ? 1 + members.filter((m) => m.kind === 'person').length
+    : members.length;
+  const [error, setError] = useState<string | null>(null);
+
   const go = (next: Page) => {
     tap();
     Keyboard.dismiss();
@@ -151,9 +162,10 @@ export default function NewMultisigSheet() {
 
   // Until you pick a rule yourself, it follows the recommended majority.
   useEffect(() => {
-    if (!touchedRule) setThreshold(recommendedThreshold(members.length));
-    else if (threshold > members.length) setThreshold(members.length);
-  }, [members.length, touchedRule, threshold]);
+    if (!touchedRule) setThreshold(recommendedThreshold(memberCount));
+    else if (threshold > memberCount) setThreshold(memberCount);
+    else if (nearOnly && memberCount >= 2 && threshold < 2) setThreshold(2);
+  }, [memberCount, touchedRule, threshold, nearOnly]);
 
   const addKey = (kind: Exclude<MemberKind, 'you' | 'person'>) => {
     tap();
@@ -177,6 +189,11 @@ export default function NewMultisigSheet() {
       : squads
         ? isSolanaAddress(entry)
         : isEvmAddress(entry);
+  const recentHere = RECENT_RECIPIENTS.filter(
+    (r) =>
+      !r.label &&
+      (protocolFor(network) === 'sputnik' ? isNearAccountId(r.address) : isEvmAddress(r.address)),
+  );
   const addPerson = (value: string, label?: string) => {
     const v = value.trim();
     if (members.some((m) => m.address === v)) return;
@@ -208,8 +225,8 @@ export default function NewMultisigSheet() {
           setWalletId(jar.walletId);
           setPage('done');
         })
-        .catch((error) => {
-          showToast(error instanceof Error ? error.message : 'Could not create the jar');
+        .catch((e) => {
+          setError(e instanceof Error ? e.message : 'Could not create the shared wallet');
           setPage('failed');
         });
       return;
@@ -266,7 +283,7 @@ export default function NewMultisigSheet() {
                     placeholderTextColor={c.placeholder}
                     maxLength={32}
                     returnKeyType="next"
-                    onSubmitEditing={() => name.trim() && go('network')}
+                    onSubmitEditing={() => name.trim() && go(AFTER_NAME)}
                     style={[styles.input, styles.flex]}
                   />
                 </View>
@@ -317,7 +334,7 @@ export default function NewMultisigSheet() {
                 <PillButton
                   label={name.trim() ? 'Continue' : 'Name your wallet'}
                   disabled={!name.trim()}
-                  onPress={() => go('network')}
+                  onPress={() => go(AFTER_NAME)}
                   style={styles.cta}
                 />
               </>
@@ -393,7 +410,13 @@ export default function NewMultisigSheet() {
                     <TextInput
                       value={entry}
                       onChangeText={setEntry}
-                      placeholder={squads ? 'Solana address' : '0x address'}
+                      placeholder={
+                        squads
+                          ? 'Solana address'
+                          : protocolFor(network) === 'sputnik'
+                            ? 'NEAR account, e.g. name.near'
+                            : '0x address'
+                      }
                       placeholderTextColor={c.placeholder}
                       autoCapitalize="none"
                       autoCorrect={false}
@@ -410,30 +433,31 @@ export default function NewMultisigSheet() {
                       <Icon name="plus" size={16} color={c.onPrimary} />
                     </PressableScale>
                   </View>
-                  {squads ? null : (
+                  {/* Recent people you can add on this network: on NEAR only NEAR accounts
+                      (the sample 0x addresses made "Invalid member account", 2026-11-13). */}
+                  {squads || !recentHere.length ? null : (
                     <>
                       <SheetSection title="Recent" />
                       <View style={styles.chips}>
-                        {RECENT_RECIPIENTS.filter((r) => !r.label)
-                          .slice(0, 4)
-                          .map((r) => (
-                            <PressableScale
-                              key={r.id}
-                              accessibilityRole="button"
-                              onPress={() => addPerson(r.address, r.label)}
-                              style={styles.chip}
-                            >
-                              <Text style={styles.chipLabel}>
-                                {r.label ?? shortAddress(r.address)}
-                              </Text>
-                            </PressableScale>
-                          ))}
+                        {recentHere.slice(0, 4).map((r) => (
+                          <PressableScale
+                            key={r.id}
+                            accessibilityRole="button"
+                            onPress={() => addPerson(r.address, r.label)}
+                            style={styles.chip}
+                          >
+                            <Text style={styles.chipLabel}>
+                              {r.label ?? shortAddress(r.address)}
+                            </Text>
+                          </PressableScale>
+                        ))}
                       </View>
                     </>
                   )}
-                  {/* Or more keys of your own, kept somewhere else */}
-                  <SheetSection title="Or add your own key" />
-                  {KEY_OPTIONS.map((k) => (
+                  {/* Or more keys of your own, kept somewhere else. Not on NEAR: a shared
+                      jar there is you plus the people you add (2026-11-13). */}
+                  {nearOnly ? null : <SheetSection title="Or add your own key" />}
+                  {(nearOnly ? [] : KEY_OPTIONS).map((k) => (
                     <PressableRow key={k.kind} onPress={() => addKey(k.kind)} style={styles.option}>
                       <View style={styles.cardIcon}>
                         <Icon name={k.icon} size={20} color={c.accentText} />
@@ -447,8 +471,8 @@ export default function NewMultisigSheet() {
                   ))}
                 </ScrollView>
                 <PillButton
-                  label={members.length < 2 ? 'Add at least one more' : 'Continue'}
-                  disabled={members.length < 2}
+                  label={memberCount < 2 ? 'Add at least one more' : 'Continue'}
+                  disabled={memberCount < 2}
                   onPress={() => go('rule')}
                   style={styles.cta}
                 />
@@ -463,7 +487,8 @@ export default function NewMultisigSheet() {
                 <View style={styles.flex} />
                 <ThresholdStepper
                   value={threshold}
-                  members={members.length}
+                  members={memberCount}
+                  min={nearOnly ? 2 : 1}
                   onChange={(n) => {
                     setTouchedRule(true);
                     setThreshold(n);
@@ -476,45 +501,51 @@ export default function NewMultisigSheet() {
 
             {page === 'review' && (
               <>
-                <View style={styles.summary}>
-                  <NetworkBadge network={network} size={48} />
-                  <Text style={styles.summaryName}>{name.trim()}</Text>
-                  <Text style={styles.summarySub}>
-                    {members.length}{' '}
-                    {purpose === 'vault'
-                      ? members.length === 1
-                        ? 'key'
-                        : 'keys'
-                      : members.length === 1
-                        ? 'member'
-                        : 'members'}
-                  </Text>
+                {/* The wallet on the left, its members' faces top right (2026-11-13). */}
+                <View style={styles.reviewHead}>
+                  <NetworkBadge network={network} size={44} />
+                  <View style={styles.flex}>
+                    <Text style={styles.reviewName} numberOfLines={1}>
+                      {name.trim()}
+                    </Text>
+                    <Text style={styles.summarySub}>
+                      {members.length}{' '}
+                      {purpose === 'vault'
+                        ? members.length === 1
+                          ? 'key'
+                          : 'keys'
+                        : members.length === 1
+                          ? 'member'
+                          : 'members'}
+                    </Text>
+                  </View>
+                  <View style={styles.faces}>
+                    {members.map((m, i) => (
+                      <View key={m.id} style={i > 0 && styles.faceOverlap}>
+                        <MemberAvatar member={m} size={32} />
+                      </View>
+                    ))}
+                  </View>
                 </View>
-                <StatRow label="Approvals" value={`${threshold} of ${members.length}`} />
+                <StatRow label="Approvals" value={`${threshold} of ${memberCount}`} />
                 <StatRow
                   label="Network"
                   value={`${protocolName(protocolFor(network))} · ${network.name}`}
                 />
-                <StatRow
-                  label={purpose === 'vault' ? 'Keys' : 'Members'}
-                  value={
-                    <View style={styles.faces}>
-                      {members.map((m, i) => (
-                        <View key={m.id} style={i > 0 && styles.faceOverlap}>
-                          <MemberAvatar member={m} size={24} />
-                        </View>
-                      ))}
-                    </View>
-                  }
-                />
                 <StatRow label="Setup cost" value={setupCost(network)} />
                 <View style={styles.flex} />
-                <Text style={styles.note}>
-                  Honey sets up the {protocolName(protocolFor(network))} wallet with a new key of
-                  yours, separate from your Honey wallet. Changing members or the rule later needs
-                  approvals too.
-                </Text>
+                {/* The "new key, separate from your Honey wallet" note is removed (2026-11-13). */}
                 <PillButton label="Create shared wallet" onPress={create} style={styles.cta} />
+              </>
+            )}
+
+            {page === 'failed' && !outcome.failure && (
+              // A live (NEAR) failure: the reason, and back to Review to try again.
+              <>
+                <Text style={styles.lead}>Couldn't create the shared wallet</Text>
+                {error ? <Text style={styles.memberSub}>{error}</Text> : null}
+                <View style={styles.flex} />
+                <PillButton label="Try again" onPress={() => go('review')} style={styles.cta} />
               </>
             )}
 
@@ -541,7 +572,7 @@ export default function NewMultisigSheet() {
               <>
                 <SuccessPage
                   title="Shared wallet ready"
-                  detail={`${name.trim()} · ${threshold} of ${members.length} on ${network.name}.${
+                  detail={`${name.trim()} · ${threshold} of ${memberCount} on ${network.name}.${
                     purpose === 'vault' ? '' : ' Invite the others so they can approve.'
                   }`}
                 />
@@ -633,7 +664,6 @@ function NetworkPage({
     return (
       <ScrollView style={styles.flex} alwaysBounceVertical={false}>
         {row(NEAR_NETWORK, `Sputnik DAO · ${setupCost(NEAR_NETWORK)} · Recommended`)}
-        <Text style={styles.note}>Shared wallets on Solana and EVM networks are coming soon.</Text>
       </ScrollView>
     );
   }
@@ -682,14 +712,12 @@ function NetworkPage({
             compact
             icon="search"
             title="No networks found"
-            hint={`No EVM network matches “${query.trim()}”. Try a name or chain ID.`}
+            hint="Try a name or chain ID."
             action={{ label: 'Clear search', onPress: () => onQuery('') }}
           />
         ) : null}
         {!searching ? (
-          <Text style={styles.note}>
-            Safe works on any EVM network. Search by name or chain ID to see all of them.
-          </Text>
+          <Text style={styles.note}>Search any EVM network by name or chain ID.</Text>
         ) : null}
       </ScrollView>
     </>
@@ -697,6 +725,8 @@ function NetworkPage({
 }
 
 const useStyles = makeStyles((c) => ({
+  reviewHead: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 8 },
+  reviewName: { color: c.text, fontSize: 20, fontWeight: '700' },
   flex: {
     flex: 1,
   },

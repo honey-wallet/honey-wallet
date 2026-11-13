@@ -2,6 +2,7 @@ import { Tabs } from 'expo-router';
 import { Easing } from 'react-native';
 import { useReducedMotion } from 'react-native-reanimated';
 import { TabBar } from '@/components/wallet/TabBar';
+import { EXTENSION } from '@/lib/surface';
 import { DURATION } from '@/theme/motion';
 
 // Motion: switching tabs slides the new screen in from the side of the tab you tapped
@@ -26,11 +27,17 @@ export default function WalletLayout() {
       }}
       tabBar={(props) => <TabBar {...props} />}
     >
-      <Tabs.Screen name="home" />
+      {/* The phone opens on the Feed; Wallet is the last tab, with transaction history
+          as its Activity section (the old Activity tab redirects there). Honey for
+          Chrome is only a wallet: it opens on Wallet and has no Feed (lib/surface). */}
+      <Tabs.Screen name={EXTENSION ? 'home' : 'feed'} />
+      <Tabs.Screen name={EXTENSION ? 'feed' : 'home'} />
       <Tabs.Screen name="savings" />
       <Tabs.Screen name="search" />
       <Tabs.Screen name="activity" />
       <Tabs.Screen name="trade" />
+      {/* Jars, from the honey jar button: a tab too, so the bar stays under it. */}
+      <Tabs.Screen name="jars" />
     </Tabs>
   );
 }

@@ -1,11 +1,15 @@
+import * as Clipboard from 'expo-clipboard';
+import Constants from 'expo-constants';
 import { useState } from 'react';
-import { TextInput, View } from 'react-native';
+import { Linking, Platform, TextInput, View } from 'react-native';
 import { PillButton } from '@/components/onboarding/PillButton';
 import { closeSheet, SheetScreen, SheetSection, SheetText } from '@/components/sheets/Sheet';
 import { Chip } from '@/components/wallet/Chip';
 import { tap } from '@/lib/haptics';
-import { showToast } from '@/lib/toast';
+import { warningOn } from '@/lib/warnings';
 import { makeStyles, radius, useTheme } from '@/theme';
+
+const SUPPORT = 'support@honeywallet.org';
 
 const TOPICS = ['Account', 'Transactions', 'Security', 'Other'] as const;
 type Topic = (typeof TOPICS)[number];
@@ -16,20 +20,43 @@ export default function ContactSheet() {
   const c = useTheme();
   const [topic, setTopic] = useState<Topic>('Account');
   const [message, setMessage] = useState('');
+  // Toasts draw under this sheet, so the no-mail-app fallback says so in the sheet.
+  const [copied, setCopied] = useState(false);
   const ready = message.trim().length > 0;
 
-  const send = () => {
+  // Sent from the phone's own mail app, so replies reach the user's inbox. Before: a
+  // "Message sent" toast that sent nothing.
+  const send = async () => {
     tap();
-    showToast('Message sent');
-    closeSheet();
+    const version = Constants.expoConfig?.version ?? '?';
+    const body = `${message.trim()}\n\n—\nHoney ${version} · ${Platform.OS} ${Platform.Version}`;
+    const url = `mailto:${SUPPORT}?subject=${encodeURIComponent(`Honey: ${topic}`)}&body=${encodeURIComponent(body)}`;
+    try {
+      await Linking.openURL(url);
+      closeSheet();
+    } catch {
+      // No mail app set up: hand over the address and the message instead.
+      await Clipboard.setStringAsync(`${SUPPORT}\n\n${body}`);
+      setCopied(true);
+    }
   };
 
   return (
     <SheetScreen
       title="Contact us"
-      footer={<PillButton label="Send" disabled={!ready} onPress={send} />}
+      footer={
+        <PillButton
+          label={copied ? 'Copied: paste it in any email app' : 'Send email'}
+          disabled={!ready}
+          onPress={() => void send()}
+        />
+      }
     >
-      <SheetText lead>We reply within a day.</SheetText>
+      <SheetText lead>
+        {copied
+          ? `No mail app is set up, so we copied ${SUPPORT} and your message. Paste them into any email app.`
+          : `Opens your mail app to ${SUPPORT}. We reply within a day.`}
+      </SheetText>
 
       <SheetSection title="Topic" />
       <View style={styles.chips}>
@@ -52,7 +79,7 @@ export default function ContactSheet() {
       <TextInput
         value={message}
         onChangeText={setMessage}
-        placeholder="Tell us what's going on. Never share your recovery phrase."
+        placeholder={`Tell us what's going on.${warningOn('contactNeverShare') ? ' Never share your recovery phrase.' : ''}`}
         placeholderTextColor={c.placeholder}
         multiline
         textAlignVertical="top"

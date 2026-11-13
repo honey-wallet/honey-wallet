@@ -1,5 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 
+// The sample Family wallet and its simulated members exist in test mode only.
+vi.mock('@/lib/test-mode', () => ({ TEST_MODE: true, NOT_AVAILABLE: 'n/a' }));
 vi.mock('@/lib/push', () => ({ notify: async () => true }));
 vi.mock('@/lib/toast', () => ({ showToast: vi.fn() }));
 vi.mock('@/lib/profile', () => ({ getProfile: () => ({ name: 'Owner' }) }));

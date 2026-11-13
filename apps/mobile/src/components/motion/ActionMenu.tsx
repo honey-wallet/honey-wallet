@@ -1,9 +1,19 @@
+import type { ReactNode } from 'react';
 import { Icon, type IconName } from '@/components/Icon';
 import { HEADER_BUTTON } from '@/components/wallet/parts';
 import { useTheme } from '@/theme';
 import { MenuDropdown } from './MenuDropdown';
 
-export type Action = { label: string; icon: IconName; onPress: () => void };
+export type Action = {
+  /** Short and fixed, one line: "Share", "View profile", "Open jar". */
+  label: string;
+  icon: IconName;
+  onPress: () => void;
+  /** Drawn in place of the icon, e.g. a token's logo. */
+  leading?: ReactNode;
+  /** Deletes or leaves something: drawn in red. */
+  destructive?: boolean;
+};
 
 /**
  * A standard round header button (••• by default) that opens a list of actions,
@@ -24,7 +34,13 @@ export function ActionMenu({
   const c = useTheme();
   return (
     <MenuDropdown
-      options={actions.map((a) => ({ value: a.label, label: a.label, icon: a.icon }))}
+      options={actions.map((a) => ({
+        value: a.label,
+        label: a.label,
+        icon: a.icon,
+        leading: a.leading,
+        destructive: a.destructive,
+      }))}
       value=""
       onChange={(label) => actions.find((a) => a.label === label)?.onPress()}
       triggerStyle={{

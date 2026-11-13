@@ -1,6 +1,6 @@
 import { router } from 'expo-router';
 import { type ReactNode, useEffect } from 'react';
-import { Text, View } from 'react-native';
+import { Linking, Text, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { Icon, type IconName } from '@/components/Icon';
 import { PressableRow } from '@/components/motion/PressableRow';
@@ -31,7 +31,9 @@ import {
   useNeedsMyApproval,
   walletName,
 } from '@/lib/multisig';
+import { useWalletNotifications, type WalletNotification } from '@/lib/notification-feed';
 import { markNotificationsRead } from '@/lib/notifications';
+import { TEST_MODE } from '@/lib/test-mode';
 import { showToast } from '@/lib/toast';
 import { makeStyles, useTheme } from '@/theme';
 import { LAYOUT_MOVE } from '@/theme/motion';
@@ -49,8 +51,9 @@ const wantsTo = (title: string) => `Wants to ${title.charAt(0).toLowerCase()}${t
 
 /**
  * Notifications, laid out like Activity: what's waiting for your approval (answer it
- * here, or open it to review), then what happened on your shared wallets, by day.
- * Rows slide out of the way as they're answered.
+ * here, or open it to review), then what happened, newest first, by day: payments in and
+ * out of this wallet (its on-chain history, as on Activity) and what happened on your
+ * shared jars. Rows slide out of the way as they're answered.
  */
 export default function NotificationsScreen() {
   const styles = useStyles();
@@ -60,18 +63,32 @@ export default function NotificationsScreen() {
   const waiting = useNeedsMyApproval();
   const events = useMultisigEvents();
   const { multisigs, proposals } = useMultisigState();
-  const loading = useFirstLoad(LOADS.notifications);
+  const firstLoad = useFirstLoad(LOADS.notifications);
+  const wallet = useWalletNotifications();
+  const loading = TEST_MODE ? firstLoad : wallet.loading;
 
-  const today = events.filter((e) => Date.now() - e.at < DAY);
-  const earlier = events.filter((e) => Date.now() - e.at >= DAY);
+  // One timeline: shared-wallet events and this wallet's payments, newest first.
+  const timeline: Entry[] = [
+    ...events.map((e): Entry => ({ type: 'event', at: e.at, event: e })),
+    ...wallet.items.map((n): Entry => ({ type: 'wallet', at: n.at, item: n })),
+  ].sort((a, b) => b.at - a.at);
+  const today = timeline.filter((e) => Date.now() - e.at < DAY);
+  const earlier = timeline.filter((e) => Date.now() - e.at >= DAY);
   // Rows ease out when answered and in when new; the rest close up behind them.
   const motion = {
     layout: LAYOUT_MOVE,
     entering: mounted ? fadeIn() : undefined,
     exiting: fadeOut(),
   };
-  const feed = (list: MultisigEvent[]) =>
-    list.map((e) => {
+  const feed = (list: Entry[]) =>
+    list.map((entry) => {
+      if (entry.type === 'wallet')
+        return (
+          <Animated.View key={entry.item.id} {...motion}>
+            <WalletRow item={entry.item} />
+          </Animated.View>
+        );
+      const e = entry.event;
       const p = proposals.find((x) => x.id === e.proposalId);
       const m = p && multisigs[p.walletId];
       return p && m ? (
@@ -125,11 +142,11 @@ export default function NotificationsScreen() {
             {feed(earlier)}
           </Animated.View>
         )}
-        {waiting.length === 0 && events.length === 0 && (
+        {waiting.length === 0 && timeline.length === 0 && (
           <EmptyState
             icon="bell"
-            title="You're all caught up"
-            hint="Approvals for shared wallets, incoming payments and security alerts show up here."
+            title="No notifications yet"
+            hint="Payments and approvals show up here."
             action={{
               label: 'Notification settings',
               onPress: () => router.push('/settings-notifications'),
@@ -138,6 +155,53 @@ export default function NotificationsScreen() {
         )}
       </SkeletonReveal>
     </PushedScreen>
+  );
+}
+
+type Entry =
+  | { type: 'event'; at: number; event: MultisigEvent }
+  | { type: 'wallet'; at: number; item: WalletNotification };
+
+const WALLET_BADGE: Record<WalletNotification['kind'], IconName> = {
+  received: 'arrowDown',
+  sent: 'arrowUp',
+  failed: 'close',
+};
+
+/** A payment in or out of this wallet (or one that failed); opens it on the explorer. */
+function WalletRow({ item }: { item: WalletNotification }) {
+  const styles = useStyles();
+  const c = useTheme();
+  return (
+    <PressableRow
+      accessibilityRole="link"
+      accessibilityLabel={`${item.title}, ${item.detail}`}
+      onPress={() => {
+        tap();
+        void Linking.openURL(item.url);
+      }}
+      style={styles.row}
+    >
+      <Lead
+        face={<TokenIcon symbol={item.symbol} size={42} />}
+        badge={{
+          icon: WALLET_BADGE[item.kind],
+          // Like Activity's badges; red when it failed.
+          color: item.kind === 'failed' ? c.error : c.success,
+        }}
+      />
+      <View style={styles.flex}>
+        <View style={styles.head}>
+          <Text style={styles.title} numberOfLines={1}>
+            {item.detail}
+          </Text>
+          <Text style={styles.date}>{when(item.at)}</Text>
+        </View>
+        <Text style={styles.detail} numberOfLines={1}>
+          {item.title}
+        </Text>
+      </View>
+    </PressableRow>
   );
 }
 

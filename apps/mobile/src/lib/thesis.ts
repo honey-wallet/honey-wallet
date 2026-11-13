@@ -1,5 +1,7 @@
+import { persistence } from '@/lib/persistence';
 import { createStore } from '@/lib/store';
 import { TEST_MODE } from '@/lib/test-mode';
+import { tokenColor } from '@/lib/token-colors';
 
 /**
  * Thesis jars: say what you believe, the agent turns it into tokens you can actually buy,
@@ -13,8 +15,8 @@ import { TEST_MODE } from '@/lib/test-mode';
 export type Risk = 'Low' | 'Medium' | 'High';
 export const RISKS: readonly Risk[] = ['Low', 'Medium', 'High'];
 /**
- * Who can see a jar: only its members; others see returns only (and can pay to copy);
- * or everyone sees holdings too.
+ * Who can see a jar: only its members (never published); others see returns only
+ * (published with its picks hidden, so it can't be copied); or everyone sees holdings too.
  */
 export type Visibility = 'members' | 'private' | 'public';
 export type OrderKind = 'market' | 'limit';
@@ -73,8 +75,19 @@ export type ThesisJar = {
   createdAt: number;
   /** Yours (created or joined), or someone else's you can browse and copy. */
   mine: boolean;
+  /** Someone else's jar whose owner hides its holdings: `picks` is empty. */
+  holdingsHidden?: boolean;
+  /** Someone else's jar whose owner hides returns: `history` is flat and means nothing. */
+  returnsHidden?: boolean;
+  /** Someone else's jar its owner doesn't let people copy. */
+  copyOff?: boolean;
   /** Set on your copy of someone's jar: who you pay, and their cut of your profit. */
   copiedFrom?: { creator: string; fee: number; jarId: string };
+  /**
+   * Someone's public jar: `history` is its whole life thinned to a few dozen points (not
+   * one a day), ending on the live return. Its page shows "since launch", no day ranges.
+   */
+  wholeLife?: boolean;
   /** Set when a shared wallet owns the jar: its buy is a proposal members approve. */
   sharedWallet?: { walletId: string; label: string; proposalId: string };
   /** The real NEAR Intents swaps that bought this jar, one per asset and chain. */
@@ -113,7 +126,7 @@ const SEED: ThesisJar[] = [
         weight: 45,
         match: 'direct',
         reason: 'Open network that pays for AI models',
-        color: '#8C96A3',
+        color: tokenColor('TAO'),
       },
       {
         symbol: 'RENDER',
@@ -122,7 +135,7 @@ const SEED: ThesisJar[] = [
         weight: 30,
         match: 'direct',
         reason: 'GPU network renting compute for AI',
-        color: '#E5484D',
+        color: tokenColor('RENDER'),
       },
       {
         symbol: 'NEAR',
@@ -131,7 +144,7 @@ const SEED: ThesisJar[] = [
         weight: 25,
         match: 'proxy',
         reason: 'Runs private AI inference (NEAR AI)',
-        color: '#00C08B',
+        color: tokenColor('NEAR'),
       },
     ],
     history: curve(1000, 0.18),
@@ -157,7 +170,7 @@ const SEED: ThesisJar[] = [
         weight: 60,
         match: 'direct',
         reason: 'Shielded payments',
-        color: '#F4B728',
+        color: tokenColor('ZEC'),
       },
       {
         symbol: 'SOL',
@@ -166,7 +179,7 @@ const SEED: ThesisJar[] = [
         weight: 40,
         match: 'proxy',
         reason: 'Where private apps are launching',
-        color: '#9945FF',
+        color: tokenColor('SOL'),
       },
     ],
     history: curve(100, 0.42),
@@ -191,7 +204,7 @@ const SEED: ThesisJar[] = [
         weight: 50,
         match: 'direct',
         reason: 'The rail itself',
-        color: '#2775CA',
+        color: tokenColor('USDC'),
       },
       {
         symbol: 'NEAR',
@@ -200,7 +213,7 @@ const SEED: ThesisJar[] = [
         weight: 30,
         match: 'proxy',
         reason: 'Payments and intents chain',
-        color: '#00C08B',
+        color: tokenColor('NEAR'),
       },
       {
         symbol: 'SOL',
@@ -209,7 +222,7 @@ const SEED: ThesisJar[] = [
         weight: 20,
         match: 'proxy',
         reason: 'Most stablecoin transfers',
-        color: '#9945FF',
+        color: tokenColor('SOL'),
       },
     ],
     history: curve(100, -0.06),
@@ -232,8 +245,8 @@ const EXPLORE: ThesisJar[] = [
     0.27,
     41,
     [
-      ['SOL', 'Solana', 'Solana', 60, '#9945FF'],
-      ['JUP', 'Jupiter', 'Solana', 40, '#2BD9A1'],
+      ['SOL', 'Solana', 'Solana', 60],
+      ['JUP', 'Jupiter', 'Solana', 40],
     ],
   ],
   [
@@ -245,8 +258,8 @@ const EXPLORE: ThesisJar[] = [
     0.19,
     33,
     [
-      ['NEAR', 'NEAR', 'NEAR', 70, '#00C08B'],
-      ['USDC', 'USD Coin', 'NEAR', 30, '#2775CA'],
+      ['NEAR', 'NEAR', 'NEAR', 70],
+      ['USDC', 'USD Coin', 'NEAR', 30],
     ],
   ],
   [
@@ -258,8 +271,8 @@ const EXPLORE: ThesisJar[] = [
     0.09,
     18,
     [
-      ['PAXG', 'Pax Gold', 'Ethereum', 80, '#E3B341'],
-      ['USDC', 'USD Coin', 'Base', 20, '#2775CA'],
+      ['PAXG', 'Pax Gold', 'Ethereum', 80],
+      ['USDC', 'USD Coin', 'Base', 20],
     ],
   ],
   [
@@ -271,8 +284,8 @@ const EXPLORE: ThesisJar[] = [
     -0.04,
     9,
     [
-      ['ETH', 'Ether', 'Ethereum', 80, '#627EEA'],
-      ['USDC', 'USD Coin', 'Base', 20, '#2775CA'],
+      ['ETH', 'Ether', 'Ethereum', 80],
+      ['USDC', 'USD Coin', 'Base', 20],
     ],
   ],
 ].map(([id, name, thesis, creator, visibility, drift, copiers, picks]) => ({
@@ -282,17 +295,15 @@ const EXPLORE: ThesisJar[] = [
   creator: creator as string,
   visibility: visibility as Visibility,
   members: [{ id: creator as string, name: creator as string, units: 1 }],
-  picks: (picks as [string, string, string, number, string][]).map(
-    ([symbol, n, chain, weight, color]) => ({
-      symbol,
-      name: n,
-      chain,
-      weight,
-      match: 'direct' as const,
-      reason: '',
-      color,
-    }),
-  ),
+  picks: (picks as [string, string, string, number][]).map(([symbol, n, chain, weight], i) => ({
+    symbol,
+    name: n,
+    chain,
+    weight,
+    match: 'direct' as const,
+    reason: '',
+    color: tokenColor(symbol, i),
+  })),
   history: curve(100, drift as number),
   invested: 1000,
   copiers: copiers as number,
@@ -301,9 +312,28 @@ const EXPLORE: ThesisJar[] = [
   mine: false,
 }));
 
-export const thesisJars = createStore<ThesisJar[]>([...SEED, ...EXPLORE], {
+// The sample jars (yours and other people's, with invented returns and copy counts)
+// only exist in test mode. Outside it, Explore and Popular are the real public jars
+// from the server (lib/social: `syncPublicJars`), and the shelf holds only your own.
+const FIXTURE_IDS = new Set([...SEED, ...EXPLORE].map((j) => j.id));
+
+export const thesisJars = createStore<ThesisJar[]>(TEST_MODE ? [...SEED, ...EXPLORE] : [], {
   persist: 'thesis-jars-v4',
 });
+
+// Installs from before this change saved the samples with their jars: drop them once
+// the saved list has loaded, keeping every jar the user made, copied or opened.
+if (!TEST_MODE) {
+  void persistence.ready.then(() => {
+    const list = thesisJars.get();
+    // Also the old "copies" of samples: the previous Copy cloned a sample without buying
+    // anything, so they hold an invented history. A copy with real swaps behind it stays.
+    const fake = (j: ThesisJar) =>
+      FIXTURE_IDS.has(j.id) ||
+      (!!j.copiedFrom && FIXTURE_IDS.has(j.copiedFrom.jarId) && !j.buy?.length);
+    if (list.some(fake)) thesisJars.set(list.filter((j) => !fake(j)));
+  });
+}
 export const useThesisJars = thesisJars.useValue;
 
 export const jarValue = (jar: ThesisJar) => jar.history.at(-1) ?? jar.invested;
@@ -350,18 +380,24 @@ export async function runThesis(
   // The live agent when signed in to Honey's server; the sample answer otherwise, or if
   // the server can't be reached (so the flow always finishes).
   // Loaded on demand, so the pure helpers here don't pull in the network stack.
-  const token = TEST_MODE ? null : (await import('@/lib/backend-session')).backendSessionToken();
-  if (token) {
-    try {
-      return await runLive(token, input, onStage);
-    } catch {
-      // Falls through to the sample below.
-    }
+  if (TEST_MODE) return sampleThesis(input, onStage);
+  // Real money: only the live agent, which picks from what NEAR Intents can deliver.
+  // Before, a signed-out user or a failed run got the sample answer (TAO, RENDER…),
+  // tokens Honey can't buy, presented as a real proposal.
+  const token = (await import('@/lib/backend-session')).backendSessionToken();
+  if (!token) throw new ThesisError('Sign in to Honey to use the agent. Nothing was bought.');
+  try {
+    return await runLive(token, input, onStage);
+  } catch (error) {
+    if (error instanceof ThesisError) throw error;
+    const reason = error instanceof Error && error.message ? ` (${error.message})` : '';
+    throw new ThesisError(`The agent couldn’t finish${reason}. Nothing was bought.`);
   }
-  return sampleThesis(input, onStage);
 }
 
-const PALETTE = ['#76B900', '#00A4EF', '#E5484D', '#9945FF', '#F5A524', '#00C08B'];
+/** An agent failure with words fit for the screen. */
+export class ThesisError extends Error {}
+
 /** The server's stages, mapped onto the steps the screen shows. */
 const STAGE_INDEX = { intake: 1, understand: 3, strategize: 5, done: 6, failed: 6 } as const;
 
@@ -400,7 +436,7 @@ async function runLive(
           weight: Math.round(p.weightPct),
           match: p.match,
           reason: p.exposure,
-          color: PALETTE[i % PALETTE.length] as string,
+          color: tokenColor(p.asset.symbol, i),
         })),
         unmatched: strategy.unmatched,
         caution: run.thesis?.rationale ?? '',
@@ -441,7 +477,7 @@ async function sampleThesis(
             weight: 60,
             match: 'direct',
             reason: 'Keeps most of it steady',
-            color: '#2775CA',
+            color: tokenColor('USDC'),
           },
           { ...(base[0] as Pick), weight: 40 },
         ]
@@ -458,7 +494,7 @@ async function sampleThesis(
               weight: 20,
               match: 'proxy',
               reason: 'Where most AI agent tokens trade',
-              color: '#9945FF',
+              color: tokenColor('SOL'),
             },
           ];
   const kz = /kazakh|tenge|kzt/i.test(input.text);
@@ -496,6 +532,8 @@ export function createThesisJar(
     buy?: import('@/lib/jar-buy').BuyLeg[];
     /** Set in advance when something (a proposal) must name the jar first. */
     id?: string;
+    /** Set when this jar copies someone else's: who gets a cut of the profit. */
+    copiedFrom?: ThesisJar['copiedFrom'];
     /** A shared wallet buying it: its members own the jar together. */
     sharedWallet?: {
       walletId: string;
@@ -534,6 +572,7 @@ export function createThesisJar(
           ],
       picks: proposal.picks,
       buy: options.buy,
+      copiedFrom: options.copiedFrom,
       sharedWallet: shared
         ? { walletId: shared.walletId, label: shared.label, proposalId: shared.proposalId }
         : undefined,
@@ -548,8 +587,21 @@ export function createThesisJar(
       createdAt: Date.now(),
       mine: true,
     },
-    ...list,
+    // A copy counts one more copier on the jar it copied.
+    ...list.map((j) => (j.id === options.copiedFrom?.jarId ? { ...j, copiers: j.copiers + 1 } : j)),
   ]);
+  if (!TEST_MODE) {
+    // Real jars reach the social layer: a public jar is published to the feed, and a copy
+    // of someone's public jar is counted on theirs. Both quietly skip without a session
+    // or a handle. (Imported lazily: lib/social imports this module.)
+    const created = thesisJars.get().find((j) => j.id === id);
+    void import('@/lib/social').then((social) => {
+      if (created && created.visibility !== 'members') void social.publishJar(created);
+      const copied = options.copiedFrom?.jarId;
+      if (copied?.startsWith(social.SOCIAL_PREFIX))
+        void social.recordCopy(copied.slice(social.SOCIAL_PREFIX.length));
+    });
+  }
   return id;
 }
 
@@ -558,28 +610,96 @@ export function updateJarBuy(id: string, buy: import('@/lib/jar-buy').BuyLeg[]) 
   thesisJars.set((list) => list.map((j) => (j.id === id ? { ...j, buy } : j)));
 }
 
-/** Copies a jar's picks into a new jar of your own (a one-time snapshot). */
-export function copyJar(jar: ThesisJar, amount: number) {
-  const id = `copy-${Date.now()}`;
-  thesisJars.set((list) => [
-    {
-      ...jar,
-      id,
-      name: `${jar.name} (copy)`,
-      copiedFrom: { creator: jar.creator, fee: jar.copyFee, jarId: jar.id },
-      copyFee: 0,
-      creator: ME,
-      visibility: 'private',
-      members: [{ id: 'me', name: ME, units: amount }],
-      history: [amount, amount],
-      invested: amount,
-      copiers: 0,
-      createdAt: Date.now(),
-      mine: true,
+/**
+ * Copying someone's jar: their picks and weights as a strategy for your amount. It then
+ * takes the same review and buy as a jar of your own (thesis-new), so outside test mode
+ * it's a real buy and never claims sample prices.
+ */
+export function copyProposal(jar: ThesisJar, amount: number): Proposal {
+  return {
+    thesis: jar.thesis,
+    amount,
+    risk: 'Medium',
+    picks: jar.picks.map((p) => ({ ...p, reason: p.reason || `${p.weight}% of ${jar.name}` })),
+    unmatched: [],
+    caution: `Past returns don’t promise future ones. ${jar.creator} gets ${jar.copyFee}% of your profit, and nothing if it loses.`,
+    feesUsd: TEST_MODE ? +(amount * 0.006).toFixed(2) : 0,
+    sources: [],
+    provenance: TEST_MODE
+      ? { sample: true, prices: 'Sample prices (test mode)', at: Date.now() }
+      : { sample: false, prices: 'NEAR Intents 1Click token list', at: Date.now() },
+  };
+}
+
+/**
+ * A jar you build yourself: the tokens you picked, in equal parts (tune them on the
+ * review with − / +), for your amount. Same review and buy as the agent's strategies.
+ */
+export function manualProposal(
+  tokens: { symbol: string; name: string; chain: string }[],
+  amount: number,
+  /** Your own split (adds to 100); evenly otherwise. */
+  weights?: number[],
+): Proposal {
+  const base = Math.floor(100 / Math.max(tokens.length, 1));
+  return {
+    thesis: tokens.map((t) => t.symbol).join(', '),
+    amount,
+    risk: 'Medium',
+    picks: tokens.map((t, i) => ({
+      symbol: t.symbol,
+      name: t.name,
+      chain: t.chain,
+      // The first pick takes the rounding, so the total is exactly 100%.
+      weight: weights?.[i] ?? (i === 0 ? 100 - base * (tokens.length - 1) : base),
+      match: 'direct',
+      reason: 'Your pick',
+      color: tokenColor(t.symbol, i),
+    })),
+    unmatched: [],
+    caution: 'You picked these yourself. Prices move, and a jar can lose value.',
+    feesUsd: TEST_MODE ? +(amount * 0.006).toFixed(2) : 0,
+    sources: [],
+    provenance: TEST_MODE
+      ? { sample: true, prices: 'Sample prices (test mode)', at: Date.now() }
+      : { sample: false, prices: 'NEAR Intents 1Click token list', at: Date.now() },
+  };
+}
+
+/**
+ * Buyable stand-ins for tokens NEAR Intents can't deliver, offered on the review (never
+ * swapped in silently): the stand-in must track the same thing, not just the same theme.
+ */
+export const PROXIES: Record<string, { symbol: string; name: string; chain: string; why: string }> =
+  {
+    PAXG: {
+      symbol: 'XAUT',
+      name: 'Tether Gold',
+      chain: 'Ethereum',
+      why: 'XAUT stands in for PAXG: both are backed by physical gold.',
     },
-    ...list.map((j) => (j.id === jar.id ? { ...j, copiers: j.copiers + 1 } : j)),
-  ]);
-  return id;
+  };
+
+/** The proposal with `symbol` swapped for its stand-in, labelled as a proxy. */
+export function withProxy(proposal: Proposal, symbol: string): Proposal {
+  const proxy = PROXIES[symbol];
+  if (!proxy || proposal.picks.some((p) => p.symbol === proxy.symbol))
+    return withoutPick(proposal, symbol);
+  return {
+    ...proposal,
+    picks: proposal.picks.map((p) =>
+      p.symbol === symbol
+        ? {
+            ...p,
+            symbol: proxy.symbol,
+            name: proxy.name,
+            chain: proxy.chain,
+            match: 'proxy',
+            reason: `${p.reason ? `${p.reason} · ` : ''}${proxy.why}`,
+          }
+        : p,
+    ),
+  };
 }
 
 /**

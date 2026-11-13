@@ -138,6 +138,11 @@ function keccakId(compressed: Uint8Array) {
   return keccak_256(full.subarray(1)).subarray(-20);
 }
 
+/** The EIP-55 address of a secp256k1 public key (compressed or not), e.g. a hardware wallet's. */
+export function evmAddressFromPublicKey(pub: Uint8Array): string {
+  return evmAddress(pub);
+}
+
 /** EIP-55 mixed-case checksum address. */
 function evmAddress(pub: Uint8Array) {
   const hex = bytesToHex(keccakId(pub));

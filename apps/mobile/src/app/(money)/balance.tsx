@@ -1,4 +1,4 @@
-import { type Href, router } from 'expo-router';
+import { type Href, router, useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
 import { Text, View } from 'react-native';
 import { Icon, type IconName } from '@/components/Icon';
@@ -12,12 +12,22 @@ import { LOADS } from '@/lib/loads';
 import { formatUsd } from '@/lib/mock-wallet';
 import { leaveSheetTo } from '@/lib/navigation';
 import { HIDDEN_AMOUNT, useSettings } from '@/lib/settings';
+import { TEST_MODE } from '@/lib/test-mode';
+import { useWalletRequired } from '@/lib/wallet-gate';
 import { useWalletView } from '@/lib/wallet-view';
 import { makeStyles, radius, useTheme } from '@/theme';
 
 /** Ways to add money, drawn as home's honey action tiles. */
-const DEPOSITS: { icon: IconName; label: string; hint: string; href: Href }[] = [
-  { icon: 'bank', label: 'Buy with cash', hint: 'Card or bank', href: '/buy-cash' },
+const DEPOSITS: { icon: IconName; label: string; hint: string; href: Href; soon?: boolean }[] = [
+  // No card or bank provider is connected outside test mode: the tile stays, dimmed and
+  // saying Coming soon, and does nothing (2026-11-13).
+  {
+    icon: 'bank',
+    label: 'Buy with cash',
+    hint: TEST_MODE ? 'Card or bank' : 'Coming soon',
+    href: '/buy-cash',
+    soon: !TEST_MODE,
+  },
   { icon: 'qr', label: 'Receive crypto', hint: 'Wallet or exchange', href: '/receive' },
 ];
 
@@ -25,7 +35,13 @@ const DEPOSITS: { icon: IconName; label: string; hint: string; href: Href }[] = 
  * Opened from the balance pill on Trade, Savings and Search: your balance as on
  * home (dimmed cents, today's change, tap it to hide), the ways to deposit more, and Portfolio.
  */
-export default function BalanceSheet() {
+// Needs a wallet; browsing visitors are taken to "Get started" first (lib/wallet-gate).
+export default function BalanceSheetRoute() {
+  const walletHere = useWalletRequired('add money');
+  return walletHere ? <BalanceSheet /> : null;
+}
+
+function BalanceSheet() {
   const styles = useStyles();
   const c = useTheme();
   // The wallet in use, as on Home: a shared wallet's own balance, a new one's $0.
@@ -35,6 +51,8 @@ export default function BalanceSheet() {
   const changePct = view.usd ? (view.change / (view.usd - view.change)) * 100 : 0;
   const { hideBalance } = useSettings();
   const [linkPressed, setLinkPressed] = useState(false);
+  // Opened from Portfolio's Deposit: no link back to the page you came from.
+  const { from } = useLocalSearchParams<{ from?: string }>();
 
   const go = (href: Href) => {
     tap();
@@ -74,9 +92,11 @@ export default function BalanceSheet() {
             key={d.label}
             accessibilityRole="button"
             accessibilityLabel={`${d.label}, ${d.hint}`}
+            accessibilityState={{ disabled: !!d.soon }}
+            disabled={d.soon}
             scaleTo={0.98}
             onPress={() => go(d.href)}
-            style={styles.tile}
+            style={[styles.tile, d.soon && styles.tileSoon]}
           >
             <Icon name={d.icon} size={22} color={c.accentText} />
             <View>
@@ -87,31 +107,34 @@ export default function BalanceSheet() {
         ))}
       </View>
 
-      <PressableScale
-        accessibilityRole="link"
-        hitSlop={8}
-        scaleTo={0.97}
-        onPress={() => {
-          tap();
-          // Portfolio is a full screen: close this sheet rather than replace it.
-          leaveSheetTo('/portfolio');
-        }}
-        onPressIn={() => setLinkPressed(true)}
-        onPressOut={() => setLinkPressed(false)}
-        style={styles.portfolio}
-      >
-        <LearnMore
-          label="View portfolio"
-          active={linkPressed}
-          color={c.accentText}
-          style={styles.portfolioText}
-        />
-      </PressableScale>
+      {from === 'portfolio' ? null : (
+        <PressableScale
+          accessibilityRole="link"
+          hitSlop={8}
+          scaleTo={0.97}
+          onPress={() => {
+            tap();
+            // Portfolio is a full screen: close this sheet rather than replace it.
+            leaveSheetTo('/portfolio');
+          }}
+          onPressIn={() => setLinkPressed(true)}
+          onPressOut={() => setLinkPressed(false)}
+          style={styles.portfolio}
+        >
+          <LearnMore
+            label="View portfolio"
+            active={linkPressed}
+            color={c.accentText}
+            style={styles.portfolioText}
+          />
+        </PressableScale>
+      )}
     </SheetScreen>
   );
 }
 
 const useStyles = makeStyles((c) => ({
+  tileSoon: { opacity: 0.45 },
   label: {
     color: c.textSecondary,
     fontSize: 15,

@@ -9,7 +9,7 @@ import { PillButton } from '@/components/onboarding/PillButton';
 import { SheetRow, SheetScreen } from '@/components/sheets/Sheet';
 import { EmptyState } from '@/components/wallet/parts';
 import { tap } from '@/lib/haptics';
-import { rangeSeries, useMarketList, useTokenMarkets } from '@/lib/market';
+import { seriesChange, useMarketList, useTokenChart, useTokenInfo } from '@/lib/market';
 import { formatBalance, formatUsd, RANGES, type Range, series } from '@/lib/mock-wallet';
 import { TEST_MODE } from '@/lib/test-mode';
 import { showErrorToast } from '@/lib/toast';
@@ -25,7 +25,8 @@ export default function ShareTokenSheet() {
   const range = params.range && RANGES.includes(params.range) ? params.range : '1D';
   // Live price and chart outside test mode (lib/market).
   const market = useMarketList().find((t) => t.symbol === symbol);
-  const live = useTokenMarkets([symbol], !TEST_MODE)[symbol];
+  const chart = useTokenChart(symbol, range, !TEST_MODE);
+  const logo = useTokenInfo(symbol, !TEST_MODE).info?.image;
   const { tokens } = useWalletView();
   const held = tokens.find((t) => t.symbol === symbol);
   const [showHolding, setShowHolding] = useState(false);
@@ -46,8 +47,8 @@ export default function ShareTokenSheet() {
 
   const data = TEST_MODE
     ? series(symbol, range, market.price, range === '1D' ? market.change : undefined)
-    : rangeSeries(live?.closes, market.price, range, live?.market?.change24h);
-  const change = ((market.price - data[0]) / data[0]) * 100;
+    : chart.prices;
+  const change = seriesChange(data, market.price, range, market.change);
 
   const share = async () => {
     tap();
@@ -85,6 +86,7 @@ export default function ShareTokenSheet() {
         change={change}
         range={range}
         data={data}
+        logo={logo}
         holding={
           showHolding && held
             ? { amount: formatBalance(held.amount), value: formatUsd(held.usd) }

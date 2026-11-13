@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { type ReactNode, useEffect, useRef } from 'react';
 import {
   Pressable,
   type StyleProp,
@@ -8,12 +8,13 @@ import {
   View,
   type ViewStyle,
 } from 'react-native';
+import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { Icon } from '@/components/Icon';
 import { PressableScale } from '@/components/motion/PressableScale';
 import { keypress, tap } from '@/lib/haptics';
 import { isWeb } from '@/lib/platform';
 import { makeStyles, radius, useTheme } from '@/theme';
-import { PRESS_SCALE } from '@/theme/motion';
+import { DURATION, EASE, PRESS_SCALE } from '@/theme/motion';
 
 export type Key = '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' | '.' | '0' | 'back';
 const KEYS: Key[] = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '.', '0', 'back'];
@@ -125,15 +126,14 @@ export function Keypad({
   return (
     <View style={styles.pad}>
       {KEYS.map((key) => (
-        <Pressable
+        <PadKey
           key={key}
-          accessibilityRole="button"
-          accessibilityLabel={key === 'back' ? 'Delete' : key}
+          label={key === 'back' ? 'Delete' : key}
+          height={keyHeight}
           onPress={() => {
             keypress();
             onKey(key);
           }}
-          style={({ pressed }) => [styles.key, { height: keyHeight }, pressed && styles.keyDown]}
         >
           {key === 'back' ? (
             <Icon name="backspace" size={22} color={c.text} />
@@ -143,9 +143,44 @@ export function Keypad({
           ) : (
             <Text style={styles.keyLabel}>{key}</Text>
           )}
-        </Pressable>
+        </PadKey>
       ))}
     </View>
+  );
+}
+
+// Motion: like the system passcode pad, a key lights the instant it's touched and the
+// light fades over 150ms after release, so fast typing leaves a soft trail instead of
+// flicker. Only the key's grey underlay moves; the digit lands immediately, with no
+// animation to queue. The fade stays under Reduce Motion (it's opacity only).
+const KEY_FADE = { duration: DURATION.quick, easing: EASE.ease } as const;
+
+function PadKey({
+  label,
+  height,
+  onPress,
+  children,
+}: {
+  label: string;
+  height: number;
+  onPress: () => void;
+  children: ReactNode;
+}) {
+  const styles = useStyles();
+  const lit = useSharedValue(0);
+  const underlay = useAnimatedStyle(() => ({ opacity: lit.get() }));
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      onPressIn={() => lit.set(1)}
+      onPressOut={() => lit.set(withTiming(0, KEY_FADE))}
+      onPress={onPress}
+      style={[styles.key, { height }]}
+    >
+      <Animated.View pointerEvents="none" style={[styles.keyDown, underlay]} />
+      {children}
+    </Pressable>
   );
 }
 
@@ -287,6 +322,12 @@ const useStyles = makeStyles((c) => ({
     ...radius(20),
   },
   keyDown: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    ...radius(20),
     backgroundColor: c.raised,
   },
   keyLabel: {

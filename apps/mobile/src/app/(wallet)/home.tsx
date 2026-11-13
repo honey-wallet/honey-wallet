@@ -1,6 +1,6 @@
-import { type Href, router } from 'expo-router';
+import { type Href, router, useLocalSearchParams } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import Animated, {
   Extrapolation,
@@ -13,7 +13,7 @@ import Animated, {
   useSharedValue,
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Avatar } from '@/components/Avatar';
+import { ActivitySection } from '@/components/activity/ActivitySection';
 import { FinishSetupCard, FundWalletCard } from '@/components/home/ActivationCard';
 import {
   ApprovalsNudge,
@@ -26,9 +26,9 @@ import { TradesList, useHasTrades } from '@/components/home/PositionsList';
 import { Icon, type IconName } from '@/components/Icon';
 import { JarList } from '@/components/jars/JarParts';
 import { HoneyJar } from '@/components/logo/HoneyJar';
+import { HoneyMascot } from '@/components/logo/HoneyMascot';
 import { Accordion, AccordionChevron } from '@/components/motion/Accordion';
 import { ContentSwap } from '@/components/motion/ContentSwap';
-import { Swap } from '@/components/motion/IconSwap';
 import { PressableRow } from '@/components/motion/PressableRow';
 import { PressableScale } from '@/components/motion/PressableScale';
 import { Entrance, Rise } from '@/components/motion/Rise';
@@ -42,8 +42,9 @@ import {
 import { Sticky, StickyArea } from '@/components/motion/Sticky';
 import { SwipeDismiss } from '@/components/motion/SwipeDismiss';
 import { UnderlineTabs } from '@/components/motion/UnderlineTabs';
-import { ChainIcons } from '@/components/wallet/ChainIcons';
-import { HeaderShortcut } from '@/components/wallet/HeaderShortcut';
+// import { expandView, inPopup } from '@/lib/dapp';
+import { PillButton } from '@/components/onboarding/PillButton';
+import { InFlightBar } from '@/components/wallet/InFlightBar';
 import {
   BalanceAmount,
   EmptyState,
@@ -53,21 +54,21 @@ import {
   TokenRow,
 } from '@/components/wallet/parts';
 import { TAB_BAR_HEIGHT } from '@/components/wallet/TabBar';
-import { useCopy } from '@/lib/copy';
+import { TabScreen } from '@/components/wallet/TabScreen';
+import { WalletHeader } from '@/components/wallet/WalletHeader';
 import { SHOW_DEMO_LABELS } from '@/lib/demo-money-copy';
-// import { expandView, inPopup } from '@/lib/dapp';
 import { tap } from '@/lib/haptics';
 import { LOADS } from '@/lib/loads';
 import { BALANCE_HISTORY, EARN, formatUsd } from '@/lib/mock-wallet';
-import { useMultisig, useMultisigDeployments, useNeedsMyApproval } from '@/lib/multisig';
-import { useUnreadNotifications } from '@/lib/notifications';
+import { useMultisig } from '@/lib/multisig';
 import { setupComplete, useOnboarding } from '@/lib/onboarding';
 import { isWeb } from '@/lib/platform';
-import { useProfile } from '@/lib/profile';
-import { receiveAddresses } from '@/lib/receive';
 import { HIDDEN_AMOUNT, updateSettings, useSettings } from '@/lib/settings';
+import { EXTENSION, SOCIAL, WALLET } from '@/lib/surface';
 import { useTabReselect } from '@/lib/tab-reselect';
 import { useThesisJars } from '@/lib/thesis';
+import { showToast } from '@/lib/toast';
+import { requireWallet, useHasWallet } from '@/lib/wallet-gate';
 import { useWalletView } from '@/lib/wallet-view';
 import { isMainWallet, useActiveWallet } from '@/lib/wallets';
 import { makeStyles, radius, useTheme } from '@/theme';
@@ -83,7 +84,8 @@ const ACTIONS: { label: string; icon: IconName; href: Href }[] = [
 // const SECTIONS = ['Tokens', 'NFTs', 'Trades'] as const;
 /** Jars lead the app for now: no Earn promo on Home. */
 const JARS_FOCUS = true;
-const SECTIONS = ['Tokens', 'Jars', 'NFTs', 'Trades'] as const;
+// 2026-11-12: Activity (transaction history) moved here from its own tab.
+const SECTIONS = ['Tokens', 'Jars', 'NFTs', 'Activity', 'Trades'] as const;
 
 /** An empty wallet's day: a flat line where the balance chart goes. */
 const FLAT_DAY = [0, 0];
@@ -93,38 +95,70 @@ const EARN_BY_RATE = [...EARN].sort((a, b) => b.apy - a.apy);
 
 const tokenHref = (symbol: string): Href => ({ pathname: '/token/[symbol]', params: { symbol } });
 
-export default function HomeScreen() {
+/**
+ * Wallet: your balance, what you hold and Send / Receive / Buy / Sell. On the phone it's a
+ * place you go, like a profile (the avatar or the balance at the top of every tab); the
+ * Feed is where the app opens (2026-11-12). It stays a tab route without a button in the
+ * bar, so the bar stays visible and the page keeps its scroll. In Honey for Chrome it's
+ * the first tab, since the extension is only a wallet.
+ */
+/**
+ * Browsing without a wallet (lib/intent): the Wallet screen is where you'd get one,
+ * not a $0.00 wallet with no address. Honey for Chrome is a wallet first and never
+ * gets here without one (lib/wallet-gate sends it to Welcome).
+ */
+export default function WalletRoute() {
+  const walletHere = useHasWallet();
+  if (!walletHere && !EXTENSION) return <NoWalletYet />;
+  return <HomeScreen />;
+}
+
+function NoWalletYet() {
+  const styles = useStyles();
+  return (
+    <TabScreen title="Wallet">
+      <View style={styles.noWallet}>
+        <HoneyMascot width={128} />
+        <Text style={styles.noWalletTitle}>Your wallet lives here</Text>
+        <Text style={styles.noWalletHint}>
+          Hold tokens, copy jars and swap; your keys stay on your phone.
+        </Text>
+        <PillButton
+          label="Create wallet"
+          onPress={() => {
+            tap();
+            requireWallet('see your balance', WALLET);
+          }}
+          style={styles.noWalletButton}
+        />
+      </View>
+    </TabScreen>
+  );
+}
+
+function HomeScreen() {
   const reduceMotion = useReducedMotion();
   const insets = useSafeAreaInsets();
   const { height: screenHeight } = useWindowDimensions();
   const styles = useStyles();
   const c = useTheme();
-  const profile = useProfile();
   const [section, setSection] = useState<(typeof SECTIONS)[number]>('Tokens');
+  // /activity, notification taps and "see history" links open on Activity.
+  const { section: asked } = useLocalSearchParams<{ section?: string }>();
+  useEffect(() => {
+    const match = SECTIONS.find((s) => s === asked);
+    if (match) setSection(match);
+  }, [asked]);
   const [promoOpen, setPromoOpen] = useState(false);
   // Earning lives on Savings; Home is balance, actions and what you hold, plus open
   // trades (the thing you check most), but only when there are some.
   const hasTrades = useHasTrades();
   const [showHidden, setShowHidden] = useState(false);
-  const unread = useUnreadNotifications();
   const wallet = useActiveWallet();
   const isMain = isMainWallet(wallet);
   const multisig = useMultisig(wallet.id);
   // Each wallet's balances arrive once; switching back to one shows them straight away.
   const firstLoad = useFirstLoad(LOADS.balances(wallet.id));
-  // The bell also lights up while a shared wallet is waiting for your approval.
-  const needsMe = useNeedsMyApproval();
-  // The chains this wallet has addresses on, as icons under its name: one copies
-  // straight away; several open Copy address to pick which.
-  const addresses = receiveAddresses(wallet);
-  const { copy: copyAddress } = useCopy(addresses[0]?.address ?? '', 'Address copied');
-  // A shared wallet lives on one chain with its own address there; the same members on
-  // other chains are one wallet with several deployments, so Copy address lists them.
-  const deployments = useMultisigDeployments(wallet.id);
-  const onAddresses = () =>
-    (multisig ? deployments.length > 1 : addresses.length > 1)
-      ? open('/addresses' as Href)
-      : void copyAddress();
 
   // The wallet in use: a shared wallet shows its own balances.
   const view = useWalletView();
@@ -136,7 +170,10 @@ export default function HomeScreen() {
   // const sections = SECTIONS.filter((s) => s !== 'Trades' || (hasTrades && !empty));
   // review: no trading in the extension, so the browser never shows the Trades tab.
   // const sections = SECTIONS.filter((s) => s !== 'Trades' || (!isWeb && hasTrades && !empty));
-  const sections = SECTIONS.filter((s) => s !== 'Trades' && (s !== 'Jars' || !multisig));
+  // Jars are the phone's (Honey for Chrome is only a wallet), and a shared wallet has none.
+  const sections = SECTIONS.filter(
+    (s) => s !== 'Trades' && (s !== 'Jars' || (!multisig && SOCIAL)),
+  );
   void hasTrades;
   // Switching to a shared wallet (which can't trade) hides Trades; fall back to Tokens.
   const shownSection = sections.includes(section) ? section : 'Tokens';
@@ -177,6 +214,9 @@ export default function HomeScreen() {
     tap();
     router.push(href);
   };
+  // A watched wallet can receive and be looked at, but not send or sell.
+  const watchBlocked = (label: string) =>
+    !!wallet.watchOnly && (label === 'Send' || label === 'Sell');
 
   // A shared wallet's balance details live on its own page.
   const openPortfolio = () =>
@@ -189,19 +229,6 @@ export default function HomeScreen() {
   const onScroll = useAnimatedScrollHandler((e) => {
     scrollY.value = e.contentOffset.y;
   });
-  // Tied to the scroll 1:1 (no easing), so the swap can't lag the finger.
-  const swap = () => {
-    'worklet';
-    return interpolate(scrollY.value, [SWAP_FROM, SWAP_TO], [0, 1], Extrapolation.CLAMP);
-  };
-  const addressShown = useAnimatedStyle(() => ({
-    opacity: 1 - swap(),
-    transform: [{ translateY: swap() * -4 }],
-  }));
-  const balanceShown = useAnimatedStyle(() => ({
-    opacity: swap(),
-    transform: [{ translateY: (1 - swap()) * 4 }],
-  }));
   const pinnedEdge = useAnimatedStyle(() => ({
     borderBottomColor: interpolateColor(
       interpolate(scrollY.value, [0, 12], [0, 1], Extrapolation.CLAMP),
@@ -232,6 +259,11 @@ export default function HomeScreen() {
 
           {/* Room for the pinned header row above the balance */}
           <View style={{ height: HEADER_ROW }} />
+
+          {/* A swap or jar buy still moving: here, since history is a section below. */}
+          <View style={styles.gutter}>
+            <InFlightBar walletId={wallet.id} />
+          </View>
 
           {/* Balance and today's change */}
           <Rise index={1}>
@@ -302,8 +334,13 @@ export default function HomeScreen() {
               <Rise key={action.label} index={2 + i} style={styles.flex}>
                 <PressableScale
                   accessibilityRole="button"
-                  onPress={() => open(action.href)}
-                  style={styles.action}
+                  accessibilityState={{ disabled: watchBlocked(action.label) }}
+                  onPress={() =>
+                    watchBlocked(action.label)
+                      ? showToast(`${wallet.label} is watch-only: its keys aren’t on this phone`)
+                      : open(action.href)
+                  }
+                  style={[styles.action, watchBlocked(action.label) && styles.actionOff]}
                 >
                   <Icon name={action.icon} size={22} color={c.accentText} />
                   <Text style={styles.actionLabel}>{action.label}</Text>
@@ -504,6 +541,7 @@ export default function HomeScreen() {
                   <NftGallery />
                 ))}
               {shownSection === 'Jars' && <HomeJars />}
+              {shownSection === 'Activity' && <ActivitySection />}
               {/* {shownSection === 'Trades' && <TradesList />} */}
               {/* review: no trading in the extension. */}
               {shownSection === 'Trades' && !isWeb && <TradesList />}
@@ -516,94 +554,13 @@ export default function HomeScreen() {
         <Animated.View style={[styles.pinned, { paddingTop: insets.top + HEADER_TOP }, pinnedEdge]}>
           {/* Profile, wallet switcher and shortcuts (above the balance, so tooltips overlap it) */}
           <Rise index={0}>
-            <View style={[styles.row, styles.gutter]}>
-              <View style={styles.identity}>
-                <PressableScale
-                  accessibilityRole="button"
-                  accessibilityLabel="Switch wallet"
-                  scaleTo={0.97}
-                  onPress={() => open('/wallets')}
-                >
-                  <Swap id={wallet.id} size={48}>
-                    {isMain ? (
-                      <Avatar
-                        name={wallet.label}
-                        size={48}
-                        uri={profile.photo}
-                        seed={profile.avatarSeed}
-                      />
-                    ) : (
-                      <Avatar name={wallet.label} size={48} seed={wallet.id} />
-                    )}
-                  </Swap>
-                </PressableScale>
-                <View style={styles.flex}>
-                  <View style={styles.nameRow}>
-                    <Text style={[styles.name, styles.nameText]} numberOfLines={1}>
-                      {wallet.label}
-                    </Text>
-                    <PressableScale
-                      accessibilityLabel="Switch wallet"
-                      hitSlop={10}
-                      scaleTo={0.97}
-                      onPress={() => open('/wallets')}
-                    >
-                      <Icon name="chevronDown" size={13} color={c.textSecondary} />
-                    </PressableScale>
-                  </View>
-                  {/* The address; once the big balance has scrolled away, the balance
-                        takes its place, so the total is never out of sight. */}
-                  <View>
-                    <Animated.View style={addressShown}>
-                      <PressableScale
-                        accessibilityRole="button"
-                        accessibilityLabel="Addresses"
-                        hitSlop={6}
-                        scaleTo={0.97}
-                        onPress={onAddresses}
-                        style={styles.addressRow}
-                      >
-                        <ChainIcons
-                          wallet={multisig ? undefined : wallet}
-                          deployments={multisig ? deployments : undefined}
-                          ring={c.canvas}
-                        />
-                      </PressableScale>
-                    </Animated.View>
-                    <Animated.Text
-                      pointerEvents="none"
-                      style={[styles.address, styles.headerBalance, balanceShown]}
-                    >
-                      {loading ? '' : hideBalance ? HIDDEN_AMOUNT : formatUsd(view.usd)}
-                    </Animated.Text>
-                  </View>
-                </View>
-              </View>
-              <View style={styles.shortcuts}>
-                {/* Expand view lives in Settings only (review: not on Home's header).
-                {inPopup ? (
-                  <HeaderShortcut
-                    icon="expandView"
-                    label="Expand view"
-                    onPress={() => void expandView()}
-                  />
-                ) : null} */}
-                <HeaderShortcut
-                  icon="bell"
-                  label="Notifications"
-                  badge={unread || needsMe.length > 0}
-                  onPress={() => router.push('/notifications')}
-                />
-                {isWeb ? null : (
-                  <HeaderShortcut icon="scan" label="Scan" onPress={() => router.push('/scan')} />
-                )}
-                <HeaderShortcut
-                  icon="settings"
-                  label="Settings"
-                  onPress={() => router.push('/settings')}
-                />
-              </View>
-            </View>
+            <WalletHeader
+              style={styles.gutter}
+              crossfade={{
+                scrollY,
+                balance: loading ? '' : hideBalance ? HIDDEN_AMOUNT : formatUsd(view.usd),
+              }}
+            />
           </Rise>
         </Animated.View>
       </StickyArea>
@@ -617,12 +574,34 @@ const HEADER_ROW = 48;
 const HEADER_BOTTOM = 10;
 /** The Tokens · NFTs · Trades row's height. */
 const TABS_ROW = 52;
-/** Scroll range over which the address under the name turns into the balance, as the
- * big balance passes under the pinned row. */
-const SWAP_FROM = 30;
-const SWAP_TO = 70;
 
 const useStyles = makeStyles((c) => ({
+  noWallet: {
+    alignItems: 'center',
+    paddingHorizontal: 24,
+    paddingTop: 48,
+  },
+  noWalletTitle: {
+    marginTop: 16,
+    color: c.text,
+    fontSize: 22,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  noWalletHint: {
+    marginTop: 6,
+    color: c.textSecondary,
+    fontSize: 15,
+    lineHeight: 21,
+    textAlign: 'center',
+  },
+  noWalletButton: {
+    marginTop: 24,
+    alignSelf: 'stretch',
+  },
+  actionOff: {
+    opacity: 0.45,
+  },
   root: {
     flex: 1,
     backgroundColor: c.canvas,
@@ -669,49 +648,6 @@ const useStyles = makeStyles((c) => ({
     paddingBottom: HEADER_BOTTOM,
     borderBottomWidth: StyleSheet.hairlineWidth,
     backgroundColor: c.canvas,
-  },
-  headerBalance: {
-    position: 'absolute',
-    top: 2,
-    left: 0,
-    color: c.text,
-    fontWeight: '600',
-    fontVariant: ['tabular-nums'],
-  },
-  identity: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  nameRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  name: {
-    flexShrink: 1,
-    color: c.text,
-    fontSize: 17,
-    fontWeight: '500',
-  },
-  nameText: {
-    flexShrink: 1,
-  },
-  addressRow: {
-    marginTop: 3,
-    flexDirection: 'row',
-    alignItems: 'center',
-    alignSelf: 'flex-start',
-  },
-  address: {
-    color: c.textSecondary,
-    fontSize: 15,
-  },
-  shortcuts: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 18,
   },
   balanceRow: {
     marginTop: 16,
@@ -852,7 +788,6 @@ const useStyles = makeStyles((c) => ({
 
 /** Home's Jars: the jars you own or share, or a way to start one. */
 function HomeJars() {
-  const c = useTheme();
   const mine = useThesisJars().filter((j) => j.mine);
   if (!mine.length)
     return (
@@ -860,38 +795,8 @@ function HomeJars() {
         icon="pie"
         title="No jars yet"
         hint="Turn an idea into tokens you can buy, alone or with friends."
-        action={{ label: 'Start a jar', onPress: () => router.push('/thesis-new') }}
+        action={{ label: 'Create a jar', onPress: () => router.push('/jar-create') }}
       />
     );
-  return (
-    <View>
-      <JarList jars={mine} />
-      <View style={homeJars.links}>
-        <PressableRow
-          accessibilityRole="button"
-          onPress={() => {
-            tap();
-            router.push('/jars');
-          }}
-          style={homeJars.all}
-        >
-          <Text style={[homeJars.allText, { color: c.accentText }]}>See all jars and explore</Text>
-          <Icon name="chevronRight" size={14} color={c.accentText} />
-        </PressableRow>
-      </View>
-    </View>
-  );
+  return <JarList jars={mine} />;
 }
-
-const homeJars = StyleSheet.create({
-  links: { marginTop: 8, gap: 4 },
-  all: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 4,
-    paddingVertical: 12,
-    borderRadius: 12,
-  },
-  allText: { fontSize: 15, fontWeight: '600' },
-});

@@ -18,8 +18,12 @@ import {
   marketOf,
   tokenName,
 } from '@/lib/mock-wallet';
+
+/** A token on one of the wallet's own networks. */
+type HeldRef = { symbol: string; chain: Chain };
+
 import { useSigner } from '@/lib/multisig';
-import { type TokenRef, updateSwap, useSwap } from '@/lib/swap';
+import { updateSwap, useSwap } from '@/lib/swap';
 import { useWalletView } from '@/lib/wallet-view';
 import { useActiveWallet } from '@/lib/wallets';
 import { makeStyles, radius, useTheme } from '@/theme';
@@ -43,7 +47,7 @@ export function TokenList({
   sending?: boolean;
   /** What you hold; a shared wallet passes its own. */
   holdings?: { symbol: string; chain: Chain; amount: number; usd: number }[];
-  onChoose: (token: TokenRef) => void;
+  onChoose: (token: HeldRef) => void;
 }) {
   const styles = useStyles();
   const c = useTheme();
@@ -79,7 +83,7 @@ export function TokenList({
     chain: sending
       ? yours.find((h) => h.symbol === symbol)?.chain
       : (marketOf(symbol)?.chain ?? 'Ethereum'),
-  })).filter((t): t is TokenRef => !!t.chain && (!network || t.chain === network));
+  })).filter((t): t is HeldRef => !!t.chain && (!network || t.chain === network));
 
   return (
     <>

@@ -1,4 +1,5 @@
 import { randomAvatarSeed } from '@/components/Avatar';
+import { persistence } from '@/lib/persistence';
 import { createStore } from '@/lib/store';
 
 /**
@@ -17,15 +18,19 @@ export type Profile = {
   haptics: boolean;
 };
 
-const profile = createStore<Profile>(
-  {
-    name: 'Honey',
-    photo: null,
-    avatarSeed: randomAvatarSeed(),
-    haptics: true,
-  },
-  { persist: 'profile' },
-);
+const initial: Profile = {
+  name: 'Honey',
+  photo: null,
+  avatarSeed: randomAvatarSeed(),
+  haptics: true,
+};
+const profile = createStore<Profile>(initial, { persist: 'profile' });
+
+// Nothing saved yet (onboarding with a recovery phrase skips name and photo): save the
+// default now, or its random avatar seed changed on every launch.
+void persistence.ready.then(() => {
+  if (profile.get() === initial) profile.set({ ...initial });
+});
 
 export function setProfile(update: Partial<Profile>) {
   profile.set((p) => ({ ...p, ...update }));

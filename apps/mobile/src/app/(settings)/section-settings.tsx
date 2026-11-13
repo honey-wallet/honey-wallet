@@ -11,9 +11,7 @@ import {
 } from '@/components/sheets/Sheet';
 import { OptionChips } from '@/components/trade/TradeForm';
 import { Chip } from '@/components/wallet/Chip';
-import { NetworkGrid, TokenIcon } from '@/components/wallet/parts';
 import { tap } from '@/lib/haptics';
-import { CHAINS } from '@/lib/mock-wallet';
 import { isWeb } from '@/lib/platform';
 import {
   type ActivityFilter,
@@ -74,6 +72,19 @@ export default function SectionSettingsSheet() {
     >
       {section === 'search' && (
         <>
+          <SheetField label="Top list" hint="Which list Search opens on.">
+            <View style={NETWORK_CHIPS}>
+              {(['Tokens', 'People'] as const).map((k) => (
+                <Chip
+                  key={k}
+                  label={`Top ${k.toLowerCase()}`}
+                  accessibilityRole="radio"
+                  selected={(prefs.searchTop ?? 'Tokens') === k}
+                  onPress={() => updateSectionPrefs({ searchTop: k })}
+                />
+              ))}
+            </View>
+          </SheetField>
           <SheetField
             label="Sort tokens by"
             hint={isWeb ? undefined : 'How Top tokens is ordered when Search opens.'}
@@ -100,11 +111,12 @@ export default function SectionSettingsSheet() {
               ))}
             </View>
           </SheetField>
+          {/* Network filter removed: tokens aren't tied to a network any more (2026-11-13).
           <SheetField
             label="Network"
             hint={isWeb ? undefined : 'Search starts filtered to this network.'}
           >
-            {/* review: the same network chips as Search itself, logo and name.
+            {/ * review: the same network chips as Search itself, logo and name.
             <OptionChips
               options={NETWORKS}
               icon={(symbol) => (symbol === 'All' ? null : <TokenIcon symbol={symbol} size={14} />)}
@@ -114,7 +126,7 @@ export default function SectionSettingsSheet() {
                   searchNetwork: CHAINS.find((chain) => chain.symbol === symbol)?.name ?? null,
                 })
               }
-            /> */}
+            /> * /}
             <View style={NETWORK_CHIPS}>
               <Chip
                 label="All"
@@ -135,13 +147,21 @@ export default function SectionSettingsSheet() {
               ))}
             </View>
           </SheetField>
+          */}
           {toggle(
             'Favorite tokens',
             'Show your favorites at the top',
             prefs.searchShowFavorites,
             (searchShowFavorites) => updateSectionPrefs({ searchShowFavorites }),
           )}
-          {/* review: no Savings in the extension, so nothing to toggle there. */}
+          {toggle(
+            'People to follow',
+            'Suggest traders worth following',
+            prefs.searchShowPeople !== false,
+            (searchShowPeople) => updateSectionPrefs({ searchShowPeople }),
+          )}
+          {/* Start earning is off while Honey focuses on jars (2026-11-13); its cards only
+              show in test mode.
           {isWeb
             ? null
             : toggle(
@@ -149,7 +169,7 @@ export default function SectionSettingsSheet() {
                 'Show earning options',
                 prefs.searchShowEarn,
                 (searchShowEarn) => updateSectionPrefs({ searchShowEarn }),
-              )}
+              )} */}
         </>
       )}
 

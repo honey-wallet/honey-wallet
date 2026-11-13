@@ -11,8 +11,8 @@ import {
 } from 'viem';
 
 /**
- * Plain transfers the app sends itself: ETH and USDC on EVM networks, SOL and USDC on
- * Solana. Each chain has a `prepare` (reads the chain: nonce, fees, blockhash; checks
+ * Plain transfers the app sends itself: the native coin and ERC-20s on EVM networks, SOL
+ * and classic SPL tokens (USDC and others) on Solana. Each chain has a `prepare` (reads the chain: nonce, fees, blockhash; checks
  * the balance covers amount + fee), a pure builder/signer, and a broadcast + confirm.
  * Every network call goes through an injected `Rpc`, so tests never touch a chain.
  */
@@ -66,10 +66,23 @@ export async function prepareEvmTransfer(
     amount: bigint;
     /** ERC-20 contract; omit for the native coin. */
     token?: `0x${string}`;
+    /** When set, the ERC-20's own `decimals()` must equal it (amounts were scaled by it). */
+    decimals?: number;
   },
 ): Promise<EvmTransferPlan> {
-  const { chainId, from, to, amount, token } = input;
+  const { chainId, from, to, amount, token, decimals } = input;
   if (!isAddress(from) || !isAddress(to)) throw new Error('Invalid EVM address');
+  if (token && !isAddress(token)) throw new Error('Invalid token contract');
+  // Tokens sent to their own contract are almost always lost for good.
+  if (token && to.toLowerCase() === token.toLowerCase())
+    throw new Error('That’s the token’s own contract, not a wallet');
+  if (token && decimals !== undefined) {
+    const onChain = await rpc('eth_call', [
+      { to: token, data: encodeFunctionData({ abi: erc20Abi, functionName: 'decimals' }) },
+      'latest',
+    ]).then(hexBig);
+    if (onChain !== BigInt(decimals)) throw new Error('Token decimals don’t match');
+  }
   if (to.toLowerCase() === from.toLowerCase()) throw new Error('That’s your own address');
   if (amount <= 0n) throw new Error('Amount must be more than zero');
   const call = token
@@ -276,11 +289,39 @@ export type SolanaTransferPlan = Readonly<{
   createsRecipientAccount: boolean;
 }>;
 
+/** An SPL token on the classic Token program: its mint and the decimals it must have. */
+export type SplToken = { mint: string; decimals: number };
+
+/** Byte offset of `decimals` in a classic SPL mint account (after authority and supply). */
+const MINT_DECIMALS_OFFSET = 44;
+const MINT_SIZE = 82;
+
+/**
+ * Throws unless `mint` is a classic SPL mint (owned by the Token program, so the
+ * associated account and TransferChecked below are right for it) with `decimals`.
+ * Token-2022 mints are refused: they can carry transfer fees and hooks.
+ */
+async function checkSplMint(rpc: Rpc, token: SplToken) {
+  const info = (await rpc('getAccountInfo', [
+    token.mint,
+    { encoding: 'base64', commitment: 'confirmed' },
+  ])) as { value?: { owner?: string; data?: [string, string] } | null };
+  const value = info?.value;
+  if (!value) throw new Error('That token doesn’t exist on Solana');
+  if (value.owner !== TOKEN_PROGRAM)
+    throw new Error('Sending this Solana token isn’t supported yet');
+  const data = base64.decode(value.data?.[0] ?? '');
+  if (data.length !== MINT_SIZE || data[MINT_DECIMALS_OFFSET] !== token.decimals)
+    throw new Error('Token decimals don’t match');
+}
+
 export async function prepareSolanaTransfer(
   rpc: Rpc,
-  input: { from: string; to: string; amount: bigint; token?: 'USDC' },
+  input: { from: string; to: string; amount: bigint; token?: 'USDC' | SplToken },
 ): Promise<SolanaTransferPlan> {
-  const { from, to, amount, token } = input;
+  const { from, to, amount } = input;
+  const token: SplToken | undefined =
+    input.token === 'USDC' ? { mint: SOLANA_USDC_MINT, decimals: 6 } : input.token;
   key32(from);
   key32(to);
   if (from === to) throw new Error('That’s your own address');
@@ -310,7 +351,11 @@ export async function prepareSolanaTransfer(
     );
     return Object.freeze({ message, feeLamports: SOLANA_BASE_FEE, createsRecipientAccount: false });
   }
-  const mint = SOLANA_USDC_MINT;
+  const { mint, decimals } = token;
+  key32(mint);
+  if (!Number.isInteger(decimals) || decimals < 0 || decimals > 18)
+    throw new Error('Invalid token decimals');
+  if (mint !== SOLANA_USDC_MINT) await checkSplMint(rpc, token);
   const source = associatedTokenAddress(from, mint);
   const destination = associatedTokenAddress(to, mint);
   const [sourceBalance, destinationInfo, rent] = await Promise.all([
@@ -325,7 +370,8 @@ export async function prepareSolanaTransfer(
     }>,
     rpc('getMinimumBalanceForRentExemption', [165]),
   ]);
-  if (BigInt(sourceBalance?.value?.amount ?? '0') < amount) throw new Error('Not enough USDC');
+  if (BigInt(sourceBalance?.value?.amount ?? '0') < amount)
+    throw new Error(mint === SOLANA_USDC_MINT ? 'Not enough USDC' : 'Not enough tokens');
   const creates = !destinationInfo?.value;
   const feeLamports = SOLANA_BASE_FEE + (creates ? BigInt(Number(rent) || 0) : 0n);
   if (lamports < feeLamports) throw new Error('Not enough SOL to pay the network fee');
@@ -333,17 +379,17 @@ export async function prepareSolanaTransfer(
     from,
     [source, destination],
     [
-      // Create the recipient's USDC account if it doesn't exist (no-op if it does).
+      // Create the recipient's token account if it doesn't exist (no-op if it does).
       {
         program: ATA_PROGRAM,
         accounts: [from, destination, to, mint, SYSTEM_PROGRAM, TOKEN_PROGRAM],
         data: Uint8Array.of(1),
       },
-      // TransferChecked: amount and decimals (6) are checked against the mint.
+      // TransferChecked: amount and decimals are checked against the mint.
       {
         program: TOKEN_PROGRAM,
         accounts: [source, mint, destination, from],
-        data: concatBytes(Uint8Array.of(12), u64(amount), Uint8Array.of(6)),
+        data: concatBytes(Uint8Array.of(12), u64(amount), Uint8Array.of(decimals)),
       },
     ],
     recent,

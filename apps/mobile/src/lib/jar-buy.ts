@@ -83,6 +83,12 @@ function payer() {
 }
 
 /** Live quotes for every routed leg. Nothing is signed yet. */
+/** Routes with money on them that can't be paid in full: any one stops the whole buy. */
+export const unpayable = (routes: Route[]) =>
+  routes.filter(
+    (r) => r.usd > 0 && (r.status !== 'ok' || !r.legs.length || r.legs.some((l) => !l.assetId)),
+  );
+
 export async function quoteJarBuy(routes: Route[], slippage: number) {
   const { addresses } = payer();
   const token = backendSessionToken();
@@ -90,12 +96,23 @@ export async function quoteJarBuy(routes: Route[], slippage: number) {
   const slippageBps = Math.round(slippage * 10_000);
   if (!Number.isFinite(slippageBps) || slippageBps < 1 || slippageBps > MAX_SLIPPAGE_BPS)
     throw new Error(`Slippage must be between 0.01% and ${MAX_SLIPPAGE_BPS / 100}%.`);
+  // Every dollar must have a route: a pick NEAR Intents can't deliver (or one still
+  // loading, or too thin) stops the buy here, before anything is paid. Before, such
+  // legs were skipped and the rest bought as if the jar were whole.
+  const blocked = unpayable(routes);
+  if (blocked.length)
+    throw new Error(
+      `${blocked.map((r) => r.symbol).join(', ')} can’t be bought right now. Remove ${
+        blocked.length === 1 ? 'it' : 'them'
+      } or pick another token. Nothing was paid.`,
+    );
   // NEAR Intents finds its own liquidity, so pools on the same chain merge into one
   // swap per asset; the split that remains is across chains.
   const legs: AskedLeg[] = [];
   for (const r of routes)
     for (const l of r.legs) {
-      if (!l.assetId || !(l.usd > 0)) continue;
+      if (!(l.usd > 0)) continue;
+      if (!l.assetId) throw new Error(`${r.symbol} has no NEAR Intents route. Nothing was paid.`);
       const recipient = recipientOn(l.chain, addresses);
       if (!recipient) throw new Error(`This wallet has no ${l.chain} address.`);
       const same = legs.find((x) => x.assetId === l.assetId);

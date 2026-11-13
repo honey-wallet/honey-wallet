@@ -1,5 +1,6 @@
 import { isAuthCallback } from '@/lib/auth-callback';
 import { takeEmailLink } from '@/lib/identity-flows';
+import { holdWalletConnectUri, walletConnectUriFromLink } from '@/lib/walletconnect-uri';
 
 /**
  * Incoming links. The Google sign-in redirect belongs to the in-app browser session that
@@ -10,6 +11,13 @@ export function redirectSystemPath({ path, initial }: { path: string; initial: b
   if (isAuthCallback(path)) return initial ? '/' : null;
   // A Firebase email sign-in link: the check-your-email screen finishes it.
   if (takeEmailLink(path)) return '/verify';
+  // A site's "open in wallet" link: read the whole wc: link here, before the router
+  // splits it at its first `&` (that dropped symKey, so every pairing failed).
+  if (/^(?:[a-z][a-z0-9+.-]*:\/\/|\/)wc(?:[/?#]|$)/i.test(path)) {
+    const uri = walletConnectUriFromLink(path);
+    if (uri) holdWalletConnectUri(uri);
+    return '/wc';
+  }
   const inApp = withoutWebPrefix(path);
   if (isSwitchedOffProduct(inApp)) return '/trade';
   return withoutPaymentPrefill(inApp);

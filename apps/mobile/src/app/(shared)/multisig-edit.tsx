@@ -149,10 +149,7 @@ export default function MultisigEditSheet() {
           </View>
         ) : kind === 'limit' ? (
           <View>
-            <SheetText>
-              Up to this much a day, any one member can spend without waiting for approvals. Above
-              it, payments need {multisig.threshold} of {multisig.members.length}.
-            </SheetText>
+            <SheetText>Any one member can spend up to this a day without approvals.</SheetText>
             <View style={styles.chips}>
               {LIMITS.map((l) => (
                 <PressableScale
@@ -196,6 +193,8 @@ export default function MultisigEditSheet() {
                 autoCapitalize="none"
                 autoCorrect={false}
                 autoFocus
+                returnKeyType="done"
+                onSubmitEditing={() => entryValid && addPerson()}
                 style={styles.input}
               />
             </View>

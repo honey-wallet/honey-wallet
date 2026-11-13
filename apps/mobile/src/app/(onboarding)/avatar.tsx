@@ -11,6 +11,7 @@ import { ShuffleIcon } from '@/components/onboarding/icons';
 import { PillButton } from '@/components/onboarding/PillButton';
 import { StepScreen, useStepStyles } from '@/components/onboarding/StepScreen';
 import { setProfile } from '@/lib/profile';
+import { LANDING } from '@/lib/surface';
 import { makeStyles, useTheme } from '@/theme';
 
 const SIZE = 148;
@@ -41,7 +42,7 @@ export default function AvatarScreen() {
   const finish = () => {
     setProfile({ name: name.trim() || 'Honey', photo, avatarSeed: seed });
     router.dismissAll();
-    router.replace('/home');
+    router.replace(LANDING);
   };
 
   return (
@@ -60,7 +61,7 @@ export default function AvatarScreen() {
       }
     >
       <Text style={[stepStyles.hint, styles.hint]}>
-        We picked one for you. Shuffle it, or choose a photo from your library.
+        Shuffle it, or choose a photo from your library.
       </Text>
 
       <View style={styles.stage}>

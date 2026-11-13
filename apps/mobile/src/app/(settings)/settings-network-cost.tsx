@@ -9,7 +9,7 @@ const OPTIONS: { value: Mode; label: string; hint: string; recommended?: boolean
   {
     value: 'auto',
     label: 'Auto',
-    // hint: 'Network costs automatically calculated and optimized for fast, reliable transactions.',
+    // hint: 'Set automatically for fast, reliable transactions.',
     hint: 'Fast and reliable',
     recommended: true,
   },

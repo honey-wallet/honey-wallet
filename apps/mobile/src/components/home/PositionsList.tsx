@@ -172,9 +172,9 @@ export function EarningList({
         {positions.length === 0 && large ? (
           <EmptyState
             compact
-            icon="sparkles"
+            icon="leaf"
             title="Nothing earning yet"
-            hint="Put idle tokens to work. No lockup, withdraw anytime."
+            hint="No lockup; withdraw anytime."
             action={{
               label: 'Start earning',
               onPress: () =>
@@ -436,7 +436,7 @@ function Row({
               style={styles.pill}
             >
               <IconSwap
-                name={claim === 'claimed' ? 'check' : 'sparkles'}
+                name={claim === 'claimed' ? 'check' : 'receive'}
                 size={13}
                 color={claim === 'claimed' ? c.success : c.text}
               />

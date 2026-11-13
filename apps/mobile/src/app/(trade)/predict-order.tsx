@@ -20,6 +20,7 @@ import { PREDICT_MARKETS, predictMarket, TRADING_CASH, yesPrice } from '@/lib/pr
 import { useTradeModeAllowed } from '@/lib/trade-modes';
 import { formatShare, useTradePrefs } from '@/lib/trade-prefs';
 import { useWalletView } from '@/lib/wallet-view';
+import { Gate } from '@/lib/warnings';
 import { makeStyles, radius, useTheme } from '@/theme';
 
 /** Quick amounts, added to what's typed, as Polymarket's +$1 / +$5 / +$10 / +$100. */
@@ -182,7 +183,9 @@ function PredictOrderSheet() {
           </View>
 
           <Keypad keyHeight={54} onKey={(key) => setAmount((a) => applyKey(a, key, 2))} />
-          <ExecutionUnavailable message="Markets, prices, and balance figures are samples. Order placement and settlement are not available." />
+          <Gate id="predictUnavailableNote">
+            <ExecutionUnavailable message="Markets, prices, and balance figures are samples. Order placement and settlement are not available." />
+          </Gate>
           <PillButton
             label={demoLabel('Trading unavailable', `Buy ${side}`)}
             disabled

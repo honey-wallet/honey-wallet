@@ -1,61 +1,65 @@
 import { router, useLocalSearchParams } from 'expo-router';
-import { useState } from 'react';
-import { ActivityIndicator, Keyboard, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import {
+  ActivityIndicator,
+  Keyboard,
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 import Animated, { FadeIn } from 'react-native-reanimated';
-import { DonutChart } from '@/components/charts/DonutChart';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Icon, type IconName } from '@/components/Icon';
-import { Facts, HoldingRow, People, TokenStack } from '@/components/jars/JarParts';
+import { JarAmount } from '@/components/jars/JarAmount';
+import { People, PickIcon, StrategyCard, stepSplit } from '@/components/jars/JarParts';
 import { PressableScale } from '@/components/motion/PressableScale';
 import { SegmentedTabs } from '@/components/motion/SegmentedTabs';
 import { PillButton } from '@/components/onboarding/PillButton';
-import { SheetScreen } from '@/components/sheets/Sheet';
+import { KeyboardFooter } from '@/components/sheets/KeyboardFooter';
+import { SHEET, SheetScreen, StatRow } from '@/components/sheets/Sheet';
+import { Trend } from '@/components/social/parts';
+import { Chip } from '@/components/wallet/Chip';
+import { EmptyState } from '@/components/wallet/parts';
 import { tap } from '@/lib/haptics';
 import { type BuyLeg, payJarBuy, quoteJarBuy } from '@/lib/jar-buy';
-import { describeRoute, useRoutes } from '@/lib/jar-routes';
+import { blockedRoutes, describeRoute, useRoutes } from '@/lib/jar-routes';
+import { useTokenChart } from '@/lib/market';
 import { formatUsd } from '@/lib/mock-wallet';
 import { memberName, propose, useActiveMultisig } from '@/lib/multisig';
+import { JAR_FEES, JAR_SLIPPAGES, JAR_VISIBILITY, settings } from '@/lib/settings';
 import { TEST_MODE } from '@/lib/test-mode';
 import {
+  copyProposal,
   createThesisJar,
   hostOf,
   linksIn,
+  manualProposal,
   type OrderKind,
+  type Pick,
+  PROXIES,
   type Proposal,
   RISKS,
   type Risk,
   runThesis,
   STAGES,
+  ThesisError,
+  useThesisJars,
   type Visibility,
   withAmount,
   withoutPick,
-  withWeight,
+  withProxy,
 } from '@/lib/thesis';
 import { chatDraft } from '@/lib/thesis-chat';
-import { showToast } from '@/lib/toast';
+import { showErrorToast, showToast } from '@/lib/toast';
 import { useActiveWallet } from '@/lib/wallets';
+import { Gate, warningOn } from '@/lib/warnings';
 import { makeStyles, radius, useTheme } from '@/theme';
 import { DURATION } from '@/theme/motion';
 
 type Step = 'idea' | 'working' | 'proposal' | 'jar';
 const AMOUNTS = [100, 500, 1000];
-const FEES = [5, 10, 15, 20];
-const SLIPPAGES = [0.5, 1, 2];
-
-const VISIBILITY: { id: Visibility; icon: IconName; title: string; hint: string }[] = [
-  { id: 'members', icon: 'lock', title: 'Only members', hint: 'Private to you and your friends' },
-  {
-    id: 'private',
-    icon: 'eyeSlash',
-    title: 'Returns only',
-    hint: 'Others see how it does, not what it holds, and pay to copy',
-  },
-  {
-    id: 'public',
-    icon: 'globe',
-    title: 'Everyone',
-    hint: 'The idea and holdings are public; anyone can copy',
-  },
-];
 
 /** Friends typed as "a, b c": names, addresses or handles, without repeats. */
 const friendList = (text: string) => [
@@ -81,46 +85,177 @@ function shortName(text: string) {
  */
 export default function NewThesisSheet() {
   const styles = useStyles();
+  const insets = useSafeAreaInsets();
   const c = useTheme();
-  const { idea, step: openAt } = useLocalSearchParams<{
+  const {
+    idea,
+    step: openAt,
+    copy,
+    manual,
+  } = useLocalSearchParams<{
     idea?: string;
     step?: 'proposal' | 'jar';
+    /** Copying this jar (its id): the creator's picks and split, at your amount. */
+    copy?: string;
+    /** Built by hand (jar-build, a post's tokens): chatDraft holds the tokens picked. */
+    manual?: string;
   }>();
-  // Opened from the chat's Buy or Edit: start on that step with the chat's strategy.
-  const fromChat = openAt ? chatDraft.get() : null;
+  // Picks that came from a person, not the agent: changing the risk mustn't re-run it.
+  const fixedPicks = !!copy || !!manual;
+  const copied = useThesisJars().find((j) => j.id === copy);
+  const copiedFrom = copied
+    ? { creator: copied.creator, fee: copied.copyFee, jarId: copied.id }
+    : undefined;
+  // Opened from the chat's Buy or Edit, a copy or your own picks: start on that step with
+  // its strategy. A copy opened without its draft (an old link) is built from the jar.
+  const [fromChat] = useState(() => {
+    if (!openAt) return null;
+    const draft = chatDraft.get();
+    if (copied) {
+      const same =
+        draft?.thesis === copied.thesis &&
+        draft.picks.map((p) => p.symbol).join() === copied.picks.map((p) => p.symbol).join();
+      return same && draft ? draft : copyProposal(copied, settings.get().copyAmount);
+    }
+    if (copy) return null;
+    // Picked tokens arrive at $0: size them now, so test-mode fees scale with the amount.
+    if (manual && draft && draft.amount <= 0)
+      return {
+        ...manualProposal(
+          draft.picks,
+          settings.get().copyAmount,
+          draft.picks.map((p) => p.weight),
+        ),
+        thesis: draft.thesis,
+      };
+    return draft;
+  });
   const [step, setStep] = useState<Step>(fromChat && openAt ? openAt : 'idea');
   const [text, setText] = useState(idea ?? fromChat?.thesis ?? '');
+  // Ideas are written in the chat: opened bare (no strategy to review), go there instead;
+  // your own jar without its picks (a reload lost them) goes back to picking.
+  useEffect(() => {
+    if (step !== 'idea' || (copy && !fromChat)) return;
+    if (manual) router.replace('/jar-build');
+    else router.replace({ pathname: '/thesis-chat', params: idea ? { idea } : {} });
+  }, [step, idea, manual, copy, fromChat]);
   const [amount, setAmount] = useState('500');
-  const [risk, setRisk] = useState<Risk>('Medium');
+  const [risk, setRisk] = useState<Risk>(fromChat?.risk ?? 'Medium');
   const [stage, setStage] = useState(0);
   const [proposal, setProposal] = useState<Proposal | null>(fromChat);
-  const [name, setName] = useState(fromChat ? shortName(fromChat.thesis) : '');
-  const [visibility, setVisibility] = useState<Visibility>('private');
-  const [friends, setFriends] = useState('');
-  const [copyFee, setCopyFee] = useState(10);
-  const [order, setOrder] = useState<OrderKind>('market');
-  const [maxSlip, setMaxSlip] = useState(1);
-  // Each pick's buy split across chains: live venues when the server answers.
-  const { routes, live: liveRoutes } = useRoutes(
-    proposal?.picks ?? [],
-    proposal?.amount ?? 0,
-    maxSlip / 100,
+  // What goes in, on the "How much?" keypad: the strategy's amount, else Copy's default.
+  const [spend, setSpend] = useState(() =>
+    fromChat && fromChat.amount > 0 ? fromChat.amount : settings.get().copyAmount,
   );
+  const [name, setName] = useState(
+    copied ? copied.name : fromChat ? shortName(fromChat.thesis) : '',
+  );
+  // A copy whose jar loaded after this opened (a cold start from a link): start on it now.
+  useEffect(() => {
+    if (!copied || proposal || !openAt) return;
+    const next = copyProposal(copied, settings.get().copyAmount);
+    setProposal(next);
+    setSpend(next.amount);
+    setName(copied.name);
+    setText(next.thesis);
+    setStep(openAt);
+  }, [copied, proposal, openAt]);
+  const [visibility, setVisibility] = useState<Visibility>(() => settings.get().jarVisibility);
+  const [friends, setFriends] = useState('');
+  const [copyFee, setCopyFee] = useState(() => settings.get().jarCopyFee);
+  // Limit orders are off for now, so every buy is a market order.
+  const [order] = useState<OrderKind>('market');
+  const [maxSlip, setMaxSlip] = useState(() => settings.get().jarSlippage);
+  // Edit split can take a token to 0%: it stays listed (to step back up) but isn't bought,
+  // and is left out of the jar on Continue.
+  const kept = (proposal?.picks ?? []).filter((p) => p.weight > 0);
+  // Each pick's buy split across chains, for the amount on the keypad: live venues when
+  // the server answers.
+  const { routes, live: liveRoutes } = useRoutes(kept, spend, maxSlip / 100);
+  // Real money: every pick must have a payable route before review can go on. In test
+  // mode the sample venues are always payable (nothing real is bought).
+  const blocked = TEST_MODE ? [] : blockedRoutes(routes);
+  const checking = blocked.some((r) => r.status === 'loading');
+  // What the order costs on top of the tokens: price impact and pool fees, then bridging.
+  const impactUsd = routes.reduce((sum, r) => sum + r.slippage * r.usd, 0);
+  const bridgeUsd = routes.reduce((sum, r) => sum + r.bridgeUsd, 0);
+
   const links = linksIn(text);
   const value = Number(amount) || 0;
 
   // Runs the agent; changing the risk on the strategy runs it again at that level.
+  // Each risk level's answer for this idea, so switching Low / Medium / High swaps the
+  // split in place (2026-11-13): the other two are fetched in the background once the
+  // first answer is in; one not back yet is fetched then, with the card dimmed meanwhile.
+  const byRisk = useRef<Partial<Record<Risk, Proposal>>>({});
+  const [reworking, setReworking] = useState(false);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: once per idea, not per amount or split edit.
+  useEffect(() => {
+    if (!proposal || fixedPicks || !text.trim()) return;
+    byRisk.current[proposal.risk] = proposal;
+    for (const level of RISKS) {
+      if (byRisk.current[level]) continue;
+      runThesis({ text, amount: proposal.amount, risk: level }, () => {})
+        .then((answer) => {
+          byRisk.current[level] ??= answer;
+        })
+        .catch(() => {});
+    }
+    // Once per idea: later proposals (an amount, a split) reuse what's cached.
+  }, [proposal?.thesis, fixedPicks]);
+  const switchRisk = async (level: Risk) => {
+    if (!proposal || level === proposal.risk) return;
+    tap();
+    setRisk(level);
+    const cached = byRisk.current[level];
+    if (cached) {
+      setProposal(withAmount(cached, proposal.amount));
+      return;
+    }
+    setReworking(true);
+    try {
+      const answer = await runThesis({ text, amount: proposal.amount, risk: level }, () => {});
+      byRisk.current[level] = answer;
+      setProposal(withAmount(answer, proposal.amount));
+    } catch (error) {
+      setRisk(proposal.risk);
+      showErrorToast(error instanceof ThesisError ? error.message : 'The agent couldn’t finish');
+    } finally {
+      setReworking(false);
+    }
+  };
+
   const build = async (level: Risk = risk) => {
     tap();
     Keyboard.dismiss();
     setRisk(level);
-    const amount = proposal?.amount ?? value;
+    const amount = proposal ? spend : value;
     setStep('working');
     setStage(0);
-    const result = await runThesis({ text, amount, risk: level }, setStage);
+    let result: Proposal;
+    try {
+      result = await runThesis({ text, amount, risk: level }, setStage);
+    } catch (error) {
+      // Back to the idea with the reason; never an invented proposal.
+      setStep(proposal ? 'proposal' : 'idea');
+      showErrorToast(error instanceof ThesisError ? error.message : 'The agent couldn’t finish');
+      return;
+    }
     setProposal(result);
     setName(shortName(result.thesis));
     setStep('proposal');
+  };
+
+  // A copy or hand-built jar came through Jars and its amount sheet: close those too, so
+  // Back from the new jar returns to Jars, not to a finished amount screen.
+  const openJar = (id: string) => {
+    if (!fixedPicks) return router.replace({ pathname: '/jar/[id]', params: { id } });
+    // Wherever the copy started (Jars, Feed, a profile), close the whole flow (the jar
+    // you copied, its amount sheet, this review) and open the new jar on top of the tab
+    // you were on: Back from it never lands on a finished keypad. (`dismissTo('/jars')`
+    // only replaced this screen when Jars wasn't in the stack.)
+    if (router.canDismiss()) router.dismissAll();
+    router.push({ pathname: '/jar/[id]', params: { id } });
   };
 
   const [buying, setBuying] = useState(false);
@@ -130,6 +265,11 @@ export default function NewThesisSheet() {
   const create = async () => {
     if (!proposal || buying) return;
     tap();
+    // Never pay (or propose) part of a jar: every pick needs a payable route first.
+    if (blocked.length) {
+      showErrorToast(`${blocked.map((r) => r.symbol).join(', ')} can’t be bought right now`);
+      return;
+    }
     if (multisig) {
       const id = `thesis-${Date.now()}`;
       const jarName = name.trim() || 'My jar';
@@ -151,8 +291,9 @@ export default function NewThesisSheet() {
         name: jarName,
         visibility,
         friends: [],
-        copyFee: visibility === 'members' ? 0 : copyFee,
+        copyFee: copied || visibility !== 'public' ? 0 : copyFee,
         order,
+        copiedFrom,
         sharedWallet: {
           walletId: multisig.walletId,
           label: activeWallet.label,
@@ -164,15 +305,16 @@ export default function NewThesisSheet() {
         },
       });
       showToast(executed ? 'Jar bought' : 'Proposed. Waiting for approvals');
-      router.replace({ pathname: '/jar/[id]', params: { id } });
+      openJar(id);
       return;
     }
     const options = {
       name: name.trim() || 'My jar',
       visibility,
       friends: friendList(friends),
-      copyFee: visibility === 'members' ? 0 : copyFee,
+      copyFee: copied || visibility !== 'public' ? 0 : copyFee,
       order,
+      copiedFrom,
     };
     // Real buys: on your own, at market, outside test mode. Everything else is saved
     // as a plan (shared and limit buys aren't live yet).
@@ -212,7 +354,7 @@ export default function NewThesisSheet() {
     }
     const id = createThesisJar(proposal, { ...options, buy });
     showToast(toast);
-    router.replace({ pathname: '/jar/[id]', params: { id } });
+    openJar(id);
   };
 
   if (step === 'working')
@@ -239,142 +381,158 @@ export default function NewThesisSheet() {
       </SheetScreen>
     );
 
-  if (step === 'proposal' && proposal)
+  // The agent found nothing it can buy for this idea: say so plainly, with the two ways
+  // forward, instead of an empty arc and a Continue that leads nowhere.
+  if (step === 'proposal' && proposal && proposal.picks.length === 0)
     return (
       <SheetScreen
         title="Your strategy"
         size="fill"
-        scroll
-        onBack={() => (fromChat ? router.back() : setStep('idea'))}
-        footer={<PillButton label="Continue" onPress={() => setStep('jar')} />}
+        onBack={() => router.back()}
+        footer={
+          <PillButton
+            label="Pick tokens yourself"
+            onPress={() => {
+              tap();
+              router.replace('/jar-build');
+            }}
+          />
+        }
       >
-        <View style={styles.gap}>
-          <View style={styles.summary}>
-            <DonutChart
-              size={84}
-              thickness={10}
-              segments={proposal.picks.map((p) => ({
-                id: p.symbol,
-                value: p.weight,
-                color: p.color,
-              }))}
-            >
-              <TokenStack picks={proposal.picks} size={20} />
-            </DonutChart>
-            <View style={styles.flex}>
-              <Text style={styles.summaryLabel}>You put in</Text>
-              <View style={styles.amountEdit}>
-                <Text style={styles.summaryValue}>$</Text>
-                <TextInput
-                  value={String(proposal.amount)}
-                  onChangeText={(t) => {
-                    const next = Number(t.replace(/[^\d.]/g, '')) || 0;
-                    setProposal(withAmount(proposal, next));
-                  }}
-                  keyboardType="decimal-pad"
-                  selectTextOnFocus
-                  accessibilityLabel="Amount in dollars"
-                  style={[styles.summaryValue, styles.amountInput]}
-                />
-                <Icon name="pencil" size={14} color={c.textSecondary} />
-              </View>
-              <Text style={styles.quote} numberOfLines={2}>
-                “{proposal.thesis}”
-              </Text>
-            </View>
-          </View>
-          <SegmentedTabs<Risk>
-            options={[...RISKS]}
-            labels={{ Low: 'Low risk', Medium: 'Medium', High: 'High risk' }}
-            value={proposal.risk}
-            onChange={(next) => void build(next)}
-            fill
-          />
-          <Facts
-            facts={[
-              {
-                label: 'Est. slippage',
-                value: `${(
-                  (routes.reduce((s, r) => s + r.slippage * r.usd + r.bridgeUsd, 0) /
-                    Math.max(proposal.amount, 1)) *
-                    100
-                ).toFixed(2)}%`,
-              },
-              { label: 'Est. fees', value: formatUsd(proposal.feesUsd) },
-              {
-                label: 'Fee share',
-                value: `${((proposal.feesUsd / Math.max(proposal.amount, 1)) * 100).toFixed(1)}%`,
-              },
-            ]}
-          />
-          <Text style={styles.section}>What it buys{liveRoutes ? '' : ' · sample routes'}</Text>
-          <View style={styles.card}>
-            {proposal.picks.map((p) => (
-              <View key={p.symbol}>
-                <HoldingRow
-                  pick={p}
-                  total={proposal.amount}
-                  onStep={
-                    proposal.picks.length > 1
-                      ? (delta) => setProposal(withWeight(proposal, p.symbol, delta))
-                      : undefined
-                  }
-                  onRemove={
-                    proposal.picks.length > 1
-                      ? () => setProposal(withoutPick(proposal, p.symbol))
-                      : undefined
-                  }
-                />
-                <Text style={styles.why}>{p.reason}</Text>
-                {(() => {
-                  // Where this pick gets bought, split across chains for the best fill.
-                  const route = routes.find((r) => r.symbol === p.symbol);
-                  if (!route) return null;
-                  return (
-                    <Text
-                      style={[styles.why, route.status === 'thin' && { color: c.error }]}
-                      numberOfLines={2}
-                    >
-                      {describeRoute(route)}
-                    </Text>
-                  );
-                })()}
-              </View>
-            ))}
-          </View>
-          {proposal.unmatched.length ? (
-            <>
-              <Text style={styles.section}>Not buyable on chain</Text>
-              <View style={styles.card}>
-                {proposal.unmatched.map((u) => (
-                  <View key={u.idea} style={styles.pick}>
-                    <Icon name="info" size={18} color={c.textSecondary} />
-                    <View style={styles.flex}>
-                      <Text style={styles.pickName}>{u.idea}</Text>
-                      <Text style={styles.pickReason}>{u.note}</Text>
-                    </View>
-                  </View>
-                ))}
-              </View>
-            </>
-          ) : null}
-          <View style={[styles.card, styles.row]}>
-            <Icon name="warning" size={18} color={c.textSecondary} />
-            <Text style={[styles.flex, styles.pickReason]}>{proposal.caution}</Text>
-          </View>
-        </View>
+        <EmptyState
+          icon="search"
+          title="Nothing to buy for this yet"
+          hint={
+            proposal.unmatched.length
+              ? `${proposal.unmatched.map((u) => u.idea).join(', ')} aren't tokens you can buy.`
+              : 'Try saying it another way.'
+          }
+          action={{ label: 'Try another idea', onPress: () => router.back() }}
+        />
       </SheetScreen>
     );
+
+  if (step === 'proposal' && proposal) {
+    // The split is yours to change unless it's a copy, which keeps the creator's.
+    const canEdit = !copied && proposal.picks.length > 1;
+    // A pick that can't be bought shows its row under the card, with its fixes.
+    const stuck = (symbol: string) =>
+      blocked.some((r) => r.symbol === symbol && r.status !== 'loading');
+    const rows = kept.filter((p) => stuck(p.symbol));
+    return (
+      // The one amount screen every jar passes through (an idea, your own picks, a copy):
+      // the strategy's card, then the keypad. Back goes to wherever it opened from (the
+      // chat, Build your own, a post).
+      <SheetScreen title="How much?" size="fill" onBack={() => router.back()}>
+        <JarAmount
+          header={
+            <View style={styles.review}>
+              <View style={reworking ? styles.reworking : null}>
+                <StrategyCard
+                  split
+                  jar={copied}
+                  picks={proposal.picks}
+                  name={copied?.name ?? proposal.thesis}
+                  meta={
+                    copied
+                      ? `by ${copied.creator} · ${copied.copiers} copied`
+                      : manual
+                        ? 'Your jar'
+                        : 'Honey’s pick'
+                  }
+                  onStep={
+                    canEdit
+                      ? (symbol, delta) => {
+                          const i = proposal.picks.findIndex((p) => p.symbol === symbol);
+                          if (i < 0) return;
+                          tap();
+                          const next = stepSplit(
+                            proposal.picks.map((p) => p.weight),
+                            i,
+                            delta,
+                          );
+                          setProposal({
+                            ...proposal,
+                            picks: proposal.picks.map((p, k) => ({ ...p, weight: next[k] ?? 0 })),
+                          });
+                        }
+                      : undefined
+                  }
+                />
+              </View>
+              {/* A copy or a hand-built jar keeps its picks: re-running the agent would replace them. */}
+              {fixedPicks ? null : (
+                <SegmentedTabs<Risk>
+                  options={[...RISKS]}
+                  labels={{ Low: 'Low risk', Medium: 'Medium', High: 'High risk' }}
+                  value={risk}
+                  onChange={(next) => void switchRisk(next)}
+                  fill
+                />
+              )}
+              {rows.length ? (
+                <View>
+                  {rows.map((p) => {
+                    const route = routes.find((r) => r.symbol === p.symbol);
+                    const proxy = PROXIES[p.symbol];
+                    return (
+                      <SplitRow
+                        key={p.symbol}
+                        pick={p}
+                        usd={(spend * p.weight) / 100}
+                        route={route ? describeRoute(route) : undefined}
+                        onRemove={
+                          proposal.picks.length > 1
+                            ? () => setProposal(withoutPick(proposal, p.symbol))
+                            : undefined
+                        }
+                        proxy={route?.status === 'unbuyable' && proxy ? proxy.symbol : undefined}
+                        onProxy={() => setProposal(withProxy(proposal, p.symbol))}
+                      />
+                    );
+                  })}
+                </View>
+              ) : null}
+            </View>
+          }
+          initial={spend}
+          onChange={setSpend}
+          note={
+            copied && !copied.mine && copied.copyFee > 0
+              ? `${copied.creator} gets ${copied.copyFee}% of your profit, never of a loss`
+              : undefined
+          }
+          hold={
+            checking
+              ? 'Checking routes…'
+              : blocked.length
+                ? `Fix ${blocked.map((r) => r.symbol).join(', ')} to continue`
+                : undefined
+          }
+          cta="Continue"
+          onDone={(amount) => {
+            tap();
+            // A token stepped down to 0% is left out of the jar.
+            setProposal({ ...withAmount(proposal, amount), picks: kept });
+            setStep('jar');
+          }}
+        />
+      </SheetScreen>
+    );
+  }
 
   if (step === 'jar' && proposal) {
     const people = friendList(friends);
     const share = proposal.amount / (people.length + 1);
-    const copyable = visibility !== 'members';
+    // A copy can't be resold for a cut of someone else's idea, and only Everyone's jars
+    // show the picks a copy buys.
+    const copyable = !copied && visibility === 'public';
     return (
       <SheetScreen
         title="Launch your jar"
         size="fill"
         scroll
+        pinFooter
         onBack={() => setStep('proposal')}
         footer={
           <View style={styles.footer}>
@@ -388,27 +546,35 @@ export default function NewThesisSheet() {
                       ? `Invite and buy ${formatUsd(share)}`
                       : `Buy ${formatUsd(proposal.amount)} and launch`
               }
-              disabled={!name.trim() || buying}
+              disabled={!name.trim() || buying || blocked.length > 0}
               onPress={() => void create()}
             />
-            <Text style={styles.footnote}>You sign every order. Honey never holds your keys.</Text>
+            <Gate id="jarLaunchKeysNote">
+              <Text style={styles.footnote}>
+                You sign every order. Honey never holds your keys.
+              </Text>
+            </Gate>
           </View>
         }
       >
         <View style={styles.gap}>
-          <View style={[styles.field, styles.nameField]}>
-            <TokenStack picks={proposal.picks} size={26} />
-            <TextInput
-              value={name}
-              onChangeText={setName}
-              maxLength={32}
-              placeholder="Name your jar"
-              placeholderTextColor={c.placeholder}
-              style={[styles.input, styles.flex]}
-              accessibilityLabel="Jar name"
-            />
-            <Icon name="pencil" size={14} color={c.textSecondary} />
-          </View>
+          {/* The Feed's strategy card: logos and the name (tap to rename), then the split. */}
+          <StrategyCard
+            split
+            picks={proposal.picks}
+            name={name}
+            nameSlot={
+              <TextInput
+                value={name}
+                onChangeText={setName}
+                maxLength={32}
+                placeholder="Name your jar"
+                placeholderTextColor={c.placeholder}
+                style={styles.nameInput}
+                accessibilityLabel="Jar name"
+              />
+            }
+          />
 
           <Text style={styles.section}>Who's in</Text>
           {multisig ? (
@@ -427,8 +593,7 @@ export default function NewThesisSheet() {
                 </Text>
               </View>
               <Text style={styles.pickReason}>
-                The shared wallet pays. Members own equal parts, and the buy goes through once{' '}
-                {multisig.threshold} of them approve.
+                The shared wallet pays once {multisig.threshold} members approve.
               </Text>
             </View>
           ) : (
@@ -461,16 +626,14 @@ export default function NewThesisSheet() {
                 />
               </View>
               {people.length ? (
-                <Text style={styles.pickReason}>
-                  Each friend gets an invite to put in their share. Trades need a majority to sign.
-                </Text>
+                <Text style={styles.pickReason}>Each friend is invited to put in their share.</Text>
               ) : null}
             </View>
           )}
 
           <Text style={styles.section}>Who can see it</Text>
           <View style={styles.card}>
-            {VISIBILITY.map((v, i) => (
+            {JAR_VISIBILITY.map((v, i) => (
               <Choice
                 key={v.id}
                 first={i === 0}
@@ -487,19 +650,14 @@ export default function NewThesisSheet() {
             <>
               <Text style={styles.section}>Your cut when people copy</Text>
               <View style={styles.feeRow}>
-                {FEES.map((f) => (
-                  <PressableScale
+                {JAR_FEES.map((f) => (
+                  <Chip
                     key={f}
-                    accessibilityRole="button"
-                    accessibilityState={{ selected: copyFee === f }}
-                    onPress={() => {
-                      tap();
-                      setCopyFee(f);
-                    }}
-                    style={[styles.choice, styles.flex, copyFee === f && styles.choiceOn]}
-                  >
-                    <Text style={styles.choiceText}>{f}%</Text>
-                  </PressableScale>
+                    accessibilityRole="radio"
+                    label={`${f}%`}
+                    selected={copyFee === f}
+                    onPress={() => setCopyFee(f)}
+                  />
                 ))}
               </View>
               <Text style={styles.pickReason}>
@@ -508,58 +666,106 @@ export default function NewThesisSheet() {
             </>
           ) : null}
 
+          {/* Limit orders ("At a better price") are off for now (2026-11-13): every buy is
+              at today's price within the max slippage below.
           <Text style={styles.section}>How to buy</Text>
           <View style={styles.card}>
             <Choice
               first
               icon="clock"
               title="Now"
-              hint={`At today's price, within ${maxSlip}% slippage, split across chains for the best fill`}
+              hint={`At today's price, within ${maxSlip}% slippage`}
               selected={order === 'market'}
               onPress={() => setOrder('market')}
             />
             <Choice
               icon="target"
               title="At a better price"
-              hint="Limit order 1% under today's price. Waits up to 24 hours; cancel anytime"
+              hint="1% under today's price, for up to 24 hours"
               selected={order === 'limit'}
               onPress={() => setOrder('limit')}
             />
-          </View>
+          </View> */}
           <Text style={styles.section}>Max slippage</Text>
           <View style={styles.feeRow}>
-            {SLIPPAGES.map((sl) => (
-              <PressableScale
+            {JAR_SLIPPAGES.map((sl) => (
+              <Chip
                 key={sl}
-                accessibilityRole="button"
-                accessibilityState={{ selected: maxSlip === sl }}
-                onPress={() => {
-                  tap();
-                  setMaxSlip(sl);
-                }}
-                style={[styles.choice, styles.flex, maxSlip === sl && styles.choiceOn]}
-              >
-                <Text style={styles.choiceText}>{sl}%</Text>
-              </PressableScale>
+                accessibilityRole="radio"
+                label={`${sl}%`}
+                selected={maxSlip === sl}
+                onPress={() => setMaxSlip(sl)}
+              />
             ))}
           </View>
 
-          <View style={[styles.card, styles.row]}>
-            <Icon name="verified" size={18} color={c.accentText} />
-            <Text style={[styles.pickReason, styles.flex]}>
-              Launching records that you called this idea on{' '}
-              {new Date().toLocaleDateString(undefined, { dateStyle: 'medium' })}. Your track record
-              starts here.
-            </Text>
+          {/* What it costs on top of the tokens, as review rows. */}
+          <View style={styles.rows}>
+            <StatRow
+              label="Slippage"
+              value={`${((impactUsd / Math.max(proposal.amount, 1)) * 100).toFixed(2)}%`}
+            />
+            {bridgeUsd > 0 ? <StatRow label="Network" value={`≈ ${formatUsd(bridgeUsd)}`} /> : null}
+            {/* Real jars learn their fees from each swap's quote, after this step: say so
+                instead of a $0.00 that reads as "free". */}
+            <StatRow
+              label="Fees"
+              value={proposal.feesUsd > 0 ? formatUsd(proposal.feesUsd) : 'In each quote'}
+            />
+            {/* Copying someone's jar: their cut, said once here rather than on the jar. */}
+            {copied && !copied.mine && copied.copyFee > 0 ? (
+              <StatRow
+                label="Creator fee"
+                value={`${copied.copyFee}% of profit, never of a loss`}
+              />
+            ) : null}
+            {liveRoutes ? null : <StatRow label="Routes" value="Sample" />}
+            {warningOn('strategyFeesWarning') &&
+            impactUsd + bridgeUsd > proposal.amount * 0.05 &&
+            proposal.amount > 0 ? (
+              <Text style={styles.warn}>≈ {formatUsd(impactUsd + bridgeUsd)} goes to fees</Text>
+            ) : null}
           </View>
+          {warningOn('proposalCaution') && proposal.caution ? (
+            <Text style={styles.note}>{proposal.caution}</Text>
+          ) : null}
         </View>
       </SheetScreen>
     );
   }
 
+  // A copy of a jar that's gone (deleted, or a stale link).
+  if (step === 'idea' && copy)
+    return (
+      <SheetScreen title="Copy jar">
+        <Text style={styles.note}>This jar isn’t available any more.</Text>
+      </SheetScreen>
+    );
+
+  // The chat takes over (above); nothing to draw on the way.
+  if (step === 'idea') return null;
+
   return (
-    <SheetScreen title="New idea" size="fill">
-      <View style={styles.gap}>
+    <SheetScreen
+      title="New idea"
+      size="fill"
+      footer={
+        // Pinned to the bottom, where the thumb expects the next step, and lifted above
+        // the keyboard the idea field opens at once.
+        // Under it already: the sheet's bottom padding over the safe area.
+        <KeyboardFooter under={insets.bottom + SHEET.bottom}>
+          <PillButton
+            label={
+              !text.trim() ? 'Describe your idea' : !value ? 'Set an amount' : 'Find what to buy'
+            }
+            disabled={!text.trim() || !value}
+            onPress={() => void build()}
+          />
+        </KeyboardFooter>
+      }
+    >
+      {/* Tapping anywhere off a field puts the keyboard away. */}
+      <Pressable accessible={false} onPress={Keyboard.dismiss} style={[styles.gap, styles.fill]}>
         <View style={[styles.field, styles.idea]}>
           <TextInput
             value={text}
@@ -596,43 +802,30 @@ export default function NewThesisSheet() {
             />
           </View>
           {AMOUNTS.map((a) => (
-            <PressableScale
+            <Chip
               key={a}
-              accessibilityRole="button"
-              accessibilityState={{ selected: value === a }}
-              onPress={() => {
-                tap();
-                setAmount(String(a));
-              }}
-              style={[styles.choice, value === a && styles.choiceOn]}
-            >
-              <Text style={styles.choiceText}>${a}</Text>
-            </PressableScale>
+              accessibilityRole="radio"
+              label={`$${a}`}
+              selected={value === a}
+              onPress={() => setAmount(String(a))}
+            />
           ))}
         </View>
 
         <Text style={styles.section}>Risk</Text>
         <SegmentedTabs<Risk> options={[...RISKS]} value={risk} onChange={setRisk} fill />
-
-        {/* Right under the choices, not pinned to the sheet's bottom: the idea field opens
-            the keyboard at once, and a bottom button sat behind it with a gap above (review). */}
-        <View style={styles.go}>
-          <PillButton
-            label={
-              !text.trim() ? 'Describe your idea' : !value ? 'Set an amount' : 'Find what to buy'
-            }
-            disabled={!text.trim() || !value}
-            onPress={() => void build()}
-          />
-        </View>
-      </View>
+      </Pressable>
     </SheetScreen>
   );
 }
 
 const useStyles = makeStyles((c) => ({
+  reworking: { opacity: 0.5 },
+  nameInput: { color: c.text, fontSize: 16, fontWeight: '600', padding: 0 },
   flex: { flex: 1 },
   gap: { gap: 12, paddingBottom: 16 },
+  fill: { flex: 1 },
+  fixRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 6 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   section: { marginTop: 8, color: c.textSecondary, fontSize: 15 },
   field: {
@@ -657,37 +850,13 @@ const useStyles = makeStyles((c) => ({
     backgroundColor: c.card,
   },
   chipText: { color: c.text, fontSize: 14 },
-  choice: {
-    height: 52,
-    paddingHorizontal: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: c.divider,
-  },
-  choiceOn: { borderColor: c.text },
-  choiceText: { color: c.text, fontSize: 15, fontWeight: '600' },
   stages: { gap: 18, paddingTop: 12 },
   stage: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   pending: { width: 20, height: 20, borderRadius: 10, borderWidth: 1.5, borderColor: c.divider },
   stageText: { color: c.text, fontSize: 17 },
   muted: { color: c.textSecondary },
-  summary: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 16,
-    padding: 16,
-    ...radius(20),
-    backgroundColor: c.card,
-  },
-  summaryLabel: { color: c.textSecondary, fontSize: 13 },
-  amountEdit: { flexDirection: 'row', alignItems: 'center', gap: 2 },
-  amountInput: { minWidth: 60, padding: 0 },
   footer: { gap: 8 },
-  go: { marginTop: 16 },
   footnote: { color: c.textSecondary, fontSize: 13, textAlign: 'center' },
-  nameField: { flexDirection: 'row', alignItems: 'center', gap: 12, justifyContent: 'flex-start' },
   memberRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   inviteField: {
     flexDirection: 'row',
@@ -720,24 +889,98 @@ const useStyles = makeStyles((c) => ({
     justifyContent: 'center',
   },
   radioOn: { borderColor: c.primary, backgroundColor: c.primary },
-  summaryValue: { color: c.text, fontSize: 30, fontWeight: '700', fontVariant: ['tabular-nums'] },
-  why: {
-    marginTop: -4,
-    marginBottom: 6,
-    marginLeft: 48,
-    color: c.textSecondary,
-    fontSize: 13,
-    lineHeight: 18,
-  },
-  quote: { marginTop: 4, color: c.textSecondary, fontSize: 14, lineHeight: 19 },
   card: { padding: 16, gap: 14, ...radius(20), backgroundColor: c.card },
-  pick: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  dot: { width: 10, height: 10, borderRadius: 5 },
   pickName: { color: c.text, fontSize: 15, fontWeight: '600' },
   pickReason: { marginTop: 2, color: c.textSecondary, fontSize: 14, lineHeight: 19 },
-  pickAmount: { color: c.text, fontSize: 15, fontVariant: ['tabular-nums'] },
-  fees: { color: c.textSecondary, fontSize: 13, textAlign: 'center' },
+
+  // Over the keypad: the strategy's card, its risk and any token to fix.
+  review: { gap: 12 },
+  rows: { gap: 2 },
+  warn: { marginTop: 4, color: c.error, fontSize: 14 },
+  note: { color: c.textSecondary, fontSize: 13, lineHeight: 18 },
+  splitRow: { paddingVertical: 8 },
+  splitMain: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  splitWho: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  splitTrend: { alignSelf: 'flex-start', marginTop: 4 },
+  splitShare: { minWidth: 48, alignItems: 'center' },
+  splitShareEnd: { alignItems: 'flex-end' },
+  splitPct: { color: c.text, fontSize: 15, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  splitUsd: { color: c.textSecondary, fontSize: 12, fontVariant: ['tabular-nums'] },
+  splitDetail: { marginTop: 6, marginLeft: 42, gap: 6 },
+  routeText: { color: c.textSecondary, fontSize: 13, lineHeight: 18 },
 }));
+
+/** A dollar amount without empty cents: $5, $12.50. */
+const dollars = (usd: number) => formatUsd(usd).replace(/\.00$/, '');
+
+/**
+ * A token of the split that can't be bought right now: logo and symbol, its week's move
+ * in the feed's pill, its dollars and share, then why, and its fixes (a stand-in to use
+ * instead, or Remove).
+ */
+function SplitRow({
+  pick,
+  usd,
+  route,
+  onRemove,
+  proxy,
+  onProxy,
+}: {
+  pick: Pick;
+  usd: number;
+  route?: string;
+  onRemove?: () => void;
+  /** A buyable stand-in to offer when this token can't be bought. */
+  proxy?: string;
+  onProxy: () => void;
+}) {
+  const styles = useStyles();
+  const c = useTheme();
+  const chart = useTokenChart(pick.symbol, '1W');
+  const prices = chart.prices;
+  const first = prices[0] ?? 0;
+  const move =
+    prices.length > 2 && first > 0 ? (prices[prices.length - 1] ?? first) / first - 1 : null;
+  return (
+    <View style={styles.splitRow}>
+      <View style={styles.splitMain}>
+        <View style={styles.splitWho}>
+          <PickIcon pick={pick} size={32} />
+          <View style={styles.flex}>
+            <Text style={styles.pickName} numberOfLines={1}>
+              {pick.symbol}
+            </Text>
+            {move !== null ? (
+              <View style={styles.splitTrend}>
+                <Trend value={move} spark={prices} />
+              </View>
+            ) : null}
+          </View>
+        </View>
+        <View style={[styles.splitShare, styles.splitShareEnd]}>
+          <Text style={styles.splitPct}>{dollars(usd)}</Text>
+          <Text style={styles.splitUsd}>{pick.weight}%</Text>
+        </View>
+      </View>
+      {route ? (
+        <View style={styles.splitDetail}>
+          <Text
+            style={[styles.routeText, warningOn('routeWarningTint') && { color: c.error }]}
+            numberOfLines={2}
+          >
+            {route}
+          </Text>
+          {proxy || onRemove ? (
+            <View style={styles.fixRow}>
+              {proxy ? <Chip variant="filled" label={`Use ${proxy}`} onPress={onProxy} /> : null}
+              {onRemove ? <Chip variant="filled" label="Remove" onPress={onRemove} /> : null}
+            </View>
+          ) : null}
+        </View>
+      ) : null}
+    </View>
+  );
+}
 
 /** One option in a list of choices: icon, title, one line, and a check when picked. */
 function Choice({

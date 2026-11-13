@@ -245,15 +245,15 @@ function AaveExecutionForWallet() {
               editable={!busy}
             />
             <PillButton
-              label="Prepare deposit"
-              disabled={busy || !session.profile}
-              onPress={() => void run(() => create('supply'))}
-            />
-            <PillButton
               label="Prepare withdrawal"
               variant="secondary"
               disabled={busy || !session.profile}
               onPress={() => void run(() => create('withdraw'))}
+            />
+            <PillButton
+              label="Prepare deposit"
+              disabled={busy || !session.profile}
+              onPress={() => void run(() => create('supply'))}
             />
           </>
         ) : !operation ? (
@@ -328,7 +328,6 @@ function AaveExecutionForWallet() {
               execute. Signature requests expire after two minutes; broadcast transactions can still
               settle later.
             </Text>
-            <PillButton label="Confirm and sign" disabled={busy} onPress={() => void run(sign)} />
             <PillButton
               label="Cancel review"
               variant="secondary"
@@ -338,6 +337,7 @@ function AaveExecutionForWallet() {
                 setReview(null);
               }}
             />
+            <PillButton label="Confirm and sign" disabled={busy} onPress={() => void run(sign)} />
           </>
         ) : null}
         {terminal || (status === 'awaiting_signature' && operation?.preparation?.expired) ? (

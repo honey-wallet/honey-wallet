@@ -1,9 +1,11 @@
 import { router, useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
 import { ScrollView, Text, View } from 'react-native';
+import Animated from 'react-native-reanimated';
 import { Icon } from '@/components/Icon';
 import { Accordion, AccordionChevron } from '@/components/motion/Accordion';
 import { ContentSwap } from '@/components/motion/ContentSwap';
+import { useOverShake } from '@/components/motion/ErrorShake';
 import { IconSwap } from '@/components/motion/IconSwap';
 import { PressableRow } from '@/components/motion/PressableRow';
 import { PressableScale } from '@/components/motion/PressableScale';
@@ -13,7 +15,7 @@ import { PillButton } from '@/components/onboarding/PillButton';
 import { DemoMoneyNotice } from '@/components/savings/DemoMoneyNotice';
 import { Copyable } from '@/components/sheets/Details';
 import { FailurePage } from '@/components/sheets/FailurePage';
-import { closeSheet, SHEET, SheetScreen, StatRow } from '@/components/sheets/Sheet';
+import { closeSheet, SHEET, SheetScreen, SheetText, StatRow } from '@/components/sheets/Sheet';
 import { finishDemo, SuccessPage } from '@/components/sheets/SuccessPage';
 import { FlowTray, InlineTray } from '@/components/sheets/Tray';
 import { applyKey, Keypad, TypedAmount } from '@/components/wallet/Keypad';
@@ -46,9 +48,22 @@ const QUICK = [50, 100, 250];
 export default function BuyCashSheet() {
   const { wallet } = useWalletView();
   if (!wallet.demo) {
+    // No card or bank provider: offer what works today, without advertising what doesn't.
     return (
-      <SheetScreen title="Buy crypto">
-        <Text>Cash purchases and sales are demo-only until a provider is connected.</Text>
+      <SheetScreen
+        title="Add money"
+        size="fill"
+        footer={
+          <PillButton
+            label="Receive crypto instead"
+            onPress={() => {
+              tap();
+              router.replace('/receive');
+            }}
+          />
+        }
+      >
+        <SheetText lead>Send crypto to Honey from an exchange or another wallet.</SheetText>
       </SheetScreen>
     );
   }
@@ -96,6 +111,8 @@ function DemoBuyCashSheet() {
   const insufficient = selling && value > heldUsd + 1e-9;
   const ready = value > 0 && !insufficient;
   const label = !value ? 'Enter an amount' : insufficient ? 'Insufficient balance' : 'Continue';
+  // Selling past what you hold shakes the amount once, with the error haptic.
+  const shaken = useOverShake(insufficient);
   const verb = selling ? 'Sell' : 'Buy';
 
   const go = (next: Page) => {
@@ -202,7 +219,9 @@ function DemoBuyCashSheet() {
                 </ScrollView>
               </Accordion>
             </View>
-            <TypedAmount value={amount} prefix="$" size={amount.length > 8 ? 44 : 60} />
+            <Animated.View style={shaken}>
+              <TypedAmount value={amount} prefix="$" size={amount.length > 8 ? 44 : 60} />
+            </Animated.View>
             {loading ? (
               <View style={styles.convertLine}>
                 <SkeletonBar width={120} height={14} />

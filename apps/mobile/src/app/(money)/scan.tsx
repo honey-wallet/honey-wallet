@@ -2,7 +2,7 @@ import { parsePairUri } from '@honey-wallet/keyring';
 import { CameraView, scanFromURLAsync, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
 import { router, useLocalSearchParams } from 'expo-router';
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import { Linking, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Icon } from '@/components/Icon';
@@ -11,11 +11,14 @@ import { TextsReveal } from '@/components/motion/TextsReveal';
 import { PillButton } from '@/components/onboarding/PillButton';
 import { SCREEN } from '@/components/wallet/parts';
 import { tap } from '@/lib/haptics';
+import { createHardwareScanner, holdHardwareImport } from '@/lib/hardware-scan';
 import { holdScannedKey } from '@/lib/key-scan';
 import { goBackOr } from '@/lib/navigation';
 import { holdScannedOffer, offerDirection } from '@/lib/pair-offer';
+import { LANDING } from '@/lib/surface';
 import { showErrorToast, showToast } from '@/lib/toast';
 import { isWalletConnectUri, pairWalletConnect } from '@/lib/walletconnect';
+import { pairingErrorMessage } from '@/lib/walletconnect-uri';
 import { isEvmAddress } from '@/lib/wallets';
 import { holdWatchedAddress } from '@/lib/watch-scan';
 import { makeStyles, useTheme } from '@/theme';
@@ -31,6 +34,11 @@ export default function ScanScreen() {
   const c = useTheme();
   const [permission, requestPermission] = useCameraPermissions();
   const handled = useRef(false);
+  // A hardware wallet's account code may animate over many frames: keep reading them.
+  const hardware = useRef(purpose === 'hardware' ? createHardwareScanner() : null);
+  const [progress, setProgress] = useState<number | null>(null);
+  const [foreign, setForeign] = useState(false);
+  const lastError = useRef({ message: '', at: 0 });
 
   /**
    * A code from the camera or a photo: a browser's pairing code opens pairing; a
@@ -39,6 +47,30 @@ export default function ScanScreen() {
    */
   const onCode = (data: string) => {
     if (handled.current) return;
+    if (hardware.current) {
+      const scan = hardware.current.feed(data);
+      if (scan.state === 'scanning') {
+        // Another kind of QR (an address, a link) in view: say what to point at.
+        setForeign(!!scan.foreign && !(scan.progress > 0));
+        if (scan.progress > 0) setProgress(scan.progress);
+        return;
+      }
+      if (scan.state === 'error') {
+        // Toast once per message (the camera sees each frame many times), not forever:
+        // a different problem, or the same one after a fresh start, shows again.
+        const now = Date.now();
+        if (lastError.current.message !== scan.message || now - lastError.current.at > 4000)
+          showErrorToast(scan.message);
+        lastError.current = { message: scan.message, at: now };
+        setProgress(null);
+        return;
+      }
+      handled.current = true;
+      tap();
+      holdHardwareImport(scan.result);
+      router.replace('/hardware-accounts');
+      return;
+    }
     handled.current = true;
     tap();
     if (purpose === 'watch') {
@@ -84,7 +116,7 @@ export default function ScanScreen() {
     if (isWalletConnectUri(data)) {
       router.back();
       showToast('Connecting…');
-      pairWalletConnect(data.trim()).catch(() => showErrorToast('Code expired'));
+      pairWalletConnect(data.trim()).catch((error) => showErrorToast(pairingErrorMessage(error)));
       return;
     }
     if (parsePairUri(data)) {
@@ -108,7 +140,7 @@ export default function ScanScreen() {
     else showErrorToast('No QR code found');
   };
 
-  const close = () => goBackOr('/home');
+  const close = () => goBackOr(LANDING);
 
   return (
     <View style={styles.root}>
@@ -144,7 +176,9 @@ export default function ScanScreen() {
                 : 'Scan a QR code'} */}
               {purpose === 'pair' || purpose === 'extension'
                 ? 'Scan the extension’s code'
-                : 'Scan a QR code'}
+                : purpose === 'hardware'
+                  ? 'Scan your wallet’s code'
+                  : 'Scan a QR code'}
             </Text>
           }
           // One short line under it, centred, instead of a two-line title (review).
@@ -152,6 +186,14 @@ export default function ScanScreen() {
             purpose === 'pair' || purpose === 'extension' ? (
               <Text style={styles.hint}>
                 It’s in Honey in your browser, under Pair with your phone.
+              </Text>
+            ) : purpose === 'hardware' ? (
+              <Text style={styles.hint}>
+                {progress != null && progress > 0
+                  ? `Keep it in view… ${Math.round(progress * 100)}%`
+                  : foreign
+                    ? 'That’s a different kind of code. On the device, open Connect Software Wallet and show its code.'
+                    : 'Hold steady. Animated codes take a few seconds.'}
               </Text>
             ) : undefined
           }

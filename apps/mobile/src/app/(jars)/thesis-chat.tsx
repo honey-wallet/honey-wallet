@@ -15,18 +15,25 @@ import {
 import Animated, { FadeIn } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Line, Path, Text as SvgText } from 'react-native-svg';
-import { DonutChart } from '@/components/charts/DonutChart';
 import { Icon } from '@/components/Icon';
-import { Facts, HoldingRow, IDEAS, TokenStack } from '@/components/jars/JarParts';
+import { Facts, IdeaGrid, StrategyCard } from '@/components/jars/JarParts';
+import { HoneyLogo } from '@/components/logo/HoneyLogo';
 import { PressableScale } from '@/components/motion/PressableScale';
 import { PillButton } from '@/components/onboarding/PillButton';
+import { CopyStepper } from '@/components/social/parts';
 import { HeaderShortcut } from '@/components/wallet/HeaderShortcut';
 import { copyText } from '@/lib/copy';
 import { tap } from '@/lib/haptics';
-import { formatUsd } from '@/lib/mock-wallet';
-import { useActiveMultisig } from '@/lib/multisig';
 import { goBackOr } from '@/lib/navigation';
-import { hostOf, linksIn, type Proposal, type Risk, STAGES } from '@/lib/thesis';
+import {
+  hostOf,
+  linksIn,
+  type Proposal,
+  type Risk,
+  STAGES,
+  ThesisError,
+  withAmount,
+} from '@/lib/thesis';
 import {
   type ChatMessage,
   type ChatPart,
@@ -37,7 +44,7 @@ import {
   reply,
   SWING,
 } from '@/lib/thesis-chat';
-import { useActiveWallet } from '@/lib/wallets';
+import { Gate } from '@/lib/warnings';
 import { makeStyles, radius, useTheme } from '@/theme';
 import { DURATION } from '@/theme/motion';
 
@@ -74,9 +81,15 @@ export default function ThesisChatScreen() {
       setMessages((m) => m.map((x) => (x.id === answer.id ? { ...x, parts } : x)));
     try {
       strategy.current = await reply(said, strategy.current, { update });
-    } catch {
+    } catch (error) {
       update([
-        { type: 'text', text: "I couldn't finish that. Nothing was bought or signed." },
+        {
+          type: 'text',
+          text:
+            error instanceof ThesisError
+              ? error.message
+              : "I couldn't finish that. Nothing was bought or signed.",
+        },
         { type: 'replies', options: [said] },
       ]);
     } finally {
@@ -101,12 +114,9 @@ export default function ThesisChatScreen() {
       style={[styles.screen, { paddingTop: insets.top }]}
     >
       <View style={styles.top}>
-        <HeaderShortcut icon="close" label="Close" onPress={() => goBackOr('/jars')} />
+        <HeaderShortcut icon="chevronLeft" label="Back" onPress={() => goBackOr('/jars')} />
         <View style={styles.titleWrap}>
-          <Text style={styles.title}>Honey</Text>
-          <View style={styles.modelChip}>
-            <Text style={styles.modelText}>Thesis agent</Text>
-          </View>
+          <Text style={styles.title}>Thesis agent</Text>
         </View>
         <View style={styles.topSpacer} />
       </View>
@@ -119,29 +129,15 @@ export default function ThesisChatScreen() {
           keyboardDismissMode="interactive"
         >
           <View style={styles.welcomeIcon}>
-            <Icon name="jar" size={28} color={c.onPrimary} />
+            <HoneyLogo variant="mark" height={72} />
           </View>
           <Text style={styles.welcomeTitle}>What do you believe in?</Text>
           <Text style={styles.welcomeHint}>
             Say it any way, or paste a post. Honey finds what you can buy.
           </Text>
+          {/* The Jars page's idea cards, each starting the conversation with its idea. */}
           <View style={styles.starters}>
-            {IDEAS.map((st) => (
-              <PressableScale
-                key={st.title}
-                accessibilityRole="button"
-                scaleTo={0.97}
-                onPress={() => void send(st.title)}
-                style={styles.starter}
-              >
-                <Text style={styles.starterTitle} numberOfLines={2}>
-                  {st.title}
-                </Text>
-                <Text style={styles.starterHint} numberOfLines={2}>
-                  {st.hint}
-                </Text>
-              </PressableScale>
-            ))}
+            <IdeaGrid onPick={(title) => void send(title)} />
           </View>
         </ScrollView>
       ) : (
@@ -238,7 +234,11 @@ export default function ThesisChatScreen() {
             )}
           </PressableScale>
         </View>
-        <Text style={styles.disclaimer}>Honey can be wrong. You review and sign every order.</Text>
+        <Gate id="assistantDisclaimer">
+          <Text style={styles.disclaimer}>
+            Honey can be wrong. You review and sign every order.
+          </Text>
+        </Gate>
       </View>
     </KeyboardAvoidingView>
   );
@@ -424,7 +424,7 @@ function Part({
         </View>
       );
     case 'strategy':
-      return <StrategyCard proposal={part.proposal} latest={latest} />;
+      return <AnswerCard proposal={part.proposal} latest={latest} />;
     case 'projection':
       return <ProjectionCard amount={part.amount} risk={part.risk} />;
     case 'replies':
@@ -447,64 +447,62 @@ function Part({
   }
 }
 
-/** The answer you act on: what it buys, the costs, and Buy (or Propose) and Edit. */
-function StrategyCard({ proposal, latest }: { proposal: Proposal; latest: boolean }) {
+/**
+ * The answer you act on (2026-11-13): the Feed's strategy card (coins, name, split) and
+ * one Continue to "How much?", where the amount, split and risk are set. Nothing it can
+ * buy: say so, with the way to pick tokens yourself.
+ */
+function AnswerCard({ proposal, latest }: { proposal: Proposal; latest: boolean }) {
   const styles = useStyles();
-  const multisig = useActiveMultisig();
-  const wallet = useActiveWallet();
-  const open = (step: 'jar' | 'proposal') => {
-    tap();
-    chatDraft.set(proposal);
-    router.push({ pathname: '/thesis-new', params: { step } });
-  };
-  return (
-    <View style={styles.card}>
-      <View style={styles.cardHead}>
-        <DonutChart
-          size={56}
-          thickness={7}
-          segments={proposal.picks.map((p) => ({ id: p.symbol, value: p.weight, color: p.color }))}
-        >
-          <TokenStack picks={proposal.picks.slice(0, 2)} size={14} />
-        </DonutChart>
-        <View style={styles.flex}>
-          <Text style={styles.muted}>{proposal.risk} risk</Text>
-          <Text style={styles.cardValue}>{formatUsd(proposal.amount)}</Text>
-        </View>
-      </View>
-      <View>
-        {proposal.picks.map((p) => (
-          <HoldingRow key={p.symbol} pick={p} total={proposal.amount} />
-        ))}
-      </View>
-      <Facts
-        facts={[
-          { label: 'Est. fees', value: formatUsd(proposal.feesUsd) },
-          {
-            label: 'Fee share',
-            value: `${((proposal.feesUsd / Math.max(proposal.amount, 1)) * 100).toFixed(1)}%`,
-          },
-          { label: 'Picks', value: String(proposal.picks.length) },
-        ]}
-      />
-      <Sources proposal={proposal} />
-      {latest ? (
-        <View style={styles.ctas}>
+  if (!proposal.picks.length)
+    return (
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>Nothing to buy for this yet</Text>
+        {proposal.unmatched.length ? (
+          <Text style={styles.muted}>
+            {proposal.unmatched.map((u) => u.idea).join(', ')} aren't tokens you can buy.
+          </Text>
+        ) : null}
+        {latest ? (
           <PillButton
-            label={multisig ? `Propose to ${wallet.label}` : `Buy ${money(proposal.amount)}`}
-            onPress={() => open('jar')}
-            style={styles.flex}
+            label="Pick tokens yourself"
+            variant="secondary"
+            onPress={() => {
+              tap();
+              router.push('/jar-build');
+            }}
           />
-          <PillButton label="Edit" variant="secondary" onPress={() => open('proposal')} />
-        </View>
+        ) : null}
+      </View>
+    );
+  return (
+    // A Feed post's strategy well: coins, name, the striped split, then − Buy 5 [USDC] +.
+    <StrategyCard
+      picks={proposal.picks}
+      name={proposal.thesis}
+      meta={`${proposal.risk} risk · ${proposal.picks.length} ${
+        proposal.picks.length === 1 ? 'token' : 'tokens'
+      }`}
+      split
+    >
+      {latest ? (
+        <CopyStepper
+          label="Buy"
+          onCopy={(amount) => {
+            tap();
+            chatDraft.set(withAmount(proposal, amount));
+            router.push({ pathname: '/thesis-new', params: { step: 'proposal' } });
+          }}
+        />
       ) : (
         <Text style={styles.muted}>Updated below.</Text>
       )}
-    </View>
+    </StrategyCard>
   );
 }
 
 /** Where this answer's numbers came from: prices and their time, and what was read. */
+// biome-ignore lint/correctness/noUnusedVariables: kept while Sources is switched off.
 function Sources({ proposal }: { proposal: Proposal }) {
   const styles = useStyles();
   const c = useTheme();
@@ -610,16 +608,21 @@ function ProjectionCard({ amount, risk }: { amount: number; risk: Risk }) {
           { label: 'Good year', value: money(Math.round(high.at(-1) ?? 0)) },
         ]}
       />
-      <Text style={styles.footnote}>
-        Assumes a typical yearly swing of {Math.round(SWING[risk] * 100)}% for {risk.toLowerCase()}
-        -risk mixes (sample assumption until live price history is connected). A rough guide, not a
-        promise.
-      </Text>
+      <Gate id="projectionFootnote">
+        <Text style={styles.footnote}>
+          Assumes a typical yearly swing of {Math.round(SWING[risk] * 100)}% for{' '}
+          {risk.toLowerCase()}
+          -risk mixes (sample assumption until live price history is connected). A rough guide, not
+          a promise.
+        </Text>
+      </Gate>
     </View>
   );
 }
 
 const useStyles = makeStyles((c) => ({
+  answer: { gap: 12 },
+  cardTitle: { color: c.text, fontSize: 17, fontWeight: '600' },
   flex: { flex: 1 },
   screen: { flex: 1, backgroundColor: c.canvas },
   top: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 8 },
@@ -644,41 +647,23 @@ const useStyles = makeStyles((c) => ({
   flexFill: { flex: 1 },
   welcome: {
     flexGrow: 1,
-    paddingVertical: 16,
+    paddingVertical: 12,
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: 20,
-    gap: 8,
+    gap: 6,
   },
-  welcomeIcon: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: c.primary,
-  },
+  // A short top block, so the four idea cards fit above the composer.
+  welcomeIcon: { marginBottom: 10 },
   welcomeTitle: {
-    marginTop: 10,
+    marginTop: 4,
     color: c.text,
-    fontSize: 24,
+    fontSize: 22,
     fontWeight: '700',
     textAlign: 'center',
   },
   welcomeHint: { color: c.textSecondary, fontSize: 15, lineHeight: 21, textAlign: 'center' },
-  starters: { marginTop: 20, width: '100%', flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  starter: {
-    flexGrow: 1,
-    flexBasis: '45%',
-    minHeight: 84,
-    padding: 14,
-    gap: 4,
-    ...radius(18),
-    borderWidth: 1,
-    borderColor: c.divider,
-  },
-  starterTitle: { color: c.text, fontSize: 15, fontWeight: '600' },
-  starterHint: { color: c.textSecondary, fontSize: 13, lineHeight: 18 },
+  starters: { marginTop: 14, width: '100%' },
   thread: { paddingHorizontal: 16, paddingVertical: 12, gap: 16 },
   youRow: { alignItems: 'flex-end' },
   you: {

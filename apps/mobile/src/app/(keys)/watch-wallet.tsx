@@ -1,5 +1,5 @@
 import { router, useFocusEffect } from 'expo-router';
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { Text, TextInput, View } from 'react-native';
 import { Icon } from '@/components/Icon';
 import { IconSwap } from '@/components/motion/IconSwap';
@@ -22,6 +22,7 @@ export default function WatchWalletSheet() {
   const c = useTheme();
   const [address, setAddress] = useState('');
   const [nickname, setNickname] = useState('');
+  const nicknameRef = useRef<TextInput>(null);
   useFocusEffect(
     useCallback(() => {
       const scanned = takeWatchedAddress();
@@ -56,9 +57,18 @@ export default function WatchWalletSheet() {
   }[status];
 
   return (
-    // The button stays inline under the fields rather than pinned as a footer, so
-    // it sits above the keyboard while typing.
-    <SheetScreen title="Watch an address" size="fill">
+    // The button is the tray's footer: pinned just above the keyboard while typing.
+    <SheetScreen
+      title="Watch an address"
+      size="fill"
+      footer={
+        <PillButton
+          label={status === 'valid' ? 'Watch' : 'Enter an address'}
+          disabled={status !== 'valid'}
+          onPress={watch}
+        />
+      }
+    >
       {/* One title, the sheet's: a second, bigger one under it read as two headings. */}
       {/* <TextsReveal
         id="watch"
@@ -66,9 +76,7 @@ export default function WatchWalletSheet() {
         first={<Text style={styles.title}>Follow any wallet</Text>}
         second={...}
       /> */}
-      <SheetText lead>
-        See its balance and activity. You can't send from a watched wallet.
-      </SheetText>
+      <SheetText lead>See its balance and activity; you can't send from it.</SheetText>
 
       <Text style={styles.label}>Address</Text>
       <View style={[styles.field, status === 'invalid' && styles.fieldError]}>
@@ -80,6 +88,9 @@ export default function WatchWalletSheet() {
           autoCapitalize="none"
           autoCorrect={false}
           spellCheck={false}
+          returnKeyType="next"
+          submitBehavior="submit"
+          onSubmitEditing={() => nicknameRef.current?.focus()}
           style={styles.input}
         />
         {isWeb ? null : (
@@ -120,16 +131,12 @@ export default function WatchWalletSheet() {
           placeholder="e.g. Cold storage"
           placeholderTextColor={c.placeholder}
           maxLength={32}
+          ref={nicknameRef}
+          returnKeyType="done"
+          onSubmitEditing={() => status === 'valid' && watch()}
           style={styles.input}
         />
       </View>
-
-      <PillButton
-        label={status === 'valid' ? 'Watch' : 'Enter an address'}
-        disabled={status !== 'valid'}
-        onPress={watch}
-        style={styles.cta}
-      />
     </SheetScreen>
   );
 }
@@ -189,8 +196,5 @@ const useStyles = makeStyles((c) => ({
   },
   hintError: {
     color: c.error,
-  },
-  cta: {
-    marginTop: 28,
   },
 }));
