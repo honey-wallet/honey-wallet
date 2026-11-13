@@ -59,9 +59,20 @@ describe('copy fees against 1Click’s record (any paying flow)', () => {
       checkOneClickCopyFees(record([{ recipient: '0xana', fee: 100 }]), [ana]),
     ).not.toThrow();
     // No declared fees: 1Click's own fee is left alone, as before.
-    expect(() =>
-      checkOneClickCopyFees(record([{ recipient: '1click', fee: 20 }]), []),
-    ).not.toThrow();
+    // Since the money audit (2): only 1Click's own entry, of 25 bps or less, as production
+    // quotes with the partner key carry it.
+    const own = '5880ad2b362620fadf759cbceb1cd5737ce8c6ed7fb8e9942881e6731f9247dd';
+    expect(() => checkOneClickCopyFees(record([{ recipient: own, fee: 1 }]), [])).not.toThrow();
+    expect(() => checkOneClickCopyFees(record(undefined), [])).not.toThrow();
+    for (const appFees of [
+      [{ recipient: '0xmallory', fee: 1 }],
+      [{ recipient: own, fee: 26 }],
+      [
+        { recipient: own, fee: 1 },
+        { recipient: '0xana', fee: 1 },
+      ],
+    ])
+      expect(() => checkOneClickCopyFees(record(appFees), [])).toThrow('quote changed');
     expect(declaredCopyFees(undefined)).toEqual([]);
   });
 
