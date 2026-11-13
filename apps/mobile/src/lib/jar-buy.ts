@@ -491,6 +491,7 @@ export async function quoteJarBuy(
             fromAddress: from,
             slippageBps,
             wrapped: true,
+            toSymbol: l.symbol,
             walletId: wallet.id,
           }),
           STEP_MS,
