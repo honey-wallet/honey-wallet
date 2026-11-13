@@ -24,7 +24,7 @@ import {
 import { NftGallery } from '@/components/home/NftGallery';
 import { TradesList, useHasTrades } from '@/components/home/PositionsList';
 import { Icon, type IconName } from '@/components/Icon';
-import { exposureSlices, JarList } from '@/components/jars/JarParts';
+import { JarList } from '@/components/jars/JarParts';
 import { TokenArc } from '@/components/jars/TokenArc';
 import { HoneyJar } from '@/components/logo/HoneyJar';
 import { HoneyMascot } from '@/components/logo/HoneyMascot';
@@ -70,6 +70,7 @@ import { EXTENSION, SHARED_WALLETS, SOCIAL, WALLET } from '@/lib/surface';
 import { useTabReselect } from '@/lib/tab-reselect';
 import { jarReturn, jarValue, type ThesisJar, useThesisJars } from '@/lib/thesis';
 import { showToast } from '@/lib/toast';
+import { tokenColor } from '@/lib/token-colors';
 import { requireWallet, useHasWallet } from '@/lib/wallet-gate';
 import { useWalletView } from '@/lib/wallet-view';
 import { isMainWallet, useActiveWallet } from '@/lib/wallets';
@@ -814,53 +815,59 @@ function HomeJars() {
 const RING_MAX = 420;
 
 /**
- * What your jars hold, as the Jars page drew it: the token ring with the Honey mark,
- * counting the tokens in its middle. Home's Jars tab is where your jars live now (the
+ * Your jars as one wheel: each jar's share of the total, its tokens stacked beside its
+ * stretch, and what they're all worth in the middle. Home's Jars tab is where your jars live now (the
  * tab bar's jar button opens Create), so the ring sits here, over the list.
  */
 function JarsRing({ jars }: { jars: ThesisJar[] }) {
   const ringStyles = useRingStyles();
   const [width, setWidth] = useState(0);
-  const slices = exposureSlices(jars);
+  // One stretch per jar, its share of what all your jars are worth, in its biggest
+  // token's colour; outside it, that jar's tokens stacked (2026-11-13: the wheel is
+  // about your jars, not the tokens across them).
+  const worth = jars.reduce((s, j) => s + jarValue(j), 0);
+  const valued = jars.filter((j) => jarValue(j) > 0);
+  const slices = valued
+    .map((j, i) => {
+      const lead = [...j.picks].sort((x, y) => y.weight - x.weight)[0]?.symbol ?? 'USDC';
+      return {
+        symbol: j.id,
+        weight: Math.max(1, Math.round((jarValue(j) / (worth || 1)) * 100)),
+        color: tokenColor(lead, i),
+      };
+    })
+    .sort((x, y) => y.weight - x.weight);
+  const stacks = Object.fromEntries(
+    valued.map((j) => [
+      j.id,
+      [...j.picks].sort((x, y) => y.weight - x.weight).map((p) => p.symbol),
+    ]),
+  );
+  const names = Object.fromEntries(valued.map((j) => [j.id, j.name]));
   // The middle: what your jars are worth, and how they've done since you bought (each
   // jar's start value backed out of its return).
-  const worth = jars.reduce((s, j) => s + jarValue(j), 0);
   const start = jars.reduce((s, j) => s + jarValue(j) / (1 + jarReturn(j)), 0);
   const change = start > 0 ? worth / start - 1 : 0;
-  // One token is a solid ring saying 100%: nothing to show.
+  // One jar is a solid ring saying 100%: nothing to show.
   if (slices.length < 2) return null;
-  // The arc carries colour and the count; the names sit in one quiet row under it
-  // (logos on the arc crowded the count, review 2026-11-13).
-  const top = slices.slice(0, 3);
-  const more = slices.length - top.length;
   return (
     <View style={ringStyles.wrap} onLayout={(e) => setWidth(e.nativeEvent.layout.width)}>
       {width > 0 ? (
         <TokenArc
           slices={slices}
+          stacks={stacks}
+          names={names}
+          onSlicePress={(id) => router.push({ pathname: '/jar/[id]', params: { id } })}
           total={formatUsd(worth)}
           sub={<Change value={change * 100} />}
           width={Math.min(width, RING_MAX)}
           outside
         />
       ) : null}
-      <View style={ringStyles.legend}>
-        {top.map((s) => (
-          <View key={s.symbol} style={ringStyles.item}>
-            <TokenIcon symbol={s.symbol} size={16} />
-            <Text style={ringStyles.pct}>{s.weight}%</Text>
-          </View>
-        ))}
-        {more > 0 ? <Text style={ringStyles.more}>+{more} more</Text> : null}
-      </View>
     </View>
   );
 }
 
-const useRingStyles = makeStyles((c) => ({
-  wrap: { alignItems: 'center', paddingTop: 12, paddingBottom: 8, gap: 10 },
-  legend: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 16 },
-  item: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  pct: { color: c.textSecondary, fontSize: 13, fontWeight: '600', fontVariant: ['tabular-nums'] },
-  more: { color: c.textSecondary, fontSize: 13 },
+const useRingStyles = makeStyles(() => ({
+  wrap: { alignItems: 'center', paddingTop: 8, paddingBottom: 4 },
 }));

@@ -26,6 +26,8 @@ const SMALL = 10;
 const STROKE = 28;
 /** Logos in the space around the wheel (`outside`). */
 const OUT_LOGO = 24;
+/** The width each outside label gets (logo over its %). */
+const OUT_W = 64;
 const NODE = 44;
 /** The arc runs 240° over the top, open at the bottom where the total sits. */
 const START = (150 * Math.PI) / 180;
@@ -78,7 +80,19 @@ export function TokenArc({
   bubbles: withBubbles = true,
   outside = false,
   sub,
+  stacks,
+  names,
+  onSlicePress,
 }: {
+  /**
+   * Outside only: a slice drawn as several logos stacked (a jar's tokens) instead of
+   * its own, keyed by the slice's `symbol` (its id).
+   */
+  stacks?: Record<string, string[]>;
+  /** What a slice is read out as, when its `symbol` is an id (a jar's name). */
+  names?: Record<string, string>;
+  /** Outside only: tapping a slice's label, e.g. to open that jar. */
+  onSlicePress?: (key: string) => void;
   /** Under the total in place of `label`, e.g. its change today. */
   sub?: ReactNode;
   /** Token logos sit on the arc; off, the arc and its middle only (a legend goes below). */
@@ -115,10 +129,12 @@ export function TokenArc({
   const sum = slices.reduce((s, r) => s + r.weight, 0) || 1;
 
   // Outside: a ring of room around the wheel for the logos.
-  const margin = outside ? OUT_LOGO + 14 : 0;
-  const r = width / 2 - STROKE / 2 - margin;
+  // Sides need room for a logo and its % beside it; the top for a logo with its % above.
+  const side = outside ? OUT_LOGO + 44 : 0;
+  const above = outside ? OUT_LOGO + 26 : 0;
+  const r = width / 2 - STROKE / 2 - side;
   const cx = width / 2;
-  const cy = margin + r + STROKE / 2;
+  const cy = above + r + STROKE / 2;
   const height = cy + r * Math.sin(Math.PI / 6) + STROKE / 2 + (outside ? 10 : 0);
 
   // The arc's stretches: one per shown token, then the rest (striped, or outside, each
@@ -132,21 +148,37 @@ export function TokenArc({
           : []),
       ];
   // Outside: where each stretch's middle is, and the rest's, on a circle past the arc.
-  const outR = r + STROKE / 2 + OUT_LOGO / 2 + 6;
+  const outR = r + STROKE / 2 + OUT_LOGO / 2 + 8;
   const midAngle = (from: number, w: number) => START + ((from + w / 2) / sum) * SWEEP;
+  // A label sits on the side facing away from the wheel: "34% ⊙" on the left, "⊙ 23%"
+  // on the right, the % over the logo at the top. Never over the arc.
+  const place = (a: number) => {
+    const p = at(cx, cy, outR, a);
+    const dx = Math.cos(a);
+    if (dx < -0.35)
+      return {
+        style: { right: width - (p.x + OUT_LOGO / 2), top: p.y - OUT_LOGO / 2 },
+        dir: 'left' as const,
+      };
+    if (dx > 0.35)
+      return {
+        style: { left: p.x - OUT_LOGO / 2, top: p.y - OUT_LOGO / 2 },
+        dir: 'right' as const,
+      };
+    return { style: { left: p.x - OUT_W / 2, top: p.y - OUT_LOGO / 2 - 18 }, dir: 'up' as const };
+  };
   const topSpots = top.map((s, i) => {
     const before = top.slice(0, i).reduce((acc, t) => acc + t.weight, 0);
-    return at(cx, cy, outR, midAngle(before, s.weight));
+    return place(midAngle(before, s.weight));
   });
-  const restSpot = at(
-    cx,
-    cy,
-    outR,
+  const restSpot = place(
     midAngle(
       top.reduce((acc, t) => acc + t.weight, 0),
       restWeight,
     ),
   );
+  const dirStyle = (dir: 'left' | 'right' | 'up') =>
+    dir === 'up' ? styles.outUp : dir === 'left' ? styles.outLeft : styles.outRight;
   const motion = useSplitMotion(
     parts.map((p) => p.weight / sum),
     parts.map((p) => p.key).join(','),
@@ -196,7 +228,9 @@ export function TokenArc({
 
         {outside
           ? top.map((s, i) => {
-              const p = topSpots[i] ?? { x: 0, y: 0 };
+              const spot = topSpots[i];
+              const logos = stacks?.[s.symbol];
+              const name = names?.[s.symbol] ?? s.symbol;
               return (
                 <Animated.View
                   key={s.symbol}
@@ -207,20 +241,37 @@ export function TokenArc({
                           .delay(120 + i * DURATION.stagger)
                           .easing(EASE.smoothOut)
                   }
-                  style={[styles.outLogo, { left: p.x - OUT_LOGO / 2, top: p.y - OUT_LOGO / 2 }]}
-                  accessibilityLabel={`${s.symbol} ${s.weight}%`}
+                  style={[styles.outLogo, spot?.style]}
                 >
-                  <TokenIcon symbol={s.symbol} size={OUT_LOGO} />
+                  <PressableScale
+                    accessibilityRole={onSlicePress ? 'button' : undefined}
+                    accessibilityLabel={`${name} ${s.weight}%`}
+                    disabled={!onSlicePress}
+                    scaleTo={0.92}
+                    hitSlop={8}
+                    onPress={() => {
+                      tap();
+                      onSlicePress?.(s.symbol);
+                    }}
+                    style={[styles.outLabel, dirStyle(spot?.dir ?? 'up')]}
+                  >
+                    {logos ? (
+                      <Stack symbols={logos} ring={c.canvas} />
+                    ) : (
+                      <TokenIcon symbol={s.symbol} size={OUT_LOGO} />
+                    )}
+                    <Text style={styles.outPct}>{s.weight}%</Text>
+                  </PressableScale>
                 </Animated.View>
               );
             })
           : null}
         {outside && rest.length ? (
-          // The small ones: overlapping dots in their colours, like a handful of
-          // marbles at the end of the wheel. Tap for the list.
+          // The small ones: their real logos stacked at the end of the wheel, and how
+          // many. Tap for the list.
           <PressableScale
             accessibilityRole="button"
-            accessibilityLabel={`${rest.length} more tokens, ${restWeight}%`}
+            accessibilityLabel={`${rest.length} more, ${restWeight}%`}
             accessibilityState={{ expanded: open }}
             scaleTo={0.92}
             hitSlop={10}
@@ -228,22 +279,13 @@ export function TokenArc({
               tap();
               setOpen((v) => !v);
             }}
-            style={[styles.cluster, { left: restSpot.x - 18, top: restSpot.y - 16 }]}
+            style={[styles.outLogo, styles.outLabel, dirStyle(restSpot.dir), restSpot.style]}
           >
-            {rest.slice(0, 4).map((s, i) => (
-              <View
-                key={s.symbol}
-                style={[
-                  styles.marble,
-                  {
-                    backgroundColor: s.color,
-                    left: [0, 12, 6, 16][i],
-                    top: [8, 0, 14, 12][i],
-                    borderColor: c.canvas,
-                  },
-                ]}
-              />
-            ))}
+            <Stack
+              symbols={rest.slice(0, 3).map((s) => stacks?.[s.symbol]?.[0] ?? s.symbol)}
+              ring={c.canvas}
+            />
+            <Text style={styles.outPct}>+{rest.length}</Text>
           </PressableScale>
         ) : null}
         {(withBubbles && !outside ? bubbles : []).map((b, i) => {
@@ -339,8 +381,12 @@ export function TokenArc({
               }
               style={styles.restRow}
             >
-              <TokenIcon symbol={s.symbol} size={28} />
-              <Text style={styles.restSymbol}>{s.symbol}</Text>
+              {stacks?.[s.symbol] ? (
+                <Stack symbols={stacks[s.symbol] ?? []} ring={c.canvas} />
+              ) : (
+                <TokenIcon symbol={s.symbol} size={28} />
+              )}
+              <Text style={styles.restSymbol}>{names?.[s.symbol] ?? s.symbol}</Text>
               <Text style={styles.restPct}>{s.weight}%</Text>
             </Animated.View>
           ))}
@@ -388,9 +434,17 @@ function Stretch({
 const useStyles = makeStyles((c) => ({
   bubble: { position: 'absolute', width: NODE, alignItems: 'center' },
   outLogo: { position: 'absolute' },
+  outLabel: { alignItems: 'center', gap: 5 },
+  outUp: { width: OUT_W, flexDirection: 'column-reverse', gap: 2 },
+  outLeft: { flexDirection: 'row-reverse' },
+  outRight: { flexDirection: 'row' },
+  outPct: {
+    color: c.textSecondary,
+    fontSize: 12,
+    fontWeight: '600',
+    fontVariant: ['tabular-nums'],
+  },
   sub: { marginTop: 4 },
-  cluster: { position: 'absolute', width: 36, height: 32 },
-  marble: { position: 'absolute', width: 18, height: 18, borderRadius: 9, borderWidth: 1.5 },
   ring: {
     width: NODE,
     height: NODE,
@@ -440,3 +494,19 @@ const useStyles = makeStyles((c) => ({
   restSymbol: { flex: 1, color: c.text, fontSize: 16, fontWeight: '500' },
   restPct: { color: c.textSecondary, fontSize: 15, fontVariant: ['tabular-nums'] },
 }));
+
+/** Up to three logos overlapping left to right, each ringed in the page colour. */
+function Stack({ symbols, ring }: { symbols: string[]; ring: string }) {
+  return (
+    <View style={{ flexDirection: 'row' }}>
+      {symbols.slice(0, 3).map((sym, i) => (
+        <View
+          key={sym}
+          style={{ marginLeft: i ? -8 : 0, borderRadius: 12, borderWidth: 2, borderColor: ring }}
+        >
+          <TokenIcon symbol={sym} size={20} />
+        </View>
+      ))}
+    </View>
+  );
+}
