@@ -60,6 +60,7 @@ import {
 import { evmRpc, type GasDeps, SPONSORED_FEE, sendSponsored, sponsorEvm } from '@/lib/evm-gas';
 import { assertNoSponsoredInFlight, liveBatch } from '@/lib/evm-in-flight';
 import { atomic, MAX_SLIPPAGE_BPS, quoteChanged } from '@/lib/intents-quote';
+import { serverNow } from '@/lib/server-clock';
 import { createStore } from '@/lib/store';
 import { TEST_MODE } from '@/lib/test-mode';
 
@@ -320,7 +321,9 @@ const defaults: DexDeps = {
       return null;
     }
   },
-  now: () => Date.now(),
+  // now: () => Date.now(),
+  // Replaced 14 Nov (money audit 6): expiries are set on the server's clock (lib/server-clock).
+  now: serverNow,
   keyOf: async (walletId, chain) => (await import('@/lib/vault')).privateKeyOf(walletId, chain),
   sponsorEvm,
   sendSponsored,
@@ -432,7 +435,9 @@ export const KYBER_SWAP_ABI = [
  * payout floor within the slippage asked for, a live expiry, and a transaction whose
  * own bytes say the same (decoded here, not taken from the JSON).
  */
-export function checkDexQuote(q: DexQuote, ask: DexAsk, now = Date.now()): void {
+// export function checkDexQuote(q: DexQuote, ask: DexAsk, now = Date.now()): void {
+// Replaced 14 Nov (money audit 6): expiries are set on the server's clock (lib/server-clock).
+export function checkDexQuote(q: DexQuote, ask: DexAsk, now = serverNow()): void {
   if (
     q.chain !== ask.chain ||
     !sameToken(ask.chain, q.sellToken, ask.sellToken) ||

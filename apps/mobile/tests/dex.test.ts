@@ -146,6 +146,26 @@ describe('quotes', () => {
     await expect(refused(() => ({ expiresAt: NOW - 1 }))).rejects.toThrow('expired');
   });
 
+  it('checks a quote’s expiry on the server’s clock, not the phone’s (money audit 6)', async () => {
+    const { observeServerDate, resetServerClock } = await import('@/lib/server-clock');
+    const ask = baseAsk();
+    const req = { ...ask, sellAmount: ask.sellAmount.toString() };
+    try {
+      // The phone runs 5 minutes fast: a quote with 2 minutes left on the server's clock
+      // looked expired to it.
+      const phone = Date.now();
+      observeServerDate(new Date(phone - 300_000).toUTCString(), phone, phone);
+      const live = quoteFor(req, { expiresAt: phone - 180_000 });
+      expect(() => dex.checkDexQuote(live, ask)).not.toThrow();
+      // The phone runs 5 minutes slow: a quote the server already let run out is refused.
+      observeServerDate(new Date(phone + 300_000).toUTCString(), phone, phone);
+      const stale = quoteFor(req, { expiresAt: phone + 120_000 });
+      expect(() => dex.checkDexQuote(stale, ask)).toThrow('expired');
+    } finally {
+      resetServerClock();
+    }
+  });
+
   it('takes the live KyberSwap build exactly as Kyber made it', () => {
     const ask = baseAsk({ taker: LIVE_TAKER });
     const q = quoteFor(

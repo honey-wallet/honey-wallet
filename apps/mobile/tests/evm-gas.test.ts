@@ -117,6 +117,27 @@ describe('sponsorEvm', () => {
       expect(await sponsorEvm({ chainId: 8453, account: ME, calls }, deps(odd))).toBeNull();
     expect(() => checkPlan(plan(), { chainId: 8453, account: ME }, NOW)).not.toThrow();
   });
+
+  it('checks the plan’s deadline on the server’s clock by default (money audit 6)', async () => {
+    const { observeServerDate, resetServerClock } = await import('@/lib/server-clock');
+    const phone = Date.now();
+    const at = (ms: number) => plan({ deadline: Math.floor(ms / 1000) });
+    const ask = (p: EvmSponsorPlan) =>
+      sponsorEvm(
+        { chainId: 8453, account: ME, calls },
+        { token: async () => 'session', prepare: vi.fn(async () => p) },
+      );
+    try {
+      // Phone 5 minutes fast: a plan with 5 minutes left on the server's clock is kept.
+      observeServerDate(new Date(phone - 300_000).toUTCString(), phone, phone);
+      expect(await ask(at(phone))).not.toBeNull();
+      // Phone 30 minutes slow: a plan the server has let lapse is refused.
+      observeServerDate(new Date(phone + 1_800_000).toUTCString(), phone, phone);
+      expect(await ask(at(phone + 600_000))).toBeNull();
+    } finally {
+      resetServerClock();
+    }
+  });
 });
 
 describe('sendSponsored', () => {

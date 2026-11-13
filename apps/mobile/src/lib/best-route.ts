@@ -32,6 +32,7 @@ import {
   parseDexQuote,
   sameToken,
 } from '@/lib/dex';
+import { serverNow } from '@/lib/server-clock';
 import { createStore } from '@/lib/store';
 
 /** Settings → Swaps: "Private routes only (NEAR Intents)". Off: fallback allowed. */
@@ -104,7 +105,9 @@ const defaults: RouteDeps = {
       return null;
     }
   },
-  now: () => Date.now(),
+  // now: () => Date.now(),
+  // Replaced 14 Nov (money audit 6): expiries are set on the server's clock (lib/server-clock).
+  now: serverNow,
   privateOnly: () => privateRoutes.get().on,
 };
 
