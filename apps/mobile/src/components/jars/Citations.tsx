@@ -1,9 +1,9 @@
 import * as WebBrowser from 'expo-web-browser';
-import { useState } from 'react';
-import { Image, Linking, Text, type TextStyle, View } from 'react-native';
+// import { useState } from 'react'; (the favicon fetch is commented out below)
+import { Linking, Text, type TextStyle, View } from 'react-native';
 import { PressableScale } from '@/components/motion/PressableScale';
 import { tap } from '@/lib/haptics';
-import type { Citation } from '@/lib/thesis';
+import { type Citation, citedHost } from '@/lib/thesis';
 import { citationParts } from '@/lib/thesis-chat';
 import { makeStyles } from '@/theme';
 
@@ -14,27 +14,33 @@ function open(url: string) {
   void WebBrowser.openBrowserAsync(url).catch(() => Linking.openURL(url).catch(() => {}));
 }
 
-/** The site's own /favicon.ico, or its first letter when that doesn't load. */
+/** A cited page's host name only (no `user:pass@`, port or `www.`). */
+const hostName = citedHost;
+
+/**
+ * The site's first letter in a small round well. Not its favicon: fetching
+ * `/favicon.ico` from each cited site would tell those sites the user's IP and when
+ * they looked (security review, 2026-11-14).
+ */
 function Favicon({ source, size }: { source: Citation; size: number }) {
   const styles = useStyles();
-  const [failed, setFailed] = useState(false);
-  const origin = source.url.match(/^https?:\/\/[^/?#]+/i)?.[0];
-  if (failed || !origin)
-    return (
-      <View style={[styles.letter, { width: size, height: size, borderRadius: size / 2 }]}>
-        <Text style={[styles.letterText, { fontSize: size * 0.62 }]}>
-          {source.domain.charAt(0).toUpperCase()}
-        </Text>
-      </View>
-    );
+  // const [failed, setFailed] = useState(false);
+  // const origin = source.url.match(/^https?:\/\/[^/?#]+/i)?.[0];
+  // if (failed || !origin)
+  const letter = (hostName(source.url) || source.domain).charAt(0).toUpperCase();
   return (
-    <Image
-      source={{ uri: `${origin}/favicon.ico` }}
-      onError={() => setFailed(true)}
-      style={{ width: size, height: size, borderRadius: 3 }}
-      accessibilityIgnoresInvertColors
-    />
+    <View style={[styles.letter, { width: size, height: size, borderRadius: size / 2 }]}>
+      <Text style={[styles.letterText, { fontSize: size * 0.62 }]}>{letter}</Text>
+    </View>
   );
+  // return (
+  //   <Image
+  //     source={{ uri: `${origin}/favicon.ico` }}
+  //     onError={() => setFailed(true)}
+  //     style={{ width: size, height: size, borderRadius: 3 }}
+  //     accessibilityIgnoresInvertColors
+  //   />
+  // );
 }
 
 /**
@@ -46,7 +52,7 @@ export function CitationPill({ source }: { source: Citation }) {
   return (
     <PressableScale
       accessibilityRole="link"
-      accessibilityLabel={`Source ${source.n}: ${source.title}, ${source.domain}`}
+      accessibilityLabel={`Source ${source.n}: ${source.title}, ${hostName(source.url) || source.domain}`}
       hitSlop={6}
       scaleTo={0.94}
       onPress={() => open(source.url)}
@@ -54,7 +60,8 @@ export function CitationPill({ source }: { source: Citation }) {
     >
       <Favicon source={source} size={12} />
       <Text style={styles.pillText} numberOfLines={1}>
-        {source.domain}
+        {/* {source.domain} */}
+        {hostName(source.url) || source.domain}
       </Text>
     </PressableScale>
   );

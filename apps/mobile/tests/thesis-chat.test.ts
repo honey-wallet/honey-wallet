@@ -260,6 +260,13 @@ describe('follow-up questions', () => {
       { text: '.' },
     ]);
     expect(citationParts('No markers.', sources)).toEqual([{ text: 'No markers.' }]);
+    // Only the host: never userinfo or a port, whatever the server sent as the domain.
+    const { citedHost } = await import('@/lib/thesis');
+    expect(citedHost('https://user:pass@www.Reuters.com:443/x?y')).toBe('reuters.com');
+    expect(
+      citationsFrom([{ n: 1, url: 'https://a:b@evil.example/x', domain: 'trusted.com' }])[0]
+        ?.domain,
+    ).toBe('evil.example');
     expect(plainWithSources('Gold held [1]. Gone [2].', sources)).toBe(
       'Gold held [1]. Gone.\n\n[1] https://www.reuters.com/a',
     );

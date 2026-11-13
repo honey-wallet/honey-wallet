@@ -71,6 +71,14 @@ export type Proposal = {
 /** A numbered page a `[n]` citation marker points at (the server checks every one). */
 export type Citation = { n: number; url: string; title: string; domain: string };
 
+/** "reuters.com" from "https://u:p@www.Reuters.com:443/x": no userinfo, port or www. */
+export function citedHost(url: string): string {
+  const rest = url.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '');
+  const authority = rest.split(/[/?#]/)[0] ?? '';
+  const host = (authority.split('@').pop() ?? '').replace(/:\d*$/, '');
+  return host.replace(/^www\./i, '').toLowerCase();
+}
+
 /** The citations a server sent, keeping only http(s) pages with a number. */
 export function citationsFrom(raw: unknown): Citation[] {
   if (!Array.isArray(raw)) return [];
@@ -78,7 +86,10 @@ export function citationsFrom(raw: unknown): Citation[] {
     const c = r as Partial<Citation> | null;
     if (!c || typeof c.n !== 'number' || typeof c.url !== 'string') return [];
     if (!/^https?:\/\/[^\s/?#]+/i.test(c.url)) return [];
-    const domain = typeof c.domain === 'string' && c.domain ? c.domain : hostOf(c.url);
+    // const domain = typeof c.domain === 'string' && c.domain ? c.domain : hostOf(c.url);
+    // The host name only, from the URL itself: never a `user:pass@` or port.
+    const domain = citedHost(c.url);
+    if (!domain) return [];
     return [{ n: c.n, url: c.url, title: typeof c.title === 'string' ? c.title : domain, domain }];
   });
 }
