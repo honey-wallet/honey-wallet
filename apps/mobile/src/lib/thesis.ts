@@ -610,6 +610,42 @@ async function sessionToken() {
   return token;
 }
 
+/**
+ * The session's access token, read fresh for each request of a run. A refresh (coming back
+ * to the front, unlocking, the 14-minute timer) revokes the one the run started with, and
+ * the run "failed" though the server had finished it (2026-11-14). Holds the last one seen
+ * while the session is between tokens.
+ */
+export class LiveToken {
+  constructor(private token: string) {}
+  async current() {
+    const fresh = (await import('@/lib/backend-session')).backendSessionToken();
+    if (fresh) this.token = fresh;
+    return this.token;
+  }
+  /** After a 401: waits up to 10s for a refresh or resume in flight to bring a new token. */
+  async next(signal?: AbortSignal) {
+    const stale = this.token;
+    for (let waited = 0; waited <= 10_000; waited += 250) {
+      if ((await this.current()) !== stale) return this.token;
+      if (signal?.aborted) return null;
+      await wait(250, signal);
+    }
+    return null;
+  }
+  /** Runs `call` with the current token, once more with a new one on a 401. */
+  async use<T>(call: (token: string) => Promise<T>, signal?: AbortSignal): Promise<T> {
+    try {
+      return await call(await this.current());
+    } catch (error) {
+      if ((error as { status?: unknown } | null)?.status !== 401) throw error;
+      const fresh = await this.next(signal);
+      if (!fresh) throw error;
+      return call(fresh);
+    }
+  }
+}
+
 async function explained<T>(work: () => Promise<T>, signal?: AbortSignal): Promise<T> {
   try {
     return await work();
@@ -765,16 +801,23 @@ async function runLive(
   const tracker = new RunTracker();
   onStage(0, tracker.initial());
   const { api } = await import('@/lib/api');
-  const { runId } = await api.startThesis(token, {
-    text: input.text,
-    links: linksIn(input.text),
-    params: {
-      amountUsd: input.amount,
-      risk: input.risk.toLowerCase() as 'low' | 'medium' | 'high',
-    },
-  });
+  const live = new LiveToken(token);
+  // const { runId } = await api.startThesis(token, {
+  const { runId } = await live.use(
+    (current) =>
+      api.startThesis(current, {
+        text: input.text,
+        links: linksIn(input.text),
+        params: {
+          amountUsd: input.amount,
+          risk: input.risk.toLowerCase() as 'low' | 'medium' | 'high',
+        },
+      }),
+    signal,
+  );
   checkStopped(signal);
-  return followRun(token, runId, input, onStage, tracker, signal);
+  // return followRun(token, runId, input, onStage, tracker, signal);
+  return followRun(live, runId, input, onStage, tracker, signal);
 }
 
 const finished = (run: { stage: string }) => run.stage === 'done' || run.stage === 'failed';
@@ -785,7 +828,9 @@ const finished = (run: { stage: string }) => run.stage === 'done' || run.stage =
  * look the same.
  */
 async function followRun(
-  token: string,
+  // Was the token the run started with; now read fresh per request (2026-11-14).
+  // token: string,
+  token: LiveToken,
   runId: string,
   input: ThesisInput,
   onStage: OnStage,
@@ -799,11 +844,15 @@ async function followRun(
     const live = tracker.update(run);
     onStage(Math.min(live.at, STAGES.length - 1), live);
   };
-  let final = await streamRun(token, runId, seen, deadline, signal).catch(() => null);
+  // let final = await streamRun(token, runId, seen, deadline, signal).catch(() => null);
+  let final = await streamRun(await token.current(), runId, seen, deadline, signal).catch(
+    () => null,
+  );
   const { api } = await import('@/lib/api');
   while (!final && Date.now() < deadline) {
     checkStopped(signal);
-    const run: LiveRun = await api.thesis(token, runId);
+    // const run: LiveRun = await api.thesis(token, runId);
+    const run: LiveRun = await token.use((current) => api.thesis(current, runId), signal);
     seen(run);
     if (finished(run)) final = run;
     else await wait(800, signal);
@@ -928,7 +977,8 @@ export async function loadRun(runId: string, said = ''): Promise<PastRun> {
   const token = await sessionToken();
   return explained(async () => {
     const { api } = await import('@/lib/api');
-    const run: LiveRun = await api.thesis(token, runId);
+    // const run: LiveRun = await api.thesis(token, runId);
+    const run: LiveRun = await new LiveToken(token).use((current) => api.thesis(current, runId));
     const input = inputFromRun(run, fallback);
     return {
       text: input.text,
@@ -1127,7 +1177,11 @@ export async function followThesis(
 ): Promise<Proposal> {
   if (TEST_MODE) return sampleThesis(input, onStage, signal);
   const token = await sessionToken();
-  return explained(() => followRun(token, runId, input, onStage, undefined, signal), signal);
+  // return explained(() => followRun(token, runId, input, onStage, undefined, signal), signal);
+  return explained(
+    () => followRun(new LiveToken(token), runId, input, onStage, undefined, signal),
+    signal,
+  );
 }
 
 /**

@@ -212,7 +212,9 @@ export function completeStep(step: SetupStep) {
 export async function signOut(confirmedAccountIds: readonly string[]) {
   // Revoke/forget backend credentials before removing the owner wallet. Local
   // refresh material is deleted even when the server cannot be reached.
-  await forgetSavedBackendSession();
+  // Every wallet's saved session goes, now that each wallet keeps its own (2026-11-14).
+  // await forgetSavedBackendSession();
+  await forgetSavedBackendSession({ everyWallet: true });
   await eraseVault(confirmedAccountIds);
   // Honey for Chrome: no website stays connected to wallets that just left.
   await forgetSites();

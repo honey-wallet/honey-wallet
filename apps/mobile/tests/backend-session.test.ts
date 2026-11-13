@@ -1,3 +1,4 @@
+import { ApiError } from '@honey-wallet/api-client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -16,8 +17,10 @@ const mocks = vi.hoisted(() => ({
   sign: vi.fn(),
   address: vi.fn(),
   active: 'real',
-  storedRefresh: null as string | null,
+  store: new Map<string, string>(),
 }));
+// Everything the keychain holds, joined (null when empty).
+const stored = () => [...mocks.store.values()].join('\n') || null;
 vi.mock('@/lib/api', () => ({
   api: {
     authConfiguration: mocks.configuration,
@@ -32,12 +35,12 @@ vi.mock('@/lib/api', () => ({
   },
 }));
 vi.mock('@/lib/secure-store', () => ({
-  getItemAsync: async () => mocks.storedRefresh,
-  setItemAsync: async (_key: string, value: string) => {
-    mocks.storedRefresh = value;
+  getItemAsync: async (key: string) => mocks.store.get(key) ?? null,
+  setItemAsync: async (key: string, value: string) => {
+    mocks.store.set(key, value);
   },
-  deleteItemAsync: async () => {
-    mocks.storedRefresh = null;
+  deleteItemAsync: async (key: string) => {
+    mocks.store.delete(key);
   },
 }));
 vi.mock('@/lib/auth', () => ({ confirmOwner: mocks.confirm }));
@@ -57,6 +60,7 @@ import {
   backendWalletChanged,
   clearBackendSession,
   clearWalletLinkReview,
+  forgetRemovedWalletSessions,
   forgetSavedBackendSession,
   prepareBackendSignIn,
   prepareWalletLink,
@@ -92,7 +96,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.resetAllMocks();
   mocks.active = 'real';
-  mocks.storedRefresh = null;
+  mocks.store.clear();
   vi.stubEnv('EXPO_PUBLIC_AUTH_ORIGIN', 'http://localhost:5173');
   vi.stubEnv('EXPO_PUBLIC_AUTH_CHAIN_ID', 'eip155:1');
   backendVisibility('active');
@@ -204,7 +208,7 @@ it('requires review before device proof, wipes key bytes, verifies profile and e
   expect(key.every((b: number) => b === 0)).toBe(true);
   expect(backendSessionToken()).toBe('a'.repeat(64));
   expect(backendSession.get().profile).toEqual(profile);
-  expect(mocks.storedRefresh).toContain('c'.repeat(64));
+  expect(stored()).toContain('c'.repeat(64));
   await vi.advanceTimersByTimeAsync(14 * 60_000);
   expect(mocks.refresh).toHaveBeenCalledWith(
     'c'.repeat(64),
@@ -223,7 +227,7 @@ it('stores only a rotating refresh family, suspends on background and resumes af
   backendVisibility('background');
   expect(backendSessionToken()).toBeNull();
   expect(mocks.signOut).not.toHaveBeenCalled();
-  expect(mocks.storedRefresh).toContain('c'.repeat(64));
+  expect(stored()).toContain('c'.repeat(64));
   backendVisibility('active');
   await refreshResumeAvailability();
   expect(backendSession.get().resumeAvailable).toBe(true);
@@ -234,7 +238,7 @@ it('stores only a rotating refresh family, suspends on background and resumes af
     '00000000-0000-4000-8000-000000000002',
   );
   expect(backendSessionToken()).toBe('b'.repeat(64));
-  expect(mocks.storedRefresh).toContain('d'.repeat(64));
+  expect(stored()).toContain('d'.repeat(64));
 });
 
 it('resumes quietly on coming back, without asking for Face ID', async () => {
@@ -247,7 +251,7 @@ it('resumes quietly on coming back, without asking for Face ID', async () => {
   await resumeBackendSession({ silent: true });
   expect(mocks.confirm).not.toHaveBeenCalled();
   expect(backendSessionToken()).toBe('b'.repeat(64));
-  expect(mocks.storedRefresh).toContain('d'.repeat(64));
+  expect(stored()).toContain('d'.repeat(64));
 });
 
 it('forgets a suspended refresh family and attempts server-side revocation', async () => {
@@ -255,7 +259,7 @@ it('forgets a suspended refresh family and attempts server-side revocation', asy
   await approveBackendSignIn();
   backendVisibility('background');
   await forgetSavedBackendSession();
-  expect(mocks.storedRefresh).toBeNull();
+  expect(stored()).toBeNull();
   expect(backendSession.get().resumeAvailable).toBe(false);
   expect(mocks.refresh).toHaveBeenCalledTimes(1);
   expect(mocks.signOut).toHaveBeenCalledTimes(1);
@@ -271,7 +275,7 @@ it('awaits access-session revocation and clears refresh material when actively s
   expect(events).toEqual(['server-revoked']);
   expect(mocks.signOut).toHaveBeenCalledTimes(1);
   expect(backendSessionToken()).toBeNull();
-  expect(mocks.storedRefresh).toBeNull();
+  expect(stored()).toBeNull();
 });
 it('completes local session removal when refresh transport stalls during sign-out', async () => {
   await prepareBackendSignIn();
@@ -281,7 +285,7 @@ it('completes local session removal when refresh transport stalls during sign-ou
   const forgetting = forgetSavedBackendSession();
   await vi.advanceTimersByTimeAsync(2000);
   await forgetting;
-  expect(mocks.storedRefresh).toBeNull();
+  expect(stored()).toBeNull();
   expect(backendSession.get().resumeAvailable).toBe(false);
 });
 it('supports a dedicated extension origin with access-only 15-minute sessions', async () => {
@@ -303,7 +307,7 @@ it('supports a dedicated extension origin with access-only 15-minute sessions', 
   await approveBackendSignIn();
   expect(backendSessionToken()).toBe('a'.repeat(64));
   expect(backendSession.get().resumeAvailable).toBe(false);
-  expect(mocks.storedRefresh).toBeNull();
+  expect(stored()).toBeNull();
   expect(mocks.refresh).not.toHaveBeenCalled();
   backendVisibility('background');
   expect(backendSessionToken()).toBeNull();
@@ -319,7 +323,7 @@ it('rejects and revokes an extension response that includes refresh credentials'
   expect(mocks.signOut).toHaveBeenCalledWith('a'.repeat(64));
   expect(backendSessionToken()).toBeNull();
   expect(backendSession.get().profile).toBeNull();
-  expect(mocks.storedRefresh).toBeNull();
+  expect(stored()).toBeNull();
   expect(backendSession.get().error).toMatch(/unexpected persistent browser session/i);
   expect(await refreshResumeAvailability()).toBe(false);
   await resumeBackendSession();
@@ -390,4 +394,280 @@ it('does not restore a revoked session after protected-profile failure', async (
   await approveBackendSignIn();
   expect(backendSessionToken()).toBeNull();
   expect(mocks.signOut).toHaveBeenCalled();
+});
+
+async function signedInThenBackgrounded() {
+  await prepareBackendSignIn();
+  await approveBackendSignIn();
+  backendVisibility('background');
+  backendVisibility('active');
+  mocks.signOut.mockClear();
+}
+it('keeps the rotated family when the app goes to the background mid-resume', async () => {
+  await signedInThenBackgrounded();
+  mocks.profile.mockImplementationOnce(async () => {
+    backendVisibility('background');
+    return profile;
+  });
+  await resumeBackendSession({ silent: true });
+  expect(mocks.signOut).not.toHaveBeenCalled();
+  expect(stored()).toContain('d'.repeat(64));
+  backendVisibility('active');
+  mocks.refresh.mockClear();
+  await resumeBackendSession({ silent: true });
+  expect(mocks.refresh).toHaveBeenCalledWith(
+    'd'.repeat(64),
+    '00000000-0000-4000-8000-000000000002',
+  );
+  expect(backendSessionToken()).toBe('b'.repeat(64));
+});
+it('keeps the rotated family when the profile read flakes after a resume', async () => {
+  await signedInThenBackgrounded();
+  mocks.profile.mockRejectedValueOnce(new Error('Network request failed'));
+  await resumeBackendSession({ silent: true });
+  expect(backendSessionToken()).toBeNull();
+  expect(mocks.signOut).not.toHaveBeenCalled();
+  expect(stored()).toContain('d'.repeat(64));
+  expect(await refreshResumeAvailability()).toBe(true);
+});
+it('forgets the family when the server rejects the refresh token', async () => {
+  await signedInThenBackgrounded();
+  mocks.refresh.mockRejectedValueOnce(new ApiError(401, 'unauthorized', 'Unauthorized'));
+  await resumeBackendSession({ silent: true });
+  expect(stored()).toBeNull();
+  expect(backendSession.get().resumeAvailable).toBe(false);
+});
+it('keeps the family when a refresh fails for a passing reason', async () => {
+  await signedInThenBackgrounded();
+  mocks.refresh.mockRejectedValueOnce(new ApiError(503, 'unavailable', 'Unavailable'));
+  await resumeBackendSession({ silent: true });
+  expect(stored()).toContain('c'.repeat(64));
+  expect(backendSession.get().resumeAvailable).toBe(true);
+});
+it('keeps the successor when the app goes to the background during the 14-minute refresh', async () => {
+  await prepareBackendSignIn();
+  await approveBackendSignIn();
+  mocks.signOut.mockClear();
+  mocks.refresh.mockImplementationOnce(async () => {
+    backendVisibility('background');
+    return {
+      accessToken: 'b'.repeat(64),
+      tokenType: 'Bearer',
+      expiresAt: new Date(Date.now() + 900000).toISOString(),
+      refreshToken: 'd'.repeat(64),
+      refreshExpiresAt: new Date(Date.now() + 30 * 86400_000).toISOString(),
+      deviceId: '00000000-0000-4000-8000-000000000002',
+      profile,
+    };
+  });
+  await vi.advanceTimersByTimeAsync(14 * 60_000);
+  expect(mocks.signOut).not.toHaveBeenCalled();
+  expect(stored()).toContain('d'.repeat(64));
+  expect(stored()).not.toContain('c'.repeat(64));
+});
+it('throws the successor away when you sign out while a refresh is in flight', async () => {
+  await signedInThenBackgrounded();
+  let finish!: (value: unknown) => void;
+  mocks.refresh.mockImplementationOnce(() => new Promise((resolve) => (finish = resolve)));
+  const resuming = resumeBackendSession({ silent: true });
+  await vi.advanceTimersByTimeAsync(0);
+  clearBackendSession();
+  finish({
+    accessToken: 'b'.repeat(64),
+    tokenType: 'Bearer',
+    expiresAt: new Date(Date.now() + 900000).toISOString(),
+    refreshToken: 'd'.repeat(64),
+    refreshExpiresAt: new Date(Date.now() + 30 * 86400_000).toISOString(),
+    deviceId: '00000000-0000-4000-8000-000000000002',
+    profile,
+  });
+  await resuming;
+  await vi.advanceTimersByTimeAsync(0);
+  expect(stored()).toBeNull();
+  expect(mocks.signOut).toHaveBeenCalledWith('b'.repeat(64));
+});
+it('puts the session away on a wallet switch, and resumes it quietly on switching back', async () => {
+  await prepareBackendSignIn();
+  await approveBackendSignIn();
+  mocks.signOut.mockClear();
+  mocks.active = 'watched';
+  backendWalletChanged();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(backendSessionToken()).toBeNull();
+  expect(mocks.signOut).not.toHaveBeenCalled();
+  expect(await refreshResumeAvailability()).toBe(false);
+  mocks.active = 'real';
+  backendWalletChanged();
+  expect(await refreshResumeAvailability()).toBe(true);
+  mocks.confirm.mockClear();
+  await resumeBackendSession({ silent: true });
+  expect(mocks.confirm).not.toHaveBeenCalled();
+  expect(backendSessionToken()).toBe('b'.repeat(64));
+});
+it('reads a family saved under the old single key and moves it', async () => {
+  await vi.advanceTimersByTimeAsync(0);
+  mocks.store.set(
+    'honey.backend-refresh-family',
+    JSON.stringify({
+      refreshToken: 'c'.repeat(64),
+      deviceId: '00000000-0000-4000-8000-000000000002',
+      refreshExpiresAt: new Date(Date.now() + 30 * 86400_000).toISOString(),
+      accountId: 'real',
+      userId: id,
+      walletId: id,
+      address,
+      chainId: 'eip155:1',
+    }),
+  );
+  expect(await refreshResumeAvailability()).toBe(true);
+  await resumeBackendSession({ silent: true });
+  expect(backendSessionToken()).toBe('b'.repeat(64));
+  expect(mocks.store.has('honey.backend-refresh-family')).toBe(false);
+  expect(mocks.store.get('honey.backend-refresh-families')).toContain('d'.repeat(64));
+});
+it("signing out of the app forgets every wallet's saved session", async () => {
+  await prepareBackendSignIn();
+  await approveBackendSignIn();
+  mocks.active = 'other';
+  mocks.accounts.mockResolvedValue([
+    { id: 'real', addresses: { evm: address } },
+    { id: 'other', addresses: { evm: address } },
+  ]);
+  backendWalletChanged();
+  await prepareBackendSignIn();
+  await approveBackendSignIn();
+  expect(mocks.store.get('honey.backend-refresh-families')).toContain('"other"');
+  expect(mocks.store.get('honey.backend-refresh-families')).toContain('"real"');
+  await forgetSavedBackendSession({ everyWallet: true });
+  expect(stored()).toBeNull();
+});
+
+it('Sign out on one wallet forgets every saved wallet of the same Honey account', async () => {
+  const linked = '0x0000000000000000000000000000000000000002';
+  mocks.accounts.mockResolvedValue([
+    { id: 'real', addresses: { evm: address } },
+    { id: 'linked', addresses: { evm: linked } },
+  ]);
+  // Two wallets linked to one backend user, each signed in on this phone.
+  await prepareBackendSignIn();
+  await approveBackendSignIn();
+  mocks.active = 'linked';
+  backendWalletChanged();
+  const linkedProfile = {
+    userId: id,
+    wallet: {
+      id: '00000000-0000-4000-8000-000000000004',
+      address: linked,
+      chainId: 'eip155:1',
+      accountKind: 'eoa',
+    },
+  };
+  mocks.address.mockReturnValue(linked);
+  mocks.challenge.mockImplementation(async () => ({
+    ...challenge(),
+    message: challenge().message.replace(address, linked),
+  }));
+  mocks.verify.mockImplementation(async () => ({
+    accessToken: 'e'.repeat(64),
+    expiresAt: new Date(Date.now() + 900000).toISOString(),
+    refreshToken: 'f'.repeat(64),
+    refreshExpiresAt: new Date(Date.now() + 30 * 86400_000).toISOString(),
+    deviceId: '00000000-0000-4000-8000-000000000005',
+    profile: linkedProfile,
+  }));
+  mocks.profile.mockResolvedValue(linkedProfile);
+  await prepareBackendSignIn();
+  await approveBackendSignIn();
+  expect(backendSessionToken()).toBe('e'.repeat(64));
+  expect(stored()).toContain('c'.repeat(64));
+  // Sign out (Session screen) on the linked wallet.
+  await forgetSavedBackendSession();
+  expect(stored()).toBeNull();
+  // The other wallet's suspended family was revoked on the server too.
+  expect(mocks.refresh).toHaveBeenCalledWith(
+    'c'.repeat(64),
+    '00000000-0000-4000-8000-000000000002',
+  );
+  mocks.active = 'real';
+  backendWalletChanged();
+  expect(await refreshResumeAvailability()).toBe(false);
+  mocks.active = 'linked';
+  backendWalletChanged();
+  expect(await refreshResumeAvailability()).toBe(false);
+});
+it('Sign out leaves a wallet of a different Honey account alone', async () => {
+  mocks.accounts.mockResolvedValue([
+    { id: 'real', addresses: { evm: address } },
+    { id: 'stranger', addresses: { evm: address } },
+  ]);
+  await prepareBackendSignIn();
+  await approveBackendSignIn();
+  mocks.active = 'stranger';
+  backendWalletChanged();
+  const otherUser = { ...profile, userId: '00000000-0000-4000-8000-000000000009' };
+  mocks.verify.mockImplementation(async () => ({
+    accessToken: 'e'.repeat(64),
+    expiresAt: new Date(Date.now() + 900000).toISOString(),
+    refreshToken: 'f'.repeat(64),
+    refreshExpiresAt: new Date(Date.now() + 30 * 86400_000).toISOString(),
+    deviceId: '00000000-0000-4000-8000-000000000005',
+    profile: otherUser,
+  }));
+  mocks.profile.mockResolvedValue(otherUser);
+  await prepareBackendSignIn();
+  await approveBackendSignIn();
+  await forgetSavedBackendSession();
+  expect(stored()).toContain('c'.repeat(64));
+  expect(stored()).not.toContain('f'.repeat(64));
+});
+
+it('revokes and deletes the saved session of a wallet removed from the phone', async () => {
+  mocks.accounts.mockResolvedValue([
+    { id: 'real', addresses: { evm: address } },
+    { id: 'other', addresses: { evm: address } },
+  ]);
+  await prepareBackendSignIn();
+  await approveBackendSignIn();
+  mocks.active = 'other';
+  backendWalletChanged();
+  const otherUser = { ...profile, userId: '00000000-0000-4000-8000-000000000009' };
+  mocks.verify.mockImplementation(async () => ({
+    accessToken: 'e'.repeat(64),
+    expiresAt: new Date(Date.now() + 900000).toISOString(),
+    refreshToken: 'f'.repeat(64),
+    refreshExpiresAt: new Date(Date.now() + 30 * 86400_000).toISOString(),
+    deviceId: '00000000-0000-4000-8000-000000000005',
+    profile: otherUser,
+  }));
+  mocks.profile.mockResolvedValue(otherUser);
+  await prepareBackendSignIn();
+  await approveBackendSignIn();
+  mocks.signOut.mockClear();
+  mocks.refresh.mockClear();
+  // 'real' leaves the phone.
+  mocks.accounts.mockResolvedValue([{ id: 'other', addresses: { evm: address } }]);
+  await forgetRemovedWalletSessions();
+  expect(stored()).not.toContain('c'.repeat(64));
+  expect(stored()).toContain('f'.repeat(64));
+  expect(mocks.refresh).toHaveBeenCalledWith(
+    'c'.repeat(64),
+    '00000000-0000-4000-8000-000000000002',
+  );
+  expect(mocks.signOut).toHaveBeenCalledWith('b'.repeat(64));
+  // The live session of the wallet still here is untouched.
+  expect(backendSessionToken()).toBe('e'.repeat(64));
+});
+
+it('keeps every saved session when the wallet list reads back empty', async () => {
+  mocks.accounts.mockResolvedValue([{ id: 'real', addresses: { evm: address } }]);
+  await prepareBackendSignIn();
+  await approveBackendSignIn();
+  mocks.signOut.mockClear();
+  mocks.refresh.mockClear();
+  // The keychain isn't readable yet: no wallets come back.
+  mocks.accounts.mockResolvedValue([]);
+  await forgetRemovedWalletSessions();
+  expect(stored()).toContain('c'.repeat(64));
+  expect(mocks.refresh).not.toHaveBeenCalled();
+  expect(mocks.signOut).not.toHaveBeenCalled();
 });

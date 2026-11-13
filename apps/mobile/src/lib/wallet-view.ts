@@ -34,7 +34,10 @@ export function useWalletView() {
       usd: live.portfolio?.totalUsd ?? 0,
       change: dayChange(tokens, liveMarkets),
       tokens,
-      empty: tokens.length === 0,
+      // A failed read isn't an empty wallet: it showed "No tokens yet" and Add money on a
+      // funded one (2026-11-14).
+      // empty: tokens.length === 0,
+      empty: tokens.length === 0 && !(live.error && !live.portfolio),
       /** Per-network balances, for Send. */
       holdings: toHoldings(holdings),
       /** Every network's balance, including ones Send can't pay from (token breakdowns). */

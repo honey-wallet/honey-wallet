@@ -28,7 +28,10 @@ const FAQ: { q: string; a: string }[] = [
   },
   {
     q: 'What are network fees?',
-    a: 'Every transaction pays a small fee to the blockchain network, not to Honey. Fees rise and fall with demand. Honey picks a fee automatically; you can change this in Settings › Advanced › Network cost.',
+    a: 'Every transaction pays a small fee to the blockchain network, not to Honey. Fees rise and fall with demand. Honey picks a fee automatically.',
+    // Settings › Advanced › Network cost is hidden live (lib/surface UNWIRED_SETTINGS), so
+    // the answer stopped pointing there (2026-11-14). Was: "…automatically; you can change
+    // this in Settings › Advanced › Network cost."
   },
   {
     q: 'What are Honey Jars?',

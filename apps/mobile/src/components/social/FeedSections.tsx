@@ -230,8 +230,18 @@ export function PersonResult({
   const people = peopleResults(query, server, known, exclude);
   const any = people.length > 0;
   const searching = peopleQuery(query) != null && server === undefined;
-  useEffect(() => onFound?.(any), [any, onFound]);
-  useEffect(() => onSearching?.(searching), [searching, onSearching]);
+  // useEffect(() => onFound?.(any), [any, onFound]);
+  // useEffect(() => onSearching?.(searching), [searching, onSearching]);
+  // Says false on the way out, so the page isn't left with a People heading or a
+  // skeleton from a result that's gone (2026-11-14).
+  useEffect(() => {
+    onFound?.(any);
+    return () => onFound?.(false);
+  }, [any, onFound]);
+  useEffect(() => {
+    onSearching?.(searching);
+    return () => onSearching?.(false);
+  }, [searching, onSearching]);
   if (!any) return null;
   return (
     <>

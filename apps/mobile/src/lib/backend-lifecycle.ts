@@ -5,6 +5,7 @@ import {
   backendVisibility,
   backendWalletChanged,
   clearBackendSession,
+  forgetRemovedWalletSessions,
   refreshResumeAvailability,
   resumeBackendSession,
   suspendBackendSession,
@@ -26,6 +27,8 @@ async function staySignedIn() {
     if (!(await refreshResumeAvailability())) return;
     const session = backendSession.get();
     if (session.profile || session.busy || session.review) return;
+    // Covers a switch back to a wallet that was signed in, not only the cold start.
+    restoring.set(true);
     await resumeBackendSession({ silent: true });
   } finally {
     restoring.set(false);
@@ -41,6 +44,18 @@ export const restoringSession = createStore(true);
 const restoring = restoringSession;
 export const useRestoringSession = () => restoring.useValue();
 
+/**
+ * Hides Sign in while a saved session is about to resume: coming back from the background
+ * cleared the profile, and Sign in flashed up on every return (2026-11-14). Never for long.
+ */
+let holdTimer: ReturnType<typeof setTimeout> | undefined;
+function holdSignIn() {
+  if (!backendSession.get().resumeAvailable) return;
+  restoring.set(true);
+  clearTimeout(holdTimer);
+  holdTimer = setTimeout(() => restoring.set(false), 8000);
+}
+
 /** Wires the backend session to the app's lifecycle; returns the cleanup. */
 export function startBackendLifecycle() {
   backendVisibility(AppState.currentState);
@@ -48,9 +63,15 @@ export function startBackendLifecycle() {
   // launch's own placeholder → saved wallet step is loading, not switching wallets:
   // treating it as a switch forgot the saved session on every cold start (2026-11-13).
   let activeId: string | null = null;
+  // The wallets on this phone, once loaded: one leaving takes its saved session with it.
+  let walletIds: Set<string> | null = null;
+  const prune = () => void forgetRemovedWalletSessions().catch(() => {});
   const start = () => {
     if (activeId !== null || !walletLoad.get().ready) return;
     activeId = wallets.get().activeId;
+    walletIds = new Set(wallets.get().added.map((w) => w.id));
+    // Also catches a wallet removed on an earlier launch.
+    prune();
     void staySignedIn();
   };
   // Never keep Sign in hidden for long: a wallet load that failed, or a slow network.
@@ -61,9 +82,17 @@ export function startBackendLifecycle() {
     start();
   });
   const removeWallet = wallets.subscribe(() => {
+    if (walletIds) {
+      const now = new Set(wallets.get().added.map((w) => w.id));
+      const removed = [...walletIds].some((id) => !now.has(id));
+      walletIds = now;
+      if (removed) prune();
+    }
     if (activeId === null || activeId === wallets.get().activeId) return;
     activeId = wallets.get().activeId;
     backendWalletChanged();
+    // The wallet switched to may have its own saved session (switching back resumes it).
+    void staySignedIn();
   });
   let locked = appLock.get().enabled && !appLock.get().unlocked;
   const removeLock = appLock.subscribe(() => {
@@ -73,11 +102,15 @@ export function startBackendLifecycle() {
     locked = nowLocked;
   });
   const visibility = AppState.addEventListener('change', (state: AppStateStatus) => {
+    // Before the suspend clears the profile, so the app-switcher snapshot and the return
+    // don't show Sign in.
+    if (state === 'background' || state === 'active') holdSignIn();
     backendVisibility(state);
     if (state === 'active') void staySignedIn();
   });
   return () => {
     clearTimeout(giveUp);
+    clearTimeout(holdTimer);
     removeLoad();
     removeWallet();
     removeLock();

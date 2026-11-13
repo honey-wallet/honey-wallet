@@ -81,10 +81,10 @@ export default function NotificationsSheet() {
         align="center"
         first={<Text style={styles.title}>Turn on notifications</Text>}
         second={
-          <Text style={styles.body}>
-            Approve shared-wallet payments the moment they're asked for, and stay updated on
-            transactions and big price moves.
-          </Text>
+          // Promised shared-wallet approvals and price alerts, neither live (2026-11-14):
+          // Approve shared-wallet payments the moment they're asked for, and stay updated on
+          // transactions and big price moves.
+          <Text style={styles.body}>Know the moment money lands in your wallet or leaves it.</Text>
         }
       />
 
