@@ -657,3 +657,17 @@ it('revokes and deletes the saved session of a wallet removed from the phone', a
   // The live session of the wallet still here is untouched.
   expect(backendSessionToken()).toBe('e'.repeat(64));
 });
+
+it('keeps every saved session when the wallet list reads back empty', async () => {
+  mocks.accounts.mockResolvedValue([{ id: 'real', addresses: { evm: address } }]);
+  await prepareBackendSignIn();
+  await approveBackendSignIn();
+  mocks.signOut.mockClear();
+  mocks.refresh.mockClear();
+  // The keychain isn't readable yet: no wallets come back.
+  mocks.accounts.mockResolvedValue([]);
+  await forgetRemovedWalletSessions();
+  expect(stored()).toContain('c'.repeat(64));
+  expect(mocks.refresh).not.toHaveBeenCalled();
+  expect(mocks.signOut).not.toHaveBeenCalled();
+});

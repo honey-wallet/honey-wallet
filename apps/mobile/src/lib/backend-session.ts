@@ -657,7 +657,11 @@ export async function forgetWalletSession(accountId: string) {
 /** Forgets the saved session of every wallet whose keys are no longer on this phone. */
 export async function forgetRemovedWalletSessions() {
   if (isExtensionTarget()) return;
-  const present = new Set((await loadAccounts()).map((account) => account.id));
+  const accounts = await loadAccounts();
+  // No wallets read back: the keychain may not be readable yet (e.g. before first unlock).
+  // A real sign-out already forgets every session, so never prune from an empty read.
+  if (accounts.length === 0) return;
+  const present = new Set(accounts.map((account) => account.id));
   const families = await serially(readFamilies);
   await Promise.all(
     Object.keys(families)
