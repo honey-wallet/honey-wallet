@@ -54,3 +54,17 @@ export function signedPct(fraction: number, minus = '-') {
 
 /** A chance: "<1%" under one percent, as Polymarket writes it; otherwise a whole percentage. */
 export const chanceText = (v: number) => (v < 0.01 ? '<1%' : `${Math.round(v * 100)}%`);
+
+/**
+ * A share of a balance for the keypad, rounded down at `decimals` places, never up past
+ * what's held (money audit 8: `toFixed` rounded 0.123456789 up to 0.12345679). Read from
+ * the number's shortest decimal text, so 0.29 stays 0.29 rather than floating to 0.28.
+ */
+export function floorNumber(n: number, decimals: number) {
+  if (!(n > 0) || !Number.isFinite(n)) return '0';
+  let s = String(n);
+  if (/e/i.test(s)) s = n.toFixed(20);
+  const [int = '0', frac = ''] = s.split('.');
+  const kept = frac.slice(0, Math.max(0, decimals)).replace(/0+$/, '');
+  return kept ? `${int}.${kept}` : int;
+}
