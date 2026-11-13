@@ -497,6 +497,12 @@ const swap = (over: Record<string, unknown> = {}) => ({
 describe('verifySwapWithOneClick', () => {
   it('accepts a deposit address 1Click says pays and refunds this wallet', async () => {
     await expect(verifySwapWithOneClick(swap(), oneClick())).resolves.toBe(25);
+    const own = oneClick({
+      appFees: [
+        { recipient: '5880ad2b362620fadf759cbceb1cd5737ce8c6ed7fb8e9942881e6731f9247dd', fee: 20 },
+      ],
+    });
+    await expect(verifySwapWithOneClick(swap(), own)).resolves.toBe(25);
   });
 
   it('refuses when 1Click’s record differs in any term, or 1Click is down', async () => {
@@ -513,6 +519,16 @@ describe('verifySwapWithOneClick', () => {
       oneClick({}, { minAmountOut: '1' }),
       oneClick({}, { depositAddress: OTHER }),
       oneClick({}, { depositMemo: '123' }),
+      // A fee to anyone but 1Click's own small entry (money audit 2).
+      oneClick({ appFees: [{ recipient: 'mallory.near', fee: 4000 }] }),
+      oneClick({
+        appFees: [
+          {
+            recipient: '5880ad2b362620fadf759cbceb1cd5737ce8c6ed7fb8e9942881e6731f9247dd',
+            fee: 30,
+          },
+        ],
+      }),
     ])
       await expect(verifySwapWithOneClick(swap(), fetcher)).rejects.toThrow('The quote changed');
     await expect(verifySwapWithOneClick(swap(), oneClick({}, {}, false))).rejects.toThrow(

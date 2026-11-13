@@ -30,6 +30,7 @@ import { backendSessionToken } from '@/lib/backend-session';
 import {
   atomic,
   checkDeadline,
+  checkOneClickFees,
   checkOneClickRecord,
   checkOneClickTerms,
   DEADLINE_MARGIN_MS,
@@ -677,6 +678,8 @@ export async function verifySwapWithOneClick(
   // Before paying: 1Click must still be waiting for this deposit, never already paid.
   if (opts.unpaid && record.status !== 'PENDING_DEPOSIT') throw alreadyUsed();
   checkOneClickTerms(record, swap);
+  // No fee is declared on a swap: only 1Click's own small entry may be there (money audit 2).
+  checkOneClickFees(record, null);
   const t = record.quote.timeEstimate;
   return typeof t === 'number' && Number.isFinite(t) && t > 0 && t < 24 * 3600 ? t : null;
 }

@@ -55,6 +55,7 @@ import {
   atomic,
   quoteChanged as changed,
   checkDeadline,
+  checkOneClickFees,
   checkOneClickRecord,
   checkOneClickTerms,
   DEADLINE_MARGIN_MS,
@@ -957,6 +958,8 @@ export async function verifyWithOneClick(
     amountIn: leg.amountIn,
   });
   checkOneClickTerms(record, leg);
+  // No fee is declared on a jar buy: only 1Click's own small entry may be there (money audit 2).
+  checkOneClickFees(record, null);
 }
 
 /**
