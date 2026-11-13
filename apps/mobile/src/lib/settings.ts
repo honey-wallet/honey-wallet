@@ -85,7 +85,7 @@ export const settings = createStore<Settings>(
     earnPromo: true,
     simulateFailures: false,
     copyAmount: 5,
-    jarVisibility: 'private',
+    jarVisibility: 'members',
     jarCopyFee: 10,
     jarSlippage: 1,
   },
@@ -99,20 +99,19 @@ export const COPY_STEPS = [1, 2, 5, 10, 25, 50, 100, 250, 500, 1000] as const;
 
 /** Who can see a jar: Launch your jar's choices, and the default picked in Settings. */
 export const JAR_VISIBILITY: { id: Visibility; icon: IconName; title: string; hint: string }[] = [
-  { id: 'members', icon: 'lock', title: 'Only members', hint: 'Private to you and your friends' },
-  {
-    id: 'private',
-    icon: 'eyeSlash',
-    title: 'Returns only',
-    hint: 'Others see how it does, not what it holds',
-  },
+  { id: 'members', icon: 'lock', title: 'Only members', hint: 'Just you and your friends' },
+  // "Returns only" is gone (2026-11-13): only Everyone's jars reach the Feed, so a
+  // half-public jar had nowhere to show. Old 'private' choices read as Only members.
   {
     id: 'public',
     icon: 'globe',
     title: 'Everyone',
-    hint: 'The idea and holdings are public; anyone can copy',
+    hint: 'Posted to the Feed; anyone can copy',
   },
 ];
+
+/** A saved choice from before Returns only went away. */
+export const shownVisibility = (v: Visibility): Visibility => (v === 'private' ? 'members' : v);
 
 /** Your cut of copiers' profit (%), and the max slippage on a jar's buys (%). */
 export const JAR_FEES = [5, 10, 15, 20] as const;

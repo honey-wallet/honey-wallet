@@ -36,7 +36,7 @@ import { formatUsd } from '@/lib/mock-wallet';
 import { memberName, propose, useActiveMultisig } from '@/lib/multisig';
 import { SHEET_EXIT } from '@/lib/navigation';
 import { useProfile } from '@/lib/profile';
-import { JAR_VISIBILITY, settings, useSettings } from '@/lib/settings';
+import { JAR_VISIBILITY, settings, shownVisibility, useSettings } from '@/lib/settings';
 import { TEST_MODE } from '@/lib/test-mode';
 import {
   copyProposal,
@@ -161,7 +161,9 @@ export default function NewThesisSheet() {
     setText(next.thesis);
     setStep(openAt);
   }, [copied, proposal, openAt]);
-  const [visibility, setVisibility] = useState<Visibility>(() => settings.get().jarVisibility);
+  const [visibility, setVisibility] = useState<Visibility>(() =>
+    shownVisibility(settings.get().jarVisibility),
+  );
   // Friends picked in the "Add friends" tray; a fresh launch starts with just you.
   const friends = friendPicks.useValue();
   useEffect(() => {
