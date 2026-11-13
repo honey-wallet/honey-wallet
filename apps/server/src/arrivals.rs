@@ -42,6 +42,22 @@
 //! - A transfer from a deposit address Honey quoted this person for a swap or jar buy
 //!   is a refund ("Refund arrived").
 //! - Logs and metrics never carry an address: wallets are named by a hash.
+//!
+//! # Who hears what
+//! Anyone signed in can declare any address with their push token, so a declared
+//! address proves nothing. Only EVM addresses are proven (SIWE sign-in or linking, in
+//! `wallet_memberships`), and a watched wallet is someone's own when its EVM address is
+//! one of theirs (its Solana and NEAR addresses come from the same key on that phone).
+//! - Each person watching a wallet gets their own message. Its owners get the full one:
+//!   the sender, the transaction and whether it's their refund (only ever a deposit
+//!   Honey quoted that same person). Anyone else gets the amount only ("Received 5
+//!   USDC on Base"), which is public chain data, so a phone's other, unlinked wallets
+//!   still notify.
+//! - A sender is named by handle only through an address its person proved; otherwise
+//!   by its short address.
+//! - Each person counts for at most [`MAX_WALLETS_PER_PERSON`] wallets per cycle, their
+//!   own ones first, and wallets are taken owned first, then one per person in turn,
+//!   so nobody can push others out of the [`MAX_WALLETS`] read each cycle.
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
@@ -77,7 +93,9 @@ const BASELINE_TTL: Duration = Duration::from_secs(35 * 24 * 60 * 60);
 /// Smaller arrivals (in US dollars) are dust.
 pub const MIN_USD: f64 = 0.01;
 /// Wallets read per cycle, at most.
-const MAX_WALLETS: i64 = 5_000;
+pub const MAX_WALLETS: i64 = 5_000;
+/// Wallets one person counts for per cycle, across all their phones.
+pub const MAX_WALLETS_PER_PERSON: i64 = 5;
 const CONCURRENCY: usize = 4;
 /// A token missing from a chain that answered is kept this many readings.
 const MISSES_KEPT: u8 = 2;
@@ -517,41 +535,218 @@ pub fn match_transfer<'a>(
         })
 }
 
-/// One watched wallet: its addresses, the phones watching it and their people.
+/// One person watching a wallet, with their phones there.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Watcher {
+    pub user: Uuid,
+    /// They proved the wallet's EVM address (`wallet_memberships`).
+    pub owner: bool,
+    pub tokens: Vec<String>,
+}
+
+/// One watched wallet: its addresses and the people watching it.
 #[derive(Clone, Debug)]
 pub struct Watched {
     pub id: String,
     pub addresses: Addresses,
-    pub tokens: Vec<String>,
-    pub users: Vec<Uuid>,
+    pub watchers: Vec<Watcher>,
 }
 
-/// (push token, user, evm, solana, near).
-pub type WatchRow = (String, Uuid, Option<String>, Option<String>, Option<String>);
+/// (push token, user, evm, solana, near, the user proved the evm address).
+pub type WatchRow = (
+    String,
+    Uuid,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    bool,
+);
 
-/// Rows of watching phones grouped into wallets.
+/// Rows of watching phones grouped into wallets, in the order the rows came.
 pub fn group_watched(rows: Vec<WatchRow>) -> Vec<Watched> {
-    let mut by: BTreeMap<String, Watched> = BTreeMap::new();
-    for (token, user, evm, solana, near) in rows {
+    let mut wallets: Vec<Watched> = Vec::new();
+    let mut at: HashMap<String, usize> = HashMap::new();
+    for (token, user, evm, solana, near, owner) in rows {
         let Ok(addresses) = Addresses::parse(evm.as_deref(), solana.as_deref(), near.as_deref())
         else {
             continue;
         };
         let id = wallet_id(&addresses);
-        let w = by.entry(id.clone()).or_insert_with(|| Watched {
-            id,
-            addresses,
-            tokens: vec![],
-            users: vec![],
+        let i = *at.entry(id.clone()).or_insert_with(|| {
+            wallets.push(Watched {
+                id,
+                addresses,
+                watchers: vec![],
+            });
+            wallets.len() - 1
         });
-        if !w.tokens.contains(&token) {
-            w.tokens.push(token);
-        }
-        if !w.users.contains(&user) {
-            w.users.push(user);
+        let watchers = &mut wallets[i].watchers;
+        let watcher = match watchers.iter().position(|w| w.user == user) {
+            Some(j) => &mut watchers[j],
+            None => {
+                watchers.push(Watcher {
+                    user,
+                    owner: false,
+                    tokens: vec![],
+                });
+                watchers.last_mut().expect("just pushed")
+            }
+        };
+        watcher.owner |= owner;
+        if !watcher.tokens.contains(&token) {
+            watcher.tokens.push(token);
         }
     }
-    by.into_values().collect()
+    wallets
+}
+
+/// The wallets of phones seen (registered) in the last 30 days, at most `limit`, and
+/// at most [`MAX_WALLETS_PER_PERSON`] per person (their owned ones first). Owned
+/// wallets come first, then one per person in turn, so declaring many addresses (or
+/// someone else's) never pushes anyone else's wallet out.
+pub async fn watched_wallets(pool: &PgPool, limit: i64) -> anyhow::Result<Vec<Watched>> {
+    let rows: Vec<WatchRow> = sqlx::query_as(
+        "WITH watching AS (
+             SELECT t.token, t.user_id, t.updated_at, w.evm, w.solana, w.near
+             FROM push_tokens t JOIN push_wallets w ON w.token = t.token
+             WHERE t.updated_at > clock_timestamp() - interval '30 days'
+             UNION ALL
+             SELECT t.token, t.user_id, t.updated_at, '0x' || encode(m.address, 'hex'),
+                    NULL, NULL
+             FROM push_tokens t JOIN wallet_memberships m ON m.user_id = t.user_id
+             WHERE NOT t.wallets_declared
+               AND t.updated_at > clock_timestamp() - interval '30 days'
+         ), per_person AS (
+             SELECT user_id, evm, solana, near, max(updated_at) AS seen,
+                    EXISTS (SELECT 1 FROM wallet_memberships m
+                            WHERE m.user_id = watching.user_id
+                              AND m.address = decode(substr(watching.evm, 3), 'hex')) AS owned
+             FROM watching GROUP BY user_id, evm, solana, near
+         ), ranked AS (
+             SELECT *,
+                    row_number() OVER (PARTITION BY user_id
+                        ORDER BY owned DESC, seen DESC, evm, solana, near) AS pick,
+                    row_number() OVER (PARTITION BY user_id, owned
+                        ORDER BY seen DESC, evm, solana, near) AS turn
+             FROM per_person
+         ), chosen AS (
+             SELECT * FROM ranked WHERE pick <= $2
+             ORDER BY owned DESC, turn, seen DESC, user_id
+             LIMIT $1
+         )
+         SELECT w.token, w.user_id, w.evm, w.solana, w.near, c.owned
+         FROM chosen c JOIN watching w ON w.user_id = c.user_id
+             AND w.evm IS NOT DISTINCT FROM c.evm
+             AND w.solana IS NOT DISTINCT FROM c.solana
+             AND w.near IS NOT DISTINCT FROM c.near
+         ORDER BY c.owned DESC, c.turn, c.seen DESC, c.user_id, w.token",
+    )
+    .bind(limit)
+    .bind(MAX_WALLETS_PER_PERSON)
+    .fetch_all(pool)
+    .await
+    .context("read watched wallets")?;
+    let mut wallets = group_watched(rows);
+    wallets.truncate(usize::try_from(limit).unwrap_or(0));
+    Ok(wallets)
+}
+
+/// A Honey handle for the sender of a transfer: only when `address` is an EVM address
+/// its person proved (`wallet_memberships`) and their profile is public, and never the
+/// recipient themselves. Declared-only addresses (`push_wallets`) never name anyone.
+pub async fn sender_handle(pool: &PgPool, address: &str, recipient: Uuid) -> Option<String> {
+    let hex = address.strip_prefix("0x")?;
+    let raw = hex::decode(hex.to_ascii_lowercase()).ok()?;
+    if raw.len() != 20 {
+        return None;
+    }
+    sqlx::query_scalar(
+        "SELECT p.handle FROM social_profiles p
+         WHERE p.public_profile AND p.user_id <> $2 AND p.user_id IN (
+             SELECT user_id FROM wallet_memberships WHERE address = $1)
+         LIMIT 1",
+    )
+    .bind(raw)
+    .bind(recipient)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+}
+
+/// An arrival with the transfer behind it, before it's told to anyone.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Found {
+    pub arrival: Arrival,
+    pub tx_hash: Option<String>,
+    /// The sender's address, from the chain's history.
+    pub from: Option<String>,
+}
+
+/// What an owner hears about one found arrival beyond the amount.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Detail {
+    /// From a deposit address Honey quoted this same person.
+    pub refund: bool,
+    /// The sender's handle, when they proved the address.
+    pub handle: Option<String>,
+}
+
+/// The arrivals as one person hears them: with `details` (an owner's, one per found
+/// arrival) the sender, hash and refund; without, the amount only.
+pub fn told_for(found: &[Found], details: Option<&[Detail]>) -> Vec<Told> {
+    found
+        .iter()
+        .enumerate()
+        .map(|(i, f)| match details.and_then(|d| d.get(i)) {
+            Some(detail) => Told {
+                arrival: f.arrival.clone(),
+                tx_hash: f.tx_hash.clone(),
+                sender: f.from.as_deref().map(|from| match &detail.handle {
+                    Some(handle) => format!("@{handle}"),
+                    None => short_address(from),
+                }),
+                refund: detail.refund,
+            },
+            None => Told {
+                arrival: f.arrival.clone(),
+                tx_hash: None,
+                sender: None,
+                refund: false,
+            },
+        })
+        .collect()
+}
+
+/// One push per phone watching the wallet, each built for its own person: owners with
+/// their details (keyed by person), everyone else the amount only.
+pub fn messages_for(
+    wallet: &Watched,
+    found: &[Found],
+    details: &HashMap<Uuid, Vec<Detail>>,
+) -> Vec<Value> {
+    let mut messages = Vec::new();
+    for watcher in &wallet.watchers {
+        let personal = watcher
+            .owner
+            .then(|| details.get(&watcher.user).map(Vec::as_slice))
+            .flatten();
+        let Some((text, data)) = compose(&told_for(found, personal)) else {
+            continue;
+        };
+        for token in &watcher.tokens {
+            messages.push(json!({
+                "to": token,
+                "title": "Honey",
+                "body": text,
+                "sound": "default",
+                "priority": "high",
+                "channelId": "default",
+                "data": data,
+            }));
+        }
+    }
+    messages
 }
 
 fn jitter(max: Duration) -> Duration {
@@ -624,35 +819,13 @@ impl ArrivalWatcher {
         })
     }
 
-    /// The wallets of phones seen (registered) in the last 30 days.
-    async fn watched(&self) -> anyhow::Result<Vec<Watched>> {
-        let rows: Vec<WatchRow> = sqlx::query_as(
-            "SELECT t.token, t.user_id, w.evm, w.solana, w.near
-                 FROM push_tokens t JOIN push_wallets w ON w.token = t.token
-                 WHERE t.updated_at > clock_timestamp() - interval '30 days'
-                 UNION ALL
-                 SELECT t.token, t.user_id, '0x' || encode(m.address, 'hex'), NULL, NULL
-                 FROM push_tokens t JOIN wallet_memberships m ON m.user_id = t.user_id
-                 WHERE NOT t.wallets_declared
-                   AND t.updated_at > clock_timestamp() - interval '30 days'
-                 LIMIT $1",
-        )
-        .bind(MAX_WALLETS * 2)
-        .fetch_all(&self.pool)
-        .await
-        .context("read watched wallets")?;
-        let mut wallets = group_watched(rows);
-        wallets.truncate(MAX_WALLETS as usize);
-        Ok(wallets)
-    }
-
     /// One pass over every watched wallet; false when another replica has this cycle.
     pub async fn cycle(&self) -> anyhow::Result<bool> {
         let lock = self.every.mul_f32(0.9).max(Duration::from_secs(1));
         if !self.store.claim("cycle", lock).await? {
             return Ok(false);
         }
-        let wallets = self.watched().await?;
+        let wallets = watched_wallets(&self.pool, MAX_WALLETS).await?;
         self.metrics.arrival_wallets.set(wallets.len() as i64);
         let spacing =
             (self.every.mul_f32(0.75) / wallets.len().max(1) as u32).min(Duration::from_secs(2));
@@ -694,12 +867,13 @@ impl ArrivalWatcher {
     }
 
     /// Finds each arrival's transfer (hash, sender), drops ones already told by hash,
-    /// and pushes the rest to every phone watching the wallet.
+    /// and pushes the rest to every phone watching the wallet: owners hear the sender
+    /// and their own refunds, everyone else the amount only.
     async fn tell(&self, wallet: &Watched, arrivals: Vec<Arrival>) -> anyhow::Result<()> {
         let history = self.portfolio.activity(&wallet.addresses).await.items;
         let now_secs = time::OffsetDateTime::now_utc().unix_timestamp();
         let mut used = BTreeSet::new();
-        let mut told = Vec::new();
+        let mut found = Vec::new();
         for arrival in arrivals {
             let item = match_transfer(&arrival, &history, &mut used, now_secs);
             if let Some(item) = item {
@@ -712,50 +886,39 @@ impl ArrivalWatcher {
                     continue;
                 }
             }
-            let from = item.and_then(|i| i.counterparty.clone());
-            let refund = match &from {
-                Some(from) => self.quoted_deposit(from, &wallet.users).await,
-                None => false,
-            };
-            let sender = match &from {
-                Some(from) => Some(
-                    self.handle_of(from, &wallet.users)
-                        .await
-                        .map(|h| format!("@{h}"))
-                        .unwrap_or_else(|| short_address(from)),
-                ),
-                None => None,
-            };
-            told.push(Told {
+            found.push(Found {
                 arrival,
                 tx_hash: item.map(|i| i.hash.clone()),
-                sender,
-                refund,
+                from: item.and_then(|i| i.counterparty.clone()),
             });
         }
-        let Some((text, data)) = compose(&told) else {
+        if found.is_empty() {
             return Ok(());
-        };
-        let messages: Vec<Value> = wallet
-            .tokens
-            .iter()
-            .map(|token| {
-                json!({
-                    "to": token,
-                    "title": "Honey",
-                    "body": text,
-                    "sound": "default",
-                    "priority": "high",
-                    "channelId": "default",
-                    "data": data,
-                })
-            })
-            .collect();
+        }
+        // Details are only looked up for owners, each for themselves.
+        let mut details = HashMap::new();
+        for watcher in wallet.watchers.iter().filter(|w| w.owner) {
+            let mut mine = Vec::with_capacity(found.len());
+            for f in &found {
+                mine.push(match &f.from {
+                    Some(from) => Detail {
+                        refund: self.quoted_deposit(from, watcher.user).await,
+                        handle: sender_handle(&self.pool, from, watcher.user).await,
+                    },
+                    None => Detail::default(),
+                });
+            }
+            details.insert(watcher.user, mine);
+        }
+        let messages = messages_for(wallet, &found, &details);
+        if messages.is_empty() {
+            return Ok(());
+        }
         let accepted = self.push.send_all(&messages).await?;
         self.metrics.arrival("pushed", accepted as u64);
         tracing::info!(
             wallet = %wallet.id,
-            arrivals = told.len(),
+            arrivals = found.len(),
             devices = messages.len(),
             accepted,
             "arrival push sent"
@@ -763,39 +926,10 @@ impl ArrivalWatcher {
         Ok(())
     }
 
-    /// A Honey handle for the sender when they're a Honey person with a public profile
-    /// (never the recipient themselves).
-    async fn handle_of(&self, address: &str, recipients: &[Uuid]) -> Option<String> {
-        let evm = address
-            .starts_with("0x")
-            .then(|| address.to_ascii_lowercase());
-        let raw: Vec<u8> = evm
-            .as_deref()
-            .and_then(|a| hex::decode(&a[2..]).ok())
-            .unwrap_or_default();
-        let key = evm.unwrap_or_else(|| address.to_string());
-        sqlx::query_scalar(
-            "SELECT p.handle FROM social_profiles p
-             WHERE p.public_profile AND NOT (p.user_id = ANY($3)) AND p.user_id IN (
-                 SELECT user_id FROM wallet_memberships WHERE address = $1
-                 UNION
-                 SELECT t.user_id FROM push_wallets w JOIN push_tokens t ON t.token = w.token
-                 WHERE w.evm = $2 OR w.solana = $2 OR w.near = $2)
-             LIMIT 1",
-        )
-        .bind(raw)
-        .bind(key)
-        .bind(recipients)
-        .fetch_optional(&self.pool)
-        .await
-        .ok()
-        .flatten()
-    }
-
-    /// Whether `from` is a deposit address Honey quoted one of these people for a swap
-    /// or jar buy in the last day (`jar_buys` records the owner): money coming back
-    /// from it is a refund.
-    async fn quoted_deposit(&self, from: &str, users: &[Uuid]) -> bool {
+    /// Whether `from` is a deposit address Honey quoted this person for a swap or jar
+    /// buy in the last day (`jar_buys` records the owner): money coming back from it is
+    /// their refund.
+    async fn quoted_deposit(&self, from: &str, user: Uuid) -> bool {
         let Some(redis) = &self.redis else {
             return false;
         };
@@ -809,7 +943,7 @@ impl ArrivalWatcher {
                 .await
                 .ok()
                 .flatten();
-            if owner.is_some_and(|o| users.iter().any(|u| u.to_string() == o)) {
+            if owner.is_some_and(|o| o == user.to_string()) {
                 return true;
             }
         }
@@ -1204,16 +1338,135 @@ mod tests {
         let (u1, u2) = (Uuid::from_u128(1), Uuid::from_u128(2));
         let evm = Some("0xAbCdEf0000000000000000000000000000000001".to_string());
         let rows = vec![
-            ("t1".into(), u1, evm.clone(), None, None),
-            ("t2".into(), u1, evm.clone(), None, None),
-            ("t3".into(), u2, None, None, Some("bob.near".into())),
-            ("t4".into(), u2, Some("nope".into()), None, None),
+            ("t3".into(), u2, None, None, Some("bob.near".into()), false),
+            ("t1".into(), u1, evm.clone(), None, None, true),
+            ("t2".into(), u1, evm.clone(), None, None, true),
+            ("t5".into(), u2, evm.clone(), None, None, false),
+            ("t4".into(), u2, Some("nope".into()), None, None, false),
         ];
         let wallets = group_watched(rows);
         assert_eq!(wallets.len(), 2);
-        let shared = wallets.iter().find(|w| w.tokens.len() == 2).unwrap();
-        assert_eq!(shared.users, vec![u1]);
+        // The order of the rows (fairness) is kept.
+        assert_eq!(wallets[0].addresses.near.as_deref(), Some("bob.near"));
+        let shared = &wallets[1];
+        assert_eq!(
+            shared.watchers,
+            vec![
+                Watcher {
+                    user: u1,
+                    owner: true,
+                    tokens: vec!["t1".into(), "t2".into()]
+                },
+                Watcher {
+                    user: u2,
+                    owner: false,
+                    tokens: vec!["t5".into()]
+                },
+            ]
+        );
         assert_eq!(shared.id.len(), 32);
         assert!(!shared.id.contains("abcdef"));
+    }
+
+    /// One wallet watched by its owner (two phones) and by someone who only declared it.
+    fn contested() -> (Watched, Uuid, Uuid) {
+        let (owner, other) = (Uuid::from_u128(1), Uuid::from_u128(2));
+        let evm = Some("0xabcdef0000000000000000000000000000000001".to_string());
+        let wallet = group_watched(vec![
+            ("owner-a".into(), owner, evm.clone(), None, None, true),
+            ("owner-b".into(), owner, evm.clone(), None, None, true),
+            ("other".into(), other, evm, None, None, false),
+        ])
+        .remove(0);
+        (wallet, owner, other)
+    }
+
+    fn found(from: &str) -> Found {
+        Found {
+            arrival: arrival("Base", "USDC", 5.0, Some(5.0)),
+            tx_hash: Some("0xhash".into()),
+            from: Some(from.into()),
+        }
+    }
+
+    fn by_token(messages: &[Value]) -> HashMap<String, Value> {
+        messages
+            .iter()
+            .map(|m| (m["to"].as_str().unwrap().to_string(), m.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn only_owners_hear_the_sender_and_their_refund() {
+        let (wallet, owner, other) = contested();
+        let sender = "0x8f3a00000000000000000000000000000000c21e";
+        let mut details = HashMap::new();
+        details.insert(
+            owner,
+            vec![Detail {
+                refund: false,
+                handle: Some("alice".into()),
+            }],
+        );
+        // Even details looked up for a non-owner are never used.
+        details.insert(
+            other,
+            vec![Detail {
+                refund: true,
+                handle: Some("leak".into()),
+            }],
+        );
+        let messages = by_token(&messages_for(&wallet, &[found(sender)], &details));
+        assert_eq!(messages.len(), 3);
+        for token in ["owner-a", "owner-b"] {
+            assert_eq!(
+                messages[token]["body"],
+                "Received 5 USDC on Base from @alice"
+            );
+            assert_eq!(messages[token]["data"]["txHash"], "0xhash");
+        }
+        let generic = &messages["other"];
+        assert_eq!(generic["body"], "Received 5 USDC on Base");
+        assert!(generic["data"].get("txHash").is_none());
+        assert!(generic["data"].get("refund").is_none());
+        assert!(!generic.to_string().contains("leak"));
+        assert!(!generic.to_string().contains("0x8f3a"));
+    }
+
+    #[test]
+    fn a_refund_reaches_only_the_owner_it_was_quoted_for() {
+        let (wallet, owner, _) = contested();
+        let mut details = HashMap::new();
+        details.insert(
+            owner,
+            vec![Detail {
+                refund: true,
+                handle: None,
+            }],
+        );
+        let messages = by_token(&messages_for(&wallet, &[found("0xdeposit")], &details));
+        assert_eq!(
+            messages["owner-a"]["body"],
+            "Refund arrived: 5 USDC on Base"
+        );
+        assert_eq!(messages["owner-a"]["data"]["refund"], true);
+        assert_eq!(messages["other"]["body"], "Received 5 USDC on Base");
+        assert!(messages["other"]["data"].get("refund").is_none());
+        // An owner whose details weren't found still hears the amount, never more.
+        let messages = by_token(&messages_for(
+            &wallet,
+            &[found("0xdeposit")],
+            &HashMap::new(),
+        ));
+        assert_eq!(messages["owner-a"]["body"], "Received 5 USDC on Base");
+        // Without a sender handle an owner sees the short address (public data).
+        let mut plain = HashMap::new();
+        plain.insert(owner, vec![Detail::default()]);
+        let sender = "0x8f3a00000000000000000000000000000000c21e";
+        let messages = by_token(&messages_for(&wallet, &[found(sender)], &plain));
+        assert_eq!(
+            messages["owner-b"]["body"],
+            "Received 5 USDC on Base from 0x8f3a…c21e"
+        );
     }
 }
