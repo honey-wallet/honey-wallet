@@ -196,6 +196,18 @@ describe('a deposit 1Click never saw, past its deadline (money audit 7)', () => 
     expect(legsMoving([failed as Leg, dropped as Leg])).toBe(false);
   });
 
+  it('keeps the hash of a leg settled from its chain, so a late SUCCESS still wins (nov14-c audit 2)', async () => {
+    const settled = { ...sent, status: 'NOT_SENT' as const };
+    const [won] = await refreshJarBuy([settled], {
+      status: vi.fn(async () => ({ status: 'SUCCESS', amountOut: '7' }) as never),
+      now: () => NOW,
+    });
+    expect(won).toMatchObject({ status: 'SUCCESS', amountOut: '7' });
+    // Still waiting at 1Click: it stays settled, never back to moving.
+    const [kept] = await refreshJarBuy([settled], { status: pending, now: () => NOW });
+    expect(kept?.status).toBe('NOT_SENT');
+  });
+
   it('doesn’t look before the deadline and grace have passed', async () => {
     const depositTx = vi.fn(async () => 'missing' as const);
     const [kept] = await refreshJarBuy([sent], {
