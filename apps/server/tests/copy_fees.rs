@@ -341,6 +341,13 @@ async fn every_sell_of_copied_units_pays_whatever_the_phone_says() {
     assert!(fees_of(&after).is_empty());
     assert_eq!(lot_rows(&pool, copier).await[0].2, BOUGHT);
 
+    // Ana sees it: her share as 1Click paid it (167 of the 333 bps, on $150 = $2.505),
+    // and the one copy, counted when the copy buy settled.
+    assert_eq!(
+        copy_fees::earnings(&pool, ana).await.unwrap(),
+        vec![(jar, 2_505_000, 1)]
+    );
+
     db.close().await;
 }
 
@@ -521,6 +528,19 @@ async fn a_loss_a_refund_or_no_wallet_means_no_fee() {
     assert!(fees_of(&quote).is_empty());
     let rows = lot_rows(&pool, copier).await;
     assert_eq!(rows[0].2, BOUGHT, "the loss-making sell counted as sold");
+
+    // A jar that's unpublished (or can't be copied) records nothing either.
+    let gone = jar(&pool, creator, 10).await;
+    sqlx::query("UPDATE social_jars SET unpublished_at = clock_timestamp() WHERE id = $1")
+        .bind(gone)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let before = lot_rows(&pool, copier).await.len();
+    let mut buy = request(USDC, ETH, BOUGHT_FOR);
+    buy.copy_of = Some(gone);
+    buys.quote(&me, buy).await.unwrap();
+    assert_eq!(lot_rows(&pool, copier).await.len(), before);
 
     // Copying your own jar records nothing.
     let mut own = request(USDC, ETH, BOUGHT_FOR);

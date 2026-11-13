@@ -1741,6 +1741,17 @@ export interface SocialCopyFeeAccount {
   nearAccount: string | null;
 }
 
+/**
+ * `GET /api/v1/social/me/copy-earnings`: what your published jars earned from copies,
+ * from sells NEAR Intents settled (your share as 1Click paid it), and each jar's copies
+ * (counted once a copy's buy settled).
+ */
+export interface SocialCopyEarnings {
+  nearAccount: string | null;
+  earnedUsd: number;
+  jars: { id: string; earnedUsd: number; copies: number }[];
+}
+
 export interface SocialHandleStatus {
   handle: string;
   valid: boolean;

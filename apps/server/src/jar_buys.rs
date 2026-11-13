@@ -93,6 +93,9 @@ pub struct LegQuote {
     /// 1Click's own deadline for the deposit address (it can be days past `deadline`).
     #[serde(skip)]
     pub one_click_deadline: Option<String>,
+    /// What 1Click echoed for each copy fee's recipient: (account, bps they receive).
+    #[serde(skip)]
+    pub copy_fees_received: Vec<(String, u64)>,
 }
 
 #[derive(Debug, Serialize)]
@@ -452,6 +455,18 @@ impl JarBuys {
         if let (Some(sale), Some(copier), Some(pool)) = (&sale, copier, &self.pool) {
             for (leg, part) in legs.iter().zip(sale) {
                 if !part.parts.is_empty() {
+                    // What each creator was paid (1Click's echo), split across their jars.
+                    let paid = |creator: uuid::Uuid| {
+                        let account = part.creators.iter().find(|(_, c)| *c == creator);
+                        let bps = account.and_then(|(a, _)| {
+                            leg.copy_fees_received
+                                .iter()
+                                .find(|(r, _)| r.eq_ignore_ascii_case(a))
+                                .map(|(_, bps)| u128::from(*bps))
+                        });
+                        bps.map_or(0, |bps| part.sale_micro * bps / 10_000)
+                    };
+                    let fees = copy_fees::received_by_jar(&part.shares, paid);
                     copy_fees::record_sale(
                         pool,
                         copier,
@@ -459,6 +474,7 @@ impl JarBuys {
                         &leg.deposit_address,
                         leg.one_click_deadline.as_deref(),
                         &part.parts,
+                        &fees,
                     )
                     .await?;
                 }
@@ -666,15 +682,19 @@ impl JarBuys {
                 continue;
             }
             let sale_usd = usd_value(tokens, asset, &leg.amount).ok_or(AppError::Busy)?;
-            let fees = copy_fees::leg_fees(
-                &lots,
-                &parts,
-                *units,
-                (sale_usd * 1e6).floor() as u128,
-                |c| recipients.get(&c).cloned().flatten(),
-            );
+            let sale_micro = (sale_usd * 1e6).floor() as u128;
+            let fees = copy_fees::leg_fees(&lots, &parts, *units, sale_micro, |c| {
+                recipients.get(&c).cloned().flatten()
+            });
+            let shares = copy_fees::jar_shares(&lots, &parts, *units, sale_micro);
             out.push(LegSale {
                 fees,
+                sale_micro,
+                shares,
+                creators: recipients
+                    .iter()
+                    .filter_map(|(c, a)| Some((a.clone()?, *c)))
+                    .collect(),
                 parts: parts
                     .into_iter()
                     .map(|(i, u)| (lots[i].deposit_address.clone(), u))
@@ -808,6 +828,12 @@ impl JarBuys {
 struct LegSale {
     fees: Vec<CopyFee>,
     parts: Vec<(String, u128)>,
+    /// The sell's value, micro-USD at 1Click's price.
+    sale_micro: u128,
+    /// Each (creator, jar)'s share of the fees, to split what 1Click paid them.
+    shares: Vec<(uuid::Uuid, uuid::Uuid, u128)>,
+    /// Creators by the account their fee is paid to.
+    creators: Vec<(String, uuid::Uuid)>,
 }
 
 /*
@@ -975,7 +1001,8 @@ fn check_quote(body: &Value, payload: &Value) -> Result<LegQuote, AppError> {
     }
     // A copy fee must reach the creator as asked, and nothing more may ride on it.
     // copy_fees::check_echo(request.get("appFees"), copy_fees::asked(payload)?.as_ref())?;
-    copy_fees::check_echoed(request.get("appFees"), &copy_fees::asked_fees(payload)?)?;
+    let asked_fees = copy_fees::asked_fees(payload)?;
+    copy_fees::check_echoed(request.get("appFees"), &asked_fees)?;
     // 1Click may re-format the timestamp (e.g. add milliseconds), so compare instants.
     let instant = |v: Option<&Value>| {
         v.and_then(Value::as_str)
@@ -1042,6 +1069,7 @@ fn check_quote(body: &Value, payload: &Value) -> Result<LegQuote, AppError> {
         // copy_fee: None,
         copy_fees: Vec::new(),
         one_click_deadline: text("deadline"),
+        copy_fees_received: copy_fees::received(request.get("appFees"), &asked_fees),
     })
 }
 

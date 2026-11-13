@@ -69,6 +69,8 @@ pub struct OpenLot {
     /// The jar's fee now.
     pub jar_pct: i16,
     pub creator: Uuid,
+    /// The published jar it copied.
+    pub jar: Uuid,
 }
 
 /// `a × b / c`, rounded down (f64 only past u128, an 18-decimal token in the quintillions).
@@ -172,6 +174,72 @@ pub fn leg_fees(
             pct,
             usd: (sale_micro_usd * bps / 10_000) as f64 / 1e6,
         })
+        .collect()
+}
+
+/// Each (creator, jar)'s share of a sell's fees, before the cap: the fee each copied lot
+/// earns, summed per jar. Splits what a creator was paid across their jars.
+pub fn jar_shares(
+    lots: &[OpenLot],
+    parts: &[(usize, u128)],
+    units_sold: u128,
+    sale_micro_usd: u128,
+) -> Vec<(Uuid, Uuid, u128)> {
+    let mut out: Vec<(Uuid, Uuid, u128)> = Vec::new();
+    if units_sold == 0 {
+        return out;
+    }
+    for &(i, units) in parts {
+        let Some(lot) = lots.get(i) else { continue };
+        let now = u8::try_from(lot.jar_pct.clamp(0, i16::from(MAX_FEE_PCT))).unwrap_or(0);
+        let pct = lot.fee_pct.min(now).min(MAX_FEE_PCT);
+        let basis = mul_div(units, lot.cost_micro_usd, lot.units);
+        let sale = mul_div(units, sale_micro_usd, units_sold);
+        let fee = sale.saturating_sub(basis) * u128::from(pct) / 100;
+        match out
+            .iter_mut()
+            .find(|(c, j, _)| *c == lot.creator && *j == lot.jar)
+        {
+            Some(entry) => entry.2 += fee,
+            None => out.push((lot.creator, lot.jar, fee)),
+        }
+    }
+    out
+}
+
+/// What 1Click echoed for each creator asked: (recipient, bps they receive).
+pub fn received(echoed: Option<&Value>, asked: &[(String, u64)]) -> Vec<(String, u64)> {
+    let entries = echoed.and_then(Value::as_array);
+    asked
+        .iter()
+        .filter_map(|(recipient, _)| {
+            let bps = entries?.iter().find_map(|e| {
+                e["recipient"]
+                    .as_str()
+                    .filter(|to| to.eq_ignore_ascii_case(recipient))
+                    .and(e["fee"].as_u64())
+            })?;
+            Some((recipient.clone(), bps))
+        })
+        .collect()
+}
+
+/// Splits each creator's received fee (micro-USD) across their jars by `shares`.
+pub fn received_by_jar(
+    shares: &[(Uuid, Uuid, u128)],
+    received_micro: impl Fn(Uuid) -> u128,
+) -> Vec<(Uuid, Uuid, u128)> {
+    shares
+        .iter()
+        .map(|&(creator, jar, share)| {
+            let total: u128 = shares
+                .iter()
+                .filter(|(c, _, _)| *c == creator)
+                .map(|s| s.2)
+                .sum();
+            (creator, jar, mul_div(received_micro(creator), share, total))
+        })
+        .filter(|s| s.2 > 0)
         .collect()
 }
 
@@ -287,12 +355,22 @@ fn unavailable(error: sqlx::Error) -> AppError {
 }
 
 /// The creator and fee of a published jar (also once unpublished: copies keep their terms).
+// pub async fn jar_terms(pool: &PgPool, jar: Uuid) -> Result<Option<(Uuid, i16)>, AppError> {
+//     sqlx::query_as("SELECT owner, copy_fee FROM social_jars WHERE id = $1")
+/// The creator and fee of a jar a copy buy can be recorded against: published, on a
+/// public profile, with copying on and its picks shown (as `record_copy` checks). Lots
+/// already recorded keep their terms if the jar later goes.
 pub async fn jar_terms(pool: &PgPool, jar: Uuid) -> Result<Option<(Uuid, i16)>, AppError> {
-    sqlx::query_as("SELECT owner, copy_fee FROM social_jars WHERE id = $1")
-        .bind(jar)
-        .fetch_optional(pool)
-        .await
-        .map_err(unavailable)
+    sqlx::query_as(
+        "SELECT j.owner, j.copy_fee FROM social_jars j
+         JOIN social_profiles p ON p.user_id = j.owner
+         WHERE j.id = $1 AND j.unpublished_at IS NULL AND p.public_profile
+           AND p.allow_copy AND p.show_holdings AND NOT j.hide_picks",
+    )
+    .bind(jar)
+    .fetch_optional(pool)
+    .await
+    .map_err(unavailable)
 }
 
 /// Where a creator's fees go: the NEAR Intents account of the first wallet they signed in
@@ -388,16 +466,47 @@ pub async fn settle_lot(
         Outcome::Done(None) => return Ok(()),
         Outcome::Void => ("void", None),
     };
-    sqlx::query(
+    // sqlx::query(
+    //     "UPDATE copy_buy_lots SET state = $2, units = $3::numeric, settled_at = clock_timestamp()
+    //      WHERE deposit_address = $1 AND state = 'quoted'",
+    // )
+    let mut tx = pool.begin().await.map_err(unavailable)?;
+    let lot: Option<(Uuid, Uuid)> = sqlx::query_as(
         "UPDATE copy_buy_lots SET state = $2, units = $3::numeric, settled_at = clock_timestamp()
-         WHERE deposit_address = $1 AND state = 'quoted'",
+         WHERE deposit_address = $1 AND state = 'quoted' RETURNING copier, jar_id",
     )
     .bind(deposit_address)
     .bind(state)
     .bind(units)
-    .execute(pool)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(unavailable)?;
+    // A copy counts (on the jar, in Trending, in the feed) once its buy has landed: one
+    // per person and jar, for copiers with a profile.
+    if let (Some((copier, jar)), "settled") = (lot, state) {
+        let counted = sqlx::query(
+            "INSERT INTO social_jar_copies (jar_id, copier)
+             SELECT $1, $2 WHERE EXISTS (SELECT 1 FROM social_profiles WHERE user_id = $2)
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(jar)
+        .bind(copier)
+        .execute(&mut *tx)
+        .await
+        .map_err(unavailable)?
+        .rows_affected();
+        if counted == 1 {
+            sqlx::query(
+                "INSERT INTO social_events (actor, kind, jar_id) VALUES ($1, 'jar_copied', $2)",
+            )
+            .bind(copier)
+            .bind(jar)
+            .execute(&mut *tx)
+            .await
+            .map_err(unavailable)?;
+        }
+    }
+    tx.commit().await.map_err(unavailable)?;
     Ok(())
 }
 
@@ -409,10 +518,10 @@ pub async fn open_lots(
     asset: &str,
     after_seq: i64,
 ) -> Result<Vec<(i64, OpenLot)>, AppError> {
-    type Row = (i64, String, String, String, i64, i16, i16, Uuid);
+    type Row = (i64, String, String, String, i64, i16, i16, Uuid, Uuid);
     let rows: Vec<Row> = sqlx::query_as(
         "SELECT l.seq, l.deposit_address, l.units::text, (l.units - l.sold)::text,
-                l.cost_micro_usd, l.fee_pct, j.copy_fee, j.owner
+                l.cost_micro_usd, l.fee_pct, j.copy_fee, j.owner, l.jar_id
          FROM copy_buy_lots l JOIN social_jars j ON j.id = l.jar_id
          WHERE l.copier = $1 AND l.asset = $2 AND l.state = 'settled' AND l.sold < l.units
            AND l.seq > $3
@@ -428,7 +537,7 @@ pub async fn open_lots(
     Ok(rows
         .into_iter()
         .filter_map(
-            |(seq, deposit_address, units, remaining, cost, fee_pct, jar_pct, creator)| {
+            |(seq, deposit_address, units, remaining, cost, fee_pct, jar_pct, creator, jar)| {
                 Some((
                     seq,
                     OpenLot {
@@ -439,6 +548,7 @@ pub async fn open_lots(
                         fee_pct: u8::try_from(fee_pct).ok()?,
                         jar_pct,
                         creator,
+                        jar,
                     },
                 ))
             },
@@ -479,6 +589,8 @@ pub async fn record_sale(
     deposit_address: &str,
     expires_at: Option<&str>,
     parts: &[(String, u128)],
+    // What each creator receives, per jar: (creator, jar, micro-USD).
+    fees: &[(Uuid, Uuid, u128)],
 ) -> Result<(), AppError> {
     let mut tx = pool.begin().await.map_err(unavailable)?;
     let inserted = sqlx::query(
@@ -505,8 +617,39 @@ pub async fn record_sale(
             .await
             .map_err(unavailable)?;
         }
+        for (creator, jar, micro) in fees {
+            sqlx::query(
+                "INSERT INTO copy_sale_fees (sale, jar_id, creator, received_micro_usd)
+                 VALUES ($1, $2, $3, $4)",
+            )
+            .bind(deposit_address)
+            .bind(jar)
+            .bind(creator)
+            .bind(i64::try_from(*micro).unwrap_or(i64::MAX))
+            .execute(&mut *tx)
+            .await
+            .map_err(unavailable)?;
+        }
     }
     tx.commit().await.map_err(unavailable)
+}
+
+/// A creator's published jars with what their copies earned them from settled sells
+/// (micro-USD received) and how many people copied each (`social_jar_copies`).
+pub async fn earnings(pool: &PgPool, creator: Uuid) -> Result<Vec<(Uuid, i64, i64)>, AppError> {
+    sqlx::query_as(
+        "SELECT j.id,
+                coalesce((SELECT sum(f.received_micro_usd)::bigint FROM copy_sale_fees f
+                          JOIN copy_sales s ON s.deposit_address = f.sale
+                          WHERE f.jar_id = j.id AND f.creator = $1 AND s.state = 'settled'), 0),
+                (SELECT count(*) FROM social_jar_copies c WHERE c.jar_id = j.id)
+         FROM social_jars j WHERE j.owner = $1
+         ORDER BY j.published_at DESC LIMIT 200",
+    )
+    .bind(creator)
+    .fetch_all(pool)
+    .await
+    .map_err(unavailable)
 }
 
 /// Quoted sells of `asset` to look up with 1Click (newest first): (deposit address, expired).
@@ -766,6 +909,7 @@ mod tests {
             fee_pct,
             jar_pct: i16::from(fee_pct),
             creator,
+            jar: Uuid::from_u128(creator.as_u128() + 100),
         }
     }
 
@@ -849,6 +993,32 @@ mod tests {
         // A later leg of the same quote picks up where the first stopped.
         assert_eq!(allocate(&lots, 150, 100), vec![(1, 50)]);
         assert_eq!(allocate(&lots, 50, 100), vec![(0, 50), (1, 50)]);
+    }
+
+    #[test]
+    fn what_each_creator_received_is_split_across_their_jars() {
+        // Two of Ana's jars copied, 100 units at $1 each, at 10% and 20%. Selling all 200
+        // for $230 ($115 each): $15 profit each, so $1.50 and $3.00 of fee.
+        let (one, two) = (Uuid::from_u128(11), Uuid::from_u128(12));
+        let mut a = lot(100, 100, 10, ANA);
+        a.jar = one;
+        let mut b = lot(100, 100, 20, ANA);
+        b.jar = two;
+        let lots = [a, b];
+        let parts = allocate(&lots, 0, 200);
+        let shares = jar_shares(&lots, &parts, 200, 230 * USD);
+        assert_eq!(shares, vec![(ANA, one, 1_500_000), (ANA, two, 3_000_000)]);
+        // 1Click paid her $2.25 (its half): a third and two thirds.
+        let split = received_by_jar(&shares, |_| 2_250_000);
+        assert_eq!(split, vec![(ANA, one, 750_000), (ANA, two, 1_500_000)]);
+        // What 1Click echoed for each recipient asked.
+        let echoed =
+            json!([{ "recipient": "0xANA", "fee": 98 }, { "recipient": ONE_CLICK, "fee": 98 }]);
+        assert_eq!(
+            received(Some(&echoed), &[("0xana".into(), 195)]),
+            vec![("0xana".to_string(), 98)]
+        );
+        assert!(received(None, &[("0xana".into(), 195)]).is_empty());
     }
 
     #[test]

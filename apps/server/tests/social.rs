@@ -74,6 +74,30 @@ async fn bearer(identity: &Identity, key_byte: u8) -> String {
         .access_token
 }
 
+/// A settled copy buy of `jar` by `handle` (what counts as a copy since 2026-11-14): the
+/// lot the jar buy quote records, settled as 1Click's status would settle it.
+async fn settled_copy(pool: &sqlx::PgPool, handle: &str, jar: &str, deposit: &str) {
+    let copier: Uuid = sqlx::query_scalar("SELECT user_id FROM social_profiles WHERE handle = $1")
+        .bind(handle)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    let jar: Uuid = jar.parse().unwrap();
+    let lot = honey_server::copy_fees::QuotedLot {
+        deposit_address: deposit.into(),
+        asset: "nep141:base-eth".into(),
+        cost_micro_usd: 5_000_000,
+        expires_at: None,
+    };
+    honey_server::copy_fees::record_quoted_lots(pool, copier, jar, 10, &[lot])
+        .await
+        .unwrap();
+    let done = honey_server::copy_fees::Outcome::Done(Some("1000".into()));
+    honey_server::copy_fees::settle_lot(pool, deposit, &done)
+        .await
+        .unwrap();
+}
+
 /// Swap records the 1Click double answers `/status` with, by deposit address.
 type Swaps = Arc<Mutex<HashMap<String, Value>>>;
 
@@ -444,6 +468,12 @@ async fn profiles_follows_jars_feed_and_holders() {
 
     // Copies: counted once per person, never your own, announced in the feed.
     let copy = format!("/social/jars/{jar_id}/copies");
+    // Only a copy buy that settled counts: asking alone adds nothing.
+    let (status, copied) = call(&app, "POST", &copy, Some(&bob), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(copied["copies"], 0);
+    settled_copy(&db.pool, "bob", &jar_id, "dep-copy-bob-0001").await;
+    settled_copy(&db.pool, "bob", &jar_id, "dep-copy-bob-0002").await;
     let (status, copied) = call(&app, "POST", &copy, Some(&bob), None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(copied["copies"], 1);
@@ -585,11 +615,14 @@ async fn profiles_follows_jars_feed_and_holders() {
     )
     .await;
     let (_, feed) = call(&app, "GET", "/social/feed?scope=everyone", None, None).await;
-    assert_eq!(feed["items"].as_array().unwrap().len(), 2);
+    // assert_eq!(feed["items"].as_array().unwrap().len(), 2);
+    // Bob's copy goes too: a copy says what he holds, so it shows only while he shares.
+    assert_eq!(crate::kinds(&feed["items"]), ["jar_published"]);
 
     // Pagination.
     let (_, first) = call(&app, "GET", "/social/feed?scope=everyone", None, None).await;
-    let last = first["items"][1]["id"].as_str().unwrap().to_string();
+    // let last = first["items"][1]["id"].as_str().unwrap().to_string();
+    let last = first["items"][0]["id"].as_str().unwrap().to_string();
     let (_, rest) = call(
         &app,
         "GET",
@@ -1205,6 +1238,7 @@ async fn privacy_hides_what_the_owner_hides_from_everyone_else() {
     let (status, _) = call(&app, "POST", &copy_path, Some(&bob), None).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
     set(json!({ "allowCopy": true })).await;
+    settled_copy(&db.pool, "bob", &jar_id, "dep-copy-bob-0003").await;
     let (status, copied) = call(&app, "POST", &copy_path, Some(&bob), None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(copied["copies"], 1);

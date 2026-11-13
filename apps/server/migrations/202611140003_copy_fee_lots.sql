@@ -59,3 +59,15 @@ CREATE TABLE copy_sale_parts (
     units numeric(39, 0) NOT NULL CHECK (units > 0),
     PRIMARY KEY (sale, lot)
 );
+
+-- What each creator was paid on a quoted sell, per jar of theirs it sold copies of
+-- (micro-USD at 1Click's price: the creator's own share as 1Click echoed it, so after
+-- 1Click's half when it splits). It counts as earned once the sell settles.
+CREATE TABLE copy_sale_fees (
+    sale text NOT NULL REFERENCES copy_sales(deposit_address) ON DELETE CASCADE,
+    jar_id uuid NOT NULL REFERENCES social_jars(id) ON DELETE CASCADE,
+    creator uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    received_micro_usd bigint NOT NULL CHECK (received_micro_usd >= 0),
+    PRIMARY KEY (sale, jar_id)
+);
+CREATE INDEX copy_sale_fees_creator_idx ON copy_sale_fees (creator);
