@@ -7,12 +7,13 @@
 //! unpriced and usually spam, so it's left out. Names come from CoinGecko's coin list
 //! when cached.
 //!
-//! Activity: Blockscout per EVM chain (Etherscan's v2 API when a key is set and
-//! Blockscout doesn't answer), NearBlocks for NEAR, and Solana's node, whose newest
+//! Activity: per EVM chain, Alchemy's `alchemy_getAssetTransfers` when `ALCHEMY_API_KEY`
+//! is set, then Blockscout, then Etherscan's v2 API when its key is set; NearBlocks for NEAR, and Solana's node, whose newest
 //! transactions are decoded for amounts. Answers are cached per chain and address so the
 //! free endpoints stay well under their limits.
 //!
-//! Read-only and public: addresses are public data and nothing here needs a key.
+//! Read-only and public: addresses are public data and nothing here needs a key. Keys
+//! that are set ride in URLs (Alchemy's path, Etherscan's query), so no URL is logged.
 
 use crate::market_data::{CoinMarket, MarketData, OneClickToken, normalize_symbol};
 use futures_util::future::join_all;
@@ -51,6 +52,9 @@ pub struct EvmNetwork {
     pub usdc: Option<&'static str>,
     /// Blockscout instance (keyless v2 API), if the chain has one Honey reads activity from.
     pub blockscout: Option<String>,
+    /// Alchemy's JSON-RPC base for this chain, without the key (`…/v2`); history is read
+    /// here first when `ALCHEMY_API_KEY` is set.
+    pub alchemy: Option<String>,
     pub explorer_tx: &'static str,
 }
 
@@ -96,6 +100,7 @@ impl Endpoints {
                         "PORTFOLIO_ETHEREUM_BLOCKSCOUT_URL",
                         "https://eth.blockscout.com",
                     )),
+                    alchemy: Some("https://eth-mainnet.g.alchemy.com/v2".into()),
                     explorer_tx: "https://etherscan.io/tx/",
                 },
                 EvmNetwork {
@@ -108,6 +113,7 @@ impl Endpoints {
                         "PORTFOLIO_BASE_BLOCKSCOUT_URL",
                         "https://base.blockscout.com",
                     )),
+                    alchemy: Some("https://base-mainnet.g.alchemy.com/v2".into()),
                     explorer_tx: "https://basescan.org/tx/",
                 },
                 EvmNetwork {
@@ -120,6 +126,7 @@ impl Endpoints {
                         "PORTFOLIO_ARBITRUM_BLOCKSCOUT_URL",
                         "https://arbitrum.blockscout.com",
                     )),
+                    alchemy: Some("https://arb-mainnet.g.alchemy.com/v2".into()),
                     explorer_tx: "https://arbiscan.io/tx/",
                 },
             ],
@@ -279,6 +286,8 @@ pub struct ExplorerKeys {
     /// Etherscan v2 (one key for every EVM chain): history when Blockscout doesn't answer.
     pub etherscan: Option<String>,
     pub etherscan_url: String,
+    /// Alchemy (one key for every chain): EVM history first, ahead of Blockscout.
+    pub alchemy: Option<String>,
 }
 
 impl ExplorerKeys {
@@ -288,6 +297,7 @@ impl ExplorerKeys {
             nearblocks: key("PORTFOLIO_NEARBLOCKS_API_KEY"),
             etherscan: key("PORTFOLIO_ETHERSCAN_API_KEY"),
             etherscan_url: env_or("PORTFOLIO_ETHERSCAN_URL", "https://api.etherscan.io/v2/api"),
+            alchemy: key("ALCHEMY_API_KEY"),
         }
     }
 }
@@ -714,8 +724,8 @@ impl PortfolioService {
     }
 
     /// Recent transfers and transactions for these addresses, newest first, one row per
-    /// transaction. EVM reads Blockscout (native and ERC-20 transfers; Etherscan's v2 API
-    /// with a key when Blockscout doesn't answer), NEAR reads NearBlocks, and Solana reads
+    /// transaction. EVM reads Alchemy with a key, else Blockscout (native and ERC-20
+    /// transfers), else Etherscan's v2 API with a key, NEAR reads NearBlocks, and Solana reads
     /// signatures from its node and decodes the newest few for amounts. Each chain is
     /// cached on its own, so one slow explorer doesn't make the others re-read.
     pub async fn activity(&self, addresses: &Addresses) -> Activity {
@@ -727,15 +737,15 @@ impl PortfolioService {
         let mut reads: Vec<ChainRead<'_, ActivityItem>> = Vec::new();
         if let Some(evm) = &addresses.evm {
             let etherscan = self.keys.etherscan.is_some();
-            for network in self
-                .endpoints
-                .evm
-                .iter()
-                .filter(|n| n.blockscout.is_some() || etherscan)
+            let alchemy = self.keys.alchemy.is_some();
+            for network in
+                self.endpoints.evm.iter().filter(|n| {
+                    n.blockscout.is_some() || etherscan || (alchemy && n.alchemy.is_some())
+                })
             {
                 reads.push(Box::pin(async move {
                     let key = format!("rows:{}:{evm}", network.chain);
-                    let read = self.evm_activity(network, evm);
+                    let read = self.evm_activity(network, evm, listed);
                     (
                         network.chain,
                         self.rows_cached(key, ACTIVITY_TTL, read).await,
@@ -770,7 +780,15 @@ impl PortfolioService {
         Activity { items, unavailable }
     }
 
-    async fn evm_activity(&self, network: &EvmNetwork, address: &str) -> Option<Vec<ActivityItem>> {
+    async fn evm_activity(
+        &self,
+        network: &EvmNetwork,
+        address: &str,
+        listed: Option<&[OneClickToken]>,
+    ) -> Option<Vec<ActivityItem>> {
+        if let Some(rows) = self.alchemy_activity(network, address, listed).await {
+            return Some(rows);
+        }
         if let Some(base) = network.blockscout.as_deref() {
             let txs_url = format!("{base}/api/v2/addresses/{address}/transactions");
             let transfers_url =
@@ -781,6 +799,116 @@ impl PortfolioService {
             }
         }
         self.etherscan_activity(network, address).await
+    }
+
+    /// Alchemy's `alchemy_getAssetTransfers`: what the address sent and what it received
+    /// (two calls), native and ERC-20 transfers plus internal ETH where the network has
+    /// them, newest first. Only used with `ALCHEMY_API_KEY` set; None when either call
+    /// fails, so the next source answers instead of half a history.
+    async fn alchemy_activity(
+        &self,
+        network: &EvmNetwork,
+        address: &str,
+        listed: Option<&[OneClickToken]>,
+    ) -> Option<Vec<ActivityItem>> {
+        let key = self.keys.alchemy.as_deref()?;
+        let url = format!(
+            "{}/{key}",
+            network.alchemy.as_deref()?.trim_end_matches('/')
+        );
+        let (sent, received) = tokio::join!(
+            self.alchemy_transfers(network, &url, key, "fromAddress", address),
+            self.alchemy_transfers(network, &url, key, "toAddress", address),
+        );
+        let mut transfers = sent?;
+        transfers.extend(received?);
+        Some(parse_alchemy(network, address, &transfers, listed))
+    }
+
+    /// One side (`fromAddress` or `toAddress`) of an address's transfers. Internal
+    /// transfers are asked for only where Alchemy documents them; if the network refuses
+    /// the category anyway, the call is repeated without it.
+    async fn alchemy_transfers(
+        &self,
+        network: &EvmNetwork,
+        url: &str,
+        key: &str,
+        side: &str,
+        address: &str,
+    ) -> Option<Vec<Value>> {
+        let mut internal = alchemy_has_internal(network.chain_id);
+        loop {
+            let mut category = vec!["external", "erc20"];
+            if internal {
+                category.push("internal");
+            }
+            let params = json!([{
+                "fromBlock": "0x0",
+                "toBlock": "latest",
+                side: address,
+                "category": category,
+                "withMetadata": true,
+                // Zero-value calls (approvals, contract calls) are rows too, as on Blockscout.
+                "excludeZeroValue": false,
+                "order": "desc",
+                "maxCount": format!("{ACTIVITY_LIMIT:#x}"),
+            }]);
+            match self.alchemy_call(network, url, key, params).await {
+                Ok(result) => {
+                    return Some(result["transfers"].as_array().cloned().unwrap_or_default());
+                }
+                Err(true) if internal => internal = false,
+                Err(_) => return None,
+            }
+        }
+    }
+
+    /// One `alchemy_getAssetTransfers` call: the result, or `Err(true)` when Alchemy
+    /// answered with a JSON-RPC error (`Err(false)`: unreachable or not JSON). Logs name
+    /// the chain, never the URL, and redact the key from anything Alchemy echoes.
+    async fn alchemy_call(
+        &self,
+        network: &EvmNetwork,
+        url: &str,
+        key: &str,
+        params: Value,
+    ) -> Result<Value, bool> {
+        let chain = network.chain;
+        let body = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "alchemy_getAssetTransfers",
+            "params": params,
+        });
+        let response = self
+            .client
+            .post(url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|error| {
+                let error = error.without_url();
+                tracing::warn!(%error, chain, "portfolio alchemy request failed");
+                false
+            })?;
+        let status = response.status();
+        let mut value: Value = response.json().await.map_err(|error| {
+            let error = error.without_url();
+            tracing::warn!(%error, %status, chain, "portfolio alchemy answer unreadable");
+            false
+        })?;
+        if let Some(error) = value.get("error").filter(|e| !e.is_null()) {
+            let message = error["message"].as_str().unwrap_or_default();
+            let message = message.replace(key, "[redacted]");
+            let code = error["code"].as_i64();
+            tracing::warn!(?code, %message, %status, chain, "portfolio alchemy error");
+            return Err(true);
+        }
+        if !status.is_success() {
+            tracing::warn!(%status, chain, "portfolio alchemy request failed");
+            return Err(false);
+        }
+        Ok(value["result"].take())
     }
 
     /// Etherscan's v2 API (one key, every chain by id): normal transactions and ERC-20
@@ -1343,6 +1471,102 @@ fn parse_blockscout(
         ));
     }
     one_row_per_hash(items)
+}
+
+/// Networks where Alchemy serves the `internal` transfer category (Ethereum, Polygon and
+/// Base, per its docs); elsewhere it's left out of the request.
+fn alchemy_has_internal(chain_id: u64) -> bool {
+    matches!(chain_id, 1 | 137 | 8453)
+}
+
+/// `alchemy_getAssetTransfers` rows (both sides of an address) as Activity rows. A
+/// transfer to oneself appears on both sides once; ERC-20s take 1Click's symbol when it
+/// lists the contract on this chain; zero-value token transfers (address-poisoning spam)
+/// and zero-value internal transfers are left out. Alchemy reports no failed status.
+fn parse_alchemy(
+    network: &EvmNetwork,
+    address: &str,
+    transfers: &[Value],
+    listed: Option<&[OneClickToken]>,
+) -> Vec<ActivityItem> {
+    let mut seen = std::collections::HashSet::new();
+    let mut rows: Vec<(u64, ActivityItem)> = Vec::new();
+    for t in transfers {
+        let Some(hash) = t["hash"].as_str() else {
+            continue;
+        };
+        let unique = t["uniqueId"].as_str().map_or_else(
+            || format!("{hash}:{}:{}:{}", t["category"], t["from"], t["to"]),
+            str::to_string,
+        );
+        if !seen.insert(unique) {
+            continue;
+        }
+        let raw = t["rawContract"]["value"].as_str();
+        let moved = match t["category"].as_str() {
+            Some(category @ ("external" | "internal")) => {
+                let amount = raw
+                    .and_then(|v| hex_units(v, 18))
+                    .or_else(|| t["value"].as_f64())
+                    .filter(|v| v.is_finite() && *v > 0.0);
+                if amount.is_none() && category == "internal" {
+                    continue;
+                }
+                amount.map(|a| ("ETH".to_string(), a))
+            }
+            Some("erc20") => {
+                let contract = t["rawContract"]["address"].as_str();
+                let entry = contract.and_then(|c| {
+                    listed?.iter().find(|e| {
+                        e.blockchain == network.oneclick
+                            && e.contract_address
+                                .as_deref()
+                                .is_some_and(|a| a.eq_ignore_ascii_case(c))
+                    })
+                });
+                let decimals = t["rawContract"]["decimal"]
+                    .as_str()
+                    .and_then(|d| hex_units(d, 0))
+                    .map(|d| d as i32)
+                    .or_else(|| entry.map(|e| i32::from(e.decimals)))
+                    .filter(|d| (0..=36).contains(d));
+                let amount = match (raw, decimals) {
+                    (Some(raw), Some(d)) => hex_units(raw, d),
+                    _ => t["value"].as_f64(),
+                }
+                .filter(|v| v.is_finite());
+                if amount == Some(0.0) {
+                    continue;
+                }
+                let symbol = match entry {
+                    Some(e) => Some(normalize_symbol(&e.symbol).to_string()),
+                    None => t["asset"].as_str().map(str::to_string),
+                };
+                symbol.zip(amount)
+            }
+            _ => continue,
+        };
+        let block = t["blockNum"]
+            .as_str()
+            .and_then(|b| u64::from_str_radix(b.trim_start_matches("0x"), 16).ok())
+            .unwrap_or(0);
+        rows.push((
+            block,
+            evm_row(
+                network,
+                address,
+                hash,
+                t["from"].as_str(),
+                t["to"].as_str(),
+                moved,
+                rfc3339(&t["metadata"]["blockTimestamp"]).unwrap_or(0),
+                false,
+            ),
+        ));
+    }
+    // Newest first across both sides, then one row per transaction.
+    rows.sort_by(|a, b| b.0.cmp(&a.0));
+    one_row_per_hash(rows.into_iter().map(|(_, row)| row).collect())
 }
 
 /// Etherscan's `{ status, message, result }`: the rows, or None for an error (a bad key
@@ -2247,5 +2471,77 @@ mod tests {
             Some(Movement::NOTHING)
         );
         assert_eq!(solana_movement(OWNER, &json!({}), None), None);
+    }
+
+    #[test]
+    fn alchemy_transfers_become_one_row_per_transaction() {
+        let network = Endpoints::from_env().evm.remove(1);
+        let tokens = listed();
+        let peer = "0x2222222222222222222222222222222222222222";
+        let weth = "0x4200000000000000000000000000000000000006";
+        let transfer = |hash: &str, category: &str, from: &str, to: &str, value: &str| {
+            json!({ "blockNum": "0x10", "uniqueId": format!("{hash}:{category}:{from}"),
+                    "hash": hash, "category": category, "from": from, "to": to,
+                    "asset": "ETH", "value": null,
+                    "rawContract": { "value": value, "address": null, "decimal": "0x12" },
+                    "metadata": { "blockTimestamp": "2026-11-02T10:00:00.000Z" } })
+        };
+        let erc20 = |hash: &str,
+                     from: &str,
+                     to: &str,
+                     contract: &str,
+                     asset: &str,
+                     value: &str,
+                     decimal: &str| {
+            json!({ "blockNum": "0x20", "uniqueId": format!("{hash}:log:{contract}:{from}"),
+                    "hash": hash, "category": "erc20", "from": from, "to": to, "asset": asset,
+                    "rawContract": { "value": value, "address": contract, "decimal": decimal },
+                    "metadata": { "blockTimestamp": "2026-11-03T10:00:00Z" } })
+        };
+        let usdc = "0x833589FCD6EDB6E08F4C7C32D4F71B54BDA02913";
+        let self_send = transfer("0xself", "external", ME, ME, "0xde0b6b3a7640000");
+        let transfers = vec![
+            // A plain receive.
+            transfer("0xa", "external", peer, ME, "0x6f05b59d3b20000"),
+            // A zero-value call replaced by the USDC it sent (matched by contract, so
+            // 1Click's symbol wins over Alchemy's).
+            transfer("0xb", "external", ME, usdc, "0x0"),
+            erc20("0xb", ME, peer, usdc, "USDbC?", "0x2625a0", "0x6"),
+            // A swap: WETH out, ETH back through an internal transfer.
+            erc20("0xc", ME, peer, weth, "WETH", "0xde0b6b3a7640000", "0x12"),
+            transfer("0xc", "internal", peer, ME, "0x1bc16d674ec80000"),
+            // Address poisoning: a zero-value look-alike transfer, left out.
+            erc20(
+                "0xd",
+                ME,
+                peer,
+                "0x9999999999999999999999999999999999999999",
+                "USDC",
+                "0x0",
+                "0x6",
+            ),
+            // To oneself: on both sides, counted once.
+            self_send.clone(),
+            self_send,
+        ];
+        let items = parse_alchemy(&network, ME, &transfers, Some(&tokens));
+        let shown: Vec<(&str, &str, Option<&str>, Option<f64>)> = items
+            .iter()
+            .map(|i| (i.hash.as_str(), i.direction, i.symbol.as_deref(), i.amount))
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                ("0xb", "sent", Some("USDC"), Some(2.5)),
+                ("0xc", "other", Some("ETH"), Some(2.0)),
+                ("0xa", "received", Some("ETH"), Some(0.5)),
+                ("0xself", "other", Some("ETH"), Some(1.0)),
+            ]
+        );
+        assert_eq!(items[0].counterparty.as_deref(), Some(peer));
+        assert_eq!(items[0].timestamp, 1_793_700_000);
+        assert_eq!(items[2].explorer_url, "https://basescan.org/tx/0xa");
+        assert!(alchemy_has_internal(1) && alchemy_has_internal(8453));
+        assert!(!alchemy_has_internal(42161));
     }
 }
