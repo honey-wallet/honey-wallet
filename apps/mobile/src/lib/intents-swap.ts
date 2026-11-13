@@ -30,9 +30,12 @@ import { backendSessionToken } from '@/lib/backend-session';
 import {
   atomic,
   checkDeadline,
+  checkOneClickFees,
   checkOneClickRecord,
   checkOneClickTerms,
   DEADLINE_MARGIN_MS,
+  type DeclaredCopyFee,
+  declaredCopyFee,
   MAX_SLIPPAGE_BPS,
   MIN_VALUE_KEPT,
   minWithinSlippage,
@@ -494,6 +497,10 @@ export type IntentsSwap = {
   destinationTxHashes?: string[];
   refundedAmount?: string | null;
   sentAt?: number;
+  /** A sale of holdings copied from this published jar (lib/jar-sell): asked of the server. */
+  copySaleOf?: string;
+  /** The creator's cut the server put on this swap, checked against 1Click's own record. */
+  copyFee?: DeclaredCopyFee | null;
 };
 
 const FINAL = new Set<SwapStatus>(['SUCCESS', 'REFUNDED', 'FAILED', 'EXPIRED']);
@@ -645,6 +652,7 @@ type Verifiable = Pick<
   | 'amountIn'
   | 'minAmountOut'
   | 'slippageBps'
+  | 'copyFee'
 >;
 
 /**
@@ -663,6 +671,8 @@ export async function verifySwapWithOneClick(
   // Before paying: 1Click must still be waiting for this deposit, never already paid.
   if (opts.unpaid && record.status !== 'PENDING_DEPOSIT') throw alreadyUsed();
   checkOneClickTerms(record, swap);
+  // A copy sale's fee must be exactly the one shown, paid to the creator shown.
+  checkOneClickFees(record, swap.copyFee ?? null);
   const t = record.quote.timeEstimate;
   return typeof t === 'number' && Number.isFinite(t) && t > 0 && t < 24 * 3600 ? t : null;
 }
@@ -689,7 +699,15 @@ const defaults: SwapDeps = {
 
 /** A live, verified quote for selling `amount` (decimal text) of `sell` for `buy`. Nothing is signed. */
 export async function quoteSwap(
-  input: { sell: TokenRef; buy: TokenRef; amount: string; recipient?: string },
+  // input: { sell: TokenRef; buy: TokenRef; amount: string; recipient?: string },
+  input: {
+    sell: TokenRef;
+    buy: TokenRef;
+    amount: string;
+    recipient?: string;
+    /** Selling holdings copied from this published jar: the server adds the creator's fee. */
+    copySaleOf?: string;
+  },
   deps: Partial<SwapDeps> = {},
 ): Promise<IntentsSwap> {
   const d = { ...defaults, ...deps };
@@ -744,6 +762,7 @@ export async function quoteSwap(
       refundTo,
       slippageBps: SWAP_SLIPPAGE_BPS,
       legs: [{ destinationAsset: destination.assetId, amount: amountIn.toString(), recipient }],
+      ...(input.copySaleOf ? { copySaleOf: input.copySaleOf } : {}),
     })
     .catch((error: unknown) => {
       throw bridgeMinimum(error, origin) ?? error;
@@ -759,6 +778,9 @@ export async function quoteSwap(
     },
     { refundTo, slippageBps: SWAP_SLIPPAGE_BPS, usdIn, now: d.now() },
   );
+  // Only a copy sale ever carries a fee; the server decides it, 1Click's record must match.
+  const copyFee = declaredCopyFee(leg.copyFee);
+  if (copyFee && !input.copySaleOf) throw quoteChanged();
   const usdOutMin = usdOf(BigInt(leg.minAmountOut), destination.decimals, destination.price);
   // Without a price for what's bought, the value check below can't run: no quote.
   if (usdOutMin === null) throw new Error(`Couldn’t price ${buy.symbol} right now. Try again.`);
@@ -794,6 +816,7 @@ export async function quoteSwap(
     usdOutMin,
     timeEstimate: null,
     status: 'QUOTED',
+    ...(input.copySaleOf ? { copySaleOf: input.copySaleOf, copyFee } : {}),
   };
   // Don't take the server's word for where the deposit address pays out: ask 1Click.
   swap.timeEstimate = await verifySwapWithOneClick(swap, d.fetcher);
@@ -822,6 +845,7 @@ export async function requoteSwap(
       buy: swap.buy,
       amount: unitsText(swap.amountIn, swap.sellDecimals),
       recipient: swap.externalRecipient ? swap.recipient : undefined,
+      copySaleOf: swap.copySaleOf,
     },
     deps,
   );

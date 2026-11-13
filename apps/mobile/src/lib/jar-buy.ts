@@ -325,6 +325,11 @@ export type JarBuyDeps = {
   dexPrices: () => Promise<Record<string, number>>;
   /** The route planner (lib/best-route): NEAR Intents unless it can't do the leg. */
   route: (ask: RouteAsk) => Promise<PlannedRoute>;
+  /**
+   * Copying this published jar (its server id): the server records what the buy cost, the
+   * basis for the creator's fee when the copy is sold (lib/copy-fees).
+   */
+  copyOf?: string;
 };
 
 /**
@@ -565,6 +570,7 @@ export async function quoteJarBuy(
             amount: l.micro.toString(),
             recipient: l.recipient,
           })),
+          ...(d.copyOf ? { copyOf: d.copyOf } : {}),
         }),
         STEP_MS,
         'NEAR Intents took too long to quote.',
@@ -815,6 +821,7 @@ async function quoteWithToken(
       amount: l.amountIn.toString(),
       recipient: l.recipient,
     })),
+    ...(d.copyOf ? { copyOf: d.copyOf } : {}),
   });
   checkQuote(quote, asked, { refundTo, slippageBps, origin: chain, originAsset: asset.assetId });
   // The cap holds for what's paid, at 1Click's price, as the server counts it.

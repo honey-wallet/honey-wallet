@@ -1198,9 +1198,14 @@ export function copyProposal(jar: ThesisJar, amount: number): Proposal {
     unmatched: [],
     // Copy fees aren't charged yet: outside test mode, none is promised. Same rule as
     // lib/surface `COPY_FEES` (not imported: it pulls react-native into this pure module).
-    caution: TEST_MODE
-      ? `Past returns don’t promise future ones. ${jar.creator} gets ${jar.copyFee}% of your profit, and nothing if it loses.`
-      : 'Past returns don’t promise future ones.',
+    // caution: TEST_MODE
+    //   ? `Past returns don’t promise future ones. ${jar.creator} gets ${jar.copyFee}% of your profit, and nothing if it loses.`
+    //   : 'Past returns don’t promise future ones.',
+    // Copy fees are collected (2026-11-14, lib/copy-fees), like lib/surface `COPY_FEES`.
+    caution:
+      jar.copyFee > 0
+        ? `Past returns don’t promise future ones. ${jar.creator} gets ${jar.copyFee}% of your profit, and nothing if it loses.`
+        : 'Past returns don’t promise future ones.',
     feesUsd: TEST_MODE ? +(amount * 0.006).toFixed(2) : 0,
     sources: [],
     provenance: TEST_MODE

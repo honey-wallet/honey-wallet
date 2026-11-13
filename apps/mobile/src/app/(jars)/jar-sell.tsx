@@ -13,6 +13,7 @@ import { SuccessPage } from '@/components/sheets/SuccessPage';
 import { FlowTray, InlineTray } from '@/components/sheets/Tray';
 import { TokenIcon } from '@/components/wallet/parts';
 import { confirmOwner } from '@/lib/auth';
+import { copiedJarId, copyFeeText } from '@/lib/copy-fees';
 import { dexGasNote, priceImpactText, routeLabel } from '@/lib/dex-tokens';
 import { SPONSORED_FEE } from '@/lib/evm-gas';
 import { useMoney } from '@/lib/fx';
@@ -289,6 +290,13 @@ function JarSellSheet() {
                         : '<$0.01'
                     }
                   />
+                  {/* A copied jar: the creator's cut of your profit, set by the server. */}
+                  {real && copiedJarId(jar) ? (
+                    <StatRow
+                      label="Creator's fee"
+                      value={quote ? copyFeeText(quote.copyFee) : '…'}
+                    />
+                  ) : null}
                   {routes.map((r) => (
                     <StatRow
                       key={r.symbol}

@@ -21,7 +21,11 @@ const TOKENS = [
 
 const calls: string[] = [];
 const quoteSwap = vi.fn(
-  async (input: { sell: { assetId?: string; symbol: string }; amount: string }) => ({
+  async (input: {
+    sell: { assetId?: string; symbol: string };
+    amount: string;
+    copySaleOf?: string;
+  }) => ({
     sell: { ...input.sell, chain: input.sell.symbol === 'SOL' ? 'Solana' : 'NEAR' },
     originAsset: input.sell.assetId,
     depositAddress: `dep-${input.sell.symbol}`,
@@ -29,6 +33,16 @@ const quoteSwap = vi.fn(
     amountOut: input.sell.symbol === 'SOL' ? '2500000' : '3990000',
     minAmountOut: input.sell.symbol === 'SOL' ? '2475000' : '3950000',
     status: 'QUOTED',
+    // The server's creator fee on a copy sale (wNEAR made a profit; SOL didn't).
+    ...(input.copySaleOf
+      ? {
+          copySaleOf: input.copySaleOf,
+          copyFee:
+            input.sell.symbol === 'SOL'
+              ? null
+              : { recipient: '0xcreator', bps: 300, pct: 10, usd: 0.12 },
+        }
+      : {}),
   }),
 );
 const prepareSwapPayment = vi.fn(
@@ -168,6 +182,21 @@ describe('quoteJarSell', () => {
     expect(quoteSwap.mock.calls[1]?.[0]).toMatchObject({ amount: '0.025' });
     expect(q.usdOut).toBeCloseTo(6.49);
     expect(q.frac).toBe(0.5);
+  });
+});
+
+describe('copied jars', () => {
+  it('names the copied jar on each swap and totals the creator’s fee', async () => {
+    const copied = jar({ copiedFrom: { creator: 'ana', fee: 10, jarId: 'social-jar-1' } });
+    const q = await quoteJarSell(copied, 6.5, 13);
+    expect(quoteSwap.mock.calls.map(([input]) => input.copySaleOf)).toEqual(['jar-1', 'jar-1']);
+    expect(q.copyFee).toEqual({ usd: 0.12, pct: 10 });
+  });
+
+  it('asks no fee on your own jar', async () => {
+    const q = await quoteJarSell(jar(), 6.5, 13);
+    expect(quoteSwap.mock.calls.every(([input]) => input.copySaleOf === undefined)).toBe(true);
+    expect(q.copyFee).toBeNull();
   });
 });
 
