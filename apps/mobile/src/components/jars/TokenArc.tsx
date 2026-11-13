@@ -1,4 +1,4 @@
-import { useId, useState } from 'react';
+import { type ReactNode, useId, useState } from 'react';
 import { Text, View } from 'react-native';
 import Animated, {
   FadeInDown,
@@ -24,6 +24,8 @@ const SHOWN = 4;
 /** Shares under this many percent group into the "+N" bubble when there are 2 or more. */
 const SMALL = 10;
 const STROKE = 28;
+/** Logos in the space around the wheel (`outside`). */
+const OUT_LOGO = 24;
 const NODE = 44;
 /** The arc runs 240° over the top, open at the bottom where the total sits. */
 const START = (150 * Math.PI) / 180;
@@ -74,9 +76,19 @@ export function TokenArc({
   onTotalPress,
   payToken,
   bubbles: withBubbles = true,
+  outside = false,
+  sub,
 }: {
+  /** Under the total in place of `label`, e.g. its change today. */
+  sub?: ReactNode;
   /** Token logos sit on the arc; off, the arc and its middle only (a legend goes below). */
   bubbles?: boolean;
+  /**
+   * The wheel with its labels in the space around it: every token keeps its own colour
+   * on the arc (the small ones too), the big ones' logos sit just outside their stretch,
+   * and the small ones gather at the end as overlapping dots of their colours.
+   */
+  outside?: boolean;
   slices: Slice[];
   total: string;
   label?: string;
@@ -102,18 +114,39 @@ export function TokenArc({
   const restWeight = rest.reduce((s, r) => s + r.weight, 0);
   const sum = slices.reduce((s, r) => s + r.weight, 0) || 1;
 
-  const r = width / 2 - STROKE / 2;
+  // Outside: a ring of room around the wheel for the logos.
+  const margin = outside ? OUT_LOGO + 14 : 0;
+  const r = width / 2 - STROKE / 2 - margin;
   const cx = width / 2;
-  const cy = r + STROKE / 2;
-  const height = cy + r * Math.sin(Math.PI / 6) + STROKE / 2;
+  const cy = margin + r + STROKE / 2;
+  const height = cy + r * Math.sin(Math.PI / 6) + STROKE / 2 + (outside ? 10 : 0);
 
-  // The arc's stretches: one per shown token, then the rest striped.
-  const parts = [
-    ...top.map((s) => ({ key: s.symbol, weight: s.weight, color: s.color, striped: false })),
-    ...(rest.length
-      ? [{ key: 'rest', weight: restWeight, color: c.textSecondary, striped: true }]
-      : []),
-  ];
+  // The arc's stretches: one per shown token, then the rest (striped, or outside, each
+  // small token in its own colour).
+  const parts = outside
+    ? sorted.map((s) => ({ key: s.symbol, weight: s.weight, color: s.color, striped: false }))
+    : [
+        ...top.map((s) => ({ key: s.symbol, weight: s.weight, color: s.color, striped: false })),
+        ...(rest.length
+          ? [{ key: 'rest', weight: restWeight, color: c.textSecondary, striped: true }]
+          : []),
+      ];
+  // Outside: where each stretch's middle is, and the rest's, on a circle past the arc.
+  const outR = r + STROKE / 2 + OUT_LOGO / 2 + 6;
+  const midAngle = (from: number, w: number) => START + ((from + w / 2) / sum) * SWEEP;
+  const topSpots = top.map((s, i) => {
+    const before = top.slice(0, i).reduce((acc, t) => acc + t.weight, 0);
+    return at(cx, cy, outR, midAngle(before, s.weight));
+  });
+  const restSpot = at(
+    cx,
+    cy,
+    outR,
+    midAngle(
+      top.reduce((acc, t) => acc + t.weight, 0),
+      restWeight,
+    ),
+  );
   const motion = useSplitMotion(
     parts.map((p) => p.weight / sum),
     parts.map((p) => p.key).join(','),
@@ -161,7 +194,59 @@ export function TokenArc({
           ))}
         </Svg>
 
-        {(withBubbles ? bubbles : []).map((b, i) => {
+        {outside
+          ? top.map((s, i) => {
+              const p = topSpots[i] ?? { x: 0, y: 0 };
+              return (
+                <Animated.View
+                  key={s.symbol}
+                  entering={
+                    reduced
+                      ? undefined
+                      : ZoomIn.duration(DURATION.medium)
+                          .delay(120 + i * DURATION.stagger)
+                          .easing(EASE.smoothOut)
+                  }
+                  style={[styles.outLogo, { left: p.x - OUT_LOGO / 2, top: p.y - OUT_LOGO / 2 }]}
+                  accessibilityLabel={`${s.symbol} ${s.weight}%`}
+                >
+                  <TokenIcon symbol={s.symbol} size={OUT_LOGO} />
+                </Animated.View>
+              );
+            })
+          : null}
+        {outside && rest.length ? (
+          // The small ones: overlapping dots in their colours, like a handful of
+          // marbles at the end of the wheel. Tap for the list.
+          <PressableScale
+            accessibilityRole="button"
+            accessibilityLabel={`${rest.length} more tokens, ${restWeight}%`}
+            accessibilityState={{ expanded: open }}
+            scaleTo={0.92}
+            hitSlop={10}
+            onPress={() => {
+              tap();
+              setOpen((v) => !v);
+            }}
+            style={[styles.cluster, { left: restSpot.x - 18, top: restSpot.y - 16 }]}
+          >
+            {rest.slice(0, 4).map((s, i) => (
+              <View
+                key={s.symbol}
+                style={[
+                  styles.marble,
+                  {
+                    backgroundColor: s.color,
+                    left: [0, 12, 6, 16][i],
+                    top: [8, 0, 14, 12][i],
+                    borderColor: c.canvas,
+                  },
+                ]}
+              />
+            ))}
+          </PressableScale>
+        ) : null}
+        {(withBubbles && !outside ? bubbles : []).map((b, i) => {
           const p = spots[i] ?? { x: 0, y: 0 };
           const entering = reduced
             ? undefined
@@ -232,7 +317,11 @@ export function TokenArc({
                 <NumberPopIn value={total} style={styles.total} />
               </View>
             )}
-            {label ? <Text style={styles.label}>{label}</Text> : null}
+            {sub ? (
+              <View style={styles.sub}>{sub}</View>
+            ) : label ? (
+              <Text style={styles.label}>{label}</Text>
+            ) : null}
           </View>
         ) : null}
       </View>
@@ -298,6 +387,10 @@ function Stretch({
 
 const useStyles = makeStyles((c) => ({
   bubble: { position: 'absolute', width: NODE, alignItems: 'center' },
+  outLogo: { position: 'absolute' },
+  sub: { marginTop: 4 },
+  cluster: { position: 'absolute', width: 36, height: 32 },
+  marble: { position: 'absolute', width: 18, height: 18, borderRadius: 9, borderWidth: 1.5 },
   ring: {
     width: NODE,
     height: NODE,

@@ -48,6 +48,7 @@ import { PillButton } from '@/components/onboarding/PillButton';
 import { InFlightBar } from '@/components/wallet/InFlightBar';
 import {
   BalanceAmount,
+  Change,
   EmptyState,
   LabeledDivider,
   Sparkline,
@@ -67,7 +68,7 @@ import { isWeb } from '@/lib/platform';
 import { HIDDEN_AMOUNT, updateSettings, useSettings } from '@/lib/settings';
 import { EXTENSION, SHARED_WALLETS, SOCIAL, WALLET } from '@/lib/surface';
 import { useTabReselect } from '@/lib/tab-reselect';
-import { type ThesisJar, useThesisJars } from '@/lib/thesis';
+import { jarReturn, jarValue, type ThesisJar, useThesisJars } from '@/lib/thesis';
 import { showToast } from '@/lib/toast';
 import { requireWallet, useHasWallet } from '@/lib/wallet-gate';
 import { useWalletView } from '@/lib/wallet-view';
@@ -810,7 +811,7 @@ function HomeJars() {
 }
 
 /** The widest the ring draws, so it never fills a tablet. */
-const RING_MAX = 240;
+const RING_MAX = 420;
 
 /**
  * What your jars hold, as the Jars page drew it: the token ring with the Honey mark,
@@ -821,6 +822,11 @@ function JarsRing({ jars }: { jars: ThesisJar[] }) {
   const ringStyles = useRingStyles();
   const [width, setWidth] = useState(0);
   const slices = exposureSlices(jars);
+  // The middle: what your jars are worth, and how they've done since you bought (each
+  // jar's start value backed out of its return).
+  const worth = jars.reduce((s, j) => s + jarValue(j), 0);
+  const start = jars.reduce((s, j) => s + jarValue(j) / (1 + jarReturn(j)), 0);
+  const change = start > 0 ? worth / start - 1 : 0;
   // One token is a solid ring saying 100%: nothing to show.
   if (slices.length < 2) return null;
   // The arc carries colour and the count; the names sit in one quiet row under it
@@ -832,10 +838,10 @@ function JarsRing({ jars }: { jars: ThesisJar[] }) {
       {width > 0 ? (
         <TokenArc
           slices={slices}
-          total={String(slices.length)}
-          label="tokens"
+          total={formatUsd(worth)}
+          sub={<Change value={change * 100} />}
           width={Math.min(width, RING_MAX)}
-          bubbles={false}
+          outside
         />
       ) : null}
       <View style={ringStyles.legend}>
