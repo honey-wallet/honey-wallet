@@ -879,12 +879,12 @@ describe('a quote kept fresh at Confirm', () => {
     expect(d.quote).not.toHaveBeenCalled();
   });
 
-  it('re-quotes one about to run out and goes on when the price held within slippage', async () => {
-    // 49104000 is within 1% of the 49500000 shown.
+  it('re-quotes one about to run out and shows a lower minimum even within slippage (money audit 5)', async () => {
+    // 49104000 is within 1% of the 49500000 shown, but less: shown for one more tap.
     const d = deps('49600000', '49104000');
     const r = await readyToPay({ swap: swap(), plan: plan() as never }, d);
     expect(d.quote).toHaveBeenCalledTimes(1);
-    expect(r.pay).toBe(true);
+    expect(r.pay).toBe(false);
     expect(r.swap).toMatchObject({
       depositAddress: FRESH,
       minAmountOut: '49104000',
@@ -897,6 +897,26 @@ describe('a quote kept fresh at Confirm', () => {
       expect.objectContaining({ to: FRESH }),
     );
     expect(priceMoved(swap(), r.swap)).toBe(true);
+  });
+
+  it('goes straight on when the fresh minimum is at least the one shown', async () => {
+    const same = await readyToPay(
+      { swap: swap(), plan: plan() as never },
+      deps('50000000', '49500000'),
+    );
+    expect(same.pay).toBe(true);
+    expect(same.swap.depositAddress).toBe(FRESH);
+    const better = await readyToPay(
+      { swap: swap(), plan: plan() as never },
+      deps('50100000', '49599000'),
+    );
+    expect(better.pay).toBe(true);
+    // One unit less than shown: re-confirmed.
+    const less = await readyToPay(
+      { swap: swap(), plan: plan() as never },
+      deps('49999999', '49499999'),
+    );
+    expect(less.pay).toBe(false);
   });
 
   it('shows a price that moved past slippage and waits for one more tap', async () => {

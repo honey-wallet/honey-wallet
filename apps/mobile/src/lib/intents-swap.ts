@@ -880,11 +880,17 @@ export const withinSlippage = (
   BigInt(fresh.minAmountOut) >=
   (BigInt(shown.minAmountOut) * BigInt(10_000 - shown.slippageBps)) / 10_000n;
 
+/** A fresh minimum at least the one on screen: nothing you'd get is less than you saw. */
+export const noWorse = (
+  shown: Pick<IntentsSwap, 'minAmountOut'>,
+  fresh: Pick<IntentsSwap, 'minAmountOut'>,
+) => BigInt(fresh.minAmountOut) >= BigInt(shown.minAmountOut);
+
 /**
  * At Confirm: a quote with `REQUOTE_BELOW_MS` or more left is paid as it is. One with
- * less is quoted again first; if the fresh minimum is within the swap's slippage of the
- * one shown, it goes straight on to Face ID with the fresh quote (`pay`), otherwise the
- * new price is shown and needs one more tap. Throws `REFRESH_FAILED` when re-quoting fails.
+ * less is quoted again first; if the fresh minimum is at least the one shown, it goes
+ * straight on to Face ID with the fresh quote (`pay`), otherwise the new price is shown
+ * and needs one more tap. Throws `REFRESH_FAILED` when re-quoting fails.
  */
 export async function readyToPay(
   shown: ReadySwap,
@@ -893,7 +899,9 @@ export async function readyToPay(
   const d = { ...defaults, ...deps };
   if (!nearExpiry(shown.swap, d.now())) return { ...shown, pay: true };
   const fresh = await refreshQuote(shown.swap, deps);
-  return { ...fresh, pay: withinSlippage(shown.swap, fresh.swap) };
+  // return { ...fresh, pay: withinSlippage(shown.swap, fresh.swap) };
+  // Replaced 14 Nov (money audit 5): up to 1% less went to Face ID unseen.
+  return { ...fresh, pay: noWorse(shown.swap, fresh.swap) };
 }
 
 const alreadyUsed = () =>
