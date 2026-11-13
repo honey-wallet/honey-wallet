@@ -310,6 +310,18 @@ export function leftOut(unmatched: { idea: string; note: string }[]) {
   return lines.slice(0, 3);
 }
 
+/** A sentence's first sentence: "Gold hedges inflation. XAUT can sit flat." → the first. */
+export function firstSentence(text: string): string {
+  const t = text.replace(/\s+/g, ' ').trim();
+  const m = t.match(/^.+?[.!?](?=\s|$)/);
+  return (m ? m[0] : t).trim();
+}
+
+/** "What could go wrong", short: at most three bullets, each its first sentence. */
+export function bearBullets(lines: readonly string[] | undefined): string[] {
+  return (lines ?? []).map(firstSentence).filter(Boolean).slice(0, 3);
+}
+
 /** "Here's the low-risk version: 2 tokens, 60% max each." */
 export function riskLine(p: Proposal) {
   const n = p.picks.length;

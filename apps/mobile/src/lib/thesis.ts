@@ -508,6 +508,26 @@ function checkStopped(signal?: AbortSignal) {
 }
 
 /** What the agent is asked: the idea, and the amount and risk to size it for. */
+/**
+ * A strategy's whole split as one list that adds up to 100: its picks, then the cash the
+ * risk rules kept in USDC (2026-11-14: the bar showed XAUT and BTC as 60/40 while the
+ * rows said 50 / 33 and 17% in USDC). The cash is `cashPct`, or whatever the picks leave
+ * when it's missing; a USDC pick takes it in. Weights already at 100 are left as they are.
+ */
+export function splitWithCash<T extends { symbol: string; weight: number }>(
+  picks: readonly T[],
+  cashPct = 0,
+): { symbol: string; weight: number }[] {
+  const total = picks.reduce((sum, p) => sum + p.weight, 0);
+  const cash = Math.max(0, Math.round(Math.max(cashPct, total > 0 ? 100 - total : 0)));
+  const out = picks.map((p) => ({ symbol: p.symbol, weight: p.weight }));
+  if (!cash || !picks.length) return out;
+  const usdc = out.find((p) => p.symbol.toUpperCase() === 'USDC');
+  if (usdc) usdc.weight += cash;
+  else out.push({ symbol: 'USDC', weight: cash });
+  return out;
+}
+
 export type ThesisInput = { text: string; amount: number; risk: Risk };
 
 /**

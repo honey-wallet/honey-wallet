@@ -33,9 +33,17 @@ const PRICE = /\bprices?\b/i;
 const HOW = /\bhow(?:'s|\s+(?:has|have|is|are|did|was|were))\b/i;
 const DONE = /\b(do|did|done|doing|perform\w*|mov\w*|going|gone)\b/i;
 const PERFORMANCE = /\bperformance\b/i;
-const COMPARE = /\b(compare|comparison|vs\.?|versus|against)\b/i;
+// const COMPARE = /\b(compare|comparison|vs\.?|versus|against)\b/i;
+const COMPARE = /\b(compare|comparison)\b/i;
+/**
+ * "against", "vs", "versus" compare only with a token named ("TAO vs RENDER"): "How can I
+ * hedge against this?" is a question for the agent, not the picks' chart (2026-11-14).
+ */
+const VERSUS = /\b(vs\.?|versus|against)\b/i;
 /** Opinions and forecasts are for the agent, even with a chart word in them. */
-const ASKS_AGENT = /\b(why|should|will|would|could|predict\w*|forecast\w*)\b/i;
+// const ASKS_AGENT = /\b(why|should|will|would|could|predict\w*|forecast\w*)\b/i;
+const ASKS_AGENT =
+  /\b(why|should|will|would|could|predict\w*|forecast\w*|hedg\w*|protect\w*|downside|how (?:can|do|should)|what (?:if|should)|risks? of)\b/i;
 /** Words that point at the answer's picks rather than a named token. */
 const PICKS = /\b(picks?|these|them|those|they|tokens|coins|jar|strategy|all|each|both)\b/i;
 
@@ -60,7 +68,9 @@ export function symbolsIn(
   named: readonly Chartable[],
   listed: readonly string[] = [],
 ): string[] {
-  const bySymbol = new Map(named.map((t) => [t.symbol.toUpperCase(), t.symbol]));
+  // A pick without a symbol (a half-built sample) names nothing.
+  const known = named.filter((t) => typeof t?.symbol === 'string' && t.symbol);
+  const bySymbol = new Map(known.map((t) => [t.symbol.toUpperCase(), t.symbol]));
   const tickers = new Map(listed.map((s) => [s.toUpperCase(), s]));
   const found: { at: number; symbol: string }[] = [];
   for (const m of text.matchAll(/\$?[A-Za-z0-9]*[A-Za-z][A-Za-z0-9]*/g)) {
@@ -70,7 +80,7 @@ export function symbolsIn(
     const symbol = bySymbol.get(key) ?? (ticker ? tickers.get(key) : undefined);
     if (symbol) found.push({ at: m.index ?? 0, symbol });
   }
-  for (const t of named) {
+  for (const t of known) {
     if (!t.name || t.name.length < 4 || t.name.toUpperCase() === t.symbol.toUpperCase()) continue;
     const m = new RegExp(`\\b${literal(t.name)}\\b`, 'i').exec(text);
     if (m) found.push({ at: m.index, symbol: t.symbol });
@@ -94,7 +104,8 @@ export function chartAsk(
 ): ChartAsk | null {
   const asked = text.trim();
   if (!asked || asked.split(/\s+/).length > MAX_WORDS || ASKS_AGENT.test(asked)) return null;
-  const compare = COMPARE.test(asked);
+  const mentioned = symbolsIn(asked, [...picks, ...named], listed);
+  const compare = COMPARE.test(asked) || (VERSUS.test(asked) && mentioned.length > 0);
   const cue =
     CHART.test(asked) ||
     PRICE.test(asked) ||
@@ -103,7 +114,7 @@ export function chartAsk(
     (HOW.test(asked) && DONE.test(asked));
   if (!cue) return null;
   const range = rangeIn(asked);
-  const symbols = symbolsIn(asked, [...picks, ...named], listed);
+  const symbols = mentioned;
   const pickSymbols = picks.map((p) => p.symbol);
   // "Show charts" with nothing named, or a word for the picks: the answer's picks.
   const meansPicks =

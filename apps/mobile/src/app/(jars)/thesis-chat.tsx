@@ -49,6 +49,7 @@ import {
   withAmount,
 } from '@/lib/thesis';
 import {
+  bearBullets,
   type ChatMessage,
   type ChatPart,
   chatAsk,
@@ -819,7 +820,14 @@ function AnswerCard({
       : { ...withAmount(proposal.byRisk[r] as Proposal, proposal.amount), byRisk: proposal.byRisk };
   const shown = variant(level);
   const cash = shown.cashPct && shown.cashPct > 0 ? shown.cashPct : 0;
-  const left = leftOut(shown.unmatched);
+  // const left = leftOut(shown.unmatched);
+  // Only what Honey left out with a reason worth reading; a bare "Ether" says nothing.
+  const left = leftOut(shown.unmatched).filter((u) => u.note);
+  const bear = bearBullets(shown.bearCase);
+  // Compact by default (2026-11-14, "too much slop text"): one line per pick; the
+  // "Wrong if" lines, Left out and What could go wrong open behind Read more.
+  const [more, setMore] = useState(false);
+  const hasMore = left.length > 0 || bear.length > 0 || shown.picks.some((p) => p.wrongIf);
   const riskSwitch =
     levels.length > 1 ? (
       <SegmentedTabs<Risk>
@@ -834,7 +842,7 @@ function AnswerCard({
       />
     ) : null;
   const leftOutBlock = left.length ? (
-    <View>
+    <View style={styles.moreBlock}>
       <Text style={styles.sectionLabel}>Left out</Text>
       <View style={styles.list}>
         {left.map((u) => (
@@ -869,9 +877,13 @@ function AnswerCard({
     <StrategyCard
       picks={shown.picks}
       name={shown.thesis}
+      // meta={`${shown.risk} risk · ${shown.picks.length} ${
+      //   shown.picks.length === 1 ? 'token' : 'tokens'
+      // }`}
       meta={`${shown.risk} risk · ${shown.picks.length} ${
         shown.picks.length === 1 ? 'token' : 'tokens'
-      }`}
+      }${cash ? ` + ${cash}% cash` : ''}`}
+      cashPct={cash}
       split
     >
       {riskSwitch}
@@ -886,15 +898,28 @@ function AnswerCard({
               key={`${p.symbol}-${p.chain}`}
               leading={<PickIcon pick={p} size={32} />}
               title={p.symbol}
+              // subtitle={
+              //   p.wrongIf ? (
+              //     <View style={styles.flex}>
+              //       {p.reason ? <Text style={styles.rowReason}>{p.reason}</Text> : null}
+              //       <Text style={styles.footnote}>{wrongIfLine(p.wrongIf)}</Text>
+              //     </View>
+              //   ) : (
+              //     p.reason
+              //   )
+              // }
+              // One line of reason; its "Wrong if" only behind Read more.
               subtitle={
-                p.wrongIf ? (
-                  <View style={styles.flex}>
-                    {p.reason ? <Text style={styles.rowReason}>{p.reason}</Text> : null}
+                <View style={styles.flex}>
+                  {p.reason ? (
+                    <Text style={styles.rowReason} numberOfLines={more ? undefined : 1}>
+                      {p.reason}
+                    </Text>
+                  ) : null}
+                  {more && p.wrongIf ? (
                     <Text style={styles.footnote}>{wrongIfLine(p.wrongIf)}</Text>
-                  </View>
-                ) : (
-                  p.reason
-                )
+                  ) : null}
+                </View>
               }
               value={`${p.weight}%`}
             />
@@ -908,12 +933,28 @@ function AnswerCard({
           ) : null}
         </ContentSwap>
       ) : null}
-      {leftOutBlock}
-      {shown.bearCase?.length ? (
-        <View>
+      {/* {leftOutBlock} and What could go wrong now open behind Read more. */}
+      {hasMore ? (
+        <PressableScale
+          accessibilityRole="button"
+          accessibilityState={{ expanded: more }}
+          hitSlop={8}
+          scaleTo={0.97}
+          onPress={() => {
+            tap();
+            setMore((m) => !m);
+          }}
+          style={styles.readMore}
+        >
+          <Text style={styles.readMoreText}>{more ? 'Show less' : 'Read more'}</Text>
+        </PressableScale>
+      ) : null}
+      {more ? leftOutBlock : null}
+      {more && bear.length ? (
+        <View style={styles.moreBlock}>
           <Text style={styles.sectionLabel}>What could go wrong</Text>
           <View style={styles.list}>
-            {shown.bearCase.map((line) => (
+            {bear.map((line) => (
               <View key={line} style={styles.listItem}>
                 <Text style={styles.listText}>•</Text>
                 <Text style={[styles.listText, styles.shrink]}>{line}</Text>
@@ -922,6 +963,7 @@ function AnswerCard({
           </View>
         </View>
       ) : null}
+      {/* Removed from the card (2026-11-14, the user's call):
       {latest ? (
         <Text
           style={styles.footnote}
@@ -932,6 +974,7 @@ function AnswerCard({
           Crypto is high risk. Only put in what you can afford to lose.
         </Text>
       ) : null}
+      */}
       {latest ? (
         <CopyStepper
           primary
@@ -1198,6 +1241,9 @@ const useStyles = makeStyles((c) => ({
   agentText: { color: c.text, fontSize: 16, lineHeight: 23 },
   muted: { color: c.textSecondary, fontSize: 14 },
   // A section's quiet label, as on a jar's page (15pt, secondary).
+  readMore: { alignSelf: 'flex-start' },
+  readMoreText: { color: c.accentText, fontSize: 15, fontWeight: '600' },
+  moreBlock: { gap: 0 },
   sectionLabel: { marginBottom: 4, color: c.textSecondary, fontSize: 15 },
   list: { gap: 6 },
   listItem: { flexDirection: 'row', gap: 8 },

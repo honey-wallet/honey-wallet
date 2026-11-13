@@ -82,3 +82,45 @@ describe('chat follow-ups', () => {
     ).rejects.toBeInstanceOf(ThesisStopped);
   });
 });
+
+describe('the answer card', () => {
+  it('draws the whole split, cash included, so every place reads 50 / 33 / 17', async () => {
+    const { splitWithCash } = await import('@/lib/thesis');
+    const picks = [
+      { symbol: 'XAUT', weight: 50 },
+      { symbol: 'BTC', weight: 33 },
+    ];
+    // From the user's phone (2026-11-14): the bar drew XAUT and BTC as 60/40.
+    expect(splitWithCash(picks, 17)).toEqual([...picks, { symbol: 'USDC', weight: 17 }]);
+    // No cashPct sent: what the picks leave is the cash.
+    expect(splitWithCash(picks)).toEqual([...picks, { symbol: 'USDC', weight: 17 }]);
+    // A USDC pick takes the cash in; a full split is left alone.
+    expect(
+      splitWithCash([
+        { symbol: 'USDC', weight: 50 },
+        { symbol: 'TAO', weight: 40 },
+      ]),
+    ).toEqual([
+      { symbol: 'USDC', weight: 60 },
+      { symbol: 'TAO', weight: 40 },
+    ]);
+    expect(splitWithCash([{ symbol: 'TAO', weight: 100 }])).toEqual([
+      { symbol: 'TAO', weight: 100 },
+    ]);
+    expect(splitWithCash([], 100)).toEqual([]);
+  });
+
+  it('keeps What could go wrong to three short bullets', async () => {
+    const { bearBullets, firstSentence } = await import('@/lib/thesis-chat');
+    expect(firstSentence('Gold hedges inflation. XAUT can sit flat.')).toBe(
+      'Gold hedges inflation.',
+    );
+    expect(firstSentence('No full stop')).toBe('No full stop');
+    expect(bearBullets(['One. Two.', 'Three, then 3.5% more. Four.', 'Five.', 'Six.'])).toEqual([
+      'One.',
+      'Three, then 3.5% more.',
+      'Five.',
+    ]);
+    expect(bearBullets(undefined)).toEqual([]);
+  });
+});
