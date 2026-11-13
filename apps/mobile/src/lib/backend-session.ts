@@ -1,4 +1,5 @@
 import {
+  ApiError,
   type SignInChallenge,
   validateSignInChallenge,
   validateWalletLinkChallenge,
@@ -45,7 +46,15 @@ let generation = 0;
 let walletLinkApprovalGeneration = 0;
 let expiry: ReturnType<typeof setTimeout> | undefined;
 let foreground = true;
+// Bumped only by an explicit sign-out or forget (not by a suspend), so a refresh that
+// lands afterwards knows to throw its successor away instead of saving it.
+let forgotten = 0;
+// Before 14 Nov: one refresh family, for whichever wallet signed in last. Still read once,
+// then moved into REFRESH_FAMILIES_KEY.
 const REFRESH_KEY = 'honey.backend-refresh-family';
+// Each wallet's refresh family, by account id, so switching wallets and back resumes the
+// first one quietly instead of signing it out (2026-11-14).
+const REFRESH_FAMILIES_KEY = 'honey.backend-refresh-families';
 
 type WalletLinkReview = { accountId: string; address: string; challenge: SignInChallenge };
 export const walletLinks = createStore<{
@@ -215,8 +224,74 @@ function parseStoredRefresh(raw: string | null): StoredRefresh | null {
   }
 }
 
-async function loadStoredRefresh() {
-  return parseStoredRefresh(await SecureStore.getItemAsync(REFRESH_KEY));
+// Replaced by the per-wallet loadStoredRefresh below (2026-11-14).
+// async function loadStoredRefresh() {
+//   return parseStoredRefresh(await SecureStore.getItemAsync(REFRESH_KEY));
+// }
+
+// Keychain reads and writes of the families map, one at a time, so two wallets' updates
+// can't overwrite each other.
+let storageQueue: Promise<unknown> = Promise.resolve();
+function serially<T>(task: () => Promise<T>): Promise<T> {
+  const run = storageQueue.then(task, task);
+  storageQueue = run.catch(() => {});
+  return run;
+}
+
+async function readFamilies(): Promise<Record<string, StoredRefresh>> {
+  const families: Record<string, StoredRefresh> = {};
+  try {
+    const raw = JSON.parse((await SecureStore.getItemAsync(REFRESH_FAMILIES_KEY)) ?? '{}');
+    for (const [accountId, value] of Object.entries(raw && typeof raw === 'object' ? raw : {})) {
+      const record = parseStoredRefresh(JSON.stringify(value));
+      if (record && record.accountId === accountId) families[accountId] = record;
+    }
+  } catch {}
+  const legacy = parseStoredRefresh(await SecureStore.getItemAsync(REFRESH_KEY));
+  if (legacy && !families[legacy.accountId]) families[legacy.accountId] = legacy;
+  return families;
+}
+
+async function writeFamilies(families: Record<string, StoredRefresh>) {
+  if (Object.keys(families).length)
+    await SecureStore.setItemAsync(REFRESH_FAMILIES_KEY, JSON.stringify(families));
+  else await SecureStore.deleteItemAsync(REFRESH_FAMILIES_KEY);
+  await SecureStore.deleteItemAsync(REFRESH_KEY);
+}
+
+/** The saved refresh family of one wallet. */
+async function loadStoredRefresh(accountId: string) {
+  return serially(async () => (await readFamilies())[accountId] ?? null);
+}
+
+async function saveStoredRefresh(record: StoredRefresh) {
+  await serially(async () => {
+    const families = await readFamilies();
+    families[record.accountId] = record;
+    await writeFamilies(families);
+  });
+}
+
+/** Forgets one wallet's saved family, or (no id) every wallet's. */
+async function deleteStoredRefresh(accountId?: string | null) {
+  await serially(async () => {
+    if (!accountId) {
+      await SecureStore.deleteItemAsync(REFRESH_FAMILIES_KEY);
+      await SecureStore.deleteItemAsync(REFRESH_KEY);
+      return;
+    }
+    const families = await readFamilies();
+    delete families[accountId];
+    await writeFamilies(families);
+  });
+}
+
+/** The server turned the refresh token away (spent, revoked or expired): it never works again. */
+function rejectedGrant(error: unknown) {
+  return (
+    error instanceof ApiError &&
+    (error.status === 401 || error.code === 'invalid_grant' || error.code === 'unauthorized')
+  );
 }
 
 async function persistRefresh(
@@ -234,7 +309,9 @@ async function persistRefresh(
     address: session.profile.wallet.address,
     chainId: session.profile.wallet.chainId,
   };
-  await SecureStore.setItemAsync(REFRESH_KEY, JSON.stringify(record));
+  // Was a single record under REFRESH_KEY; now one per wallet (2026-11-14).
+  // await SecureStore.setItemAsync(REFRESH_KEY, JSON.stringify(record));
+  await saveStoredRefresh(record);
   return record;
 }
 
@@ -250,12 +327,16 @@ export async function refreshResumeAvailability() {
   // persistent refresh-token holder.
   if (isExtensionTarget()) {
     installRefresh(null);
-    await SecureStore.deleteItemAsync(REFRESH_KEY).catch(() => {});
+    // Was the single REFRESH_KEY; every wallet's family now (2026-11-14).
+    // await SecureStore.deleteItemAsync(REFRESH_KEY).catch(() => {});
+    await deleteStoredRefresh().catch(() => {});
     backendSession.set((s) => ({ ...s, resumeAvailable: false }));
     return false;
   }
   try {
-    const record = await loadStoredRefresh();
+    // Was loadStoredRefresh() of the one saved family; now the active wallet's own.
+    // const record = await loadStoredRefresh();
+    const record = await loadStoredRefresh(wallets.get().activeId);
     const available =
       !!record &&
       Date.parse(record.refreshExpiresAt) > Date.now() &&
@@ -279,16 +360,23 @@ export async function resumeBackendSession({ silent = false }: { silent?: boolea
   const accountId = wallets.get().activeId;
   if (backendSession.get().busy || !foreground || !accountId) return;
   const current = generation;
+  const cleared = forgotten;
   backendSession.set((s) => ({ ...s, busy: true, error: null }));
   let issued: Awaited<ReturnType<typeof api.refreshSession>> | null = null;
+  // Revoke and forget the family only when it is really dead or wrong (a 401, a mismatch),
+  // never because the app went to the background or a request flaked (2026-11-14).
+  let dead = false;
   try {
-    const record = await loadStoredRefresh();
+    // Was the one saved family, whichever wallet it belonged to.
+    // const record = await loadStoredRefresh();
+    const record = await loadStoredRefresh(accountId);
     if (
       !record ||
       record.accountId !== accountId ||
       Date.parse(record.refreshExpiresAt) <= Date.now()
     ) {
-      await SecureStore.deleteItemAsync(REFRESH_KEY);
+      // await SecureStore.deleteItemAsync(REFRESH_KEY);
+      await deleteStoredRefresh(accountId);
       installRefresh(null);
       backendSession.set((s) => ({ ...s, resumeAvailable: false }));
       throw new Error('Saved session expired or belongs to another wallet. Sign in again.');
@@ -308,12 +396,26 @@ export async function resumeBackendSession({ silent = false }: { silent?: boolea
       throw new Error('Saved session does not match this wallet or server.');
     if (!silent && !(await confirmOwner('Resume Honey account', true))) return;
     if (!valid(current, accountId)) return;
-    issued = await api.refreshSession(record.refreshToken, record.deviceId);
-    if (!valid(current, accountId)) {
-      void api.signOut(issued.accessToken).catch(() => {});
-      void SecureStore.deleteItemAsync(REFRESH_KEY).catch(() => {});
-      return;
+    // issued = await api.refreshSession(record.refreshToken, record.deviceId);
+    try {
+      issued = await api.refreshSession(record.refreshToken, record.deviceId);
+    } catch (error) {
+      if (rejectedGrant(error)) {
+        await deleteStoredRefresh(accountId).catch(() => {});
+        if (valid(current, accountId))
+          backendSession.set((s) => ({ ...s, resumeAvailable: false }));
+        throw new Error('Your saved session ended. Sign in again.');
+      }
+      throw error;
     }
+    // Moved below: the server has already spent the old token, so its successor is saved
+    // first. Revoking and deleting here lost "stay signed in" for good (2026-11-14).
+    // if (!valid(current, accountId)) {
+    //   void api.signOut(issued.accessToken).catch(() => {});
+    //   void SecureStore.deleteItemAsync(REFRESH_KEY).catch(() => {});
+    //   return;
+    // }
+    dead = true;
     if (
       !issued.refreshToken ||
       !issued.refreshExpiresAt ||
@@ -328,25 +430,51 @@ export async function resumeBackendSession({ silent = false }: { silent?: boolea
       Date.parse(issued.refreshExpiresAt) > Date.now() + 31 * 86400_000
     )
       throw new Error('Invalid refreshed wallet session.');
-    const verified = await api.profile(issued.accessToken);
-    if (!valid(current, accountId)) {
-      void api.signOut(issued.accessToken).catch(() => {});
-      void SecureStore.deleteItemAsync(REFRESH_KEY).catch(() => {});
-      return;
+    dead = false;
+    const rotated = await persistRefresh(issued, accountId);
+    if (forgotten !== cleared) {
+      // Signed out while this was in flight: the successor goes too.
+      dead = true;
+      throw new Error('Signed out.');
     }
+    // Backgrounded or switched wallets meanwhile: the successor is saved, so the next
+    // resume picks it up.
+    if (!valid(current, accountId)) return;
+    // const verified = await api.profile(issued.accessToken);
+    let verified: WalletProfile;
+    try {
+      verified = await api.profile(issued.accessToken);
+    } catch (error) {
+      // A flaky profile read keeps the saved family; a 401 means it's gone.
+      dead = rejectedGrant(error);
+      throw error;
+    }
+    if (forgotten !== cleared) {
+      dead = true;
+      throw new Error('Signed out.');
+    }
+    // if (!valid(current, accountId)) {
+    //   void api.signOut(issued.accessToken).catch(() => {});
+    //   void SecureStore.deleteItemAsync(REFRESH_KEY).catch(() => {});
+    //   return;
+    // }
+    if (!valid(current, accountId)) return;
     if (
       verified.userId !== record.userId ||
       verified.wallet.id !== record.walletId ||
       verified.wallet.address.toLowerCase() !== record.address.toLowerCase() ||
       verified.wallet.chainId !== record.chainId
-    )
+    ) {
+      dead = true;
       throw new Error('Protected profile does not match this wallet.');
-    const rotated = await persistRefresh(issued, accountId);
-    if (!valid(current, accountId)) {
-      void api.signOut(issued.accessToken).catch(() => {});
-      void SecureStore.deleteItemAsync(REFRESH_KEY).catch(() => {});
-      return;
     }
+    // Saved above, straight after the refresh.
+    // const rotated = await persistRefresh(issued, accountId);
+    // if (!valid(current, accountId)) {
+    //   void api.signOut(issued.accessToken).catch(() => {});
+    //   void SecureStore.deleteItemAsync(REFRESH_KEY).catch(() => {});
+    //   return;
+    // }
     installRefresh(rotated);
     token = issued.accessToken;
     activeAccountId = accountId;
@@ -360,9 +488,12 @@ export async function resumeBackendSession({ silent = false }: { silent?: boolea
     });
     scheduleRefresh(issued.expiresAt, accountId);
   } catch (error) {
-    if (issued) {
+    // if (issued) {
+    if (issued && dead) {
       void api.signOut(issued.accessToken).catch(() => {});
-      void SecureStore.deleteItemAsync(REFRESH_KEY).catch(() => {});
+      // void SecureStore.deleteItemAsync(REFRESH_KEY).catch(() => {});
+      void deleteStoredRefresh(accountId).catch(() => {});
+      if (valid(current, accountId)) backendSession.set((s) => ({ ...s, resumeAvailable: false }));
     }
     if (valid(current, accountId))
       backendSession.set((s) => ({
@@ -396,13 +527,17 @@ export function backendSessionToken(): string | null {
 }
 /** Also invalidates a proof/signature/HTTP response already in flight. */
 export function clearBackendSession(error: string | null = null) {
+  const accountId = activeAccountId ?? wallets.get().activeId;
   const previous = resetBackendSession(error);
   if (previous) void api.signOut(previous).catch(() => {});
-  void SecureStore.deleteItemAsync(REFRESH_KEY).catch(() => {});
+  // Was the single REFRESH_KEY; now only this wallet's family (2026-11-14).
+  // void SecureStore.deleteItemAsync(REFRESH_KEY).catch(() => {});
+  void deleteStoredRefresh(accountId).catch(() => {});
 }
 
 function resetBackendSession(error: string | null): string | null {
   generation++;
+  forgotten++;
   clearTimeout(expiry);
   const previous = token;
   token = null;
@@ -420,24 +555,56 @@ function resetBackendSession(error: string | null): string | null {
   return previous;
 }
 
-/** Explicitly forget a suspended family; refresh then logout when no access token remains. */
-export async function forgetSavedBackendSession() {
-  const savedPromise = loadStoredRefresh().catch(() => null);
+/**
+ * Explicitly forget a suspended family; refresh then logout when no access token remains.
+ * The active wallet's by default; `everyWallet` (signing out of the app) forgets them all.
+ */
+export async function forgetSavedBackendSession({
+  everyWallet = false,
+}: {
+  everyWallet?: boolean;
+} = {}) {
+  const accountId = activeAccountId ?? wallets.get().activeId;
+  // Was the one saved family; now every wallet's, filtered below (2026-11-14).
+  // const savedPromise = loadStoredRefresh().catch(() => null);
+  const savedPromise = serially(readFamilies).catch(() => ({}) as Record<string, StoredRefresh>);
   const previous = resetBackendSession(null);
-  const saved = await savedPromise;
-  await SecureStore.deleteItemAsync(REFRESH_KEY).catch(() => {});
-  if (previous) {
-    await revokeWithinDeadline(previous);
-    return;
-  }
-  if (!previous && saved && Date.parse(saved.refreshExpiresAt) > Date.now()) {
-    try {
-      const rotated = await withinDeadline(api.refreshSession(saved.refreshToken, saved.deviceId));
-      await revokeWithinDeadline(rotated.accessToken);
-    } catch {
-      // Local credentials are already removed; server family expires within 30 days.
-    }
-  }
+  // const saved = await savedPromise;
+  // await SecureStore.deleteItemAsync(REFRESH_KEY).catch(() => {});
+  const families = await savedPromise;
+  await deleteStoredRefresh(everyWallet ? null : accountId).catch(() => {});
+  // if (previous) {
+  //   await revokeWithinDeadline(previous);
+  //   return;
+  // }
+  // if (!previous && saved && Date.parse(saved.refreshExpiresAt) > Date.now()) {
+  //   try {
+  //     const rotated = await withinDeadline(api.refreshSession(saved.refreshToken, saved.deviceId));
+  //     await revokeWithinDeadline(rotated.accessToken);
+  //   } catch {
+  //     // Local credentials are already removed; server family expires within 30 days.
+  //   }
+  // }
+  // A live access token revokes its own family; a suspended one is refreshed, then revoked.
+  const suspended = Object.values(families).filter(
+    (saved) =>
+      (everyWallet || saved.accountId === accountId) &&
+      !(previous && saved.accountId === accountId) &&
+      Date.parse(saved.refreshExpiresAt) > Date.now(),
+  );
+  await Promise.all([
+    previous ? revokeWithinDeadline(previous) : null,
+    ...suspended.map(async (saved) => {
+      try {
+        const rotated = await withinDeadline(
+          api.refreshSession(saved.refreshToken, saved.deviceId),
+        );
+        await revokeWithinDeadline(rotated.accessToken);
+      } catch {
+        // Local credentials are already removed; server family expires within 30 days.
+      }
+    }),
+  ]);
 }
 
 async function revokeWithinDeadline(accessToken: string) {
@@ -493,6 +660,76 @@ function scheduleRefresh(expiresAt: string, accountId: string) {
   expiry = setTimeout(() => void rotateForegroundSession(current, accountId), delay);
 }
 
+// Replaced below (2026-11-14): a background or a flaky profile read after the refresh
+// revoked and deleted the family the server had just rotated.
+// async function rotateForegroundSession(current: number, accountId: string) {
+//   if (!valid(current, accountId) || !refreshToken || !refreshDeviceId || !refreshExpiresAt) {
+//     if (valid(current, accountId))
+//       suspendBackendSession('Your session expired. Resume or sign in again.');
+//     return;
+//   }
+//   const oldRefresh = refreshToken;
+//   let issued: Awaited<ReturnType<typeof api.refreshSession>> | null = null;
+//   try {
+//     issued = await api.refreshSession(oldRefresh, refreshDeviceId);
+//     if (!valid(current, accountId)) {
+//       void api.signOut(issued.accessToken).catch(() => {});
+//       void SecureStore.deleteItemAsync(REFRESH_KEY).catch(() => {});
+//       return;
+//     }
+//     if (
+//       !issued.refreshToken ||
+//       !issued.refreshExpiresAt ||
+//       issued.deviceId !== refreshDeviceId ||
+//       issued.profile.wallet.address.toLowerCase() !==
+//         backendSession.get().profile?.wallet.address.toLowerCase() ||
+//       issued.profile.wallet.chainId !== backendSession.get().profile?.wallet.chainId ||
+//       Date.parse(issued.expiresAt) <= Date.now() ||
+//       Date.parse(issued.expiresAt) > Date.now() + 930_000
+//     ) {
+//       void api.signOut(issued.accessToken).catch(() => {});
+//       throw new Error('Invalid refreshed wallet session.');
+//     }
+//     const verified = await api.profile(issued.accessToken);
+//     if (!valid(current, accountId)) {
+//       void api.signOut(issued.accessToken).catch(() => {});
+//       void SecureStore.deleteItemAsync(REFRESH_KEY).catch(() => {});
+//       return;
+//     }
+//     if (
+//       verified.userId !== issued.profile.userId ||
+//       verified.wallet.id !== issued.profile.wallet.id ||
+//       verified.wallet.address.toLowerCase() !== issued.profile.wallet.address.toLowerCase() ||
+//       verified.wallet.chainId !== issued.profile.wallet.chainId
+//     )
+//       throw new Error('Protected profile does not match this wallet.');
+//     const record = await persistRefresh(issued, accountId);
+//     if (!valid(current, accountId)) {
+//       void api.signOut(issued.accessToken).catch(() => {});
+//       void SecureStore.deleteItemAsync(REFRESH_KEY).catch(() => {});
+//       return;
+//     }
+//     installRefresh(record);
+//     token = issued.accessToken;
+//     activeAccountId = accountId;
+//     const newExpiresAt = issued.expiresAt;
+//     backendSession.set((s) => ({
+//       ...s,
+//       profile: verified,
+//       expiresAt: newExpiresAt,
+//       resumeAvailable: !!record,
+//       error: null,
+//     }));
+//     scheduleRefresh(issued.expiresAt, accountId);
+//   } catch (error) {
+//     if (issued) {
+//       void api.signOut(issued.accessToken).catch(() => {});
+//       void SecureStore.deleteItemAsync(REFRESH_KEY).catch(() => {});
+//     }
+//     if (valid(current, accountId))
+//       suspendBackendSession(error instanceof Error ? error.message : 'Session refresh failed.');
+//   }
+// }
 async function rotateForegroundSession(current: number, accountId: string) {
   if (!valid(current, accountId) || !refreshToken || !refreshDeviceId || !refreshExpiresAt) {
     if (valid(current, accountId))
@@ -500,45 +737,68 @@ async function rotateForegroundSession(current: number, accountId: string) {
     return;
   }
   const oldRefresh = refreshToken;
+  const deviceId = refreshDeviceId;
+  // Who the session is, read now: a background mid-refresh clears the profile.
+  const expected = backendSession.get().profile;
+  const cleared = forgotten;
   let issued: Awaited<ReturnType<typeof api.refreshSession>> | null = null;
+  // Revoke and forget the family only when it is really dead or wrong.
+  let dead = false;
   try {
-    issued = await api.refreshSession(oldRefresh, refreshDeviceId);
-    if (!valid(current, accountId)) {
-      void api.signOut(issued.accessToken).catch(() => {});
-      void SecureStore.deleteItemAsync(REFRESH_KEY).catch(() => {});
-      return;
+    try {
+      issued = await api.refreshSession(oldRefresh, deviceId);
+    } catch (error) {
+      if (rejectedGrant(error)) {
+        await deleteStoredRefresh(accountId).catch(() => {});
+        if (valid(current, accountId))
+          backendSession.set((s) => ({ ...s, resumeAvailable: false }));
+      }
+      throw error;
     }
     if (
+      !expected ||
       !issued.refreshToken ||
       !issued.refreshExpiresAt ||
-      issued.deviceId !== refreshDeviceId ||
-      issued.profile.wallet.address.toLowerCase() !==
-        backendSession.get().profile?.wallet.address.toLowerCase() ||
-      issued.profile.wallet.chainId !== backendSession.get().profile?.wallet.chainId ||
+      issued.deviceId !== deviceId ||
+      issued.profile.userId !== expected.userId ||
+      issued.profile.wallet.id !== expected.wallet.id ||
+      issued.profile.wallet.address.toLowerCase() !== expected.wallet.address.toLowerCase() ||
+      issued.profile.wallet.chainId !== expected.wallet.chainId ||
       Date.parse(issued.expiresAt) <= Date.now() ||
       Date.parse(issued.expiresAt) > Date.now() + 930_000
     ) {
-      void api.signOut(issued.accessToken).catch(() => {});
+      dead = true;
       throw new Error('Invalid refreshed wallet session.');
     }
-    const verified = await api.profile(issued.accessToken);
-    if (!valid(current, accountId)) {
-      void api.signOut(issued.accessToken).catch(() => {});
-      void SecureStore.deleteItemAsync(REFRESH_KEY).catch(() => {});
-      return;
+    // The server has already spent the old token: save its successor before anything
+    // else can fail.
+    const record = await persistRefresh(issued, accountId);
+    if (forgotten !== cleared) {
+      dead = true;
+      throw new Error('Signed out.');
     }
+    // Backgrounded or switched wallets meanwhile: the saved successor resumes later.
+    if (!valid(current, accountId)) return;
+    let verified: WalletProfile;
+    try {
+      verified = await api.profile(issued.accessToken);
+    } catch (error) {
+      dead = rejectedGrant(error);
+      throw error;
+    }
+    if (forgotten !== cleared) {
+      dead = true;
+      throw new Error('Signed out.');
+    }
+    if (!valid(current, accountId)) return;
     if (
       verified.userId !== issued.profile.userId ||
       verified.wallet.id !== issued.profile.wallet.id ||
       verified.wallet.address.toLowerCase() !== issued.profile.wallet.address.toLowerCase() ||
       verified.wallet.chainId !== issued.profile.wallet.chainId
-    )
+    ) {
+      dead = true;
       throw new Error('Protected profile does not match this wallet.');
-    const record = await persistRefresh(issued, accountId);
-    if (!valid(current, accountId)) {
-      void api.signOut(issued.accessToken).catch(() => {});
-      void SecureStore.deleteItemAsync(REFRESH_KEY).catch(() => {});
-      return;
     }
     installRefresh(record);
     token = issued.accessToken;
@@ -553,9 +813,10 @@ async function rotateForegroundSession(current: number, accountId: string) {
     }));
     scheduleRefresh(issued.expiresAt, accountId);
   } catch (error) {
-    if (issued) {
+    if (issued && dead) {
       void api.signOut(issued.accessToken).catch(() => {});
-      void SecureStore.deleteItemAsync(REFRESH_KEY).catch(() => {});
+      void deleteStoredRefresh(accountId).catch(() => {});
+      if (valid(current, accountId)) backendSession.set((s) => ({ ...s, resumeAvailable: false }));
     }
     if (valid(current, accountId))
       suspendBackendSession(error instanceof Error ? error.message : 'Session refresh failed.');
@@ -570,10 +831,20 @@ export function backendVisibility(state: string) {
   if (state === 'active') foreground = true;
   if (state === 'active') void refreshResumeAvailability();
 }
+/**
+ * Another wallet became active (one you added, imported, watch or hardware): the old
+ * wallet's session is put away, not signed out, so switching back resumes it quietly.
+ * Revoking it here signed you out every time you added a wallet (2026-11-14).
+ */
 export function backendWalletChanged() {
   const state = backendSession.get();
-  if (state.review?.accountId !== wallets.get().activeId || state.profile)
-    void forgetSavedBackendSession();
+  // if (state.review?.accountId !== wallets.get().activeId || state.profile)
+  //   void forgetSavedBackendSession();
+  if (state.review?.accountId !== wallets.get().activeId || state.profile) {
+    suspendBackendSession();
+    // The new wallet's own saved session is looked up next (refreshResumeAvailability).
+    backendSession.set((s) => ({ ...s, resumeAvailable: false }));
+  }
 }
 
 export async function prepareBackendSignIn() {
@@ -622,6 +893,7 @@ export async function approveBackendSignIn() {
   const review = state.review;
   if (!review || state.busy || !foreground) return;
   const current = generation;
+  const cleared = forgotten;
   backendSession.set((s) => ({ ...s, busy: true, error: null }));
   try {
     validateSignInChallenge(review.challenge, review);
@@ -671,11 +943,19 @@ export async function approveBackendSignIn() {
     )
       throw new Error('Protected profile does not match this wallet.');
     const storedRefresh = await persistRefresh(session, review.accountId);
-    if (!valid(current, review.accountId)) {
+    // A background or wallet switch now keeps the saved family (it resumes later); only a
+    // sign-out meanwhile throws it away (2026-11-14).
+    // if (!valid(current, review.accountId)) {
+    //   void api.signOut(session.accessToken).catch(() => {});
+    //   void SecureStore.deleteItemAsync(REFRESH_KEY).catch(() => {});
+    //   return;
+    // }
+    if (forgotten !== cleared) {
       void api.signOut(session.accessToken).catch(() => {});
-      void SecureStore.deleteItemAsync(REFRESH_KEY).catch(() => {});
+      void deleteStoredRefresh(review.accountId).catch(() => {});
       return;
     }
+    if (!valid(current, review.accountId)) return;
     installRefresh(storedRefresh);
     activeAccountId = review.accountId;
     backendSession.set({
