@@ -16,6 +16,7 @@ import { useEffect, useState } from 'react';
 import { Share } from 'react-native';
 import { api } from '@/lib/api';
 import { backendSession, backendSessionToken } from '@/lib/backend-session';
+import { signedPct } from '@/lib/format';
 import { DEMO_FRIENDS, demoCollabPost, setDemoHandle } from '@/lib/group-demo';
 import { getProfile } from '@/lib/profile';
 import {
@@ -735,9 +736,11 @@ export function timeAgo(at: number, now = Date.now()) {
   return new Date(at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
 }
 
-/** "+12.4%" from a fraction. */
-export const pct = (fraction: number) =>
-  `${fraction >= 0 ? '+' : '−'}${Math.abs(fraction * 100).toFixed(1)}%`;
+/** "+12.4%" from a fraction, with a typographic minus ("−3.0%"). */
+export const pct = (fraction: number) => signedPct(fraction, '−');
+// Replaced on 14 Nov (cleanup) by signedPct in lib/format.ts:
+// export const pct = (fraction: number) =>
+//   `${fraction >= 0 ? '+' : '−'}${Math.abs(fraction * 100).toFixed(1)}%`;
 
 /** Trims a token amount for a sentence: 0.2, 1,250, 0.00042. */
 export function amountText(amount: number) {
@@ -1004,7 +1007,8 @@ async function share(message: string, url: string) {
   }
 }
 
-const signed = (fraction: number) => `${fraction >= 0 ? '+' : ''}${(fraction * 100).toFixed(1)}%`;
+// Replaced on 14 Nov (cleanup) by signedPct in lib/format.ts.
+// const signed = (fraction: number) => `${fraction >= 0 ? '+' : ''}${(fraction * 100).toFixed(1)}%`;
 
 export function sharePost(post: SocialPost) {
   const tokens = post.tokens.map((t) => `$${t.symbol}`).join(' ');
@@ -1014,7 +1018,7 @@ export function sharePost(post: SocialPost) {
 
 export function shareJar(jar: SocialJar) {
   const r = jar.returnSincePublish;
-  const ret = r == null ? '' : ` (${signed(r)} since launch)`;
+  const ret = r == null ? '' : ` (${signedPct(r)} since launch)`;
   return share(`${jar.name} by @${jar.owner.handle} on Honey${ret}`, jarLink(jar.id));
 }
 
@@ -1039,7 +1043,7 @@ export function shareRank(rank: number, jar: SocialJar, window: SocialLeaderboar
         : window === '7d'
           ? 'this week'
           : 'this month';
-  const ret = r == null ? '' : ` at ${signed(r)}`;
+  const ret = r == null ? '' : ` at ${signedPct(r)}`;
   return share(`#${rank} on the Honey leaderboard ${when}${ret} with ${jar.name}`, jarLink(jar.id));
 }
 

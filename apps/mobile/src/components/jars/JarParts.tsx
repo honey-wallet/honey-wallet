@@ -24,6 +24,7 @@ import {
 } from '@/components/wallet/parts';
 import { TOKEN_IMAGES } from '@/components/wallet/token-images';
 import { TOKEN_LOGOS } from '@/components/wallet/token-logos';
+import { signedPct } from '@/lib/format';
 import { tap } from '@/lib/haptics';
 import { useTokenInfo } from '@/lib/market';
 import { formatBalance, formatUsd, tokenName } from '@/lib/mock-wallet';
@@ -621,9 +622,10 @@ export function JarHoldingRow({
   );
 }
 
-/** A signed percentage, "+12.4%". */
-export const signedPct = (fraction: number) =>
-  `${fraction >= 0 ? '+' : ''}${(fraction * 100).toFixed(1)}%`;
+// Replaced on 14 Nov (cleanup) by signedPct in lib/format.ts.
+// /** A signed percentage, "+12.4%". */
+// export const signedPct = (fraction: number) =>
+//   `${fraction >= 0 ? '+' : ''}${(fraction * 100).toFixed(1)}%`;
 
 /**
  * The Perps page's market tiles: one grey card split into tiles by the page's colour,

@@ -24,6 +24,7 @@ import {
 } from '@/components/wallet/parts';
 import { SearchField } from '@/components/wallet/SearchField';
 import { alignSeries, backtestStats } from '@/lib/converge';
+import { signedPct } from '@/lib/format';
 import { tap } from '@/lib/haptics';
 import { categoriesFor } from '@/lib/jar-categories';
 import {
@@ -61,7 +62,8 @@ const PREVIEW_AMOUNT = 100;
 
 /** A token is just its symbol here; NEAR Intents picks the chain when it buys. */
 const keyOf = (t: { symbol: string }) => t.symbol.toUpperCase();
-const pctText = (fraction: number) => `${fraction >= 0 ? '+' : ''}${(fraction * 100).toFixed(1)}%`;
+// Replaced on 14 Nov (cleanup) by signedPct in lib/format.ts.
+// const pctText = (fraction: number) => `${fraction >= 0 ? '+' : ''}${(fraction * 100).toFixed(1)}%`;
 
 /**
  * A jar built by hand, without the agent (after nearbags.com/create): tokens grouped
@@ -424,12 +426,12 @@ function Preview({
         <View style={styles.stats}>
           <Tiles
             tiles={[
-              { label: 'Return', value: pctText(stats.ret), tone: stats.ret < 0 ? 'down' : 'up' },
-              { label: 'Worst drop', value: pctText(stats.worstDrop) },
+              { label: 'Return', value: signedPct(stats.ret), tone: stats.ret < 0 ? 'down' : 'up' },
+              { label: 'Worst drop', value: signedPct(stats.worstDrop) },
               { label: 'Volatility', value: `${(stats.volatility * 100).toFixed(0)}% a year` },
               {
                 label: 'BTC',
-                value: btcChange === null ? '—' : pctText(btcChange),
+                value: btcChange === null ? '—' : signedPct(btcChange),
                 tone: btcChange === null ? undefined : btcChange < 0 ? 'down' : 'up',
               },
             ]}

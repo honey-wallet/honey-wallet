@@ -42,6 +42,7 @@ import {
   pathLength,
   spreadLabels,
 } from '@/lib/converge';
+import { signedPct } from '@/lib/format';
 import { tap } from '@/lib/haptics';
 import { isDollar, useChartSeries } from '@/lib/market';
 import { formatUsd } from '@/lib/mock-wallet';
@@ -247,21 +248,22 @@ function ConvergeView({
             <View
               key={l.symbol}
               style={[styles.chip, l.missing && styles.greyed]}
-              accessibilityLabel={`${l.symbol}, ${l.missing ? 'no price history' : signed(l.change)}`}
+              accessibilityLabel={`${l.symbol}, ${l.missing ? 'no price history' : signedPct(l.change)}`}
             >
               <View
                 style={[styles.dash, { backgroundColor: l.missing ? c.textSecondary : l.color }]}
               />
               <TokenIcon symbol={l.symbol} size={16} />
               <Text style={styles.chipText}>
-                {l.symbol} <Text style={styles.chipPct}>{l.missing ? '—' : signed(l.change)}</Text>
+                {l.symbol}{' '}
+                <Text style={styles.chipPct}>{l.missing ? '—' : signedPct(l.change)}</Text>
               </Text>
             </View>
           ))}
-          <View style={styles.chip} accessibilityLabel={`Jar, ${signed(model.change)}`}>
+          <View style={styles.chip} accessibilityLabel={`Jar, ${signedPct(model.change)}`}>
             <View style={[styles.dash, styles.dashThick, { backgroundColor: color }]} />
             <Text style={styles.chipText}>
-              Jar <Text style={[styles.chipPct, { color }]}>{signed(model.change)}</Text>
+              Jar <Text style={[styles.chipPct, { color }]}>{signedPct(model.change)}</Text>
             </Text>
           </View>
         </View>
@@ -273,7 +275,8 @@ function ConvergeView({
   );
 }
 
-const signed = (fraction: number) => `${fraction >= 0 ? '+' : ''}${(fraction * 100).toFixed(1)}%`;
+// Replaced on 14 Nov (cleanup) by signedPct in lib/format.ts.
+// const signed = (fraction: number) => `${fraction >= 0 ? '+' : ''}${(fraction * 100).toFixed(1)}%`;
 
 type PlotProps = {
   model: ConvergeModel;
