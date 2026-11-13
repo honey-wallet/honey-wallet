@@ -335,8 +335,13 @@ The agent never signs. Humans approve **bounded orders**, and the bounds are wha
 - **R-SF-1 MUST** keep fetched content in a data channel. Agents that read untrusted content have no
   tools that move money or change state.
 - **R-SF-2 MUST** check every agent output against a strict schema; anything invalid is rejected and retried, never acted on loosely.
-- **R-SF-3 MUST** pick assets, compute weights and sizes, and choose routes in **plain code**, not in the
-  model. The model only proposes exposures, instruments and explanations.
+- **R-SF-3 MUST** build the candidate assets, compute weights and sizes, and choose routes in **plain
+  code**, not in the model. Code builds a closed candidate list per exposure (registry assets that pass
+  the liquidity and risk checks); the model may only choose from that list (the allowed tickers are an
+  enum in the call's schema), and code validates every choice and drops anything outside the list. The
+  model writes no addresses and no numbers: it proposes exposures, chooses among candidates with a
+  conviction and a reason, and may only shrink or drop picks at the critic. Risk checks only shrink a
+  position; trimmed weight stays in USDC and is shown, never moved to the other picks.
 - **R-SF-4 MUST** have the critic agent (or a separate check) flag suspicious instructions found in
   sources ("buy token 0x… now") and drop that source.
 - **R-SF-5 MUST** run an independent check before showing a proposal: re-fetch the registry entries

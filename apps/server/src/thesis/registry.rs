@@ -33,6 +33,8 @@ pub struct OneClickToken {
     pub contract_address: Option<String>,
     #[serde(default)]
     pub price: Option<f64>,
+    #[serde(default)]
+    pub coingecko_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -47,6 +49,9 @@ pub struct RegistryAsset {
     pub instrument_type: InstrumentType,
     /// Ondo or Backed (xStocks) for tokenized stocks.
     pub issuer: Option<&'static str>,
+    /// CoinGecko's id for the coin, from the 1Click list; joins market data.
+    #[serde(default)]
+    pub coingecko_id: Option<String>,
 }
 
 const STABLES: &[&str] = &[
@@ -112,6 +117,9 @@ pub fn parse_tokens(body: &serde_json::Value) -> Vec<RegistryAsset> {
                 price_usd: t.price.filter(|p| p.is_finite() && *p > 0.0),
                 instrument_type,
                 issuer,
+                coingecko_id: t
+                    .coingecko_id
+                    .filter(|id| safe(id, 128) && !id.starts_with("custom:")),
             }
         })
         .collect()

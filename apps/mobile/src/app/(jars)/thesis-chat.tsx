@@ -16,22 +16,28 @@ import Animated, { FadeIn } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle, Defs, LinearGradient, Path, Stop, Text as SvgText } from 'react-native-svg';
 import { Icon } from '@/components/Icon';
-import { IdeaGrid, StrategyCard } from '@/components/jars/JarParts';
-import { StepsCard } from '@/components/jars/StepsCard';
+import { IdeaGrid, PickIcon, StrategyCard } from '@/components/jars/JarParts';
+import { ChatChart } from '@/components/jars/ThesisCharts';
+import { ThesisProgress, Understood } from '@/components/jars/ThesisLive';
 import { HoneyLogo } from '@/components/logo/HoneyLogo';
+import { ContentSwap } from '@/components/motion/ContentSwap';
 import { PressableScale } from '@/components/motion/PressableScale';
+import { SegmentedTabs } from '@/components/motion/SegmentedTabs';
 import { PillButton } from '@/components/onboarding/PillButton';
+import { SheetRow } from '@/components/sheets/Sheet';
 import { CopyStepper } from '@/components/social/parts';
 import { HeaderShortcut } from '@/components/wallet/HeaderShortcut';
 import { copyText } from '@/lib/copy';
 import { tap } from '@/lib/haptics';
+import { chartableTokens } from '@/lib/market';
 import { goBackOr } from '@/lib/navigation';
 import {
   hostOf,
   linksIn,
+  type Pick,
   type Proposal,
+  RISKS,
   type Risk,
-  STAGES,
   ThesisError,
   withAmount,
 } from '@/lib/thesis';
@@ -40,15 +46,30 @@ import {
   type ChatPart,
   chatAsk,
   chatDraft,
+  leftOut,
   money,
   newMessage,
   projection,
+  RETRY,
+  replay,
   reply,
   SWING,
 } from '@/lib/thesis-chat';
+import { tokenColor } from '@/lib/token-colors';
 import { Gate } from '@/lib/warnings';
 import { makeStyles, radius, useTheme } from '@/theme';
 import { DURATION } from '@/theme/motion';
+
+/** The cash the risk rules keep aside, drawn as a USDC row. */
+const USDC: Pick = {
+  symbol: 'USDC',
+  name: 'USD Coin',
+  chain: 'Base',
+  weight: 0,
+  match: 'direct',
+  reason: '',
+  color: tokenColor('USDC'),
+};
 
 /** One line of the message box, and the size of its round buttons. */
 const ROW = 36;
@@ -62,28 +83,40 @@ export default function ThesisChatScreen() {
   const styles = useStyles();
   const c = useTheme();
   const insets = useSafeAreaInsets();
-  const { idea } = useLocalSearchParams<{ idea?: string }>();
+  const { idea, run, said } = useLocalSearchParams<{
+    idea?: string;
+    /** A past chat opened from History: its saved answer, read-only. */
+    run?: string;
+    said?: string;
+  }>();
+  const readOnly = !!run;
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
   const [inputHeight, setInputHeight] = useState(ROW);
   const strategy = useRef<Proposal | null>(null);
+  // The message a failed run was answering, for its Try again.
+  const retry = useRef<string | null>(null);
   const list = useRef<FlatList<ChatMessage>>(null);
 
   const send = async (text: string) => {
-    const said = text.trim();
-    if (!said || busy) return;
+    const typed = text.trim();
+    if (!typed || busy) return;
+    // Try again re-asks what failed, not the words "Try again".
+    const asked = typed === RETRY && retry.current ? retry.current : typed;
+    retry.current = null;
     tap();
     setDraft('');
     setInputHeight(ROW);
     setBusy(true);
     const answer = newMessage('agent', []);
-    setMessages((m) => [...m, newMessage('you', [{ type: 'text', text: said }]), answer]);
+    setMessages((m) => [...m, newMessage('you', [{ type: 'text', text: typed }]), answer]);
     const update = (parts: ChatPart[]) =>
       setMessages((m) => m.map((x) => (x.id === answer.id ? { ...x, parts } : x)));
     try {
-      strategy.current = await reply(said, strategy.current, { update });
+      strategy.current = await reply(asked, strategy.current, { update, ...chartableTokens() });
     } catch (error) {
+      retry.current = asked;
       update([
         {
           type: 'text',
@@ -92,13 +125,41 @@ export default function ThesisChatScreen() {
               ? error.message
               : "I couldn't finish that. Nothing was bought or signed.",
         },
-        { type: 'replies', options: [said] },
+        { type: 'replies', options: [RETRY] },
       ]);
     } finally {
       setBusy(false);
     }
   };
 
+  // A past chat: the idea as it was asked, then its saved answer (or the run, still going).
+  const open = async (runId: string) => {
+    setBusy(true);
+    const you = newMessage('you', [{ type: 'text', text: said ?? '' }]);
+    const answer = newMessage('agent', []);
+    setMessages(said ? [you, answer] : [answer]);
+    const update = (parts: ChatPart[]) =>
+      setMessages((m) => m.map((x) => (x.id === answer.id ? { ...x, parts } : x)));
+    try {
+      const past = await replay(runId, said ?? '', { update });
+      strategy.current = past.proposal;
+      if (past.text && past.text !== said)
+        setMessages((m) => [
+          { ...you, parts: [{ type: 'text', text: past.text }] },
+          ...m.filter((x) => x.id !== you.id),
+        ]);
+    } catch (error) {
+      update([
+        {
+          type: 'text',
+          text:
+            error instanceof ThesisError ? error.message : "I couldn't open this chat right now.",
+        },
+      ]);
+    } finally {
+      setBusy(false);
+    }
+  };
   // Back from How much? with a change of risk: ask it here, in the conversation.
   useFocusEffect(
     // biome-ignore lint/correctness/useExhaustiveDependencies: reads the latest send
@@ -110,10 +171,12 @@ export default function ThesisChatScreen() {
     }, [busy]),
   );
 
-  // An idea passed in (from the Jars field) starts the chat straight away.
+  // An idea passed in (from the Jars field) starts the chat straight away; a past chat
+  // opens on its answer.
   // biome-ignore lint/correctness/useExhaustiveDependencies: once, on open
   useEffect(() => {
-    if (idea) void send(idea);
+    if (run) void open(run);
+    else if (idea) void send(idea);
   }, []);
 
   const empty = messages.length === 0;
@@ -131,7 +194,15 @@ export default function ThesisChatScreen() {
         <View style={styles.titleWrap}>
           <Text style={styles.title}>Thesis agent</Text>
         </View>
-        <View style={styles.topSpacer} />
+        {readOnly ? (
+          <View style={styles.topSpacer} />
+        ) : (
+          <HeaderShortcut
+            icon="history"
+            label="History"
+            onPress={() => router.push('/thesis-history')}
+          />
+        )}
       </View>
 
       {empty ? (
@@ -170,89 +241,96 @@ export default function ThesisChatScreen() {
               busy={busy}
               last={index === messages.length - 1}
               latestStrategy={latestStrategy}
+              onVariant={(p) => {
+                strategy.current = p;
+              }}
             />
           )}
         />
       )}
 
-      <View style={[styles.composerWrap, { paddingBottom: Math.max(insets.bottom, 12) }]}>
-        {linksIn(draft).length ? (
-          <View style={styles.linkRow}>
-            {linksIn(draft).map((url) => (
-              <View key={url} style={styles.link}>
-                <Icon name="link" size={12} color={c.textSecondary} />
-                <Text style={styles.linkText} numberOfLines={1}>
-                  {hostOf(url)}
-                </Text>
-              </View>
-            ))}
-          </View>
-        ) : null}
-        <View style={styles.composer}>
-          <PressableScale
-            accessibilityRole="button"
-            accessibilityLabel="Paste a link"
-            hitSlop={6}
-            onPress={() => {
-              tap();
-              setDraft((d) => (d.endsWith(' ') || !d ? `${d}https://` : `${d} https://`));
-            }}
-            style={styles.attach}
-          >
-            <Icon name="paperclip" size={18} color={c.textSecondary} />
-          </PressableScale>
-          <TextInput
-            value={draft}
-            onChangeText={setDraft}
-            placeholder={empty ? 'An idea, or a link to a post' : 'Ask anything about it'}
-            placeholderTextColor={c.placeholder}
-            multiline
-            numberOfLines={1}
-            autoFocus={!idea}
-            // One line to start (a web textarea defaults to two), growing to five.
-            onContentSizeChange={(e) =>
-              setInputHeight(
-                Math.min(120, Math.max(ROW, Math.ceil(e.nativeEvent.contentSize.height))),
-              )
-            }
-            style={[styles.input, { height: inputHeight }]}
-            // Enter sends, Shift+Enter adds a line (web and hardware keyboards).
-            onKeyPress={(e) => {
-              const key = e.nativeEvent as unknown as { key: string; shiftKey?: boolean };
-              if (key.key === 'Enter' && !key.shiftKey) {
-                (e as unknown as { preventDefault?: () => void }).preventDefault?.();
-                void send(draft);
+      {readOnly ? (
+        <View style={{ height: Math.max(insets.bottom, 12) }} />
+      ) : (
+        <View style={[styles.composerWrap, { paddingBottom: Math.max(insets.bottom, 12) }]}>
+          {linksIn(draft).length ? (
+            <View style={styles.linkRow}>
+              {linksIn(draft).map((url) => (
+                <View key={url} style={styles.link}>
+                  <Icon name="link" size={12} color={c.textSecondary} />
+                  <Text style={styles.linkText} numberOfLines={1}>
+                    {hostOf(url)}
+                  </Text>
+                </View>
+              ))}
+            </View>
+          ) : null}
+          <View style={styles.composer}>
+            <PressableScale
+              accessibilityRole="button"
+              accessibilityLabel="Paste a link"
+              hitSlop={6}
+              onPress={() => {
+                tap();
+                setDraft((d) => (d.endsWith(' ') || !d ? `${d}https://` : `${d} https://`));
+              }}
+              style={styles.attach}
+            >
+              <Icon name="paperclip" size={18} color={c.textSecondary} />
+            </PressableScale>
+            <TextInput
+              value={draft}
+              onChangeText={setDraft}
+              placeholder={empty ? 'An idea, or a link to a post' : 'Ask anything about it'}
+              placeholderTextColor={c.placeholder}
+              multiline
+              numberOfLines={1}
+              autoFocus={!idea}
+              // One line to start (a web textarea defaults to two), growing to five.
+              onContentSizeChange={(e) =>
+                setInputHeight(
+                  Math.min(120, Math.max(ROW, Math.ceil(e.nativeEvent.contentSize.height))),
+                )
               }
-            }}
-            onSubmitEditing={() => void send(draft)}
-            submitBehavior="submit"
-            accessibilityLabel="Message"
-          />
-          <PressableScale
-            accessibilityRole="button"
-            accessibilityLabel="Send"
-            accessibilityState={{ disabled: !draft.trim() || busy }}
-            disabled={!draft.trim() || busy}
-            onPress={() => void send(draft)}
-            style={[styles.send, (!draft.trim() || busy) && styles.sendOff]}
-          >
-            {busy ? (
-              <ActivityIndicator size="small" color={c.onPrimary} />
-            ) : (
-              <Icon
-                name="arrowUp"
-                size={18}
-                color={!draft.trim() ? c.textSecondary : c.onPrimary}
-              />
-            )}
-          </PressableScale>
+              style={[styles.input, { height: inputHeight }]}
+              // Enter sends, Shift+Enter adds a line (web and hardware keyboards).
+              onKeyPress={(e) => {
+                const key = e.nativeEvent as unknown as { key: string; shiftKey?: boolean };
+                if (key.key === 'Enter' && !key.shiftKey) {
+                  (e as unknown as { preventDefault?: () => void }).preventDefault?.();
+                  void send(draft);
+                }
+              }}
+              onSubmitEditing={() => void send(draft)}
+              submitBehavior="submit"
+              accessibilityLabel="Message"
+            />
+            <PressableScale
+              accessibilityRole="button"
+              accessibilityLabel="Send"
+              accessibilityState={{ disabled: !draft.trim() || busy }}
+              disabled={!draft.trim() || busy}
+              onPress={() => void send(draft)}
+              style={[styles.send, (!draft.trim() || busy) && styles.sendOff]}
+            >
+              {busy ? (
+                <ActivityIndicator size="small" color={c.onPrimary} />
+              ) : (
+                <Icon
+                  name="arrowUp"
+                  size={18}
+                  color={!draft.trim() ? c.textSecondary : c.onPrimary}
+                />
+              )}
+            </PressableScale>
+          </View>
+          <Gate id="assistantDisclaimer">
+            <Text style={styles.disclaimer}>
+              Honey can be wrong. You review and sign every order.
+            </Text>
+          </Gate>
         </View>
-        <Gate id="assistantDisclaimer">
-          <Text style={styles.disclaimer}>
-            Honey can be wrong. You review and sign every order.
-          </Text>
-        </Gate>
-      </View>
+      )}
     </KeyboardAvoidingView>
   );
 }
@@ -263,12 +341,14 @@ function Message({
   busy,
   last,
   latestStrategy,
+  onVariant,
 }: {
   message: ChatMessage;
   onSay: (text: string) => void;
   busy: boolean;
   last: boolean;
   latestStrategy: string | null;
+  onVariant: (proposal: Proposal) => void;
 }) {
   const styles = useStyles();
   const c = useTheme();
@@ -301,13 +381,15 @@ function Message({
         {message.parts.length === 0 ? <Typing /> : null}
         {message.parts.map((part, i) => (
           <Part
-            // biome-ignore lint/suspicious/noArrayIndexKey: parts are replaced as a whole
-            key={i}
+            // Keyed by kind, so a part keeps its state (the live feed's buffers) when
+            // another arrives before it (the idea, once understood).
+            key={partKey(message.parts, i)}
             part={part}
             onSay={onSay}
             busy={busy}
             stream={last}
             latest={latestStrategy === message.id}
+            onVariant={onVariant}
           />
         ))}
         {!working && text ? (
@@ -368,6 +450,12 @@ function Action({
   );
 }
 
+/** "stages-0", "text-1": a part's kind and its count among that kind. */
+const partKey = (parts: ChatPart[], i: number) => {
+  const type = parts[i]?.type;
+  return `${type}-${parts.slice(0, i).filter((p) => p.type === type).length}`;
+};
+
 /** Three dots while the agent starts thinking. */
 function Typing() {
   const styles = useStyles();
@@ -402,31 +490,30 @@ function Part({
   busy,
   stream,
   latest,
+  onVariant,
 }: {
   part: ChatPart;
   onSay: (t: string) => void;
   busy: boolean;
   stream: boolean;
   latest: boolean;
+  onVariant: (proposal: Proposal) => void;
 }) {
   const styles = useStyles();
   switch (part.type) {
     case 'text':
       return <StreamText text={part.text} stream={stream} />;
+    case 'understood':
+      return <Understood theme={part.theme} picks={part.picks} />;
     case 'stages':
-      // A checklist with a summary header: open while it works, folded once done.
-      return (
-        <StepsCard
-          title="Researching your idea"
-          doneTitle="Researched your idea"
-          steps={STAGES}
-          at={part.done ? STAGES.length : part.at}
-        />
-      );
+      // The steps with their times and live feed: open while it works, folded once done.
+      return <ThesisProgress at={part.at} done={part.done} live={part.live} />;
     case 'strategy':
-      return <AnswerCard proposal={part.proposal} latest={latest} />;
+      return <AnswerCard proposal={part.proposal} latest={latest} onVariant={onVariant} />;
     case 'projection':
       return <ProjectionCard amount={part.amount} risk={part.risk} />;
+    case 'chart':
+      return <ChatChart symbols={part.symbols} range={part.range} picks={part.picks} />;
     case 'replies':
       return (
         <View style={styles.replies}>
@@ -448,21 +535,63 @@ function Part({
 }
 
 /**
- * The answer you act on (2026-11-13): the Feed's strategy card (coins, name, split) and
- * one Continue to "How much?", where the amount, split and risk are set. Nothing it can
- * buy: say so, with the way to pick tokens yourself.
+ * The answer you act on (2026-11-13): the Feed's strategy card (coins, name, split), a
+ * Low / Medium / High switch when the run sized all three (swapped in place, no new AI
+ * call), why each pick, what was left out, what could go wrong, and one Create jar to
+ * "How much?", where the amount is set. Nothing it can buy: say so, with the way to pick
+ * tokens yourself.
  */
-function AnswerCard({ proposal, latest }: { proposal: Proposal; latest: boolean }) {
+function AnswerCard({
+  proposal,
+  latest,
+  onVariant,
+}: {
+  proposal: Proposal;
+  latest: boolean;
+  onVariant: (proposal: Proposal) => void;
+}) {
   const styles = useStyles();
-  if (!proposal.picks.length)
+  const levels = RISKS.filter((r) => proposal.byRisk?.[r]);
+  const [level, setLevel] = useState<Risk>(proposal.risk);
+  const variant = (r: Risk): Proposal =>
+    r === proposal.risk || !proposal.byRisk?.[r]
+      ? proposal
+      : { ...withAmount(proposal.byRisk[r] as Proposal, proposal.amount), byRisk: proposal.byRisk };
+  const shown = variant(level);
+  const cash = shown.cashPct && shown.cashPct > 0 ? shown.cashPct : 0;
+  const left = leftOut(shown.unmatched);
+  const riskSwitch =
+    levels.length > 1 ? (
+      <SegmentedTabs<Risk>
+        options={levels}
+        labels={{ Low: 'Low risk', Medium: 'Medium', High: 'High risk' }}
+        value={level}
+        onChange={(next) => {
+          setLevel(next);
+          if (latest) onVariant(variant(next));
+        }}
+        fill
+      />
+    ) : null;
+  const leftOutBlock = left.length ? (
+    <View>
+      <Text style={styles.sectionLabel}>Left out</Text>
+      <View style={styles.list}>
+        {left.map((u) => (
+          <View key={u.idea}>
+            <Text style={styles.leftOut}>{u.idea}</Text>
+            {u.note ? <Text style={styles.footnote}>{u.note}</Text> : null}
+          </View>
+        ))}
+      </View>
+    </View>
+  ) : null;
+  if (!shown.picks.length)
     return (
       <View style={styles.card}>
         <Text style={styles.cardTitle}>Nothing to buy for this yet</Text>
-        {proposal.unmatched.length ? (
-          <Text style={styles.muted}>
-            {proposal.unmatched.map((u) => u.idea).join(', ')} aren't tokens you can buy.
-          </Text>
-        ) : null}
+        {riskSwitch}
+        {leftOutBlock}
         {latest ? (
           <PillButton
             label="Pick tokens yourself"
@@ -478,13 +607,66 @@ function AnswerCard({ proposal, latest }: { proposal: Proposal; latest: boolean 
   return (
     // A Feed post's strategy well: coins, name, the striped split, then − Buy 5 [USDC] +.
     <StrategyCard
-      picks={proposal.picks}
-      name={proposal.thesis}
-      meta={`${proposal.risk} risk · ${proposal.picks.length} ${
-        proposal.picks.length === 1 ? 'token' : 'tokens'
+      picks={shown.picks}
+      name={shown.thesis}
+      meta={`${shown.risk} risk · ${shown.picks.length} ${
+        shown.picks.length === 1 ? 'token' : 'tokens'
       }`}
       split
     >
+      {riskSwitch}
+      {/* Why each pick, as the app's rows: its logo, the token, the agent's reason (and
+          what would prove it wrong), its share; then what the risk rules kept in USDC.
+          A new risk level slides its rows in from the side it sits on. */}
+      {shown.picks.some((p) => p.reason) || cash ? (
+        <ContentSwap id={level} index={RISKS.indexOf(level)}>
+          <Text style={styles.sectionLabel}>Why these</Text>
+          {shown.picks.map((p) => (
+            <SheetRow
+              key={`${p.symbol}-${p.chain}`}
+              leading={<PickIcon pick={p} size={32} />}
+              title={p.symbol}
+              subtitle={
+                p.wrongIf ? (
+                  <View style={styles.flex}>
+                    {p.reason ? <Text style={styles.rowReason}>{p.reason}</Text> : null}
+                    <Text style={styles.footnote}>{p.wrongIf}</Text>
+                  </View>
+                ) : (
+                  p.reason
+                )
+              }
+              value={`${p.weight}%`}
+            />
+          ))}
+          {cash ? (
+            <SheetRow
+              leading={<PickIcon pick={USDC} size={32} />}
+              title="Kept in USDC"
+              value={`${cash}%`}
+            />
+          ) : null}
+        </ContentSwap>
+      ) : null}
+      {leftOutBlock}
+      {shown.bearCase?.length ? (
+        <View>
+          <Text style={styles.sectionLabel}>What could go wrong</Text>
+          <View style={styles.list}>
+            {shown.bearCase.map((line) => (
+              <View key={line} style={styles.listItem}>
+                <Text style={styles.listText}>•</Text>
+                <Text style={[styles.listText, styles.flex]}>{line}</Text>
+              </View>
+            ))}
+          </View>
+        </View>
+      ) : null}
+      {latest ? (
+        <Text style={styles.footnote}>
+          Crypto is unregulated and can be highly risky. Only invest what you're prepared to lose.
+        </Text>
+      ) : null}
       {latest ? (
         <CopyStepper
           primary
@@ -492,7 +674,8 @@ function AnswerCard({ proposal, latest }: { proposal: Proposal; latest: boolean 
           label="Create jar"
           onCopy={(amount) => {
             tap();
-            chatDraft.set(withAmount(proposal, amount));
+            // The level on screen is the one bought.
+            chatDraft.set(withAmount(shown, amount));
             router.push({ pathname: '/thesis-new', params: { step: 'proposal', from: 'chat' } });
           }}
         />
@@ -739,6 +922,14 @@ const useStyles = makeStyles((c) => ({
   },
   agentText: { color: c.text, fontSize: 16, lineHeight: 23 },
   muted: { color: c.textSecondary, fontSize: 14 },
+  // A section's quiet label, as on a jar's page (15pt, secondary).
+  sectionLabel: { marginBottom: 4, color: c.textSecondary, fontSize: 15 },
+  list: { gap: 6 },
+  listItem: { flexDirection: 'row', gap: 8 },
+  listText: { color: c.text, fontSize: 15, lineHeight: 21 },
+  leftOut: { color: c.textSecondary, fontSize: 14, lineHeight: 19 },
+  // A pick row's reason, as the row's own subtitle reads.
+  rowReason: { color: c.textSecondary, fontSize: 14, lineHeight: 19 },
   card: { padding: 16, gap: 12, ...radius(20), backgroundColor: c.card },
   cardHead: { flexDirection: 'row', alignItems: 'center', gap: 14 },
   cardValue: { color: c.text, fontSize: 26, fontWeight: '700', fontVariant: ['tabular-nums'] },

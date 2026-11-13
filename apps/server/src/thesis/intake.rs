@@ -515,7 +515,7 @@ fn decode(s: &str) -> String {
 /// Escapes the `<` of every `untrusted_source` tag, opening or closing, in any letter
 /// case and with whitespace after `<` or `/`, so quoted content can't end its block early
 /// or open a fake one.
-fn defuse_tags(s: &str) -> String {
+pub fn defuse_tags(s: &str) -> String {
     const TAG: &[u8] = b"untrusted_source";
     let bytes = s.as_bytes();
     let mut out = String::with_capacity(s.len());

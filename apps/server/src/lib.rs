@@ -288,7 +288,11 @@ fn router(config: &Config, health: runtime::RuntimeHealth, services: RouterServi
         .merge(routes::bridges::router(identity.clone(), bridges))
         .merge(routes::near_intents::router(identity.clone(), near_intents))
         .merge(routes::relay_quotes::router(identity.clone(), relay_quotes))
-        .merge(theses_router(identity.clone()))
+        .merge(theses_router(
+            identity.clone(),
+            market.clone(),
+            redis.clone(),
+        ))
         .merge(confidential_intents_router(
             identity.clone(),
             market.clone(),
@@ -462,9 +466,15 @@ fn jar_buys_router(
 }
 
 /// Thesis runs (agent pipeline). Without NEAR_AI_API_KEY it answers with fixtures
-/// (DRY_RUN); the registry fetches lazily, so building the router stays offline.
-fn theses_router(identity: Option<identity::Identity>) -> Router {
-    match thesis::ThesisService::new(thesis::Settings::from_env()) {
+/// (DRY_RUN); the registry fetches lazily, so building the router stays offline. Runs
+/// are kept in Redis when configured, so every instance can answer a poll.
+fn theses_router(
+    identity: Option<identity::Identity>,
+    market: Option<std::sync::Arc<market_data::MarketData>>,
+    redis: Option<redis_store::RedisStore>,
+) -> Router {
+    let pool = identity.as_ref().map(|i| i.pool().clone());
+    match thesis::ThesisService::new(thesis::Settings::from_env(), market, redis, pool) {
         Ok(service) => routes::theses::router(identity, std::sync::Arc::new(service)),
         Err(error) => {
             tracing::error!(%error, "thesis runs disabled");

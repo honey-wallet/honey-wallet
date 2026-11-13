@@ -20,7 +20,7 @@ use std::{convert::Infallible, sync::Arc, time::Duration};
 use uuid::Uuid;
 
 /// Thesis runs per minute: a few per user, and a global ceiling sized for the
-/// hackathon demo (runs are process-local and each spends up to 10 model calls).
+/// hackathon demo (each run spends up to 10 model calls).
 const RUNS: Quota = Quota {
     domain: "thesis_run",
     global: 20,
@@ -35,10 +35,11 @@ struct StateData {
 
 pub fn router(identity: Option<Identity>, service: Arc<ThesisService>) -> Router {
     Router::new()
-        .route("/theses", post(start))
+        .route("/theses", post(start).get(list))
         .route("/theses/{id}", get(view))
         .route("/theses/{id}/artifacts", get(artifacts))
         .route("/theses/{id}/events", get(events))
+        .route("/theses/{id}/stream", get(stream_run))
         .with_state(StateData { identity, service })
 }
 
@@ -86,6 +87,45 @@ async fn start(
     ))
 }
 
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ListQuery {
+    #[serde(default)]
+    limit: Option<i64>,
+    /// RFC 3339: runs created before this (the last `createdAt` of the previous page).
+    #[serde(default)]
+    before: Option<String>,
+}
+
+#[derive(Serialize)]
+struct RunList {
+    runs: Vec<crate::thesis::history::HistoryRun>,
+}
+
+/// The caller's runs, newest first.
+async fn list(
+    State(state): State<StateData>,
+    headers: HeaderMap,
+    query: Result<axum::extract::Query<ListQuery>, axum::extract::rejection::QueryRejection>,
+) -> Result<Json<RunList>, AppError> {
+    let owner = user(&state, &headers).await?;
+    let axum::extract::Query(query) =
+        query.map_err(|_| AppError::BadRequest("invalid query".into()))?;
+    let before = match query.before.as_deref() {
+        Some(b) => Some(
+            time::OffsetDateTime::parse(b, &time::format_description::well_known::Rfc3339)
+                .map_err(|_| AppError::BadRequest("before must be an RFC 3339 time".into()))?,
+        ),
+        None => None,
+    };
+    let runs = state
+        .service
+        .list(owner, query.limit.unwrap_or(20), before)
+        .await
+        .map_err(|_| AppError::Busy)?;
+    Ok(Json(RunList { runs }))
+}
+
 async fn view(
     State(state): State<StateData>,
     headers: HeaderMap,
@@ -96,6 +136,7 @@ async fn view(
         .service
         .view(owner, run_id(&id)?)
         .await
+        .map_err(|_| AppError::Busy)?
         .map(Json)
         .ok_or(AppError::NotFound)
 }
@@ -110,50 +151,124 @@ async fn artifacts(
         .service
         .artifacts(owner, run_id(&id)?)
         .await
+        .map_err(|_| AppError::Busy)?
         .map(Json)
         .ok_or(AppError::NotFound)
 }
 
+/// Progress over SSE. The run may be executing on another instance, so this polls the
+/// shared run store and sends each new progress entry, ending once the run finishes.
 async fn events(
     State(state): State<StateData>,
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, AppError> {
     let owner = user(&state, &headers).await?;
-    let (past, receiver, finished) = state
+    let id = run_id(&id)?;
+    state
         .service
-        .subscribe(owner, run_id(&id)?)
+        .progress_of(owner, id)
         .await
+        .map_err(|_| AppError::Busy)?
         .ok_or(AppError::NotFound)?;
-    let to_event = |p: &crate::thesis::Progress| {
-        Ok::<_, Infallible>(
-            Event::default()
-                .event("progress")
-                .json_data(p)
-                .unwrap_or_else(|_| Event::default().event("progress")),
-        )
-    };
-    let past: Vec<_> = past.iter().map(to_event).collect();
-    let live = stream::unfold((receiver, finished), move |(mut rx, done)| async move {
-        if done {
-            return None;
-        }
-        loop {
-            match rx.recv().await {
-                Ok(p) => {
-                    let end = matches!(
-                        p.stage,
+    let service = state.service.clone();
+    let polls = (EVENTS_MAX.as_secs() / EVENTS_POLL.as_secs().max(1)) as usize;
+    let live = stream::unfold(
+        (service, 0usize, false, 0usize),
+        move |(service, sent, done, tick)| async move {
+            if done || tick > polls {
+                return None;
+            }
+            if tick > 0 {
+                tokio::time::sleep(EVENTS_POLL).await;
+            }
+            let (progress, finished) = match service.progress_of(owner, id).await {
+                Ok(Some(p)) => p,
+                Ok(None) => return None,
+                // Store briefly unavailable: try again on the next tick.
+                Err(_) => (Vec::new(), false),
+            };
+            let fresh: Vec<_> = progress.iter().skip(sent).map(to_event).collect();
+            let sent = sent.max(progress.len());
+            Some((stream::iter(fresh), (service, sent, finished, tick + 1)))
+        },
+    )
+    .flatten();
+    Ok(Sse::new(live).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))))
+}
+
+/// The whole run as Server-Sent Events: `event: update` with the run JSON (as from
+/// `GET /theses/{id}`) whenever it changes (feed, live model text, partial results,
+/// stage), a heartbeat comment every 10 s, closed once the run is done or failed. Reads
+/// the shared run store, so it works whichever instance runs the pipeline. Polling the
+/// run keeps working for older apps.
+async fn stream_run(
+    State(state): State<StateData>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<impl axum::response::IntoResponse, AppError> {
+    let owner = user(&state, &headers).await?;
+    let id = run_id(&id)?;
+    state
+        .service
+        .view(owner, id)
+        .await
+        .map_err(|_| AppError::Busy)?
+        .ok_or(AppError::NotFound)?;
+    let service = state.service.clone();
+    let polls = (STREAM_MAX.as_millis() / STREAM_POLL.as_millis()) as usize;
+    let updates = stream::unfold(
+        (service, String::new(), false, 0usize),
+        move |(service, last, done, tick)| async move {
+            if done || tick > polls {
+                return None;
+            }
+            if tick > 0 {
+                tokio::time::sleep(STREAM_POLL).await;
+            }
+            let (body, finished) = match service.view(owner, id).await {
+                Ok(Some(view)) => {
+                    let finished = matches!(
+                        view.stage,
                         crate::thesis::Stage::Done | crate::thesis::Stage::Failed
                     );
-                    return Some((to_event(&p), (rx, end)));
+                    (serde_json::to_string(&view).unwrap_or_default(), finished)
                 }
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(_) => return None,
-            }
-        }
-    });
-    Ok(Sse::new(stream::iter(past).chain(live))
-        .keep_alive(KeepAlive::new().interval(Duration::from_secs(15))))
+                Ok(None) => return None,
+                // Store briefly unavailable: try again on the next tick.
+                Err(_) => (last.clone(), false),
+            };
+            let event = (body != last)
+                .then(|| Ok::<_, Infallible>(Event::default().event("update").data(body.clone())));
+            Some((stream::iter(event), (service, body, finished, tick + 1)))
+        },
+    )
+    .flatten();
+    Ok((
+        [
+            (axum::http::header::CACHE_CONTROL, "no-cache, no-transform"),
+            (
+                axum::http::HeaderName::from_static("x-accel-buffering"),
+                "no",
+            ),
+        ],
+        Sse::new(updates).keep_alive(KeepAlive::new().interval(Duration::from_secs(10))),
+    ))
+}
+
+const STREAM_POLL: Duration = Duration::from_millis(500);
+/// Runs end within 180 s; Cloud Run's request timeout must be at least this (300 s).
+const STREAM_MAX: Duration = Duration::from_secs(240);
+
+const EVENTS_POLL: Duration = Duration::from_secs(1);
+/// A run ends within its 180 s deadline; the stream gives up a little after that.
+const EVENTS_MAX: Duration = Duration::from_secs(200);
+
+fn to_event(p: &crate::thesis::Progress) -> Result<Event, Infallible> {
+    Ok(Event::default()
+        .event("progress")
+        .json_data(p)
+        .unwrap_or_else(|_| Event::default().event("progress")))
 }
 
 #[cfg(test)]

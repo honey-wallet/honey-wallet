@@ -244,6 +244,7 @@ export default function RootLayout() {
               <Stack.Screen name="(jars)/saved" />
               <Stack.Screen name="(jars)/jar-create" options={tray()} />
               <Stack.Screen name="(jars)/thesis-chat" />
+              <Stack.Screen name="(jars)/thesis-history" />
               <Stack.Screen name="(jars)/jar/[id]" />
               {/* Group jars: the group's page, its invite and Launch's friend picker */}
               <Stack.Screen name="(jars)/group/[id]" />

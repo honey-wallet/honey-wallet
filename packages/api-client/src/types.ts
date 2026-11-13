@@ -687,6 +687,7 @@ export type ThesisStage = 'intake' | 'understand' | 'strategize' | 'done' | 'fai
 export interface StartThesis {
   text?: string;
   links?: string[];
+  /** `risk` picks which level the proposal opens on; all three are built (`byRisk`). */
   params?: { amountUsd?: number; risk?: ThesisRisk };
 }
 
@@ -696,8 +697,63 @@ export interface ThesisStarted {
   dryRun: boolean;
 }
 
+/**
+ * Fine-grained pipeline step. `stage` stays within `ThesisStage`; shortlist, pick, critic,
+ * size and quote all report stage `strategize`.
+ */
+export type ThesisStep =
+  | 'intake'
+  | 'research'
+  | 'understand'
+  | 'shortlist'
+  | 'pick'
+  | 'critic'
+  | 'size'
+  | 'quote'
+  | 'done'
+  | 'failed';
+
+/** One line of the live feed, appended as the run goes ("Picked TAO: …"). */
+export interface ThesisFeedEvent {
+  at: string;
+  step: ThesisStep | string;
+  text: string;
+  /** Milliseconds since this step started. */
+  ms?: number;
+}
+
+/** When a step ran; `endedAt` is absent while it runs. */
+export interface ThesisStepTime {
+  step: ThesisStep | string;
+  startedAt: string;
+  endedAt?: string;
+}
+
+/** The current model call's reply as it streams in (its last ~1,500 characters). */
+export interface ThesisThinking {
+  step: ThesisStep | string;
+  text: string;
+}
+
+/** A pick known before sizing and quotes finish. */
+export interface ThesisPartialPick {
+  symbol: string;
+  exposure: string;
+  conviction: ThesisConviction;
+  reason: string;
+}
+
+/** What is known before the proposal is ready. */
+export interface ThesisPartial {
+  theme?: string;
+  exposures?: Thesis['exposures'];
+  picks?: ThesisPartialPick[];
+}
+
 export interface ThesisProgress {
   stage: ThesisStage;
+  /** Added with the harness; absent on older runs. Treat unknown values as `stage`. */
+  step?: ThesisStep | string;
   message: string;
   at: string;
 }
@@ -736,7 +792,16 @@ export interface Thesis {
   rationale: string;
   horizon: string;
   conviction: string;
-  exposures: { label: string; instruments: string[] }[];
+  exposures: {
+    label: string;
+    instruments: string[];
+    /** An exposure category id (e.g. `ai`, `gold`); absent when none fits. */
+    category?: string;
+    /** An objective, observable sign this part of the idea is wrong. */
+    wrongIf?: string;
+  }[];
+  /** Why the whole idea could fail (1-4 bullets). */
+  bearCase?: string[];
 }
 
 export interface RegistryAsset {
@@ -748,32 +813,105 @@ export interface RegistryAsset {
   priceUsd: number | null;
   instrumentType: 'stablecoin' | 'tokenized_stock' | 'token';
   issuer: string | null;
+  /** CoinGecko's id for the coin, when 1Click gives one. */
+  coingeckoId?: string | null;
 }
 
-/** Strategy/1 */
+export type ThesisConviction = 'high' | 'medium' | 'low';
+
+/** Market data for a pick, from Honey's data (never written by the model). */
+export interface ThesisPickMarket {
+  /** 1Click's live price (what Honey quotes). */
+  priceUsd: number;
+  marketCapUsd?: number;
+  volume24hUsd?: number;
+  /** In percent. */
+  change24hPct?: number;
+}
+
+/** A dry 1Click quote from USDC for the pick's amount. Nothing is executed. */
+export interface ThesisPickQuote {
+  ok: boolean;
+  /** Estimated amount received, in whole tokens (decimal string, e.g. "0.006442"). */
+  amountOut?: string;
+  note?: string;
+}
+
+export interface ThesisPick {
+  asset: RegistryAsset;
+  exposure: string;
+  weightPct: number;
+  amountUsd: number;
+  match: 'direct' | 'proxy';
+  /** One plain sentence on why this asset carries the exposure. */
+  reason?: string;
+  conviction?: ThesisConviction;
+  market?: ThesisPickMarket;
+  quote?: ThesisPickQuote;
+}
+
+/** Strategy/1. Fields after `quoted` were added with the harness and are optional. */
 export interface Strategy {
   version: 'Strategy/1';
-  picks: {
-    asset: RegistryAsset;
-    exposure: string;
-    weightPct: number;
-    amountUsd: number;
-    match: 'direct' | 'proxy';
-  }[];
+  picks: ThesisPick[];
   unmatched: { idea: string; note: string }[];
   ignored: string[];
+  /** Every pick has a working dry quote. */
   quoted: boolean;
+  /** 2-4 bullets on how this could lose money (the critic's, else the thesis's). */
+  bearCase?: string[];
+  /** The second-opinion check; `skipped` when it didn't run (notes say why). */
+  critic?: { verdict: 'ok' | 'revised' | 'skipped'; notes: string[] };
+  /** Prompt name to version, plus `model` (the model id), e.g. { pick: 'pick/3', model: '…' }. */
+  promptVersions?: Record<string, string>;
+  /**
+   * Percent kept in USDC: what the risk caps or the critic trimmed, or 100 when nothing
+   * fits. Dollar stablecoins are never picks; holding dollars shows up here. Weights plus
+   * cashPct sum to 100.
+   */
+  cashPct?: number;
+  /** A plain sentence for the user: why the proposal is empty, or what is kept in USDC. */
+  note?: string;
+  /**
+   * The same run sized for every risk level, so the app can switch levels without a new
+   * run. The top-level fields equal `byRisk[params.risk]`. Absent inside the variants.
+   */
+  byRisk?: { low: Strategy; medium: Strategy; high: Strategy };
 }
 
 /** GET /api/v1/theses/:id */
 export interface ThesisRun {
   runId: string;
   stage: ThesisStage;
+  /** Fine-grained step of the latest progress entry. */
+  step?: ThesisStep | string;
   dryRun: boolean;
+  startedAt?: string;
+  /** The live feed, oldest first. */
+  events?: ThesisFeedEvent[];
+  steps?: ThesisStepTime[];
+  /** Present only while a model call streams. */
+  thinking?: ThesisThinking;
+  partial?: ThesisPartial;
   progress: ThesisProgress[];
   intent: IntentRecord | null;
   thesis: Thesis | null;
   proposal: Strategy | null;
+}
+
+/** One run in `GET /api/v1/theses?limit=20&before=<createdAt>` (newest first). */
+export interface ThesisHistoryRun {
+  runId: string;
+  text: string;
+  createdAt: string;
+  stage: ThesisStage;
+  theme?: string;
+  picks?: { symbol: string; weightPct: number }[];
+}
+
+/** GET /api/v1/theses */
+export interface ThesisHistory {
+  runs: ThesisHistoryRun[];
 }
 
 /** GET /api/v1/theses/:id/artifacts */

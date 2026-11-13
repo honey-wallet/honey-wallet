@@ -122,6 +122,7 @@ import type {
   SwapIntent,
   SwapQuoteRequest,
   ThesisArtifact,
+  ThesisHistory,
   ThesisRun,
   ThesisStarted,
   VersionInfo,
@@ -501,6 +502,18 @@ export function createApiClient({ baseUrl, fetch: fetchImpl = fetch }: ApiClient
         isThesisRun,
         authorized(token, init),
       ),
+    /** The caller's runs, newest first; pass the last `createdAt` as `before` for more. */
+    theses: (
+      token: string,
+      query: { limit?: number; before?: string } = {},
+      init?: RequestInit,
+    ) => {
+      const params = new URLSearchParams();
+      if (query.limit !== undefined) params.set('limit', String(query.limit));
+      if (query.before) params.set('before', query.before);
+      const suffix = params.size > 0 ? `?${params}` : '';
+      return validated(`/api/v1/theses${suffix}`, isThesisHistory, authorized(token, init));
+    },
     thesisArtifacts: (token: string, runId: string, init?: RequestInit) =>
       validated(
         `/api/v1/theses/${encodeURIComponent(runId)}/artifacts`,
@@ -1158,6 +1171,11 @@ function isThesisStarted(value: unknown): value is ThesisStarted {
 }
 
 const THESIS_STAGES = new Set(['intake', 'understand', 'strategize', 'done', 'failed']);
+
+function isThesisHistory(value: unknown): value is ThesisHistory {
+  const v = value as ThesisHistory | null;
+  return !!v && Array.isArray(v.runs);
+}
 
 function isThesisRun(value: unknown): value is ThesisRun {
   const v = value as ThesisRun | null;

@@ -205,6 +205,11 @@ export default function NewThesisSheet() {
   useEffect(() => {
     if (!proposal || fixedPicks || !text.trim()) return;
     byRisk.current[proposal.risk] = proposal;
+    // A run that sized every level already has them: no more AI calls.
+    for (const level of RISKS) {
+      const known = proposal.byRisk?.[level];
+      if (known) byRisk.current[level] ??= { ...known, byRisk: proposal.byRisk };
+    }
     for (const level of RISKS) {
       if (byRisk.current[level]) continue;
       runThesis({ text, amount: proposal.amount, risk: level }, () => {})
