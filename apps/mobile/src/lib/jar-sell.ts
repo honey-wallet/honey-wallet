@@ -21,12 +21,14 @@ import {
   usdcOn,
   waitForDex,
 } from '@/lib/dex';
+import { floorSignificant } from '@/lib/format';
 import { DEADLINE_MARGIN_MS, msLeft, QuoteRanOut, REQUOTE_BELOW_MS } from '@/lib/intents-quote';
 import {
   executeSwapPayment,
   fetchSwapTokens,
   type IntentsSwap,
   MAX_INPUT_DECIMALS,
+  noWorse,
   prepareSwapPayment,
   quoteSwap,
   requoteSwap,
@@ -317,7 +319,9 @@ export async function executeJarSell(
     sent.push(done);
   }
   for (const sale of q.dex) {
-    const done = await sellDex(jar, sale, deps);
+    // const done = await sellDex(jar, sale, deps);
+    // The same confirmation shows a re-quoted onward price before it's paid (nov14-c audit 3).
+    const done = await sellDex(jar, sale, { ...deps, confirm });
     if (done) sent.push(done);
   }
   if (q.frac >= 1 && sent.length === q.swaps.length + q.dex.filter((x) => x.payout).length)
@@ -336,7 +340,12 @@ export async function executeJarSell(
 async function sellDex(
   jar: ThesisJar,
   sale: DexSale,
-  deps: Partial<SwapDeps> & { dex?: Partial<DexDeps> },
+  // deps: Partial<SwapDeps> & { dex?: Partial<DexDeps> },
+  deps: Partial<SwapDeps> & {
+    dex?: Partial<DexDeps>;
+    /** Asks again (Face ID or password) with a new price before paying it. */
+    confirm?: (reason: string) => Promise<boolean>;
+  },
 ): Promise<IntentsSwap | null> {
   const { leg, units, chain, quoted } = sale;
   const sent = await executeDex(quoted, {}, deps.dex);
@@ -390,6 +399,16 @@ async function sellDex(
       const fresh = await requoteSwap(payout, deps);
       if (!withinSlippage(payout, fresh))
         throw new Error('The price moved past your max slippage since you reviewed it');
+      // payout = fresh;
+      // Replaced 14 Nov (nov14-c audit 3), as Swap does: a fresh minimum at least the one
+      // shown goes straight on; a lower one is shown and paid only once you confirm it.
+      if (!noWorse(payout, fresh)) {
+        const least = `${floorSignificant(unitsText(fresh.minAmountOut, fresh.buyDecimals))} ${fresh.buy.symbol}`;
+        const ok = await (deps.confirm ?? (async () => false))(
+          `The price moved: get at least ${least} for the USDC from ${leg.symbol}`,
+        );
+        if (!ok) throw new Error('You didn’t confirm the new price');
+      }
       payout = fresh;
     }
     const plan = await prepareSwapPayment(payout, { ...deps, prepare: quiet });
