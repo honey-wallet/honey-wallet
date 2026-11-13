@@ -12,8 +12,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PriceChart } from '@/components/charts/PriceChart';
 import { Icon } from '@/components/Icon';
 import { JarGuide } from '@/components/jars/JarGuide';
-import { exposureSlices, JarCard } from '@/components/jars/JarParts';
-import { TokenArc } from '@/components/jars/TokenArc';
+import { exposureSlices, JarCard, Mix } from '@/components/jars/JarParts';
 import { NumberPopIn } from '@/components/motion/NumberPopIn';
 import { SegmentedTabs } from '@/components/motion/SegmentedTabs';
 import {
@@ -43,8 +42,6 @@ const RANGE_POINTS: Record<Range, number> = { '1W': 8, '1M': 30, All: Number.POS
 const CHART_HEIGHT = 120;
 /** How much of the sheet shows under the chart before you swipe it up. */
 const PEEK = 88;
-/** The split arc's widest, so it sits under the chart without scrolling. */
-const ARC_MAX = 260;
 
 /**
  * Jars: everything here is yours (2026-11-12). On top, what your jars are worth, the
@@ -77,7 +74,6 @@ export function JarsScreen() {
   const [width, setWidth] = useState(0);
   const [topHeight, setTopHeight] = useState(0);
   const [scrub, setScrub] = useState<number | null>(null);
-  const [sheetWidth, setSheetWidth] = useState(0);
 
   const total = mine.reduce((s, j) => s + jarValue(j), 0);
   const invested = mine.reduce((s, j) => s + j.invested, 0);
@@ -205,20 +201,8 @@ export function JarsScreen() {
                 {split.length ? (
                   <>
                     <Text style={styles.heading}>What your jars hold</Text>
-                    <View
-                      style={styles.arc}
-                      onLayout={(e) => setSheetWidth(e.nativeEvent.layout.width)}
-                    >
-                      {sheetWidth > 0 ? (
-                        // The total is already up top: the arc's middle counts the tokens.
-                        <TokenArc
-                          slices={split}
-                          total={String(split.length)}
-                          label={split.length === 1 ? 'token' : 'tokens'}
-                          width={Math.min(sheetWidth, ARC_MAX)}
-                        />
-                      ) : null}
-                    </View>
+                    {/* The standard striped split (Feed, How much?, jar pages); no wheel. */}
+                    <Mix picks={split} />
                   </>
                 ) : null}
 
@@ -376,7 +360,6 @@ const useStyles = makeStyles((c) => ({
     backgroundColor: c.raised,
   },
   heading: { color: c.textSecondary, fontSize: 15, marginBottom: 10 },
-  arc: { alignItems: 'center' },
   section: { marginTop: 28 },
   shelf: { gap: 10 },
 }));
