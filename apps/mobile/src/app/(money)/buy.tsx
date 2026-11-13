@@ -69,7 +69,9 @@ function BuySheet() {
   // const options = isWeb ? allOptions.filter((o) => o.icon !== 'trade') : allOptions;
   // Buying with cash shows only once it's live (Buy goes straight to Swap until then,
   // lib/buy `openBuy`); selling for cash stays, dimmed, as coming soon.
-  const options = allOptions.filter((o) => selling || !o.soon);
+  // const options = allOptions.filter((o) => selling || !o.soon);
+  // Buy shows cash too, dimmed as Coming soon, the same as Sell (14 Nov).
+  const options = allOptions;
 
   return (
     <SheetScreen title={selling ? `Sell ${what}` : `Buy ${what}`}>

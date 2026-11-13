@@ -167,11 +167,13 @@ describe('buying one token with what you hold', () => {
     router.navigate.mockClear();
   });
 
-  it('opens Swap to buy the token, paying with ETH, and quotes from ETH', async () => {
+  it('opens the Buy sheet; its Swap pays with ETH and quotes from ETH', async () => {
+    // Buy opens its sheet (card dimmed as Coming soon, then Swap); Swap there presets the pair.
     openBuy([eth], 'AERO');
-    expect(router.navigate).toHaveBeenCalledWith('/trade');
-    // Straight to Swap: no choice sheet while cash is coming soon.
-    expect(router.push).not.toHaveBeenCalled();
+    expect(router.push).toHaveBeenCalledWith({ pathname: '/buy', params: { symbol: 'AERO' } });
+    // expect(router.navigate).toHaveBeenCalledWith('/trade');
+    // expect(router.push).not.toHaveBeenCalled();
+    presetBuy([eth], 'AERO');
     const { sell, buy } = swap.get();
     expect(sell).toEqual({ symbol: 'ETH', chain: 'Base' });
     expect(buy).toEqual({ symbol: 'AERO', chain: 'Base', assetId: AERO });
