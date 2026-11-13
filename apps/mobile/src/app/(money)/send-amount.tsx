@@ -39,6 +39,7 @@ import {
 } from '@/lib/mock-wallet';
 import { type ProposalAction, propose, useSigner } from '@/lib/multisig';
 import { followFix, useFailure } from '@/lib/outcomes';
+import { refreshAfterChange } from '@/lib/portfolio';
 import {
   prepareSend,
   recipientChains,
@@ -207,12 +208,15 @@ export default function SendAmountSheet() {
       const walletId = wallet.id;
       setSent(await plan.execute(() => wallets.get().activeId === walletId));
       success();
+      // The balance and Activity show the send as soon as the chain does.
+      refreshAfterChange(wallet);
       setPage('sent');
     } catch (error) {
       showErrorToast(error instanceof Error ? error.message : 'Send failed');
       // Signed or handed to Honey: its outcome may be unknown, so never offer this plan
       // again. Back to the amount, where Review reads the chain afresh.
       if (plan.spent?.()) {
+        refreshAfterChange(wallet);
         setPlan(null);
         setPage('amount');
       }

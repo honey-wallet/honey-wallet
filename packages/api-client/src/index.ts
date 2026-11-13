@@ -57,6 +57,7 @@ export {
   isTokenInfo,
   isTokenLogos,
   isTokenMarket,
+  type PortfolioReadOptions,
   portfolioQuery,
 } from './portfolio';
 export {

@@ -1,0 +1,19 @@
+import { AppState } from 'react-native';
+
+/**
+ * Calls `refresh` every `everyMs`, and as soon as the app comes back to the foreground
+ * (timers don't run while it's in the background, so a quote left open there comes back
+ * stale). Returns a function that stops both.
+ */
+export function keepFresh(refresh: () => void, everyMs: number) {
+  const timer = setInterval(refresh, everyMs);
+  let was = AppState.currentState;
+  const sub = AppState.addEventListener('change', (state) => {
+    if (state === 'active' && was !== 'active') refresh();
+    was = state;
+  });
+  return () => {
+    clearInterval(timer);
+    sub.remove();
+  };
+}

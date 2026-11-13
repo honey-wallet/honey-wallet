@@ -55,40 +55,141 @@ export const addressKey = (a: PortfolioAddresses) =>
 const patch = (key: string, next: Partial<Entry>) =>
   portfolios.set((prev) => ({ ...prev, [key]: { ...EMPTY, ...prev[key], ...next } }));
 
-export async function refreshBalances(addresses: PortfolioAddresses, force = false) {
+/**
+ * The newest read started per address set and kind: an older read that answers later
+ * (a cached one overtaken by a fresh one) is dropped rather than shown.
+ */
+const latest = new Map<string, number>();
+let reads = 0;
+const begin = (key: string) => {
+  const n = ++reads;
+  latest.set(key, n);
+  return () => latest.get(key) === n;
+};
+
+/**
+ * `force` reads even when the last read is recent; `fresh` also asks the server past its
+ * own cache (after a transaction), and isn't held back by a read already under way.
+ */
+export async function refreshBalances(addresses: PortfolioAddresses, force = false, fresh = false) {
   const key = addressKey(addresses);
   const entry = portfolios.get()[key];
-  if (entry?.loadingBalances) return entry.portfolio;
-  if (!force && entry && Date.now() - entry.balancesAt < STALE_MS) return entry.portfolio;
+  if (entry?.loadingBalances && !fresh) return entry.portfolio;
+  if (!force && !fresh && entry && Date.now() - entry.balancesAt < STALE_MS) return entry.portfolio;
+  const current = begin(`balances:${key}`);
   patch(key, { loadingBalances: true });
   try {
-    const portfolio = await api.portfolioBalances(addresses);
+    const portfolio = await api.portfolioBalances(addresses, undefined, { fresh });
+    if (!current()) return portfolio;
     patch(key, { portfolio, loadingBalances: false, error: false, balancesAt: Date.now() });
     return portfolio;
   } catch {
-    patch(key, { loadingBalances: false, error: true, balancesAt: Date.now() });
+    if (current()) patch(key, { loadingBalances: false, error: true, balancesAt: Date.now() });
     return undefined;
   }
 }
 
-export async function refreshActivity(addresses: PortfolioAddresses, force = false) {
+export async function refreshActivity(addresses: PortfolioAddresses, force = false, fresh = false) {
   const key = addressKey(addresses);
   const entry = portfolios.get()[key];
-  if (entry?.loadingActivity) return;
-  if (!force && entry && Date.now() - entry.activityAt < STALE_MS) return;
+  if (entry?.loadingActivity && !fresh) return;
+  if (!force && !fresh && entry && Date.now() - entry.activityAt < STALE_MS) return;
+  const current = begin(`activity:${key}`);
   patch(key, { loadingActivity: true });
   try {
-    const { items } = await api.portfolioActivity(addresses);
-    patch(key, { activity: items, loadingActivity: false, activityAt: Date.now() });
+    const { items } = await api.portfolioActivity(addresses, undefined, { fresh });
+    if (current()) patch(key, { activity: items, loadingActivity: false, activityAt: Date.now() });
   } catch {
-    patch(key, { loadingActivity: false, activityAt: Date.now() });
+    if (current()) patch(key, { loadingActivity: false, activityAt: Date.now() });
   }
+}
+
+/** The addresses Honey reads for a wallet, or null for sample and shared wallets. */
+const liveAddresses = (wallet: AddedWallet) =>
+  wallet.demo || wallet.kind !== 'wallet' ? null : addressesOf(wallet);
+
+/** Pull to refresh: balances and history now, past the server's cache. */
+export async function refreshNow(wallet: AddedWallet) {
+  const addresses = liveAddresses(wallet);
+  if (!addresses) return undefined;
+  const [portfolio] = await Promise.all([
+    refreshBalances(addresses, true, true),
+    refreshActivity(addresses, true, true),
+  ]);
+  return portfolio;
+}
+
+/**
+ * When to read again after a transaction: now, then as it confirms and the explorers
+ * index it (a node has the new balance within seconds; history can take half a minute).
+ */
+export const AFTER_CHANGE_MS = [0, 5_000, 15_000, 40_000];
+
+/** Amounts per token and chain (not dollars: prices move on their own). */
+const amountsOf = (p: Portfolio | undefined) =>
+  p
+    ? p.holdings
+        .map((h) => `${h.chain}:${h.symbol}:${h.amount}`)
+        .sort()
+        .join('|')
+    : null;
+
+/** The schedule running per address set; a newer transaction replaces it. */
+const afterChange = new Map<string, () => void>();
+
+/**
+ * After this wallet sends, swaps, buys or sells: reads balances and history past every
+ * cache now, then again on `AFTER_CHANGE_MS`, until the balances differ from before. One
+ * more history read follows that, since explorers index after the node answers. Returns
+ * a function that stops it.
+ */
+export function refreshAfterChange(wallet: AddedWallet, schedule = AFTER_CHANGE_MS): () => void {
+  const addresses = liveAddresses(wallet);
+  if (!addresses) return () => {};
+  const key = addressKey(addresses);
+  afterChange.get(key)?.();
+  let before = amountsOf(portfolios.get()[key]?.portfolio);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let stopped = false;
+  const stop = () => {
+    stopped = true;
+    clearTimeout(timer);
+    if (afterChange.get(key) === stop) afterChange.delete(key);
+  };
+  const at = (step: number, run: () => Promise<void>) => {
+    const wait = schedule[step];
+    if (stopped || wait === undefined) return stop();
+    const prev = schedule[step - 1] ?? 0;
+    timer = setTimeout(() => void run(), Math.max(0, wait - prev));
+  };
+  const round = (step: number) => async () => {
+    if (stopped) return;
+    const [portfolio] = await Promise.all([
+      refreshBalances(addresses, true, true),
+      refreshActivity(addresses, true, true),
+    ]);
+    if (stopped) return;
+    const now = amountsOf(portfolio);
+    // Nothing read before: this read is what later ones are compared with.
+    if (before === null) before = now;
+    else if (now !== null && now !== before) {
+      // Balances moved: one last history read at the next step, then done.
+      return at(step + 1, async () => {
+        if (!stopped) await refreshActivity(addresses, true, true);
+        stop();
+      });
+    }
+    at(step + 1, round(step + 1));
+  };
+  afterChange.set(key, stop);
+  at(0, round(0));
+  return stop;
 }
 
 /** A wallet's live balances (and, with `withActivity`, history), fetched as needed. */
 export function usePortfolio(wallet: AddedWallet, withActivity = false) {
   const all = portfolios.useValue();
-  const addresses = wallet.demo || wallet.kind !== 'wallet' ? null : addressesOf(wallet);
+  const addresses = liveAddresses(wallet);
   const key = addresses ? addressKey(addresses) : '';
   const { evm, solana, near } = addresses ?? {};
   useEffect(() => {

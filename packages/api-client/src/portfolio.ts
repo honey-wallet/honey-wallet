@@ -22,13 +22,24 @@ const nullable = <T>(v: unknown, is: (v: unknown) => v is T) => v === null || is
 const optional = <T>(v: unknown, is: (v: unknown) => v is T) => v === undefined || nullable(v, is);
 const isString = (v: unknown): v is string => typeof v === 'string';
 
+/**
+ * How a portfolio read is made. `fresh` skips the server's short cache (right after a
+ * transaction this app made); the server limits these per client and answers from the
+ * cache past that.
+ */
+export type PortfolioReadOptions = { fresh?: boolean };
+
 /** Query string for the portfolio endpoints; empty values are left out. */
-export function portfolioQuery(addresses: PortfolioAddresses): string {
+export function portfolioQuery(
+  addresses: PortfolioAddresses,
+  options: PortfolioReadOptions = {},
+): string {
   const params = new URLSearchParams();
   for (const key of ['evm', 'solana', 'near'] as const) {
     const value = addresses[key]?.trim();
     if (value) params.set(key, value);
   }
+  if (options.fresh) params.set('fresh', '1');
   return params.toString();
 }
 

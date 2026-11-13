@@ -32,6 +32,9 @@ const ACTIVITY_TTL: Duration = Duration::from_secs(60);
 const NEAR_ACTIVITY_TTL: Duration = Duration::from_secs(180);
 /// A chain that didn't answer isn't asked again for this long.
 const FAILED_TTL: Duration = Duration::from_secs(20);
+/// A `fresh` read (the app asks right after a transaction it made) skips the cache,
+/// except NEAR history: NearBlocks' keyless tier can't take a read every few seconds.
+const NEAR_FRESH_TTL: Duration = Duration::from_secs(30);
 const MAX_ENTRIES: usize = 5_000;
 const ACTIVITY_LIMIT: usize = 50;
 /// Token contracts read per EVM chain in one Multicall3 batch.
@@ -402,8 +405,12 @@ impl PortfolioService {
         {
             let cache = self.cache.read().await;
             if let Some((at, Cached::Rows(rows))) = cache.get(&key) {
-                let fresh = if rows.is_some() { ttl } else { FAILED_TTL };
-                if at.elapsed() < fresh {
+                let max_age = if rows.is_some() {
+                    ttl
+                } else {
+                    FAILED_TTL.min(ttl)
+                };
+                if at.elapsed() < max_age {
                     return rows.clone();
                 }
             }
@@ -448,10 +455,12 @@ impl PortfolioService {
             .ok()
     }
 
-    /// Balances on every chain for these addresses, priced in USD.
-    pub async fn balances(&self, addresses: &Addresses) -> Portfolio {
+    /// Balances on every chain for these addresses, priced in USD. `fresh` skips the
+    /// cached answer (the new one is still kept for everyone else).
+    pub async fn balances(&self, addresses: &Addresses, fresh: bool) -> Portfolio {
         let key = format!("balances:{}", addresses.key());
-        if let Some(Cached::Portfolio(p)) = self.cached(&key, BALANCES_TTL).await {
+        let ttl = if fresh { Duration::ZERO } else { BALANCES_TTL };
+        if let Some(Cached::Portfolio(p)) = self.cached(&key, ttl).await {
             return p;
         }
         let tokens = match &self.market {
@@ -766,8 +775,14 @@ impl PortfolioService {
     /// transaction. EVM reads Alchemy with a key, else Blockscout (native and ERC-20
     /// transfers), else Etherscan's v2 API with a key, NEAR reads NearBlocks, and Solana reads
     /// signatures from its node and decodes the newest few for amounts. Each chain is
-    /// cached on its own, so one slow explorer doesn't make the others re-read.
-    pub async fn activity(&self, addresses: &Addresses) -> Activity {
+    /// cached on its own, so one slow explorer doesn't make the others re-read. `fresh`
+    /// skips the cached rows (NEAR's only after `NEAR_FRESH_TTL`).
+    pub async fn activity(&self, addresses: &Addresses, fresh: bool) -> Activity {
+        let (ttl, near_ttl) = if fresh {
+            (Duration::ZERO, NEAR_FRESH_TTL)
+        } else {
+            (ACTIVITY_TTL, NEAR_ACTIVITY_TTL)
+        };
         let tokens = match &self.market {
             Some(m) => m.tokens().await.ok(),
             None => None,
@@ -785,10 +800,7 @@ impl PortfolioService {
                 reads.push(Box::pin(async move {
                     let key = format!("rows:{}:{evm}", network.chain);
                     let read = self.evm_activity(network, evm, listed);
-                    (
-                        network.chain,
-                        self.rows_cached(key, ACTIVITY_TTL, read).await,
-                    )
+                    (network.chain, self.rows_cached(key, ttl, read).await)
                 }));
             }
         }
@@ -796,14 +808,14 @@ impl PortfolioService {
             reads.push(Box::pin(async move {
                 let key = format!("rows:Solana:{sol}");
                 let read = self.solana_activity(sol, listed);
-                ("Solana", self.rows_cached(key, ACTIVITY_TTL, read).await)
+                ("Solana", self.rows_cached(key, ttl, read).await)
             }));
         }
         if let Some(near) = &addresses.near {
             reads.push(Box::pin(async move {
                 let key = format!("rows:NEAR:{near}");
                 let read = self.near_activity(near);
-                ("NEAR", self.rows_cached(key, NEAR_ACTIVITY_TTL, read).await)
+                ("NEAR", self.rows_cached(key, near_ttl, read).await)
             }));
         }
         let mut items = Vec::new();

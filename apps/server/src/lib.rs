@@ -198,7 +198,17 @@ fn router(config: &Config, health: runtime::RuntimeHealth, services: RouterServi
         std::sync::Arc::new(routes::polymarket::PolymarketCatalogService::new(store))
     }));
     let market = market_data();
-    let public_markets = public_markets.merge(portfolio_router(market.clone()));
+    let portfolio = portfolio_router(
+        market.clone(),
+        redis.clone().map(|redis| {
+            routes::identity::AuthenticatedApiAdmission::new(
+                redis,
+                config.trust_proxy_headers,
+                config.trusted_proxy_cidrs.clone(),
+            )
+        }),
+    );
+    let public_markets = public_markets.merge(portfolio);
     let public_markets = if let Some(redis) = redis.clone() {
         public_markets.route_layer(middleware::from_fn_with_state(
             routes::identity::AuthenticatedApiAdmission::new(
@@ -364,9 +374,23 @@ fn market_data() -> Option<std::sync::Arc<market_data::MarketData>> {
 }
 
 /// Public balances and activity for the user's addresses (keyless public nodes).
-fn portfolio_router(market: Option<std::sync::Arc<market_data::MarketData>>) -> Router {
+/// `fresh=1` reads skip its cache, a few a minute per client when Redis can count them
+/// (production always has Redis; a loopback dev server leaves them unlimited).
+fn portfolio_router(
+    market: Option<std::sync::Arc<market_data::MarketData>>,
+    fresh_admission: Option<routes::identity::AuthenticatedApiAdmission>,
+) -> Router {
     match portfolio::PortfolioService::new(market) {
-        Ok(service) => routes::portfolio::router(service),
+        Ok(service) => {
+            let router = routes::portfolio::router(service);
+            match fresh_admission {
+                Some(admission) => router.route_layer(middleware::from_fn_with_state(
+                    admission,
+                    routes::identity::limit_fresh_portfolio_reads_by_ip,
+                )),
+                None => router,
+            }
+        }
         Err(error) => {
             tracing::error!(%error, "portfolio reads disabled");
             Router::new()

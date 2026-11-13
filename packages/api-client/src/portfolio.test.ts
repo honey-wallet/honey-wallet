@@ -165,6 +165,13 @@ describe('portfolio', () => {
     expect(String(fetch.mock.calls[0]?.[0])).toBe(
       'http://api.test/api/v1/portfolio/balances?evm=0xabc',
     );
+    // After a transaction the app asks past the server's cache.
+    await api.portfolioBalances({ evm: '0xabc' }, undefined, { fresh: true });
+    await api.portfolioActivity({ near: 'me.near' }, undefined, { fresh: true });
+    expect(fetch.mock.calls.slice(-2).map(([url]) => String(url))).toEqual([
+      'http://api.test/api/v1/portfolio/balances?evm=0xabc&fresh=1',
+      'http://api.test/api/v1/portfolio/activity?near=me.near&fresh=1',
+    ]);
     const [url, init] = fetch.mock.calls[2] ?? [];
     expect(String(url)).toBe('http://api.test/api/v1/me/account');
     expect(init?.method).toBe('DELETE');

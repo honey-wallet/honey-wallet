@@ -147,7 +147,8 @@ export default function PortfolioScreen() {
     const addresses = addressesOf(wallet);
     if (!addresses) return;
     // Only claim it worked when it did: refreshBalances returns nothing on a failure.
-    const fresh = await refreshBalances(addresses, true);
+    // Past the server's cache too, so a balance that just changed shows.
+    const fresh = await refreshBalances(addresses, true, true);
     if (fresh) showToast('Prices refreshed');
     else showErrorToast('Couldn’t refresh. Check your connection');
   };

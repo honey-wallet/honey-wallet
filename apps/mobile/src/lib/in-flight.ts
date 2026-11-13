@@ -89,6 +89,21 @@ async function tick() {
   }
 }
 
+/**
+ * Settled: what was bought (or refunded) is in the wallet now, so its balance and
+ * Activity are read again past every cache. Loaded on demand, like lib/jar-buy's reads:
+ * the balances module pulls in the screens' stack.
+ */
+function refreshWallet(walletId?: string) {
+  void Promise.all([import('@/lib/portfolio'), import('@/lib/wallets')])
+    .then(([{ refreshAfterChange }, { wallets }]) => {
+      const { added, activeId } = wallets.get();
+      const wallet = added.find((w) => w.id === (walletId ?? activeId));
+      if (wallet) refreshAfterChange(wallet);
+    })
+    .catch(() => {});
+}
+
 const anyMoving = () =>
   Object.values(intentsSwaps.get()).some(swapMoving) ||
   thesisJars.get().some((j) => j.mine && legsMoving(j.buy));
@@ -124,6 +139,7 @@ export function useInFlightWatcher() {
         if (was && !now) {
           const outcome = swapOutcome(s);
           if (outcome) (outcome.error ? showErrorToast : showToast)(outcome.message, 3200);
+          refreshWallet(s.walletId);
         }
       }
       syncPolling();
@@ -136,6 +152,8 @@ export function useInFlightWatcher() {
         if (was && !now) {
           const outcome = jarOutcome(j);
           if (outcome) (outcome.error ? showErrorToast : showToast)(outcome.message, 3200);
+          // Jars are bought by the wallet in use (lib/jar-buy's payer).
+          refreshWallet();
         }
       }
       syncPolling();

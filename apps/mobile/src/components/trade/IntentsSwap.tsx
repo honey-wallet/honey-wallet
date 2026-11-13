@@ -16,6 +16,7 @@ import { applyKey, Keypad, PercentChips, TypedAmount } from '@/components/wallet
 import { SCREEN, TokenIcon } from '@/components/wallet/parts';
 import { backendSession, backendSessionToken } from '@/lib/backend-session';
 import { success, tap } from '@/lib/haptics';
+import { REFRESH_FAILED } from '@/lib/intents-quote';
 import {
   canBuyRef,
   canSellRef,
@@ -25,10 +26,16 @@ import {
   isFinal,
   loadSwapTokens,
   MAX_INPUT_DECIMALS,
+  nearExpiry,
   needsMemoWarning,
   needsRecipient,
   prepareSwapPayment,
+  priceMoved,
+  QuoteRanOut,
   quoteSwap,
+  type ReadySwap,
+  readyToPay,
+  refreshQuote,
   type IntentsSwap as Swap,
   SwapTooSmall,
   sameToken,
@@ -40,8 +47,11 @@ import {
   unsupportedReason,
   useIntentsSwaps,
 } from '@/lib/intents-swap';
+import { keepFresh } from '@/lib/keep-fresh';
 import { formatBalance, formatUsd } from '@/lib/mock-wallet';
+import { refreshAfterChange } from '@/lib/portfolio';
 import type { SendPlan } from '@/lib/send';
+import { serverNow } from '@/lib/server-clock';
 import { shareTrade } from '@/lib/social';
 import { type TokenRef, updateSwap, useSwap } from '@/lib/swap';
 import { explorerTxOn } from '@/lib/tx-receipt';
@@ -85,13 +95,16 @@ function supportedPair(
   return { sell, buy };
 }
 
-/** Ticks every `ms` while `ms` is set, for countdowns. */
+/**
+ * The server's time (lib/server-clock.ts: quote deadlines are on its clock, and the
+ * phone's may be minutes off), ticking every `ms` while `ms` is set, for countdowns.
+ */
 function useNow(ms: number | null) {
-  const [now, setNow] = useState(() => Date.now());
+  const [now, setNow] = useState(serverNow);
   useEffect(() => {
     if (!ms) return;
-    setNow(Date.now());
-    const timer = setInterval(() => setNow(Date.now()), ms);
+    setNow(serverNow());
+    const timer = setInterval(() => setNow(serverNow()), ms);
     return () => clearInterval(timer);
   }, [ms]);
   return now;
@@ -489,21 +502,33 @@ function IntentsSwapForm() {
                   swap={tray.swap}
                   note={tray.note}
                   onBack={() => setTray(null)}
-                  onConfirm={(plan) => {
+                  onQuote={(was, fresh) =>
+                    // The screen behind shows the refreshed quote too, once the review closes.
+                    setQuote((q) =>
+                      q && q.swap.depositAddress === was.depositAddress
+                        ? { key: q.key, swap: fresh }
+                        : q,
+                    )
+                  }
+                  onConfirm={(swap, plan) => {
                     if (paying.current) return;
                     paying.current = true;
-                    const swap = tray.swap;
                     setTray({ kind: 'progress', swap });
                     const walletId = wallet.id;
+                    const paidFrom = wallet;
                     executeSwapPayment(swap, plan, () => wallets.get().activeId === walletId)
                       .then(() => {
+                        // What was sold leaves now; what's bought follows when the swap
+                        // settles (lib/in-flight reads again then).
+                        refreshAfterChange(paidFrom);
                         setAmount('');
                         setQuote(null);
                       })
                       .catch((e) => {
                         const text = message(e, 'The swap didn’t send.');
-                        // Cancelled at the prompt: back to the review, nothing sent.
-                        if (/cancelled/i.test(text)) {
+                        // Cancelled at the prompt, or the quote ran out while it was up:
+                        // back to the review (which fetches a fresh price), nothing sent.
+                        if (/cancelled/i.test(text) || e instanceof QuoteRanOut) {
                           setTray({ kind: 'review', swap, note: text });
                           return;
                         }
@@ -552,31 +577,91 @@ const countdown = (ms: number) => {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 };
 
+/** While the review is open the quote is refreshed this often, and on coming back to the app. */
+const REFRESH_MS = 30_000;
+/** How long "Price updated" stays. */
+const FLASH_MS = 4_000;
+
 /**
  * The review: what you pay and the least you get, the full deposit address you pay
  * into, the networks, the network cost, and that refunds come back to you. The deposit
- * is prepared (and checked with NEAR Intents once more) as it opens.
+ * is prepared (and checked with NEAR Intents once more) as it opens. While it's open the
+ * quote is refreshed quietly (lib/intents-swap.ts `refreshQuote`), and Confirm on a quote
+ * about to run out fetches a fresh one first (`readyToPay`).
  */
 function ReviewStep({
-  swap,
+  swap: opened,
   note,
   onBack,
+  onQuote,
   onConfirm,
 }: {
   swap: Swap;
   note?: string;
   onBack: () => void;
-  onConfirm: (plan: SendPlan) => void;
+  /** A refresh replaced the quote `was` with `fresh`. */
+  onQuote: (was: Swap, fresh: Swap) => void;
+  onConfirm: (swap: Swap, plan: SendPlan) => void;
 }) {
   const styles = useStyles();
   const c = useTheme();
-  const [plan, setPlan] = useState<SendPlan | null>(null);
+  // The quote shown and, once prepared and checked, its payment. A refresh replaces both
+  // together, so Swap never pays one quote with another's plan.
+  const [{ swap, plan }, setReady] = useState<{ swap: Swap; plan: SendPlan | null }>({
+    swap: opened,
+    plan: null,
+  });
   const [error, setError] = useState<string | null>(null);
+  const [flash, setFlash] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  // For the timers: the latest quote, a refresh in flight, and whether Swap was handed on.
+  const latest = useRef({ swap, plan, onQuote });
+  latest.current = { swap, plan, onQuote };
+  const inFlight = useRef<Promise<void> | null>(null);
+  const handedOn = useRef(false);
+
+  const show = (was: Swap, next: ReadySwap) => {
+    setReady(next);
+    setError(null);
+    if (priceMoved(was, next.swap)) setFlash('Price updated');
+    latest.current.onQuote(was, next.swap);
+  };
+
+  // A fresh quote in the background. A failure only shows once the quote on screen can't
+  // be confirmed as it is; until then it stands.
+  const refresh = () => {
+    if (inFlight.current || handedOn.current) return inFlight.current;
+    const was = latest.current.swap;
+    const run = refreshQuote(was)
+      .then((next) => {
+        if (!handedOn.current && latest.current.swap === was) show(was, next);
+      })
+      .catch((e) => {
+        if (!handedOn.current && nearExpiry(latest.current.swap))
+          setError(message(e, REFRESH_FAILED));
+      })
+      .finally(() => {
+        inFlight.current = null;
+      });
+    inFlight.current = run;
+    return run;
+  };
+  const refreshRef = useRef(refresh);
+  refreshRef.current = refresh;
+
   useEffect(() => {
     let live = true;
-    prepareSwapPayment(swap)
+    handedOn.current = false;
+    setReady({ swap: opened, plan: null });
+    setError(null);
+    // Opened (or came back) with too little time left: start from a fresh quote.
+    if (nearExpiry(opened)) {
+      void refreshRef.current();
+      return;
+    }
+    prepareSwapPayment(opened)
       .then((p) => {
-        if (live) setPlan(p);
+        if (live && latest.current.swap === opened) setReady({ swap: opened, plan: p });
       })
       .catch((e) => {
         if (live) setError(message(e, 'Couldn’t prepare the swap.'));
@@ -584,7 +669,53 @@ function ReviewStep({
     return () => {
       live = false;
     };
-  }, [swap]);
+  }, [opened]);
+
+  // Every 30 s while open, and whenever the app comes back to the foreground.
+  useEffect(() => {
+    handedOn.current = false;
+    const stop = keepFresh(() => void refreshRef.current(), REFRESH_MS);
+    return () => {
+      handedOn.current = true;
+      stop();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!flash) return;
+    const timer = setTimeout(() => setFlash(null), FLASH_MS);
+    return () => clearTimeout(timer);
+  }, [flash]);
+
+  const confirm = async () => {
+    if (confirming) return;
+    tap();
+    setConfirming(true);
+    try {
+      // Let a refresh already on its way land first, then decide on the latest quote.
+      await inFlight.current;
+      const { swap: was, plan: wasPlan } = latest.current;
+      const ready = wasPlan ? { swap: was, plan: wasPlan } : null;
+      if (!ready) {
+        await refreshRef.current();
+        return;
+      }
+      const next = await readyToPay(ready);
+      if (handedOn.current) return;
+      if (next.swap !== was) show(was, next);
+      if (next.pay) {
+        handedOn.current = true;
+        onConfirm(next.swap, next.plan);
+      } else setFlash('Price updated. Check it, then swap.');
+    } catch (e) {
+      if (!handedOn.current) setError(message(e, REFRESH_FAILED));
+    } finally {
+      setConfirming(false);
+    }
+  };
+  // A failed refresh left nothing to pay: the button asks again.
+  const retry = !plan && error === REFRESH_FAILED;
+  const ready = !confirming && (!!plan || retry);
   const pay = `${unitsText(swap.amountIn, swap.sellDecimals)} ${swap.sell.symbol}`;
   const get = `${unitsText(swap.minAmountOut, swap.buyDecimals)} ${swap.buy.symbol}`;
   const network =
@@ -628,6 +759,7 @@ function ReviewStep({
         </Text>
       ) : null}
       {plan?.note ? <Text style={styles.small}>{plan.note}</Text> : null}
+      {flash ? <Text style={styles.small}>{flash}</Text> : null}
       {error || note ? <Text style={[styles.small, styles.error]}>{error ?? note}</Text> : null}
       <View style={styles.actions}>
         <PressableScale
@@ -643,18 +775,24 @@ function ReviewStep({
         </PressableScale>
         <PressableScale
           accessibilityRole="button"
-          accessibilityLabel="Swap"
-          accessibilityState={{ disabled: !plan }}
-          disabled={!plan}
-          onPress={() => {
-            if (!plan) return;
-            tap();
-            onConfirm(plan);
-          }}
-          style={[styles.swap, !plan && styles.swapOff]}
+          accessibilityLabel={retry ? 'Try again' : 'Swap'}
+          accessibilityState={{ disabled: !ready }}
+          disabled={!ready}
+          onPress={() => void confirm()}
+          style={[styles.swap, !ready && styles.swapOff]}
         >
           <Icon name="faceId" size={20} color={c.onPrimary} />
-          <Text style={styles.swapLabel}>{plan ? 'Swap' : error ? 'Can’t swap' : 'Checking…'}</Text>
+          <Text style={styles.swapLabel}>
+            {confirming
+              ? 'Checking…'
+              : plan
+                ? 'Swap'
+                : retry
+                  ? 'Try again'
+                  : error
+                    ? 'Can’t swap'
+                    : 'Checking…'}
+          </Text>
         </PressableScale>
       </View>
     </View>

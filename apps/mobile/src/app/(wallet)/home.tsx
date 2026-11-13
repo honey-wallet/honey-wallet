@@ -1,7 +1,7 @@
 import { type Href, router, useLocalSearchParams } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useState } from 'react';
-import { StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { RefreshControl, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import Animated, {
   Extrapolation,
   interpolate,
@@ -64,6 +64,7 @@ import { BALANCE_HISTORY, EARN, formatUsd } from '@/lib/mock-wallet';
 import { useMultisig } from '@/lib/multisig';
 import { setupComplete, useOnboarding } from '@/lib/onboarding';
 import { isWeb } from '@/lib/platform';
+import { refreshNow } from '@/lib/portfolio';
 import { HIDDEN_AMOUNT, updateSettings, useSettings } from '@/lib/settings';
 import { EXTENSION, SHARED_WALLETS, SOCIAL, WALLET } from '@/lib/surface';
 import { useTabReselect } from '@/lib/tab-reselect';
@@ -159,6 +160,13 @@ function HomeScreen() {
   const wallet = useActiveWallet();
   const isMain = isMainWallet(wallet);
   const multisig = useMultisig(wallet.id);
+  // Pull to refresh: balances and Activity read again, past the server's cache.
+  const [refreshing, setRefreshing] = useState(false);
+  const refresh = async () => {
+    setRefreshing(true);
+    await refreshNow(wallet).catch(() => undefined);
+    setRefreshing(false);
+  };
   // Each wallet's balances arrive once; switching back to one shows them straight away.
   const firstLoad = useFirstLoad(LOADS.balances(wallet.id));
 
@@ -260,6 +268,14 @@ function HomeScreen() {
           style={styles.root}
           onScroll={onScroll}
           scrollEventThrottle={16}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={refresh}
+              tintColor={c.textSecondary}
+              progressViewOffset={insets.top + HEADER_TOP + HEADER_ROW}
+            />
+          }
           contentContainerStyle={{
             paddingTop: insets.top + HEADER_TOP,
             paddingBottom: insets.bottom + TAB_BAR_HEIGHT + 24,

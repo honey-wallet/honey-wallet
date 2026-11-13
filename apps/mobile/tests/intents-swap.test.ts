@@ -24,7 +24,10 @@ const {
   needsMemoWarning,
   parseOneClickTokens,
   prepareSwapPayment,
+  priceMoved,
+  QuoteRanOut,
   quoteSwap,
+  readyToPay,
   refreshSwap,
   FALLBACK_SWAP_TOKENS,
   shownInWallet,
@@ -847,5 +850,108 @@ describe('payout wording', () => {
     expect(needsMemoWarning('Stellar')).toBe(true);
     expect(needsMemoWarning('TON')).toBe(true);
     expect(needsMemoWarning('Bitcoin')).toBe(false);
+  });
+});
+
+describe('a quote kept fresh at Confirm', () => {
+  const FRESH = '0x3333333333333333333333333333333333333333';
+  /** 75 s before the first quote's deadline: under the 90 s that triggers a re-quote. */
+  const LATE = Date.parse('2026-11-09T12:13:45Z');
+  const freshLeg = (amountOut: string, minAmountOut: string) =>
+    leg({ depositAddress: FRESH, amountOut, minAmountOut, deadline: '2026-11-09T12:28:45Z' });
+  const deps = (amountOut: string, minAmountOut: string) => ({
+    fetcher: oneClick({}, { depositAddress: FRESH.toLowerCase(), minAmountOut }),
+    quote: vi.fn(async () => quote([freshLeg(amountOut, minAmountOut)])),
+    prepare: vi.fn(async () => plan({ to: FRESH }) as never),
+    now: () => LATE,
+  });
+
+  beforeEach(() => {
+    wallets.set({ activeId: 'seed-0', added: [wallet] });
+    intentsSwaps.set({});
+  });
+
+  it('pays a quote with time left as it is', async () => {
+    const d = deps('50000000', '49500000');
+    const shown = { swap: swap(), plan: plan() as never };
+    const r = await readyToPay(shown, { ...d, now: () => NOW });
+    expect(r).toMatchObject({ pay: true, swap: shown.swap, plan: shown.plan });
+    expect(d.quote).not.toHaveBeenCalled();
+  });
+
+  it('re-quotes one about to run out and goes on when the price held within slippage', async () => {
+    // 49104000 is within 1% of the 49500000 shown.
+    const d = deps('49600000', '49104000');
+    const r = await readyToPay({ swap: swap(), plan: plan() as never }, d);
+    expect(d.quote).toHaveBeenCalledTimes(1);
+    expect(r.pay).toBe(true);
+    expect(r.swap).toMatchObject({
+      depositAddress: FRESH,
+      minAmountOut: '49104000',
+      amountIn: '2000000000000000',
+      recipient: MY_SOL,
+      refundTo: ME,
+    });
+    expect(d.prepare).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ to: FRESH }),
+    );
+    expect(priceMoved(swap(), r.swap)).toBe(true);
+  });
+
+  it('shows a price that moved past slippage and waits for one more tap', async () => {
+    const r = await readyToPay(
+      { swap: swap(), plan: plan() as never },
+      deps('45500000', '45045000'),
+    );
+    expect(r.pay).toBe(false);
+    expect(r.swap.minAmountOut).toBe('45045000');
+  });
+
+  it('says the price couldn’t refresh, never “expired”, when re-quoting fails', async () => {
+    const d = {
+      ...deps('50000000', '49500000'),
+      quote: vi.fn(async () => Promise.reject(new Error('busy'))),
+    };
+    await expect(readyToPay({ swap: swap(), plan: plan() as never }, d)).rejects.toThrow(
+      'Couldn’t refresh the price. Try again.',
+    );
+    // A fresh quote that pays someone else is refused the same way.
+    const bad = {
+      ...deps('50000000', '49500000'),
+      quote: vi.fn(async () =>
+        quote([leg({ recipient: OTHER_SOL, deadline: '2026-11-09T12:28:45Z' })]),
+      ),
+    };
+    await expect(readyToPay({ swap: swap(), plan: plan() as never }, bad)).rejects.toThrow(
+      'Couldn’t refresh the price',
+    );
+    expect(bad.prepare).not.toHaveBeenCalled();
+  });
+
+  it('never signs an expired quote, nor one that ran out while Face ID was up', async () => {
+    const p = plan();
+    await expect(
+      executeSwapPayment(swap(), p as never, () => true, {
+        now: () => Date.parse('2026-11-09T12:14:30Z'),
+      }),
+    ).rejects.toThrow('expired');
+    expect(p.execute).not.toHaveBeenCalled();
+    expect(intentsSwaps.get()[DEPOSIT]).toBeUndefined();
+
+    let clock = NOW;
+    const sign = vi.fn();
+    const slow = plan({
+      execute: vi.fn(async (isCurrent: () => boolean) => {
+        clock = Date.parse('2026-11-09T12:14:30Z'); // Face ID sat open
+        if (!isCurrent()) throw new Error('Wallet changed. Review the send again.');
+        sign();
+      }),
+    });
+    await expect(
+      executeSwapPayment(swap(), slow as never, () => true, { now: () => clock }),
+    ).rejects.toBeInstanceOf(QuoteRanOut);
+    expect(sign).not.toHaveBeenCalled();
+    expect(intentsSwaps.get()[DEPOSIT]).toBeUndefined();
   });
 });

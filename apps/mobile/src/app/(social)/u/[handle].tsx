@@ -16,6 +16,7 @@ import Svg, { Circle, Defs, Pattern, Rect } from 'react-native-svg';
 import { PriceChart } from '@/components/charts/PriceChart';
 import { Icon } from '@/components/Icon';
 import { ActionMenu } from '@/components/motion/ActionMenu';
+import { MenuDropdown } from '@/components/motion/MenuDropdown';
 import { PressableScale } from '@/components/motion/PressableScale';
 import { SkeletonBar, SkeletonReveal } from '@/components/motion/Skeleton';
 import { PILL_HEIGHT, PillButton } from '@/components/onboarding/PillButton';
@@ -37,13 +38,15 @@ import {
   holdingsOf,
   loadProfile,
   pct,
+  privacyOf,
   type SocialProfile,
+  setPrivacy,
   shareProfile,
   socialError,
   toggleFollow,
   useSocial,
 } from '@/lib/social';
-import { showErrorToast } from '@/lib/toast';
+import { showErrorToast, showToast } from '@/lib/toast';
 import { requireSignIn } from '@/lib/wallet-gate';
 import { makeStyles, useTheme } from '@/theme';
 
@@ -219,6 +222,8 @@ function ProfileBody({
   ].sort((a, b) => b.at - a.at);
   // Their P&L over 30 days as a dense line: their jars' tokens' prices, ending on the P&L.
   const { pnl, line: pnlLine } = usePnlLine(profile.jars, '1M');
+  // Your own P&L setting: Private, Returns only or Public (the ••• menu and the lock).
+  const level = pnlLevelOf(profile);
   const tokens = useMemo(() => holdingsOf(profile).map((t) => t.symbol), [profile]);
   const following = profile.followedByMe;
 
@@ -236,6 +241,8 @@ function ProfileBody({
         line={pnlLine}
         scrollY={scrollY}
         onOpen={() => router.push({ pathname: '/pnl', params: { handle } })}
+        // Your own private P&L: tap the lock to choose who sees it, right here.
+        level={profile.isMe ? level : undefined}
       />
       {/* As on X: the avatar over the banner's edge, the actions across from its lower half. */}
       <View style={styles.avatarRow}>
@@ -274,6 +281,14 @@ function ProfileBody({
           <ActionMenu
             actions={[
               { label: 'Share profile', icon: 'share', onPress: () => void shareProfile(handle) },
+              // Your own P&L: who sees it, from here and not only in Settings.
+              ...(profile.isMe
+                ? PNL_LEVELS.map((l) => ({
+                    label: `P&L: ${l.label}`,
+                    icon: (l.value === level ? 'check' : l.icon) as 'check',
+                    onPress: () => void setPnlLevel(l.value),
+                  }))
+                : []),
               ...(pnl
                 ? [
                     {
@@ -491,17 +506,51 @@ function Bio({ text }: { text: string }) {
  * with its fill fading under it (PriceChart, so it scrubs), and a chip with the number.
  * Private: the same dotted card with a lock. Pulling the page down stretches it.
  */
+/**
+ * Who sees your P&L, in three steps over the existing privacy switches: Private (no
+ * returns), Returns only (returns, not what your jars hold) and Public (both).
+ */
+type PnlLevel = 'private' | 'returns' | 'public';
+const PNL_LEVELS: { value: PnlLevel; label: string; icon: 'lock' | 'trendUp' | 'eye' }[] = [
+  { value: 'private', label: 'Private', icon: 'lock' },
+  { value: 'returns', label: 'Returns only', icon: 'trendUp' },
+  { value: 'public', label: 'Public', icon: 'eye' },
+];
+function pnlLevelOf(profile: SocialProfile): PnlLevel {
+  const p = privacyOf(profile);
+  if (!p?.showReturns) return 'private';
+  return p.showHoldings ? 'public' : 'returns';
+}
+async function setPnlLevel(level: PnlLevel) {
+  tap();
+  try {
+    await setPrivacy({ showReturns: level !== 'private', showHoldings: level === 'public' });
+    showToast(
+      level === 'private'
+        ? 'Only you see your P&L'
+        : level === 'returns'
+          ? 'Others see your returns, not what you hold'
+          : 'Others see your returns and what you hold',
+    );
+  } catch (error) {
+    showErrorToast(socialError(error));
+  }
+}
+
 function Banner({
   pnl,
   line,
   scrollY,
   onOpen,
+  level,
 }: {
   pnl: Pnl | null;
   line: number[];
   scrollY: SharedValue<number>;
   /** Opens their P&L sheet. */
   onOpen: () => void;
+  /** Your own profile: who sees your P&L, so the lock can change it. */
+  level?: PnlLevel;
 }) {
   const styles = useStyles();
   const c = useTheme();
@@ -565,10 +614,29 @@ function Banner({
           </PressableScale>
         ) : (
           <View style={[styles.locked, { top: insets.top }]}>
-            <View style={styles.lockedPill}>
-              <Icon name="lock" size={14} color={c.textSecondary} />
-              <Text style={styles.lockedText}>P&L is private</Text>
-            </View>
+            {level ? (
+              <MenuDropdown
+                options={PNL_LEVELS.map((l) => ({
+                  value: l.value,
+                  label: l.label,
+                  leading: <Icon name={l.icon} size={16} color={c.textSecondary} />,
+                }))}
+                value={level}
+                onChange={(next) => void setPnlLevel(next)}
+                trigger={() => (
+                  <View style={styles.lockedPill}>
+                    <Icon name="lock" size={14} color={c.textSecondary} />
+                    <Text style={styles.lockedText}>P&L is private</Text>
+                    <Text style={styles.lockedAction}>Change</Text>
+                  </View>
+                )}
+              />
+            ) : (
+              <View style={styles.lockedPill}>
+                <Icon name="lock" size={14} color={c.textSecondary} />
+                <Text style={styles.lockedText}>P&L is private</Text>
+              </View>
+            )}
           </View>
         )}
       </View>
@@ -661,6 +729,7 @@ const useStyles = makeStyles((c) => ({
     backgroundColor: c.canvas,
   },
   lockedText: { color: c.textSecondary, fontSize: 14, fontWeight: '700' },
+  lockedAction: { color: c.accentText, fontSize: 14, fontWeight: '700' },
   // The avatar over the banner's edge, the actions across from its lower half.
   avatarRow: {
     flexDirection: 'row',

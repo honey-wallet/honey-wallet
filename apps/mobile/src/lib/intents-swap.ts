@@ -32,15 +32,21 @@ import {
   checkDeadline,
   checkOneClickRecord,
   checkOneClickTerms,
+  DEADLINE_MARGIN_MS,
   MAX_SLIPPAGE_BPS,
   MIN_VALUE_KEPT,
   minWithinSlippage,
+  msLeft,
+  QuoteRanOut,
   quoteChanged,
+  REFRESH_FAILED,
+  REQUOTE_BELOW_MS,
   sameAddress,
 } from '@/lib/intents-quote';
 import { viewStorageRegistered } from '@/lib/jar-dao-core';
 import { type Chain, EVM_CHAIN_IDS, NATIVE_COIN } from '@/lib/mock-wallet';
 import { prepareSend, type SendPlan, validRecipient } from '@/lib/send';
+import { serverNow } from '@/lib/server-clock';
 import { createStore } from '@/lib/store';
 import type { TokenRef } from '@/lib/swap';
 import { TEST_MODE } from '@/lib/test-mode';
@@ -677,7 +683,8 @@ const defaults: SwapDeps = {
   quote: (...args) => api.jarBuyQuote(...args),
   nearFtReady: (token, account) => viewStorageRegistered(createNearRpc('mainnet'), token, account),
   prepare: prepareSend,
-  now: () => Date.now(),
+  // The server's clock: deadlines are set on it, and a phone's may be minutes off.
+  now: serverNow,
 };
 
 /** A live, verified quote for selling `amount` (decimal text) of `sell` for `buy`. Nothing is signed. */
@@ -793,6 +800,100 @@ export async function quoteSwap(
   return swap;
 }
 
+// ---------------------------------------------------------------------------
+// Keeping a quote fresh while it's reviewed
+
+export { QuoteRanOut };
+
+/** A quote ready to pay: the swap and its deposit payment, prepared and checked. */
+export type ReadySwap = { swap: IntentsSwap; plan: SendPlan };
+
+/**
+ * Asks again for exactly this swap: same wallet, pair, amount, payout and refund, with
+ * every check `quoteSwap` makes. A fresh quote has its own deposit address. Nothing is signed.
+ */
+export async function requoteSwap(
+  swap: IntentsSwap,
+  deps: Partial<SwapDeps> = {},
+): Promise<IntentsSwap> {
+  const fresh = await quoteSwap(
+    {
+      sell: swap.sell,
+      buy: swap.buy,
+      amount: unitsText(swap.amountIn, swap.sellDecimals),
+      recipient: swap.externalRecipient ? swap.recipient : undefined,
+    },
+    deps,
+  );
+  if (
+    fresh.walletId !== swap.walletId ||
+    fresh.originAsset !== swap.originAsset ||
+    fresh.destinationAsset !== swap.destinationAsset ||
+    fresh.amountIn !== swap.amountIn ||
+    !sameAddress(fresh.recipient, swap.recipient) ||
+    !sameAddress(fresh.refundTo, swap.refundTo) ||
+    !!fresh.externalRecipient !== !!swap.externalRecipient ||
+    fresh.slippageBps !== swap.slippageBps
+  )
+    throw quoteChanged();
+  return fresh;
+}
+
+/**
+ * A fresh quote for the swap under review, with its payment prepared (and checked with
+ * 1Click) like the first. Any failure reads "Couldn’t refresh the price", never "expired".
+ */
+export async function refreshQuote(
+  swap: IntentsSwap,
+  deps: Partial<SwapDeps> = {},
+): Promise<ReadySwap> {
+  try {
+    const fresh = await requoteSwap(swap, deps);
+    return { swap: fresh, plan: await prepareSwapPayment(fresh, deps) };
+  } catch (cause) {
+    throw new Error(REFRESH_FAILED, { cause });
+  }
+}
+
+/** Whether a quote has under `REQUOTE_BELOW_MS` left on the server's clock. */
+export const nearExpiry = (swap: Pick<IntentsSwap, 'deadline'>, now = serverNow()) =>
+  !(msLeft(swap.deadline, now) >= REQUOTE_BELOW_MS);
+
+/** The least you get moved by more than 0.5%: worth saying "Price updated". */
+export function priceMoved(
+  was: Pick<IntentsSwap, 'minAmountOut'>,
+  now: Pick<IntentsSwap, 'minAmountOut'>,
+) {
+  const a = BigInt(was.minAmountOut);
+  const b = BigInt(now.minAmountOut);
+  const diff = a > b ? a - b : b - a;
+  return diff * 1000n > a * 5n;
+}
+
+/** A fresh minimum no worse than the shown one less the slippage the swap allows. */
+export const withinSlippage = (
+  shown: Pick<IntentsSwap, 'minAmountOut' | 'slippageBps'>,
+  fresh: Pick<IntentsSwap, 'minAmountOut'>,
+) =>
+  BigInt(fresh.minAmountOut) >=
+  (BigInt(shown.minAmountOut) * BigInt(10_000 - shown.slippageBps)) / 10_000n;
+
+/**
+ * At Confirm: a quote with `REQUOTE_BELOW_MS` or more left is paid as it is. One with
+ * less is quoted again first; if the fresh minimum is within the swap's slippage of the
+ * one shown, it goes straight on to Face ID with the fresh quote (`pay`), otherwise the
+ * new price is shown and needs one more tap. Throws `REFRESH_FAILED` when re-quoting fails.
+ */
+export async function readyToPay(
+  shown: ReadySwap,
+  deps: Partial<SwapDeps> = {},
+): Promise<ReadySwap & { pay: boolean }> {
+  const d = { ...defaults, ...deps };
+  if (!nearExpiry(shown.swap, d.now())) return { ...shown, pay: true };
+  const fresh = await refreshQuote(shown.swap, deps);
+  return { ...fresh, pay: withinSlippage(shown.swap, fresh.swap) };
+}
+
 const alreadyUsed = () =>
   new Error('This quote was already used. Check Activity, then get a new quote.');
 
@@ -898,14 +999,22 @@ export async function executeSwapPayment(
   if (plan.to !== swap.depositAddress) throw quoteChanged();
   const sending: IntentsSwap = { ...swap, status: 'SENDING', sentAt: d.now() };
   saveSwap(sending);
+  // Checked again once Face ID returns, right before signing: a prompt left open must
+  // never sign a quote that has run out (or is about to).
+  let ranOut = false;
+  const live = () => {
+    ranOut = !(msLeft(swap.deadline, d.now()) >= DEADLINE_MARGIN_MS);
+    return !ranOut && isCurrent();
+  };
   let result: Awaited<ReturnType<SendPlan['execute']>>;
   try {
-    result = await plan.execute(isCurrent);
+    result = await plan.execute(live);
   } catch (error) {
     const message = error instanceof Error ? error.message : '';
-    // Cancelled at the prompt or the wallet changed: nothing was signed.
+    // Cancelled at the prompt, the wallet changed or the quote ran out: nothing was signed.
     if (/cancelled|Wallet changed/i.test(message)) forgetSwap(swap.depositAddress);
     else saveSwap({ ...sending, status: 'NOT_SENT' });
+    if (ranOut && /Wallet changed/i.test(message)) throw new QuoteRanOut();
     throw error;
   }
   const sent: IntentsSwap = {

@@ -58,3 +58,35 @@ it('pays every Base leg in one batch Honey pays the gas of', async () => {
     [HASH, 'KNOWN_DEPOSIT_TX'],
   ]);
 });
+
+it('re-quotes rather than pays a jar buy about to run out, before Face ID or after it', async () => {
+  const { QuoteRanOut } = await import('../src/lib/jar-buy');
+  const sponsorEvm = vi.fn(async () => ({ plan: {} as never, calls: [] }));
+  const nearly = {
+    ...leg('0x1111111111111111111111111111111111111111', '5000000'),
+    deadline: new Date(Date.now() + 80_000).toISOString(),
+  };
+  const confirm = vi.fn(async () => true);
+  await expect(payJarBuy([nearly], undefined, undefined, { confirm, sponsorEvm })).rejects.toThrow(
+    QuoteRanOut,
+  );
+  expect(confirm).not.toHaveBeenCalled();
+  // The prompt sat open until the quote ran out: nothing is paid.
+  vi.useFakeTimers({ toFake: ['Date'] });
+  try {
+    const slow = vi.fn(async () => {
+      vi.setSystemTime(Date.now() + 15 * 60_000);
+      return true;
+    });
+    await expect(
+      payJarBuy([leg('0x1111111111111111111111111111111111111111', '5000000')], undefined, '', {
+        confirm: slow,
+        sponsorEvm,
+      }),
+    ).rejects.toThrow(QuoteRanOut);
+    expect(slow).toHaveBeenCalled();
+    expect(sponsorEvm).not.toHaveBeenCalled();
+  } finally {
+    vi.useRealTimers();
+  }
+});

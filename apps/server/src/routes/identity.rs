@@ -173,6 +173,33 @@ pub(crate) async fn limit_market_data_reads_by_ip(
     Ok(next.run(request).await)
 }
 
+/// `fresh=1` portfolio reads skip the server's cache and go to public nodes and
+/// explorers, so each client gets a few a minute (an app makes about eight after one
+/// transaction). Past that the read is answered from the cache, not refused.
+const PORTFOLIO_FRESH_GLOBAL_LIMIT: i32 = 6_000;
+const PORTFOLIO_FRESH_PEER_LIMIT: i32 = 30;
+
+pub(crate) async fn limit_fresh_portfolio_reads_by_ip(
+    State(state): State<AuthenticatedApiAdmission>,
+    request: Request<axum::body::Body>,
+    next: Next,
+) -> Response {
+    let client = client_ip_from_request(state.trust_proxy, &state.trusted_proxy_cidrs, &request);
+    let request = crate::routes::portfolio::admit_fresh(request, client, |ip| async move {
+        state
+            .redis
+            .rate_limit_pair(
+                "portfolio_fresh",
+                &client_bucket(ip).to_string(),
+                state.global_limit.min(PORTFOLIO_FRESH_GLOBAL_LIMIT),
+                state.peer_limit.min(PORTFOLIO_FRESH_PEER_LIMIT),
+            )
+            .await
+    })
+    .await;
+    next.run(request).await
+}
+
 async fn configuration(
     State(state): State<AuthState>,
     headers: HeaderMap,

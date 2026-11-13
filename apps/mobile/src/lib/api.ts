@@ -1,5 +1,6 @@
 import { createApiClient } from '@honey-wallet/api-client';
 import Constants from 'expo-constants';
+import { clockedFetch } from '@/lib/server-clock';
 
 const SERVER_PORT = 8080;
 
@@ -16,4 +17,8 @@ export function resolveBaseUrl(): string {
   return `http://${devHost ?? 'localhost'}:${SERVER_PORT}`;
 }
 
-export const api = createApiClient({ baseUrl: resolveBaseUrl() });
+/** Every response also tells the phone the server's time (lib/server-clock.ts). */
+export const api = createApiClient({
+  baseUrl: resolveBaseUrl(),
+  fetch: clockedFetch((...args) => fetch(...args)),
+});

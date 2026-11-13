@@ -2,8 +2,7 @@ import type { ChainActivityItem } from '@honey-wallet/api-client';
 import * as Clipboard from 'expo-clipboard';
 import { router, useLocalSearchParams } from 'expo-router';
 import type { ReactNode } from 'react';
-// import { Share, Text, View } from 'react-native';
-import { Text, View } from 'react-native';
+import { Platform, Share, Text, View } from 'react-native';
 import { PressableScale } from '@/components/motion/PressableScale';
 import { SkeletonBar, SkeletonReveal, useFirstLoad } from '@/components/motion/Skeleton';
 import { TextsReveal } from '@/components/motion/TextsReveal';
@@ -19,14 +18,24 @@ import { LOADS } from '@/lib/loads';
 import {
   ACTIVITY,
   ACTIVITY_DETAILS,
-  type Chain,
   chainSymbol,
   formatUsd,
   nativeCoinOf,
 } from '@/lib/mock-wallet';
+import { isWeb } from '@/lib/platform';
 import { formatAmount, portfolios } from '@/lib/portfolio';
 import { type ThesisJar, useThesisJars } from '@/lib/thesis';
 import { showToast } from '@/lib/toast';
+import { explorerTx } from '@/lib/tx-receipt';
+import {
+  chainTxShare,
+  explorerUrl,
+  fixtureShare,
+  intentsUrl,
+  shareContent,
+  swapShare,
+  type TxShare,
+} from '@/lib/tx-share';
 import { makeStyles } from '@/theme';
 
 const TITLE = {
@@ -35,18 +44,6 @@ const TITLE = {
   swapped: 'Swapped',
   approved: 'Approved',
   other: 'Transaction',
-};
-
-/** Where each chain's transactions are looked up. */
-const EXPLORER: Record<Chain, { name: string; tx: (hash: string) => string }> = {
-  Ethereum: { name: 'Etherscan', tx: (h) => `https://etherscan.io/tx/${h}` },
-  Base: { name: 'Basescan', tx: (h) => `https://basescan.org/tx/${h}` },
-  Arbitrum: { name: 'Arbiscan', tx: (h) => `https://arbiscan.io/tx/${h}` },
-  Polygon: { name: 'Polygonscan', tx: (h) => `https://polygonscan.com/tx/${h}` },
-  Solana: { name: 'Solscan', tx: (h) => `https://solscan.io/tx/${h}` },
-  NEAR: { name: 'NearBlocks', tx: (h) => `https://nearblocks.io/txns/${h}` },
-  Tron: { name: 'Tronscan', tx: (h) => `https://tronscan.org/#/transaction/${h}` },
-  'XRP Ledger': { name: 'XRPScan', tx: (h) => `https://xrpscan.com/tx/${h}` },
 };
 
 /** Explorer names for the networks the wallet reads (and swaps reach). */
@@ -58,12 +55,6 @@ const EXPLORER_NAME: Record<string, string> = {
   Solana: 'Solscan',
   NEAR: 'NearBlocks',
 };
-const EXPLORER_TX: Record<string, (hash: string) => string> = Object.fromEntries(
-  Object.entries(EXPLORER).map(([chain, e]) => [chain, e.tx]),
-);
-/** Where NEAR Intents shows a swap, by its deposit address. */
-const intentsUrl = (depositAddress: string) =>
-  `https://explorer.near-intents.org/transactions/${depositAddress}`;
 
 /**
  * Activity's detail sheet. A real wallet's rows: a swap or a jar buy made here (its NEAR
@@ -103,19 +94,32 @@ function NotFound() {
   );
 }
 
-/** Share copies the hash (the browser has no share sheet), then Done. */
-function Footer({ copy, toast }: { copy?: string; toast: string }) {
+/**
+ * Share: the system share sheet with a line about the transaction and its explorer link
+ * ("Sent 5 USDC on Base"). The browser has no share sheet, so there it copies the link.
+ */
+function shareTx(share: TxShare) {
+  tap();
+  if (isWeb) {
+    const link = share.url ?? share.hash;
+    void Clipboard.setStringAsync(link).then(() =>
+      showToast(share.url ? 'Link copied' : 'Transaction ID copied'),
+    );
+    return;
+  }
+  Share.share(shareContent(share, Platform.OS)).catch(() => {});
+}
+
+/** Share, then Done. */
+function Footer({ share }: { share?: TxShare }) {
   const styles = useStyles();
   return (
     <View style={styles.actions}>
-      {copy ? (
+      {share ? (
         <PillButton
           label="Share"
           variant="secondary"
-          onPress={() => {
-            tap();
-            void Clipboard.setStringAsync(copy).then(() => showToast(toast));
-          }}
+          onPress={() => shareTx(share)}
           style={styles.flex}
         />
       ) : null}
@@ -127,7 +131,7 @@ function Footer({ copy, toast }: { copy?: string; toast: string }) {
 /** A hash you can copy, with its explorer link when the network has one. */
 function TxValue({ hash, chain, url }: { hash: string; chain: string; url?: string }) {
   const styles = useStyles();
-  const link = url ?? EXPLORER_TX[chain]?.(hash);
+  const link = url || explorerUrl(chain, hash);
   return (
     <View style={styles.inline}>
       <Copyable value={hash} toast="Transaction ID copied" />
@@ -167,7 +171,7 @@ function SwapDetail({ swap: s }: { swap: IntentsSwap }) {
   return (
     <SheetScreen
       title={done ? 'Swapped' : state.tone === 'waiting' ? 'Swapping' : 'Swap'}
-      footer={<Footer copy={s.txHash ?? s.depositAddress} toast="Transaction ID copied" />}
+      footer={<Footer share={swapShare(s, sold, got)} />}
     >
       <View style={styles.summary}>
         <TokenIcon symbol={s.buy.symbol} chain={s.buy.chain} size={40} />
@@ -320,7 +324,7 @@ function ChainDetail({ item }: { item: ChainActivityItem }) {
   return (
     <SheetScreen
       title={DIRECTION_TITLE[item.direction]}
-      footer={<Footer copy={item.hash} toast="Hash copied" />}
+      footer={<Footer share={chainTxShare(item)} />}
     >
       <View style={styles.summary}>
         <TokenIcon symbol={symbol} size={40} />
@@ -382,38 +386,11 @@ function FixtureDetail({ id }: { id: string }) {
   // The list has what happened; the receipt (hash, cost, time) is looked up on the chain.
   const loading = useFirstLoad(LOADS.tx(id));
   if (!activity || !detail) return <NotFound />;
-  const explorer = EXPLORER[detail.chain];
-  const link = explorer.tx(detail.hash);
-  // Share copies the transaction hash (review): it's what people pass on, and the
-  // browser has no share sheet.
-  // const share = () => {
-  //   Share.share({
-  //     message: `${TITLE[activity.kind]} ${detail.amount} on ${detail.chain}\n${link}`,
-  //   }).catch(() => {});
-  // };
-  const share = () => {
-    tap();
-    void Clipboard.setStringAsync(detail.hash).then(() => showToast('Hash copied'));
-  };
+  const explorer = explorerTx(detail.chain, detail.hash);
+  const share = fixtureShare(TITLE[activity.kind], detail.amount, detail.chain, detail.hash);
 
   return (
-    <SheetScreen
-      title={TITLE[activity.kind]}
-      footer={
-        <View style={styles.actions}>
-          <PillButton
-            label="Share"
-            variant="secondary"
-            onPress={() => {
-              tap();
-              share();
-            }}
-            style={styles.flex}
-          />
-          <PillButton label="Done" onPress={() => closeSheet()} style={styles.flex} />
-        </View>
-      }
-    >
+    <SheetScreen title={TITLE[activity.kind]} footer={<Footer share={share} />}>
       <View style={styles.summary}>
         <TokenIcon symbol={activity.symbol} size={40} />
         <TextsReveal
@@ -445,7 +422,7 @@ function FixtureDetail({ id }: { id: string }) {
             <Receipt loading={loading} width={150}>
               <View style={styles.inline}>
                 <Copyable value={detail.hash} toast="Transaction ID copied" short={false} />
-                <ExplorerLink name={explorer.name} url={link} />
+                <ExplorerLink name={explorer.name} url={explorer.url} />
               </View>
             </Receipt>
           }
