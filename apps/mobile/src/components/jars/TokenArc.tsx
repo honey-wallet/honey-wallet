@@ -28,6 +28,8 @@ const STROKE = 28;
 const OUT_LOGO = 24;
 /** The width each outside label gets (logo over its %). */
 const OUT_W = 64;
+/** An outside label's height: a row of logos over its %. */
+const OUT_H = 42;
 const NODE = 44;
 /** The arc runs 240° over the top, open at the bottom where the total sits. */
 const START = (150 * Math.PI) / 180;
@@ -130,8 +132,8 @@ export function TokenArc({
 
   // Outside: a ring of room around the wheel for the logos.
   // Sides need room for a logo and its % beside it; the top for a logo with its % above.
-  const side = outside ? OUT_LOGO + 44 : 0;
-  const above = outside ? OUT_LOGO + 26 : 0;
+  const side = outside ? OUT_W / 2 + 20 : 0;
+  const above = outside ? OUT_H + 8 : 0;
   const r = width / 2 - STROKE / 2 - side;
   const cx = width / 2;
   const cy = above + r + STROKE / 2;
@@ -148,24 +150,19 @@ export function TokenArc({
           : []),
       ];
   // Outside: where each stretch's middle is, and the rest's, on a circle past the arc.
-  const outR = r + STROKE / 2 + OUT_LOGO / 2 + 8;
+  const outR = r + STROKE / 2 + OUT_H / 2 + 6;
   const midAngle = (from: number, w: number) => START + ((from + w / 2) / sum) * SWEEP;
-  // A label sits on the side facing away from the wheel: "34% ⊙" on the left, "⊙ 23%"
-  // on the right, the % over the logo at the top. Never over the arc.
+  // Every label is the same small column (logos, then the %), centred just past its
+  // stretch, so none runs off the side or over the arc (review 2026-11-13).
   const place = (a: number) => {
     const p = at(cx, cy, outR, a);
-    const dx = Math.cos(a);
-    if (dx < -0.35)
-      return {
-        style: { right: width - (p.x + OUT_LOGO / 2), top: p.y - OUT_LOGO / 2 },
-        dir: 'left' as const,
-      };
-    if (dx > 0.35)
-      return {
-        style: { left: p.x - OUT_LOGO / 2, top: p.y - OUT_LOGO / 2 },
-        dir: 'right' as const,
-      };
-    return { style: { left: p.x - OUT_W / 2, top: p.y - OUT_LOGO / 2 - 18 }, dir: 'up' as const };
+    return {
+      style: {
+        left: Math.min(Math.max(p.x - OUT_W / 2, 0), width - OUT_W),
+        top: p.y - OUT_H / 2,
+      },
+      dir: 'up' as const,
+    };
   };
   const topSpots = top.map((s, i) => {
     const before = top.slice(0, i).reduce((acc, t) => acc + t.weight, 0);
@@ -435,7 +432,7 @@ const useStyles = makeStyles((c) => ({
   bubble: { position: 'absolute', width: NODE, alignItems: 'center' },
   outLogo: { position: 'absolute' },
   outLabel: { alignItems: 'center', gap: 5 },
-  outUp: { width: OUT_W, flexDirection: 'column-reverse', gap: 2 },
+  outUp: { width: OUT_W, height: OUT_H, flexDirection: 'column', justifyContent: 'center', gap: 3 },
   outLeft: { flexDirection: 'row-reverse' },
   outRight: { flexDirection: 'row' },
   outPct: {
