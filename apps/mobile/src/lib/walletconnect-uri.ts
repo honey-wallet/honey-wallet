@@ -60,5 +60,11 @@ export function pairingErrorMessage(error: unknown) {
   if (/expired/i.test(message)) return 'Link expired. Get a new one from the site';
   if (/already exists|already paired|pairing.*exist/i.test(message))
     return 'Already used. Get a new link from the site';
-  return 'Couldn’t connect. Get a new link from the site';
+  // The relay's own reason, short, so a failure on a phone can be traced (14 Nov: release
+  // builds only ever said "Couldn't connect").
+  const why = message.replace(/\s+/g, ' ').trim().slice(0, 60);
+  // return 'Couldn’t connect. Get a new link from the site';
+  return why
+    ? `Couldn’t connect (${why}). Get a new link from the site`
+    : 'Couldn’t connect. Get a new link from the site';
 }
