@@ -20,6 +20,11 @@ type SwapState = {
    * takes it once and clears it.
    */
   presetAmount?: string | null;
+  /**
+   * Whether a token to buy was chosen. Swap starts like Uniswap's, with Buy empty
+   * ("Select token" and suggestions) until one is picked; `buy` is only a placeholder.
+   */
+  buyChosen?: boolean;
 };
 
 /**
@@ -31,12 +36,18 @@ export const swap = createStore<SwapState>({
   buy: { symbol: 'SOL', chain: 'Solana' },
   network: null,
   bridgeTipDismissed: false,
+  buyChosen: false,
 });
 
 export const useSwap = swap.useValue;
 
+/** Sets part of the swap; naming a `buy` (a token page's Buy, a popular pair) chooses it. */
 export function updateSwap(update: Partial<SwapState>) {
-  swap.set((prev) => ({ ...prev, ...update }));
+  swap.set((prev) => ({
+    ...prev,
+    ...(update.buy ? { buyChosen: true } : {}),
+    ...update,
+  }));
 }
 
 /** Picks a token for one side; picking the other side's token flips the pair. */
@@ -44,6 +55,11 @@ export function pickToken(side: 'sell' | 'buy', token: TokenRef) {
   swap.set((prev) => {
     const other = side === 'sell' ? 'buy' : 'sell';
     const same = prev[other].symbol === token.symbol && prev[other].chain === token.chain;
-    return { ...prev, [side]: token, ...(same ? { [other]: prev[side] } : {}) };
+    return {
+      ...prev,
+      [side]: token,
+      ...(same ? { [other]: prev[side] } : {}),
+      ...(side === 'buy' ? { buyChosen: true } : {}),
+    };
   });
 }

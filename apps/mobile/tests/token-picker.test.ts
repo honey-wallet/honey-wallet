@@ -13,6 +13,8 @@ vi.mock('@/lib/persistence', () => ({ persistence: { register: vi.fn(), save: vi
 
 const {
   clearRecentPicks,
+  coinName,
+  popularOrder,
   pickerLists,
   quickPicks,
   RECENT_MAX,
@@ -170,5 +172,63 @@ describe('pickerLists', () => {
     expect(search(USDC_ETH.contractAddress?.toLowerCase() ?? '').results).toEqual([USDC_ETH]);
     // The coin itself first: exact symbol and native before copies on other chains.
     expect(search('eth').results[0]).toBe(ETH);
+  });
+});
+
+describe('coinName', () => {
+  it('names a coin away from its own network as Uniswap does', () => {
+    expect(coinName(ETH, 'Ethereum', chainName)).toBe('Ethereum');
+    expect(coinName(ETH_BASE, 'Ethereum', chainName)).toBe('Base ETH');
+    expect(coinName(token('arb', 'ETH', null), 'Ethereum', chainName)).toBe('Arbitrum ETH');
+    expect(coinName(token('op', 'ETH', null), 'Ethereum', chainName)).toBe('Optimistic ETH');
+    expect(coinName(USDC_BASE, 'USD Coin', chainName)).toBe('USD Coin');
+  });
+});
+
+describe('popularOrder', () => {
+  const ETH_ARB = token('arb', 'ETH', null);
+  const ETH_NEAR = token('near', 'ETH', 'eth.bridge.near');
+  const USDT_SOL = token('sol', 'USDT', 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB');
+  const list = [
+    ETH_NEAR,
+    BRETT,
+    USDT_SOL,
+    USDC_BASE,
+    ETH_ARB,
+    SOL,
+    USDT_ETH,
+    ETH_BASE,
+    USDC_ETH,
+    ETH,
+  ];
+  const ranks: Record<string, number> = { ETH: 1, USDT: 2, USDC: 3, SOL: 4 };
+  const main: Record<string, string> = { USDC: 'Base' };
+  const popularity = {
+    rankOf: (s: string) => ranks[s],
+    mainNetworkOf: (s: string) => main[s],
+  };
+
+  it('lists each token once by market cap, then the other networks’ copies', () => {
+    expect(
+      popularOrder(list, popularity, chainName).map((t) => `${t.symbol}@${t.blockchain}`),
+    ).toEqual([
+      'ETH@eth',
+      'USDT@eth',
+      'USDC@base',
+      'SOL@sol',
+      'BRETT@base',
+      'ETH@base',
+      'ETH@near',
+      'ETH@arb',
+      'USDT@sol',
+      'USDC@eth',
+    ]);
+  });
+
+  it('feeds the Tokens list, while search still finds every copy', () => {
+    const lists = pickerLists(list, { ...base, popularity });
+    expect(lists.rest.slice(0, 4).map((t) => t.symbol)).toEqual(['ETH', 'USDT', 'USDC', 'SOL']);
+    const eth = pickerLists(list, { ...base, query: 'eth', popularity }).results;
+    expect(eth.filter((t) => t.symbol === 'ETH')).toHaveLength(4);
   });
 });
