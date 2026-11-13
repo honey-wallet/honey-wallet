@@ -55,7 +55,7 @@ k256 = { version = "0.13.4", features = ["ecdsa"] }
 
 [dev-dependencies]
 tower.workspace = true
-tokio-tungstenite = "0.29"
+tokio-tungstenite = "0.30"
 
 [lints]
 workspace = true
