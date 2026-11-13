@@ -88,6 +88,8 @@ async fn settled_copy(pool: &sqlx::PgPool, handle: &str, jar: &str, deposit: &st
         asset: "nep141:base-eth".into(),
         cost_micro_usd: 5_000_000,
         expires_at: None,
+        recipient: "0x00000000000000000000000000000000000000c0".into(),
+        counts: true,
     };
     honey_server::copy_fees::record_quoted_lots(pool, copier, jar, 10, &[lot])
         .await

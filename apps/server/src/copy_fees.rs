@@ -15,7 +15,7 @@
 //! nothing. Per copied lot: fee = pct × max(0, sale − cost of the part sold); per creator,
 //! as basis points of the sale, rounded down; all creators together capped.
 
-use crate::error::AppError;
+use crate::{error::AppError, market_data::OneClickToken};
 use serde::Serialize;
 use serde_json::{Value, json};
 use sqlx::PgPool;
@@ -341,10 +341,66 @@ pub fn outcome(status: &str, amount_out: Option<&str>, expired: bool) -> Option<
             .filter(|a| a.bytes().any(|b| b != b'0'))
             .map(|a| Outcome::Done(Some(a.to_string()))),
         "PENDING_DEPOSIT" => expired.then_some(Outcome::Void),
-        "KNOWN_DEPOSIT_TX" | "PROCESSING" | "INCOMPLETE_DEPOSIT" => None,
-        // REFUNDED, FAILED, EXPIRED and anything else 1Click calls final.
-        _ => Some(Outcome::Void),
+        // "KNOWN_DEPOSIT_TX" | "PROCESSING" | "INCOMPLETE_DEPOSIT" => None,
+        // // REFUNDED, FAILED, EXPIRED and anything else 1Click calls final.
+        // _ => Some(Outcome::Void),
+        // Only the final failures 1Click documents void; anything else, a status it adds
+        // later included, is "not yet" (audit L1).
+        "REFUNDED" | "FAILED" | "EXPIRED" => Some(Outcome::Void),
+        _ => None,
     }
+}
+
+/// Caps open lots at what `seller` holds on chain now (audit H1): copied units beyond
+/// the balance left (sent away, sold elsewhere) and pay nothing. They're taken from the
+/// oldest lots first and returned as (lot, units) to count as gone; the lots come back
+/// with what's left.
+pub fn cap_to_balance(lots: &[OpenLot], balance: u128) -> (Vec<OpenLot>, Vec<(String, u128)>) {
+    let total: u128 = lots.iter().map(|l| l.remaining).sum();
+    let mut gone = total.saturating_sub(balance);
+    let mut left = Vec::with_capacity(lots.len());
+    let mut consumed = Vec::new();
+    for lot in lots {
+        let take = gone.min(lot.remaining);
+        gone -= take;
+        if take > 0 {
+            consumed.push((lot.deposit_address.clone(), take));
+        }
+        if lot.remaining > take {
+            left.push(OpenLot {
+                remaining: lot.remaining - take,
+                ..lot.clone()
+            });
+        }
+    }
+    (left, consumed)
+}
+
+/// 1Click's blockchain names as Honey's portfolio names its chains.
+fn chain_name(blockchain: &str) -> Option<&'static str> {
+    Some(match blockchain {
+        "eth" => "Ethereum",
+        "base" => "Base",
+        "arb" => "Arbitrum",
+        "pol" => "Polygon",
+        "sol" => "Solana",
+        "near" => "NEAR",
+        _ => return None,
+    })
+}
+
+/// Atomic units of `token` among an address's holdings: by 1Click asset id, or (a chain's
+/// own coin, USDC by name) by symbol on the token's chain.
+pub fn held_units(holdings: &[crate::portfolio::Holding], token: &OneClickToken) -> u128 {
+    let chain = chain_name(&token.blockchain);
+    holdings
+        .iter()
+        .filter(|h| match &h.asset_id {
+            Some(id) => *id == token.asset_id,
+            None => Some(h.chain) == chain && h.symbol.eq_ignore_ascii_case(&token.symbol),
+        })
+        .map(|h| (h.amount * 10f64.powi(i32::from(token.decimals))).floor() as u128)
+        .sum()
 }
 
 // ---------------------------------------------------------------------------
@@ -373,6 +429,44 @@ pub async fn jar_terms(pool: &PgPool, jar: Uuid) -> Result<Option<(Uuid, i16)>, 
     .map_err(unavailable)
 }
 
+/// A copyable jar's creator, fee and picks (symbol, chain), as `jar_terms` checks it.
+pub async fn jar_copy_terms(
+    pool: &PgPool,
+    jar: Uuid,
+) -> Result<Option<(Uuid, i16, Vec<(String, String)>)>, AppError> {
+    let row: Option<(Uuid, i16, String)> = sqlx::query_as(
+        "SELECT j.owner, j.copy_fee, j.picks::text FROM social_jars j
+         JOIN social_profiles p ON p.user_id = j.owner
+         WHERE j.id = $1 AND j.unpublished_at IS NULL AND p.public_profile
+           AND p.allow_copy AND p.show_holdings AND NOT j.hide_picks",
+    )
+    .bind(jar)
+    .fetch_optional(pool)
+    .await
+    .map_err(unavailable)?;
+    Ok(row.map(|(owner, fee, picks)| {
+        let picks: Vec<Value> = serde_json::from_str(&picks).unwrap_or_default();
+        let picks = picks
+            .iter()
+            .filter_map(|p| {
+                Some((
+                    p["symbol"].as_str()?.to_string(),
+                    p["chain"].as_str()?.to_string(),
+                ))
+            })
+            .collect();
+        (owner, fee, picks)
+    }))
+}
+
+/// Whether a 1Click token is one of a jar's picks (same symbol on the same chain).
+pub fn is_pick(picks: &[(String, String)], token: &OneClickToken) -> bool {
+    let chain = chain_name(&token.blockchain);
+    picks.iter().any(|(symbol, on)| {
+        symbol.eq_ignore_ascii_case(&token.symbol) && Some(on.as_str()) == chain
+    })
+}
+
 /// Where a creator's fees go: the NEAR Intents account of the first wallet they signed in
 /// with. None when they have no such wallet; they're charged nothing then.
 pub async fn payout_account(pool: &PgPool, user: Uuid) -> Result<Option<String>, AppError> {
@@ -386,6 +480,475 @@ pub async fn payout_account(pool: &PgPool, user: Uuid) -> Result<Option<String>,
     .map_err(unavailable)?;
     Ok(address.as_deref().and_then(intents_account))
 }
+
+/// One quoted copy buy leg: its deposit address, the asset it buys, what it costs, when
+/// its quote lapses (Honey's deadline plus a margin, RFC 3339), the address it delivers
+/// to, and whether it counts as a copy of the jar (one of its picks, a real amount).
+pub struct QuotedLot {
+    pub deposit_address: String,
+    pub asset: String,
+    pub cost_micro_usd: i64,
+    pub expires_at: Option<String>,
+    pub recipient: String,
+    pub counts: bool,
+}
+
+/// An address as stored and compared: EVM lowercased, everything else as given.
+pub fn normalize_address(address: &str) -> String {
+    let a = address.trim();
+    if a.starts_with("0x") || a.starts_with("0X") {
+        a.to_ascii_lowercase()
+    } else {
+        a.to_string()
+    }
+}
+
+/// The advisory lock that serializes a copier's sells: allocating copied units and
+/// recording the sell (and marking a deposit) happen under it.
+pub async fn lock_copier(conn: &mut sqlx::PgConnection, copier: Uuid) -> Result<(), AppError> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('copy-fees:' || $1::text, 0))")
+        .bind(copier)
+        .execute(conn)
+        .await
+        .map_err(unavailable)?;
+    Ok(())
+}
+
+/// Copy buys a copier has paid (the app said so) that haven't settled or been voided.
+/// An abandoned quote doesn't count (audit M2).
+pub async fn outstanding_lots(pool: &PgPool, copier: Uuid) -> Result<i64, AppError> {
+    sqlx::query_scalar(
+        "SELECT count(*) FROM copy_buy_lots
+         WHERE copier = $1 AND state = 'quoted' AND deposited_at IS NOT NULL",
+    )
+    .bind(copier)
+    .fetch_one(pool)
+    .await
+    .map_err(unavailable)
+}
+
+pub async fn record_quoted_lots(
+    pool: &PgPool,
+    copier: Uuid,
+    jar: Uuid,
+    fee_pct: i16,
+    lots: &[QuotedLot],
+) -> Result<(), AppError> {
+    for lot in lots {
+        sqlx::query(
+            "INSERT INTO copy_buy_lots
+               (deposit_address, copier, jar_id, asset, cost_micro_usd, fee_pct, expires_at,
+                recipient, counts)
+             VALUES ($1, $2, $3, $4, $5, $6, $7::timestamptz, $8, $9)
+             ON CONFLICT (deposit_address) DO NOTHING",
+        )
+        .bind(&lot.deposit_address)
+        .bind(copier)
+        .bind(jar)
+        .bind(&lot.asset)
+        .bind(lot.cost_micro_usd)
+        .bind(fee_pct.clamp(0, i16::from(MAX_FEE_PCT)))
+        .bind(lot.expires_at.as_deref())
+        .bind(normalize_address(&lot.recipient))
+        .bind(lot.counts)
+        .execute(pool)
+        .await
+        .map_err(unavailable)?;
+    }
+    Ok(())
+}
+
+/// Quoted copy buys to look up with 1Click, paid ones first, then oldest:
+/// (deposit address, lapsed). `asset` narrows them to one asset.
+pub async fn quoted_lots(
+    pool: &PgPool,
+    copier: Uuid,
+    asset: Option<&str>,
+    limit: i64,
+) -> Result<Vec<(String, bool)>, AppError> {
+    sqlx::query_as(
+        "SELECT deposit_address, coalesce(expires_at < clock_timestamp(), false)
+         FROM copy_buy_lots
+         WHERE copier = $1 AND state = 'quoted' AND ($2::text IS NULL OR asset = $2)
+         ORDER BY (deposited_at IS NULL), seq LIMIT $3",
+    )
+    .bind(copier)
+    .bind(asset)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .map_err(unavailable)
+}
+
+/// Marks a deposit the app says it paid: a copy buy's (it now counts towards the
+/// outstanding cap) or a sell's (its units are now spoken for), under the copier's lock.
+pub async fn mark_deposited(pool: &PgPool, deposit_address: &str) -> Result<(), AppError> {
+    let mut tx = pool.begin().await.map_err(unavailable)?;
+    sqlx::query(
+        "UPDATE copy_buy_lots SET deposited_at = clock_timestamp()
+         WHERE deposit_address = $1 AND deposited_at IS NULL",
+    )
+    .bind(deposit_address)
+    .execute(&mut *tx)
+    .await
+    .map_err(unavailable)?;
+    let copier: Option<Option<Uuid>> =
+        sqlx::query_scalar("SELECT copier FROM copy_sales WHERE deposit_address = $1")
+            .bind(deposit_address)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(unavailable)?;
+    if let Some(Some(copier)) = copier {
+        lock_copier(&mut tx, copier).await?;
+        sqlx::query(
+            "UPDATE copy_sales SET deposited_at = clock_timestamp()
+             WHERE deposit_address = $1 AND deposited_at IS NULL AND state = 'quoted'",
+        )
+        .bind(deposit_address)
+        .execute(&mut *tx)
+        .await
+        .map_err(unavailable)?;
+    }
+    tx.commit().await.map_err(unavailable)
+}
+
+/// Settles a quoted copy buy: delivered (`Done(units)`) or void. A delivered buy that
+/// counts as a copy adds the copy (jar, Trending, feed).
+pub async fn settle_lot(
+    pool: &PgPool,
+    deposit_address: &str,
+    outcome: &Outcome,
+) -> Result<(), AppError> {
+    let (state, units) = match outcome {
+        Outcome::Done(Some(units)) => ("settled", Some(units.as_str())),
+        Outcome::Done(None) => return Ok(()),
+        Outcome::Void => ("void", None),
+    };
+    let mut tx = pool.begin().await.map_err(unavailable)?;
+    let lot: Option<(Uuid, Uuid, bool)> = sqlx::query_as(
+        "UPDATE copy_buy_lots SET state = $2, units = $3::numeric, settled_at = clock_timestamp()
+         WHERE deposit_address = $1 AND state = 'quoted' RETURNING copier, jar_id, counts",
+    )
+    .bind(deposit_address)
+    .bind(state)
+    .bind(units)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(unavailable)?;
+    // Only a real copy counts (audit L3): one of the jar's picks, a real amount.
+    if let (Some((copier, jar, true)), "settled") = (lot, state) {
+        let counted = sqlx::query(
+            "INSERT INTO social_jar_copies (jar_id, copier)
+             SELECT $1, $2 WHERE EXISTS (SELECT 1 FROM social_profiles WHERE user_id = $2)
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(jar)
+        .bind(copier)
+        .execute(&mut *tx)
+        .await
+        .map_err(unavailable)?
+        .rows_affected();
+        if counted == 1 {
+            sqlx::query(
+                "INSERT INTO social_events (actor, kind, jar_id) VALUES ($1, 'jar_copied', $2)",
+            )
+            .bind(copier)
+            .bind(jar)
+            .execute(&mut *tx)
+            .await
+            .map_err(unavailable)?;
+        }
+    }
+    tx.commit().await.map_err(unavailable)?;
+    Ok(())
+}
+
+/// A copier's settled copy buys of `asset` delivered to `seller`, with units still free,
+/// oldest first: free = units − sold − units of sells whose deposit was paid but haven't
+/// settled (audit H1, H2). Only these count; paged by `seq`.
+pub async fn open_lots(
+    conn: &mut sqlx::PgConnection,
+    copier: Uuid,
+    asset: &str,
+    seller: &str,
+    after_seq: i64,
+) -> Result<Vec<(i64, OpenLot)>, AppError> {
+    type Row = (i64, String, String, String, i64, i16, i16, Uuid, Uuid);
+    let rows: Vec<Row> = sqlx::query_as(
+        "SELECT l.seq, l.deposit_address, l.units::text,
+                (l.units - l.sold - coalesce((SELECT sum(p.units) FROM copy_sale_parts p
+                    JOIN copy_sales s ON s.deposit_address = p.sale
+                    WHERE p.lot = l.deposit_address AND s.state = 'quoted'
+                      AND s.deposited_at IS NOT NULL), 0))::text,
+                l.cost_micro_usd, l.fee_pct, j.copy_fee, j.owner, l.jar_id
+         FROM copy_buy_lots l JOIN social_jars j ON j.id = l.jar_id
+         WHERE l.copier = $1 AND l.asset = $2 AND l.recipient = $3
+           AND l.state = 'settled' AND l.sold < l.units AND l.seq > $4
+         ORDER BY l.seq LIMIT $5",
+    )
+    .bind(copier)
+    .bind(asset)
+    .bind(normalize_address(seller))
+    .bind(after_seq)
+    .bind(LOT_PAGE)
+    .fetch_all(conn)
+    .await
+    .map_err(unavailable)?;
+    Ok(rows
+        .into_iter()
+        .filter_map(
+            |(seq, deposit_address, units, remaining, cost, fee_pct, jar_pct, creator, jar)| {
+                let remaining: i128 = remaining.parse().ok()?;
+                Some((
+                    seq,
+                    OpenLot {
+                        deposit_address,
+                        units: units.parse().ok()?,
+                        remaining: u128::try_from(remaining.max(0)).ok()?,
+                        cost_micro_usd: u128::try_from(cost).ok()?,
+                        fee_pct: u8::try_from(fee_pct).ok()?,
+                        jar_pct,
+                        creator,
+                        jar,
+                    },
+                ))
+            },
+        )
+        .filter(|(_, lot)| lot.remaining > 0)
+        .collect())
+}
+
+/// Every open lot of `asset` at `seller`, oldest first, until `units` are covered.
+pub async fn open_lots_covering(
+    conn: &mut sqlx::PgConnection,
+    copier: Uuid,
+    asset: &str,
+    seller: &str,
+    units: u128,
+) -> Result<Vec<OpenLot>, AppError> {
+    let (mut out, mut covered, mut after) = (Vec::new(), 0u128, 0i64);
+    loop {
+        let page = open_lots(conn, copier, asset, seller, after).await?;
+        let full = page.len() as i64 == LOT_PAGE;
+        let Some((last, _)) = page.last() else { break };
+        after = *last;
+        for (_, lot) in page {
+            covered = covered.saturating_add(lot.remaining);
+            out.push(lot);
+        }
+        if !full || covered >= units {
+            break;
+        }
+    }
+    Ok(out)
+}
+
+/// Counts copied units that left without a fee (sent away, sold elsewhere): `parts` of
+/// lots as sold, never past a lot's units.
+pub async fn consume(
+    conn: &mut sqlx::PgConnection,
+    parts: &[(String, u128)],
+) -> Result<(), AppError> {
+    for (lot, units) in parts {
+        sqlx::query(
+            "UPDATE copy_buy_lots SET sold = LEAST(units, sold + $2::numeric)
+             WHERE deposit_address = $1 AND state = 'settled'",
+        )
+        .bind(lot)
+        .bind(units.to_string())
+        .execute(&mut *conn)
+        .await
+        .map_err(unavailable)?;
+    }
+    Ok(())
+}
+
+/// Voids a copier's quoted sells of `asset` that were never paid and have lapsed
+/// (Honey's deadline plus a margin): nothing to ask 1Click about (audit L2).
+pub async fn void_stale_sales(
+    conn: &mut sqlx::PgConnection,
+    copier: Uuid,
+    asset: &str,
+) -> Result<(), AppError> {
+    sqlx::query(
+        "UPDATE copy_sales SET state = 'void', settled_at = clock_timestamp()
+         WHERE copier = $1 AND asset = $2 AND state = 'quoted' AND deposited_at IS NULL
+           AND expires_at < clock_timestamp()",
+    )
+    .bind(copier)
+    .bind(asset)
+    .execute(conn)
+    .await
+    .map_err(unavailable)?;
+    Ok(())
+}
+
+/// Records a quoted sell of copied units from `seller` and the lots it sells from; they
+/// count as sold only once 1Click confirms it (`settle_sale`), and as spoken for once
+/// the app says it paid (`mark_deposited`). Run under the copier's lock.
+#[allow(clippy::too_many_arguments)]
+pub async fn record_sale(
+    conn: &mut sqlx::PgConnection,
+    copier: Uuid,
+    asset: &str,
+    seller: &str,
+    deposit_address: &str,
+    expires_at: Option<&str>,
+    parts: &[(String, u128)],
+    // What each creator receives, per jar: (creator, jar, micro-USD).
+    fees: &[(Uuid, Uuid, u128)],
+) -> Result<(), AppError> {
+    let inserted = sqlx::query(
+        "INSERT INTO copy_sales (deposit_address, copier, asset, seller, expires_at)
+         VALUES ($1, $2, $3, $4, $5::timestamptz) ON CONFLICT (deposit_address) DO NOTHING",
+    )
+    .bind(deposit_address)
+    .bind(copier)
+    .bind(asset)
+    .bind(normalize_address(seller))
+    .bind(expires_at)
+    .execute(&mut *conn)
+    .await
+    .map_err(unavailable)?
+    .rows_affected();
+    if inserted == 1 {
+        for (lot, units) in parts {
+            sqlx::query(
+                "INSERT INTO copy_sale_parts (sale, lot, units) VALUES ($1, $2, $3::numeric)",
+            )
+            .bind(deposit_address)
+            .bind(lot)
+            .bind(units.to_string())
+            .execute(&mut *conn)
+            .await
+            .map_err(unavailable)?;
+        }
+        for (creator, jar, micro) in fees {
+            sqlx::query(
+                "INSERT INTO copy_sale_fees (sale, jar_id, creator, received_micro_usd)
+                 VALUES ($1, $2, $3, $4)",
+            )
+            .bind(deposit_address)
+            .bind(jar)
+            .bind(creator)
+            .bind(i64::try_from(*micro).unwrap_or(i64::MAX))
+            .execute(&mut *conn)
+            .await
+            .map_err(unavailable)?;
+        }
+    }
+    Ok(())
+}
+
+/// A creator's published jars with what their copies earned them from settled sells
+/// (micro-USD received) and how many people copied each (`social_jar_copies`).
+pub async fn earnings(pool: &PgPool, creator: Uuid) -> Result<Vec<(Uuid, i64, i64)>, AppError> {
+    sqlx::query_as(
+        "SELECT j.id,
+                coalesce((SELECT sum(f.received_micro_usd)::bigint FROM copy_sale_fees f
+                          JOIN copy_sales s ON s.deposit_address = f.sale
+                          WHERE f.jar_id = j.id AND f.creator = $1 AND s.state = 'settled'), 0),
+                (SELECT count(*) FROM social_jar_copies c WHERE c.jar_id = j.id)
+         FROM social_jars j WHERE j.owner = $1
+         ORDER BY j.published_at DESC LIMIT 200",
+    )
+    .bind(creator)
+    .fetch_all(pool)
+    .await
+    .map_err(unavailable)
+}
+
+/// Paid sells of `asset` still quoted, to look up with 1Click (oldest first, so none is
+/// starved): (deposit address, lapsed). Unpaid ones void on their own (`void_stale_sales`).
+pub async fn quoted_sales(
+    pool: &PgPool,
+    copier: Uuid,
+    asset: &str,
+) -> Result<Vec<(String, bool)>, AppError> {
+    sqlx::query_as(
+        "SELECT deposit_address, coalesce(expires_at < clock_timestamp(), false)
+         FROM copy_sales WHERE copier = $1 AND asset = $2 AND state = 'quoted'
+           AND deposited_at IS NOT NULL
+         ORDER BY created_at LIMIT $3",
+    )
+    .bind(copier)
+    .bind(asset)
+    .bind(MAX_SALE_LOOKUPS)
+    .fetch_all(pool)
+    .await
+    .map_err(unavailable)
+}
+
+/// Settles a quoted sell: on success its parts count as sold. A part that would sell more
+/// of a lot than it holds is refused loudly, never clamped (audit H2): the sell stays
+/// quoted and the error is logged.
+pub async fn settle_sale(
+    pool: &PgPool,
+    deposit_address: &str,
+    outcome: &Outcome,
+) -> Result<(), AppError> {
+    let mut tx = pool.begin().await.map_err(unavailable)?;
+    let state = match outcome {
+        Outcome::Done(_) => "settled",
+        Outcome::Void => "void",
+    };
+    let copier: Option<Option<Uuid>> = sqlx::query_scalar(
+        "SELECT copier FROM copy_sales WHERE deposit_address = $1 AND state = 'quoted'",
+    )
+    .bind(deposit_address)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(unavailable)?;
+    let Some(copier) = copier else {
+        return Ok(());
+    };
+    if let Some(copier) = copier {
+        lock_copier(&mut tx, copier).await?;
+    }
+    if state == "settled" {
+        let over: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM copy_sale_parts p
+                JOIN copy_buy_lots l ON l.deposit_address = p.lot
+                WHERE p.sale = $1 AND (l.state <> 'settled' OR l.sold + p.units > l.units))",
+        )
+        .bind(deposit_address)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(unavailable)?;
+        if over {
+            tracing::error!(
+                sale = deposit_address,
+                "copy sale sells more of a copied lot than it holds; left unsettled"
+            );
+            return Err(AppError::Conflict(
+                "copy sale overlaps units already sold".into(),
+            ));
+        }
+        sqlx::query(
+            "UPDATE copy_buy_lots l SET sold = l.sold + p.units
+             FROM copy_sale_parts p
+             WHERE p.sale = $1 AND l.deposit_address = p.lot",
+        )
+        .bind(deposit_address)
+        .execute(&mut *tx)
+        .await
+        .map_err(unavailable)?;
+    }
+    sqlx::query(
+        "UPDATE copy_sales SET state = $2, settled_at = clock_timestamp()
+         WHERE deposit_address = $1 AND state = 'quoted'",
+    )
+    .bind(deposit_address)
+    .bind(state)
+    .execute(&mut *tx)
+    .await
+    .map_err(unavailable)?;
+    tx.commit().await.map_err(unavailable)
+}
+
+/*
+Superseded 2026-11-14 (audit 2): storage before lots were tied to the address they
+delivered to, sells in flight were spoken for, and settling refused overlaps.
 
 /// One quoted copy buy leg: its deposit address, the asset it buys, what it costs, and
 /// 1Click's deadline for the deposit address (RFC 3339).
@@ -705,6 +1268,7 @@ pub async fn settle_sale(
     }
     tx.commit().await.map_err(unavailable)
 }
+*/
 
 /*
 Superseded 2026-11-14 (security review): fees from one named jar's lots, averaged, with
@@ -1067,15 +1631,78 @@ mod tests {
         assert_eq!(outcome("SUCCESS", None, false), None);
         assert_eq!(outcome("SUCCESS", Some("0"), false), None);
         assert_eq!(outcome("SUCCESS", Some("1.5"), false), None);
-        for gone in ["REFUNDED", "FAILED", "EXPIRED", "SOMETHING_NEW"] {
+        // for gone in ["REFUNDED", "FAILED", "EXPIRED", "SOMETHING_NEW"] {
+        for gone in ["REFUNDED", "FAILED", "EXPIRED"] {
             assert_eq!(outcome(gone, None, false), Some(Outcome::Void), "{gone}");
         }
+        // A status 1Click adds later is "not yet", never void (audit L1).
+        assert_eq!(outcome("SOMETHING_NEW", None, true), None);
         for live in ["KNOWN_DEPOSIT_TX", "PROCESSING", "INCOMPLETE_DEPOSIT"] {
             assert_eq!(outcome(live, None, true), None, "{live}");
         }
         // Unpaid: void only once 1Click's own deadline has passed.
         assert_eq!(outcome("PENDING_DEPOSIT", None, false), None);
         assert_eq!(outcome("PENDING_DEPOSIT", None, true), Some(Outcome::Void));
+    }
+
+    #[test]
+    fn copied_units_are_capped_at_what_the_wallet_still_holds() {
+        // 100 + 50 copied units, the wallet holds 120: the oldest 30 left, no fee on them.
+        let lots = [lot(100, 100, 10, ANA), lot(50, 100, 10, BEN)];
+        let (left, gone) = cap_to_balance(&lots, 120);
+        assert_eq!(gone, vec![(lots[0].deposit_address.clone(), 30)]);
+        assert_eq!(
+            left.iter().map(|l| l.remaining).collect::<Vec<_>>(),
+            vec![70, 50]
+        );
+        // Holding more than was copied changes nothing; holding none takes it all.
+        assert_eq!(cap_to_balance(&lots, 500).1, vec![]);
+        let (left, gone) = cap_to_balance(&lots, 0);
+        assert!(left.is_empty());
+        assert_eq!(gone.iter().map(|g| g.1).sum::<u128>(), 150);
+    }
+
+    #[test]
+    fn holdings_are_matched_by_asset_or_by_name_on_the_chain() {
+        let token = |asset: &str, chain: &str, symbol: &str| OneClickToken {
+            asset_id: asset.into(),
+            blockchain: chain.into(),
+            symbol: symbol.into(),
+            decimals: 6,
+            price: Some(1.0),
+            contract_address: None,
+            coingecko_id: None,
+        };
+        let holding = |chain: &'static str, symbol: &str, amount: f64, asset: Option<&str>| {
+            crate::portfolio::Holding {
+                chain,
+                symbol: symbol.into(),
+                name: symbol.into(),
+                amount,
+                price_usd: Some(1.0),
+                usd: amount,
+                contract: None,
+                decimals: None,
+                asset_id: asset.map(String::from),
+            }
+        };
+        let held = [
+            holding("Base", "USDC", 2.5, None),
+            holding("Arbitrum", "USDC", 9.0, None),
+            holding("Base", "AERO", 1.0, Some("nep141:base-aero")),
+        ];
+        assert_eq!(
+            held_units(&held, &token("nep141:base-usdc", "base", "USDC")),
+            2_500_000
+        );
+        assert_eq!(
+            held_units(&held, &token("nep141:base-aero", "base", "AERO")),
+            1_000_000
+        );
+        assert_eq!(
+            held_units(&held, &token("nep141:sol-usdc", "sol", "USDC")),
+            0
+        );
     }
 
     #[test]

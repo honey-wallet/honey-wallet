@@ -26,7 +26,17 @@ CREATE TABLE copy_buy_lots (
     state text NOT NULL DEFAULT 'quoted' CHECK (state IN ('quoted', 'settled', 'void')),
     -- 1Click's own deadline for the deposit address (days past the app's): a buy still
     -- unpaid after it is void.
+    -- Since the audit (2026-11-14): Honey's own deadline plus a margin, so an abandoned
+    -- quote doesn't hold copying up for days.
     expires_at timestamptz NULL,
+    -- The address the copy delivered to (EVM lowercased): only a sell from that address
+    -- sells these units.
+    recipient text NOT NULL CHECK (char_length(recipient) BETWEEN 1 AND 128),
+    -- Counts as a copy of its jar (one of the jar's picks, a real amount): the copy
+    -- count and the feed's "copied" event come only from these.
+    counts boolean NOT NULL DEFAULT false,
+    -- When the app said it paid the deposit (`/jar-buys/deposit`).
+    deposited_at timestamptz NULL,
     created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     settled_at timestamptz NULL,
     CHECK ((state = 'settled') = (units IS NOT NULL)),
@@ -34,7 +44,9 @@ CREATE TABLE copy_buy_lots (
 );
 -- CREATE INDEX copy_buy_lots_holding_idx ON copy_buy_lots (copier, jar_id, asset)
 --     WHERE state <> 'void';
-CREATE INDEX copy_buy_lots_open_idx ON copy_buy_lots (copier, asset, seq)
+-- CREATE INDEX copy_buy_lots_open_idx ON copy_buy_lots (copier, asset, seq)
+--     WHERE state = 'settled' AND sold < units;
+CREATE INDEX copy_buy_lots_open_idx ON copy_buy_lots (copier, asset, recipient, seq)
     WHERE state = 'settled' AND sold < units;
 CREATE INDEX copy_buy_lots_quoted_idx ON copy_buy_lots (copier, asset)
     WHERE state = 'quoted';
@@ -43,10 +55,16 @@ CREATE INDEX copy_buy_lots_quoted_idx ON copy_buy_lots (copier, asset)
 -- Its parts count as sold only once 1Click says the sell succeeded.
 CREATE TABLE copy_sales (
     deposit_address text PRIMARY KEY CHECK (char_length(deposit_address) BETWEEN 8 AND 128),
-    copier uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    -- copier uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    -- A copier deleting their account keeps the sell (its fees are the creator's record).
+    copier uuid NULL REFERENCES users(id) ON DELETE SET NULL,
     asset text NOT NULL CHECK (char_length(asset) BETWEEN 1 AND 200),
+    -- The address it sells from (EVM lowercased).
+    seller text NOT NULL CHECK (char_length(seller) BETWEEN 1 AND 128),
     state text NOT NULL DEFAULT 'quoted' CHECK (state IN ('quoted', 'settled', 'void')),
     expires_at timestamptz NULL,
+    -- When the app said it paid the deposit: from then its units are spoken for.
+    deposited_at timestamptz NULL,
     created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     settled_at timestamptz NULL
 );

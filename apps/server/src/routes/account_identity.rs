@@ -87,9 +87,12 @@ pub const PERSONAL_TABLES: &[&str] = &[
 /// records (`copy_fees`), the person's copy buys and sells, and fees paid to them.
 pub const PERSONAL_COLUMNS: &[(&str, &str)] = &[
     ("copy_buy_lots", "copier"),
-    ("copy_sales", "copier"),
+    // ("copy_sales", "copier"),
     ("copy_sale_fees", "creator"),
 ];
+/// Rows that keep without the person (`ON DELETE SET NULL`), keyed by another column: a
+/// copier's sells, whose fees are the creator's record of what copies earned (audit M4).
+pub const KEPT_COLUMNS: &[(&str, &str)] = &[("copy_sales", "copier")];
 /// Spend ledgers that keep their rows without the person (`ON DELETE SET NULL`).
 pub const SPEND_TABLES: &[&str] = &["gas_charges", "evm_sponsorships"];
 /// What may keep a `users` row alive: immutable operation evidence.
@@ -127,6 +130,14 @@ pub async fn delete_linked_user(pool: &PgPool, user: uuid::Uuid) -> Result<bool,
             .bind(user)
             .execute(&mut *tx)
             .await?;
+    }
+    for (table, column) in KEPT_COLUMNS {
+        sqlx::query(&format!(
+            "UPDATE {table} SET {column} = NULL WHERE {column} = $1"
+        ))
+        .bind(user)
+        .execute(&mut *tx)
+        .await?;
     }
     for table in SPEND_TABLES {
         sqlx::query(&format!(

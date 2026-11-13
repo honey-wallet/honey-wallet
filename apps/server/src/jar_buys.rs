@@ -199,7 +199,34 @@ pub struct JarBuys {
     cap_usd: f64,
     /// Copy fees' records (`copy_fees`); without a database no copy fee is charged.
     pool: Option<sqlx::PgPool>,
+    /// What an address holds of an asset on chain now (atomic units), to cap copied units
+    /// at what's still there (audit H1). None: unchecked (development).
+    held: Option<HeldFn>,
+    /// 1Click statuses read for copy fee records, kept briefly (audit L4).
+    statuses: Mutex<HashMap<String, (Instant, RawStatus)>>,
 }
+
+/// (address, 1Click asset) → atomic units held on chain now; None when it can't be read.
+pub type HeldFn = Arc<
+    dyn Fn(
+            String,
+            String,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<u128>> + Send>>
+        + Send
+        + Sync,
+>;
+
+/// A 1Click status as read for copy fee records: (status, units delivered).
+type RawStatus = (String, Option<String>);
+
+/// How long a 1Click status read for copy fee records is reused.
+const STATUS_TTL: Duration = Duration::from_secs(30);
+/// At most this many 1Click status reads per quote for copy fee records (audit L4).
+const MAX_STATUS_CALLS: usize = 12;
+/// A quote with no deposit lapses this long after Honey's own deadline (audit M2).
+const LAPSE_MARGIN_MINUTES: i64 = 30;
+/// A copy buy smaller than this doesn't count as a copy (audit L3).
+const MIN_COPY_USD: f64 = 1.0;
 
 /// The per-quote USD cap (`JAR_BUY_CAP_USD`, default $250), shared by jar buys and the
 /// Confidential Intents quote proxy.
@@ -291,7 +318,15 @@ impl JarBuys {
             market,
             cap_usd,
             pool: None,
+            held: None,
+            statuses: Mutex::default(),
         })
+    }
+
+    /// Reads on-chain balances, so copied units that left the wallet pay nothing.
+    pub fn with_held(mut self, held: Option<HeldFn>) -> Self {
+        self.held = held;
+        self
     }
 
     /// Records copy buys and charges copy fees (`copy_fees`) in PostgreSQL.
@@ -392,10 +427,19 @@ impl JarBuys {
         if input.copy_of.is_some() {
             self.check_outstanding(copier).await?;
         }
-        let sale = if input.intents {
+        // let sale = if input.intents {
+        //     None
+        // } else {
+        //     self.copy_sale(copier, &input, &tokens).await?
+        // };
+        // The sell's allocation holds the copier's lock until it's recorded (audit H2).
+        let (mut sale_tx, sale) = match if input.intents {
             None
         } else {
             self.copy_sale(copier, &input, &tokens).await?
+        } {
+            Some((tx, legs)) => (Some(tx), Some(legs)),
+            None => (None, None),
         };
         let now = OffsetDateTime::now_utc();
         let minutes = if input.intents {
@@ -452,7 +496,8 @@ impl JarBuys {
         }
         // Each sell of copied units is recorded, so its units count as sold once 1Click
         // confirms it; without the record they'd be charged again, so it isn't optional.
-        if let (Some(sale), Some(copier), Some(pool)) = (&sale, copier, &self.pool) {
+        // if let (Some(sale), Some(copier), Some(pool)) = (&sale, copier, &self.pool) {
+        if let (Some(sale), Some(copier), Some(tx)) = (&sale, copier, sale_tx.as_mut()) {
             for (leg, part) in legs.iter().zip(sale) {
                 if !part.parts.is_empty() {
                     // What each creator was paid (1Click's echo), split across their jars.
@@ -467,18 +512,24 @@ impl JarBuys {
                         bps.map_or(0, |bps| part.sale_micro * bps / 10_000)
                     };
                     let fees = copy_fees::received_by_jar(&part.shares, paid);
+                    // copy_fees::record_sale(pool, copier, &input.origin_asset,
+                    //     &leg.deposit_address, leg.one_click_deadline.as_deref(), &part.parts, &fees)
                     copy_fees::record_sale(
-                        pool,
+                        tx,
                         copier,
                         &input.origin_asset,
+                        &input.refund_to,
                         &leg.deposit_address,
-                        leg.one_click_deadline.as_deref(),
+                        lapse(&leg.deadline).as_deref(),
                         &part.parts,
                         &fees,
                     )
                     .await?;
                 }
             }
+        }
+        if let Some(tx) = sale_tx {
+            tx.commit().await.map_err(crate::identity::unavailable)?;
         }
         if let Some(jar) = input.copy_of {
             self.record_copy_buy(owner, jar, &input, &legs, &tokens)
@@ -510,6 +561,13 @@ impl JarBuys {
             ));
         }
         self.owners.check(&input.deposit_address, owner).await?;
+        // A paid copy buy now counts towards the outstanding cap, a paid sell's units are
+        // spoken for (audit H2, M2). Best effort: 1Click also sees the deposit itself.
+        if let Some(pool) = &self.pool
+            && let Err(error) = copy_fees::mark_deposited(pool, &input.deposit_address).await
+        {
+            tracing::warn!(%error, "copy fee deposit not marked");
+        }
         self.call(
             self.client
                 .post(format!("{}/deposit/submit", self.origin))
@@ -554,15 +612,55 @@ impl JarBuys {
         Ok(status)
     }
 
-    /// 1Click's status for a deposit address, raw: (status, units delivered). None when it
-    /// can't be read right now.
-    async fn raw_status(&self, deposit_address: &str) -> Option<(String, Option<String>)> {
+    //     /// 1Click's status for a deposit address, raw: (status, units delivered). None when it
+    //     /// can't be read right now.
+    //     async fn raw_status(&self, deposit_address: &str) -> Option<(String, Option<String>)> {
+    //         let mut url = reqwest::Url::parse(&format!("{}/status", self.origin)).ok()?;
+    //         url.query_pairs_mut()
+    //             .append_pair("depositAddress", deposit_address);
+    //         let body = self.call(self.client.get(url)).await.ok()?;
+    //         let status = body["status"].as_str().filter(|s| safe(s, 64))?.to_string();
+    //         let out = body["swapDetails"]["amountOut"].as_str().map(String::from);
+    //         Some((status, out))
+    //     }
+
+    /// 1Click's status for a deposit address, raw: (status, units delivered), reused for
+    /// `STATUS_TTL`; a fresh read spends one of `budget`. None when it can't be read now.
+    async fn raw_status(
+        &self,
+        deposit_address: &str,
+        budget: &std::sync::atomic::AtomicUsize,
+    ) -> Option<(String, Option<String>)> {
+        use std::sync::atomic::Ordering;
+        if let Some((at, found)) = self
+            .statuses
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(deposit_address)
+            && at.elapsed() < STATUS_TTL
+        {
+            return Some(found.clone());
+        }
+        if budget
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .is_err()
+        {
+            return None;
+        }
         let mut url = reqwest::Url::parse(&format!("{}/status", self.origin)).ok()?;
         url.query_pairs_mut()
             .append_pair("depositAddress", deposit_address);
         let body = self.call(self.client.get(url)).await.ok()?;
         let status = body["status"].as_str().filter(|s| safe(s, 64))?.to_string();
         let out = body["swapDetails"]["amountOut"].as_str().map(String::from);
+        let mut cache = self.statuses.lock().unwrap_or_else(|p| p.into_inner());
+        cache.retain(|_, (at, _)| at.elapsed() < STATUS_TTL);
+        if cache.len() < MAX_LOCAL_OWNERS {
+            cache.insert(
+                deposit_address.into(),
+                (Instant::now(), (status.clone(), out.clone())),
+            );
+        }
         Some((status, out))
     }
 
@@ -574,10 +672,16 @@ impl JarBuys {
         copier: uuid::Uuid,
         asset: Option<&str>,
         limit: i64,
+        budget: &std::sync::atomic::AtomicUsize,
     ) -> Result<(), AppError> {
         let quoted = copy_fees::quoted_lots(pool, copier, asset, limit).await?;
+        // let looked = futures_util::future::join_all(
+        //     quoted.iter().map(|(address, _)| self.raw_status(address)),
+        // )
         let looked = futures_util::future::join_all(
-            quoted.iter().map(|(address, _)| self.raw_status(address)),
+            quoted
+                .iter()
+                .map(|(address, _)| self.raw_status(address, budget)),
         )
         .await;
         for ((address, expired), found) in quoted.iter().zip(looked) {
@@ -595,16 +699,26 @@ impl JarBuys {
         pool: &sqlx::PgPool,
         copier: uuid::Uuid,
         asset: &str,
+        budget: &std::sync::atomic::AtomicUsize,
     ) -> Result<(), AppError> {
         let quoted = copy_fees::quoted_sales(pool, copier, asset).await?;
+        // let looked = futures_util::future::join_all(
+        //     quoted.iter().map(|(address, _)| self.raw_status(address)),
+        // )
         let looked = futures_util::future::join_all(
-            quoted.iter().map(|(address, _)| self.raw_status(address)),
+            quoted
+                .iter()
+                .map(|(address, _)| self.raw_status(address, budget)),
         )
         .await;
         for ((address, expired), found) in quoted.iter().zip(looked) {
             let Some((status, out)) = found else { continue };
             if let Some(outcome) = copy_fees::outcome(&status, out.as_deref(), *expired) {
-                copy_fees::settle_sale(pool, address, &outcome).await?;
+                // copy_fees::settle_sale(pool, address, &outcome).await?;
+                // An overlap is logged and left unsettled; it doesn't stop this quote.
+                if let Err(error) = copy_fees::settle_sale(pool, address, &outcome).await {
+                    tracing::warn!(%error, "copy sale not settled");
+                }
             }
         }
         Ok(())
@@ -619,7 +733,8 @@ impl JarBuys {
         if copy_fees::outstanding_lots(pool, copier).await? < copy_fees::MAX_OUTSTANDING_LOTS {
             return Ok(());
         }
-        self.resolve_lots(pool, copier, None, copy_fees::MAX_OUTSTANDING_LOTS)
+        let budget = std::sync::atomic::AtomicUsize::new(MAX_STATUS_CALLS);
+        self.resolve_lots(pool, copier, None, copy_fees::MAX_OUTSTANDING_LOTS, &budget)
             .await?;
         if copy_fees::outstanding_lots(pool, copier).await? < copy_fees::MAX_OUTSTANDING_LOTS {
             return Ok(());
@@ -629,6 +744,10 @@ impl JarBuys {
                 .into(),
         ))
     }
+
+    /*
+    Superseded 2026-11-14 (audit 2): lots of any address, nothing in flight spoken for,
+    no balance cap, priced at the index.
 
     /// The creators' fees on each leg of a quote selling `origin_asset`, from the copier's
     /// settled, unsold copy buys of it across every jar, oldest first. None when the copier
@@ -703,6 +822,124 @@ impl JarBuys {
         }
         Ok(Some(out))
     }
+    */
+
+    /// The creators' fees on each leg of a quote selling `origin_asset` from `refund_to`:
+    /// the copier's settled copy buys of it delivered to that address, less what sells in
+    /// flight already spoke for, capped at what the address still holds, oldest first
+    /// (audit H1, H2). Priced at the lower of 1Click's index and what a dry quote pays
+    /// (audit M1). None when no copied units are there. The open transaction holds the
+    /// copier's lock until the sell is recorded. Busy (never "no fee") when it can't be
+    /// worked out.
+    async fn copy_sale(
+        &self,
+        copier: Option<uuid::Uuid>,
+        input: &BuyRequest,
+        tokens: &[OneClickToken],
+    ) -> Result<Option<(SaleTx, Vec<LegSale>)>, AppError> {
+        let (Some(pool), Some(copier)) = (&self.pool, copier) else {
+            return Ok(None);
+        };
+        let asset = input.origin_asset.as_str();
+        let seller = copy_fees::normalize_address(&input.refund_to);
+        // What 1Click has finished since: copy buys that landed, sells that went through.
+        let budget = std::sync::atomic::AtomicUsize::new(MAX_STATUS_CALLS);
+        self.resolve_lots(
+            pool,
+            copier,
+            Some(asset),
+            copy_fees::MAX_OUTSTANDING_LOTS,
+            &budget,
+        )
+        .await?;
+        self.resolve_sales(pool, copier, asset, &budget).await?;
+        let amounts = input
+            .legs
+            .iter()
+            .map(|l| atomic(&l.amount).ok_or_else(|| AppError::BadRequest("invalid amount".into())))
+            .collect::<Result<Vec<_>, _>>()?;
+        let total = amounts.iter().fold(0u128, |s, a| s.saturating_add(*a));
+        let unavailable = crate::identity::unavailable;
+        let mut tx = pool.begin().await.map_err(unavailable)?;
+        copy_fees::lock_copier(&mut tx, copier).await?;
+        copy_fees::void_stale_sales(&mut tx, copier, asset).await?;
+        let lots =
+            copy_fees::open_lots_covering(&mut tx, copier, asset, &seller, u128::MAX).await?;
+        if lots.is_empty() {
+            tx.commit().await.map_err(unavailable)?;
+            return Ok(None);
+        }
+        // Copied units no longer at the address left without a fee: counted as gone.
+        let lots = match &self.held {
+            Some(held) => {
+                let balance = held(seller.clone(), asset.to_string())
+                    .await
+                    .ok_or(AppError::Busy)?;
+                let (left, gone) = copy_fees::cap_to_balance(&lots, balance);
+                copy_fees::consume(&mut tx, &gone).await?;
+                left
+            }
+            None => lots,
+        };
+        if lots.is_empty() {
+            tx.commit().await.map_err(unavailable)?;
+            return Ok(None);
+        }
+        let _ = total;
+        let mut skip = 0u128;
+        let mut allocations = Vec::with_capacity(amounts.len());
+        for units in &amounts {
+            allocations.push(copy_fees::allocate(&lots, skip, *units));
+            skip = skip.saturating_add(*units);
+        }
+        let mut recipients: HashMap<uuid::Uuid, Option<String>> = HashMap::new();
+        for (i, _) in allocations.iter().flatten() {
+            let creator = lots[*i].creator;
+            if let std::collections::hash_map::Entry::Vacant(slot) = recipients.entry(creator) {
+                slot.insert(copy_fees::payout_account(pool, creator).await?);
+            }
+        }
+        let mut out = Vec::with_capacity(amounts.len());
+        for ((leg, units), parts) in input.legs.iter().zip(&amounts).zip(allocations) {
+            if parts.is_empty() {
+                out.push(LegSale::default());
+                continue;
+            }
+            let index_usd = usd_value(tokens, asset, &leg.amount).ok_or(AppError::Busy)?;
+            // What the swap really pays, before any fee: price impact isn't profit.
+            let paid_usd = self
+                .dry_quote_usd(
+                    asset,
+                    &leg.destination_asset,
+                    &leg.amount,
+                    &leg.recipient,
+                    &input.refund_to,
+                    input.slippage_bps,
+                )
+                .await?
+                .ok_or(AppError::Busy)?;
+            let sale_usd = index_usd.min(paid_usd);
+            let sale_micro = (sale_usd * 1e6).floor() as u128;
+            let fees = copy_fees::leg_fees(&lots, &parts, *units, sale_micro, |c| {
+                recipients.get(&c).cloned().flatten()
+            });
+            let shares = copy_fees::jar_shares(&lots, &parts, *units, sale_micro);
+            out.push(LegSale {
+                fees,
+                sale_micro,
+                shares,
+                creators: recipients
+                    .iter()
+                    .filter_map(|(c, a)| Some((a.clone()?, *c)))
+                    .collect(),
+                parts: parts
+                    .into_iter()
+                    .map(|(i, u)| (lots[i].deposit_address.clone(), u))
+                    .collect(),
+            });
+        }
+        Ok(Some((tx, out)))
+    }
 
     /// Records a copy buy's legs as the copier's cost basis (each leg's price in dollars at
     /// 1Click's price for what paid). Never stops the buy: without a record the copier is
@@ -718,16 +955,33 @@ impl JarBuys {
         let (Some(pool), Ok(copier)) = (&self.pool, owner.parse::<uuid::Uuid>()) else {
             return;
         };
-        let terms = match copy_fees::jar_terms(pool, jar).await {
-            Ok(Some((creator, pct))) if creator != copier => pct,
+        // let terms = match copy_fees::jar_terms(pool, jar).await {
+        //     Ok(Some((creator, pct))) if creator != copier => pct,
+        let (terms, picks) = match copy_fees::jar_copy_terms(pool, jar).await {
+            Ok(Some((creator, pct, picks))) if creator != copier => (pct, picks),
             Ok(_) => return,
             Err(error) => {
                 tracing::warn!(%error, "copy buy not recorded");
                 return;
             }
         };
+        // A copy buys the jar's picks: only those legs are its lots, and only a real
+        // amount of them counts as a copy (audit L3).
+        let is_pick = |asset: &str| {
+            tokens
+                .iter()
+                .find(|t| t.asset_id == asset)
+                .is_some_and(|t| copy_fees::is_pick(&picks, t))
+        };
+        let picked_usd: f64 = legs
+            .iter()
+            .filter(|leg| is_pick(&leg.destination_asset))
+            .filter_map(|leg| usd_value(tokens, &input.origin_asset, &leg.amount_in))
+            .sum();
+        let counts = picked_usd >= MIN_COPY_USD;
         let lots: Vec<_> = legs
             .iter()
+            .filter(|leg| is_pick(&leg.destination_asset))
             .filter_map(|leg| {
                 let cost = usd_value(tokens, &input.origin_asset, &leg.amount_in)?;
                 // Some(copy_fees::NewLot {
@@ -735,7 +989,10 @@ impl JarBuys {
                     deposit_address: leg.deposit_address.clone(),
                     asset: leg.destination_asset.clone(),
                     cost_micro_usd: (cost * 1e6).floor() as i64,
-                    expires_at: leg.one_click_deadline.clone(),
+                    // expires_at: leg.one_click_deadline.clone(),
+                    expires_at: lapse(&leg.deadline),
+                    recipient: leg.recipient.clone(),
+                    counts,
                 })
             })
             .filter(|lot| lot.cost_micro_usd > 0)
@@ -850,6 +1107,17 @@ fn settled_units(status: &LegStatus) -> Option<Option<&str>> {
 }
 */
 
+/// The copier's open transaction while a sell is allocated and recorded.
+type SaleTx = sqlx::Transaction<'static, sqlx::Postgres>;
+
+/// When an unpaid quote lapses: Honey's own deadline plus a margin (RFC 3339).
+fn lapse(deadline: &str) -> Option<String> {
+    let at = OffsetDateTime::parse(deadline, &Rfc3339).ok()?;
+    (at + time::Duration::minutes(LAPSE_MARGIN_MINUTES))
+        .format(&Rfc3339)
+        .ok()
+}
+
 /// A 1Click dry quote: what a swap would deliver, with no deposit address made.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DryQuote {
@@ -903,6 +1171,53 @@ impl JarBuys {
             )
             .await?;
         check_dry(&body, &payload)
+    }
+
+    /// What a swap pays in dollars by 1Click's own dry quote (`amountOutUsd`), checked like
+    /// any dry quote; None when 1Click doesn't say.
+    pub async fn dry_quote_usd(
+        &self,
+        origin_asset: &str,
+        destination_asset: &str,
+        amount: &str,
+        recipient: &str,
+        refund_to: &str,
+        slippage_bps: u16,
+    ) -> Result<Option<f64>, AppError> {
+        if !safe(origin_asset, 200)
+            || !safe(destination_asset, 200)
+            || !safe(recipient, 128)
+            || !safe(refund_to, 128)
+            || atomic(amount).is_none()
+            || slippage_bps == 0
+            || slippage_bps > MAX_SLIPPAGE_BPS
+        {
+            return Err(AppError::BadRequest("invalid NEAR Intents quote".into()));
+        }
+        let deadline = (OffsetDateTime::now_utc() + time::Duration::minutes(DEADLINE_MINUTES))
+            .replace_nanosecond(0)
+            .map_err(|_| AppError::Busy)?
+            .format(&Rfc3339)
+            .map_err(|_| AppError::Busy)?;
+        let payload = json!({
+            "dry": true, "swapType": "EXACT_INPUT", "depositType": "ORIGIN_CHAIN",
+            "recipientType": "DESTINATION_CHAIN", "refundType": "ORIGIN_CHAIN",
+            "originAsset": origin_asset, "destinationAsset": destination_asset,
+            "amount": amount, "recipient": recipient, "refundTo": refund_to,
+            "slippageTolerance": slippage_bps, "deadline": deadline,
+        });
+        let body = self
+            .call(
+                self.client
+                    .post(format!("{}/quote", self.origin))
+                    .json(&payload),
+            )
+            .await?;
+        check_dry(&body, &payload)?;
+        Ok(body["quote"]["amountOutUsd"]
+            .as_str()
+            .and_then(|v| v.parse::<f64>().ok())
+            .filter(|v| v.is_finite() && *v >= 0.0))
     }
 }
 

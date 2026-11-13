@@ -6,7 +6,8 @@ mod common;
 
 use common::TestDatabase;
 use honey_server::routes::account_identity::{
-    EVIDENCE_TABLES, PERSONAL_COLUMNS, PERSONAL_TABLES, SPEND_TABLES, delete_linked_user,
+    EVIDENCE_TABLES, KEPT_COLUMNS, PERSONAL_COLUMNS, PERSONAL_TABLES, SPEND_TABLES,
+    delete_linked_user,
 };
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -239,11 +240,16 @@ async fn account_deletion_covers_every_reference() {
     cascading.extend(PERSONAL_COLUMNS.iter().map(|(t, _)| t.to_string()));
     cascading.sort();
     assert_eq!(of("c"), cascading);
-    assert_eq!(of("n"), sorted(SPEND_TABLES));
+    // assert_eq!(of("n"), sorted(SPEND_TABLES));
+    let mut kept = sorted(SPEND_TABLES);
+    kept.extend(KEPT_COLUMNS.iter().map(|(t, _)| t.to_string()));
+    kept.sort();
+    assert_eq!(of("n"), kept);
     assert_eq!(of("a"), sorted(EVIDENCE_TABLES));
     assert_eq!(
         refs.len(),
-        cascading.len() + SPEND_TABLES.len() + EVIDENCE_TABLES.len()
+        // cascading.len() + SPEND_TABLES.len() + EVIDENCE_TABLES.len()
+        cascading.len() + kept.len() + EVIDENCE_TABLES.len()
     );
     db.close().await;
 }

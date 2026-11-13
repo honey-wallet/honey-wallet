@@ -501,14 +501,51 @@ fn jar_buys(
     redis: Option<redis_store::RedisStore>,
     pool: Option<sqlx::PgPool>,
 ) -> Option<std::sync::Arc<jar_buys::JarBuys>> {
-    market.and_then(|market| match jar_buys::JarBuys::from_env(market) {
+    market.and_then(|market| match jar_buys::JarBuys::from_env(market.clone()) {
         // Ok(buys) => Some(std::sync::Arc::new(buys.with_redis(redis))),
-        Ok(buys) => Some(std::sync::Arc::new(buys.with_redis(redis).with_pool(pool))),
+        // Ok(buys) => Some(std::sync::Arc::new(buys.with_redis(redis).with_pool(pool))),
+        Ok(buys) => Some(std::sync::Arc::new(
+            buys.with_redis(redis)
+                .with_pool(pool)
+                .with_held(held_balances(market)),
+        )),
         Err(error) => {
             tracing::error!(%error, "jar buys disabled");
             None
         }
     })
+}
+
+/// What an address holds of a 1Click asset on chain now, read fresh through the public
+/// portfolio reads, for capping copied units at what's still there (`copy_fees`).
+fn held_balances(market: std::sync::Arc<market_data::MarketData>) -> Option<jar_buys::HeldFn> {
+    let service = portfolio::PortfolioService::new(Some(market.clone()))
+        .map_err(|error| tracing::error!(%error, "copy fee balance reads disabled"))
+        .ok()?;
+    Some(std::sync::Arc::new(
+        move |address: String, asset: String| {
+            let (service, market) = (service.clone(), market.clone());
+            Box::pin(async move {
+                let tokens = market.tokens().await.ok()?;
+                let token = tokens.iter().find(|t| t.asset_id == asset)?.clone();
+                let addresses = if address.starts_with("0x") {
+                    portfolio::Addresses::parse(Some(&address), None, None)
+                } else if bs58::decode(&address)
+                    .into_vec()
+                    .is_ok_and(|b| b.len() == 32)
+                {
+                    portfolio::Addresses::parse(None, Some(&address), None)
+                } else {
+                    portfolio::Addresses::parse(None, None, Some(&address))
+                }
+                .ok()?;
+                let read = service.balances(&addresses, true).await;
+                let held = copy_fees::held_units(&read.holdings, &token);
+                // A chain that didn't answer is unknown, not empty.
+                (held > 0 || read.unavailable.is_empty()).then_some(held)
+            })
+        },
+    ))
 }
 
 /// EIP-7702 gas sponsorship on Base, Arbitrum and Polygon; off unless
