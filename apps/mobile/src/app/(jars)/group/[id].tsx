@@ -146,6 +146,7 @@ function GroupPage({ group: g, ring }: { group: SocialGroup; ring: string }) {
           if (!live) return;
           if (state === 'paid') showToast('Your share is in');
           if (state === 'refunded') showErrorToast('Your payment was refunded. Try again.');
+          if (state === 'not_sent') showErrorToast('Your payment didn’t go out. Try again.');
         })
         .catch(() => {});
     void tick();
