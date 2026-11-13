@@ -25,7 +25,6 @@ import { NftGallery } from '@/components/home/NftGallery';
 import { TradesList, useHasTrades } from '@/components/home/PositionsList';
 import { Icon, type IconName } from '@/components/Icon';
 import { JarList } from '@/components/jars/JarParts';
-import { TokenArc } from '@/components/jars/TokenArc';
 import { HoneyJar } from '@/components/logo/HoneyJar';
 import { HoneyMascot } from '@/components/logo/HoneyMascot';
 import { Accordion, AccordionChevron } from '@/components/motion/Accordion';
@@ -48,7 +47,6 @@ import { PillButton } from '@/components/onboarding/PillButton';
 import { InFlightBar } from '@/components/wallet/InFlightBar';
 import {
   BalanceAmount,
-  Change,
   EmptyState,
   LabeledDivider,
   Sparkline,
@@ -68,9 +66,8 @@ import { isWeb } from '@/lib/platform';
 import { HIDDEN_AMOUNT, updateSettings, useSettings } from '@/lib/settings';
 import { EXTENSION, SHARED_WALLETS, SOCIAL, WALLET } from '@/lib/surface';
 import { useTabReselect } from '@/lib/tab-reselect';
-import { jarReturn, jarValue, type ThesisJar, useThesisJars } from '@/lib/thesis';
+import { useThesisJars } from '@/lib/thesis';
 import { showToast } from '@/lib/toast';
-import { tokenColor } from '@/lib/token-colors';
 import { requireWallet, useHasWallet } from '@/lib/wallet-gate';
 import { useWalletView } from '@/lib/wallet-view';
 import { isMainWallet, useActiveWallet } from '@/lib/wallets';
@@ -803,71 +800,5 @@ function HomeJars() {
         action={{ label: 'Create a jar', onPress: () => router.push('/jar-create') }}
       />
     );
-  return (
-    <View>
-      <JarsRing jars={mine} />
-      <JarList jars={mine} />
-    </View>
-  );
+  return <JarList jars={mine} />;
 }
-
-/** The widest the ring draws, so it never fills a tablet. */
-const RING_MAX = 420;
-
-/**
- * Your jars as one wheel: each jar's share of the total, its tokens stacked beside its
- * stretch, and what they're all worth in the middle. Home's Jars tab is where your jars live now (the
- * tab bar's jar button opens Create), so the ring sits here, over the list.
- */
-function JarsRing({ jars }: { jars: ThesisJar[] }) {
-  const ringStyles = useRingStyles();
-  const [width, setWidth] = useState(0);
-  // One stretch per jar, its share of what all your jars are worth, in its biggest
-  // token's colour; outside it, that jar's tokens stacked (2026-11-13: the wheel is
-  // about your jars, not the tokens across them).
-  const worth = jars.reduce((s, j) => s + jarValue(j), 0);
-  const valued = jars.filter((j) => jarValue(j) > 0);
-  const slices = valued
-    .map((j, i) => {
-      const lead = [...j.picks].sort((x, y) => y.weight - x.weight)[0]?.symbol ?? 'USDC';
-      return {
-        symbol: j.id,
-        weight: Math.max(1, Math.round((jarValue(j) / (worth || 1)) * 100)),
-        color: tokenColor(lead, i),
-      };
-    })
-    .sort((x, y) => y.weight - x.weight);
-  const stacks = Object.fromEntries(
-    valued.map((j) => [
-      j.id,
-      [...j.picks].sort((x, y) => y.weight - x.weight).map((p) => p.symbol),
-    ]),
-  );
-  const names = Object.fromEntries(valued.map((j) => [j.id, j.name]));
-  // The middle: what your jars are worth, and how they've done since you bought (each
-  // jar's start value backed out of its return).
-  const start = jars.reduce((s, j) => s + jarValue(j) / (1 + jarReturn(j)), 0);
-  const change = start > 0 ? worth / start - 1 : 0;
-  // One jar is a solid ring saying 100%: nothing to show.
-  if (slices.length < 2) return null;
-  return (
-    <View style={ringStyles.wrap} onLayout={(e) => setWidth(e.nativeEvent.layout.width)}>
-      {width > 0 ? (
-        <TokenArc
-          slices={slices}
-          stacks={stacks}
-          names={names}
-          onSlicePress={(id) => router.push({ pathname: '/jar/[id]', params: { id } })}
-          total={formatUsd(worth)}
-          sub={<Change value={change * 100} />}
-          width={Math.min(width, RING_MAX)}
-          outside
-        />
-      ) : null}
-    </View>
-  );
-}
-
-const useRingStyles = makeStyles(() => ({
-  wrap: { alignItems: 'center', paddingTop: 8, paddingBottom: 4 },
-}));

@@ -632,14 +632,20 @@ function JarBody({
             </Text>
           </View>
         ) : jar.mine ? (
-          jar.picks.map((p) => (
-            <JarHoldingRow
-              key={p.symbol}
-              pick={p}
-              total={shown}
-              price={prices[p.symbol.toUpperCase()]}
-            />
-          ))
+          // The split everywhere else shows (Feed, How much?, Launch), then each holding.
+          <>
+            <View style={styles.split}>
+              <Mix picks={jar.picks} tappable />
+            </View>
+            {jar.picks.map((p) => (
+              <JarHoldingRow
+                key={p.symbol}
+                pick={p}
+                total={shown}
+                price={prices[p.symbol.toUpperCase()]}
+              />
+            ))}
+          </>
         ) : (
           <Mix picks={jar.picks} tappable />
         )}
@@ -959,6 +965,7 @@ const useStyles = makeStyles((c) => ({
   ranges: { marginTop: 8, paddingHorizontal: 12 },
   aboutHeadSkeleton: { marginBottom: 8 },
   section: { marginTop: 28 },
+  split: { marginBottom: 8 },
   // DetailGroup brings its own 16pt space above its title.
   detail: { marginTop: 12 },
   heading: { marginBottom: 10, color: c.textSecondary, fontSize: 15 },
