@@ -11,7 +11,12 @@
 //! - the account is one of the signed-in person's own proven wallets;
 //! - the calls are only what the app makes: one plain transfer (the native coin, or
 //!   `transfer` of USDC or a token 1Click lists on that chain) to anyone, or up to six
-//!   such transfers each into a 1Click deposit address this person was quoted;
+//!   such transfers each into a 1Click deposit address this person was quoted; or a
+//!   DEX swap bound to a quote Honey issued this person (`quoteId`, `crate::dex`):
+//!   exactly the stored calls (an exact approve of the sell amount to an allowlisted
+//!   router, then that router's swap paying the account itself), unexpired, used once,
+//!   and simulated (`eth_simulateV1`) to show the account's buy token rising by at
+//!   least the quote's minimum;
 //! - the account is fresh (then a 7702 authorization for exactly `CALIBUR`, this chain
 //!   and the account's current nonce, signed by the account, must come with it) or
 //!   already delegated to `CALIBUR`; anything else is refused;
@@ -44,6 +49,7 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::{
+    dex::{evm as dex_evm, store::StoredQuote},
     error::AppError,
     gas_allowance::{GasCharge, NativeBudget, to_usd_micros},
     json_rpc::RpcError,
@@ -110,7 +116,9 @@ pub const CHAINS: [ChainSpec; 3] = [
         oneclick: "base",
         rpc_env: "EVM_SPONSOR_RPC_BASE",
         default_rpc: "https://mainnet.base.org",
-        max_gas: 600_000,
+        // A DEX swap (approve + aggregator + Calibur + first delegation) runs ~500k;
+        // `EVM_SPONSOR_MAX_TX_USD` still caps what any one transaction can cost.
+        max_gas: 1_000_000,
         max_fee_per_gas: GWEI,
         op_stack: true,
         usdc: address!("833589fcd6edb6e08f4c7c32d4f71b54bda02913"),
@@ -134,7 +142,7 @@ pub const CHAINS: [ChainSpec; 3] = [
         oneclick: "pol",
         rpc_env: "EVM_SPONSOR_RPC_POLYGON",
         default_rpc: "https://polygon-bor-rpc.publicnode.com",
-        max_gas: 600_000,
+        max_gas: 1_000_000,
         max_fee_per_gas: 3_000 * GWEI,
         op_stack: false,
         usdc: address!("3c499c542cef5e3811e1192ce70d8cc03d5c3359"),
@@ -555,6 +563,9 @@ pub struct PrepareRequest {
     pub chain_id: u64,
     pub account: String,
     pub calls: Vec<CallInput>,
+    /// A DEX quote (`POST /dex/quote`) the calls must match exactly.
+    #[serde(default)]
+    pub quote_id: Option<String>,
 }
 
 /// `EvmSponsorAuthorization`: the account's signed EIP-7702 authorization.
@@ -582,6 +593,9 @@ pub struct SubmitRequest {
     /// 65 bytes, 0x hex.
     pub signature: String,
     pub authorization: Option<AuthorizationInput>,
+    /// A DEX quote (`POST /dex/quote`) the calls must match exactly.
+    #[serde(default)]
+    pub quote_id: Option<String>,
 }
 
 /// `EvmSponsorPlan`: what the wallet signs for Honey to pay its gas.
@@ -733,6 +747,21 @@ pub trait SponsorBackend: Send + Sync {
     ) -> Result<bool, AppError>;
     /// Every row still `sent` for a while, for the sweeper.
     async fn unsettled(&self) -> Result<Vec<Sponsorship>, AppError>;
+    /// The person's own unexpired DEX quote (`crate::dex`); None without DEX routing.
+    async fn dex_quote(&self, _user: Uuid, _id: Uuid) -> Result<Option<StoredQuote>, AppError> {
+        Ok(None)
+    }
+    /// Marks a DEX quote used; false when it already was (a replay).
+    async fn spend_dex_quote(&self, _quote: &StoredQuote) -> Result<bool, AppError> {
+        Ok(false)
+    }
+    /// Whether Honey pays for this person's swaps now (`DEX_SPONSOR_ENABLED` and the
+    /// sponsor gate, `crate::dex::DexService::sponsor_check`). Off without DEX routing.
+    async fn dex_sponsor_check(&self, _user: Uuid) -> Result<(), AppError> {
+        Err(AppError::Unsupported(
+            "Honey isn't paying gas for swaps right now".into(),
+        ))
+    }
 }
 
 /// JSON-RPC per chain.
@@ -836,6 +865,16 @@ fn hex_bytes(v: &Value) -> Result<Vec<u8>, AppError> {
     alloy_primitives::hex::decode(s).map_err(|_| AppError::Busy)
 }
 
+/// The deadline a batch is signed with: `DEADLINE_SECS` out, or for a quoted DEX swap
+/// no later than a minute past the quote's expiry.
+fn batch_deadline(now: u64, swap: Option<&StoredQuote>) -> u64 {
+    let deadline = now + DEADLINE_SECS;
+    match swap {
+        Some(quote) => deadline.min(quote.expires_at.saturating_add(60)),
+        None => deadline,
+    }
+}
+
 fn parse_address(text: &str) -> Result<Address, AppError> {
     let t = text.trim();
     if t.len() != 42 {
@@ -845,7 +884,9 @@ fn parse_address(text: &str) -> Result<Address, AppError> {
         .map_err(|_| AppError::BadRequest("invalid address".into()))
 }
 
-fn parse_calls(calls: &[CallInput]) -> Result<Vec<Call>, AppError> {
+/// The calls of a request; `swap` lets one call carry a router's longer calldata.
+fn parse_calls(calls: &[CallInput], swap: bool) -> Result<Vec<Call>, AppError> {
+    let max_data = if swap { dex_evm::MAX_SWAP_DATA } else { 1024 };
     if calls.is_empty() || calls.len() > MAX_CALLS {
         return Err(AppError::BadRequest(format!(
             "a sponsored batch has 1 to {MAX_CALLS} calls"
@@ -858,7 +899,7 @@ fn parse_calls(calls: &[CallInput]) -> Result<Vec<Call>, AppError> {
                 .then(|| U256::from_str_radix(&c.value, 10).ok())
                 .flatten()
                 .ok_or_else(|| AppError::BadRequest("invalid call value".into()))?;
-            if c.data.len() > 2 + 2 * 1024 {
+            if c.data.len() > 2 + 2 * max_data {
                 return Err(AppError::BadRequest("call data too long".into()));
             }
             let data = alloy_primitives::hex::decode(c.data.trim())
@@ -895,6 +936,16 @@ impl EvmSponsor {
             .chains
             .iter()
             .filter_map(|id| chain(*id).map(|c| c.name))
+            .collect()
+    }
+
+    /// The chain ids this sponsor pays on.
+    pub fn chain_ids(&self) -> Vec<u64> {
+        self.config
+            .chains
+            .iter()
+            .copied()
+            .filter(|id| chain(*id).is_some())
             .collect()
     }
 
@@ -948,14 +999,44 @@ impl EvmSponsor {
     }
 
     /// The calls Honey pays for: each a transfer; a lone one may pay anyone, several must
-    /// all pay 1Click deposit addresses this person was quoted.
+    /// all pay 1Click deposit addresses this person was quoted. With `quote_id`, exactly
+    /// a DEX quote Honey issued this person (returned for the simulation).
     async fn check_calls(
         &self,
         user: Uuid,
         chain: &ChainSpec,
         account: Address,
         calls: &[Call],
-    ) -> Result<(), AppError> {
+        quote_id: Option<&str>,
+    ) -> Result<Option<StoredQuote>, AppError> {
+        if let Some(id) = quote_id {
+            // Off, or not for this person: refused before the quote is even looked up.
+            self.backend.dex_sponsor_check(user).await?;
+            let id: Uuid = id
+                .trim()
+                .parse()
+                .map_err(|_| AppError::BadRequest("invalid quote id".into()))?;
+            let quote = self.backend.dex_quote(user, id).await?.ok_or_else(|| {
+                AppError::BadRequest("that swap quote expired; review again".into())
+            })?;
+            // Quoted as one the person pays for themselves: not Honey's to pay now.
+            if !quote.sponsored {
+                return Err(AppError::GasNotCovered);
+            }
+            for call in calls {
+                if denied(call.to, account, self.relayer()) {
+                    return Err(AppError::BadRequest(
+                        "Honey can't pay for that call: not a swap".into(),
+                    ));
+                }
+            }
+            let raw: Vec<dex_evm::RawCall> = calls
+                .iter()
+                .map(|c| (c.to, c.value, c.data.clone()))
+                .collect();
+            dex_evm::check_quoted_calls(&quote, chain.id, account, &raw, (self.now)())?;
+            return Ok(Some(quote));
+        }
         let transfers = calls
             .iter()
             .map(|c| classify(c, account, self.relayer()))
@@ -980,7 +1061,35 @@ impl EvmSponsor {
                 }
             }
         }
-        Ok(())
+        Ok(None)
+    }
+
+    /// `eth_simulateV1` of `txs` between `balanceOf` reads of the quote's tokens: every
+    /// transaction succeeds, the sell token falls by at most the quoted amount and the
+    /// buy token rises by at least the quoted minimum. Returns the gas the transactions
+    /// used. A node that can't simulate means no sponsorship (the app pays its own gas).
+    async fn simulate_swap(
+        &self,
+        chain: &ChainSpec,
+        account: Address,
+        quote: &StoredQuote,
+        txs: Vec<Value>,
+        code: Option<&[u8]>,
+    ) -> Result<u64, AppError> {
+        let sell = dex_evm::parse_address(&quote.sell_token)?;
+        let buy = dex_evm::parse_address(&quote.buy_token)?;
+        let amount = dex_evm::parse_amount(&quote.sell_amount).ok_or(AppError::Busy)?;
+        let min = dex_evm::parse_amount(&quote.min_buy_amount).ok_or(AppError::Busy)?;
+        let n = txs.len();
+        let params = dex_evm::simulation_params(account, sell, buy, txs, code);
+        match self.rpc.call(chain.id, "eth_simulateV1", params).await {
+            Ok(result) => dex_evm::check_simulation(&result, n, amount, min),
+            Err(RpcError::Rpc(error)) => {
+                tracing::info!(chain = chain.name, %error, "swap simulation refused");
+                Err(AppError::GasNotCovered)
+            }
+            Err(error) => Err(rpc_failed(error)),
+        }
     }
 
     async fn account_state(
@@ -1115,11 +1224,13 @@ impl EvmSponsor {
     ) -> Result<PrepareResponse, AppError> {
         let chain = self.chain(input.chain_id)?;
         let account = parse_address(&input.account)?;
-        let calls = parse_calls(&input.calls)?;
+        let calls = parse_calls(&input.calls, input.quote_id.is_some())?;
         if !self.backend.owns_account(user, account).await? {
             return Err(AppError::Forbidden);
         }
-        self.check_calls(user, chain, account, &calls).await?;
+        let swap = self
+            .check_calls(user, chain, account, &calls, input.quote_id.as_deref())
+            .await?;
         let state = self.account_state(chain, account).await?;
         if state.delegation == Delegation::Other {
             return Err(AppError::GasNotCovered);
@@ -1131,7 +1242,23 @@ impl EvmSponsor {
         if state.delegation == Delegation::Fresh {
             gas += 25_000 + 20_000;
         }
-        for call in &calls {
+        if let Some(quote) = &swap {
+            // The approve and the swap from the account itself, in one simulated block
+            // (estimating the swap alone would fail before the approve).
+            let txs = calls
+                .iter()
+                .map(|c| {
+                    json!({
+                        "from": account.to_string(),
+                        "to": c.to.to_string(),
+                        "value": format!("0x{:x}", c.value),
+                        "data": hx(&c.data),
+                    })
+                })
+                .collect();
+            gas += u128::from(self.simulate_swap(chain, account, quote, txs, None).await?);
+        }
+        for call in calls.iter().filter(|_| swap.is_none()) {
             let estimate = self
                 .rpc(
                     chain,
@@ -1147,7 +1274,10 @@ impl EvmSponsor {
                 .map_err(|_| AppError::BadRequest("that payment would fail".into()))?;
             gas += quantity(&estimate)?.saturating_sub(21_000);
         }
-        let l1 = self.l1_fee_bound(chain, 700 + 200 * calls.len()).await?;
+        let data_len: usize = calls.iter().map(|c| c.data.len()).sum();
+        let l1 = self
+            .l1_fee_bound(chain, 700 + 200 * calls.len() + data_len)
+            .await?;
         let wei = gas.saturating_mul(max_fee).saturating_add(l1);
         let price = self.price(chain).await?;
         let fee = self.usd(wei, price)?;
@@ -1169,7 +1299,7 @@ impl EvmSponsor {
             delegate: CALIBUR.to_checksum(None),
             executor: self.relayer().to_checksum(None),
             nonce: state.seq.to_string(),
-            deadline: (self.now)() + DEADLINE_SECS,
+            deadline: batch_deadline((self.now)(), swap.as_ref()),
             salt: state.salt.to_string(),
             authorization_nonce: (state.delegation == Delegation::Fresh).then_some(state.tx_nonce),
             fee_usd_micros: fee,
@@ -1185,7 +1315,7 @@ impl EvmSponsor {
     ) -> Result<SubmitResponse, AppError> {
         let chain = self.chain(input.chain_id)?;
         let account = parse_address(&input.account)?;
-        let calls = parse_calls(&input.calls)?;
+        let calls = parse_calls(&input.calls, input.quote_id.is_some())?;
         if !self.backend.owns_account(user, account).await? {
             return Err(AppError::Forbidden);
         }
@@ -1201,7 +1331,16 @@ impl EvmSponsor {
             .ok_or_else(|| AppError::BadRequest("invalid nonce".into()))?;
         let signature = alloy_primitives::hex::decode(input.signature.trim())
             .map_err(|_| AppError::BadRequest("invalid signature".into()))?;
-        self.check_calls(user, chain, account, &calls).await?;
+        let swap = self
+            .check_calls(user, chain, account, &calls, input.quote_id.as_deref())
+            .await?;
+        // A quoted swap's batch can't outlive its quote by more than a minute (fee bumps
+        // could otherwise land it up to the full deadline later).
+        if input.deadline > batch_deadline(now, swap.as_ref()) {
+            return Err(AppError::BadRequest(
+                "that swap's signature outlives its quote; review again".into(),
+            ));
+        }
         let state = self.account_state(chain, account).await?;
         let batch = Batch {
             chain_id: chain.id,
@@ -1281,6 +1420,20 @@ impl EvmSponsor {
         if gas_limit > chain.max_gas {
             return Err(AppError::GasNotCovered);
         }
+        if let Some(quote) = &swap {
+            // Exactly what the relayer would send, with a fresh account simulated as
+            // already delegated: the buy token must arrive.
+            let tx = json!({
+                "from": self.relayer().to_string(),
+                "to": account.to_string(),
+                "value": "0x0",
+                "data": hx(&calldata),
+            });
+            let code =
+                (state.delegation == Delegation::Fresh).then(|| dex_evm::designator(CALIBUR));
+            self.simulate_swap(chain, account, quote, vec![tx], code.as_deref())
+                .await?;
+        }
         let (max_fee, tip) = self.fees(chain).await?;
         let mut tx = Unsigned {
             chain_id: chain.id,
@@ -1319,6 +1472,19 @@ impl EvmSponsor {
                 },
             )
             .await?;
+        // A quote pays for one swap only. It is spent only once the ledger said yes (a
+        // person over their allowance keeps it), and losing that race gives the
+        // reservation back.
+        if let Some(quote) = &swap {
+            let spent = self.backend.spend_dex_quote(quote).await;
+            if !matches!(spent, Ok(true)) {
+                let _ = self.backend.release(&charge).await;
+                spent?;
+                return Err(AppError::Conflict(
+                    "that swap quote was already used; review again".into(),
+                ));
+            }
+        }
 
         // One relayer nonce at a time per chain, across replicas.
         let lock = match self.backend.lock_relayer(chain.id).await {

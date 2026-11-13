@@ -324,6 +324,10 @@ struct Memory {
     settled: Vec<(Uuid, i64)>,
     released: Vec<Uuid>,
     rows: Vec<Sponsorship>,
+    quotes: Vec<StoredQuote>,
+    spent: Vec<Uuid>,
+    /// What `dex_sponsor_check` answers (None: allowed).
+    dex_sponsor: Option<AppError>,
 }
 
 struct MemoryBackend(Mutex<Memory>);
@@ -464,7 +468,35 @@ impl SponsorBackend for MemoryBackend {
             .cloned()
             .collect())
     }
+    async fn dex_quote(&self, user: Uuid, id: Uuid) -> Result<Option<StoredQuote>, AppError> {
+        Ok(self
+            .0
+            .lock()
+            .unwrap()
+            .quotes
+            .iter()
+            .find(|q| q.id == id && q.user_id == user)
+            .cloned())
+    }
+    async fn spend_dex_quote(&self, quote: &StoredQuote) -> Result<bool, AppError> {
+        let mut m = self.0.lock().unwrap();
+        if m.spent.contains(&quote.id) {
+            return Ok(false);
+        }
+        m.spent.push(quote.id);
+        Ok(true)
+    }
+    async fn dex_sponsor_check(&self, _: Uuid) -> Result<(), AppError> {
+        match &self.0.lock().unwrap().dex_sponsor {
+            None => Ok(()),
+            Some(AppError::GasNotCovered) => Err(AppError::GasNotCovered),
+            Some(e) => Err(AppError::Unsupported(e.to_string())),
+        }
+    }
 }
+
+/// (sell before, sell after, buy before, buy after, status of the transactions).
+type SwapSim = (u128, u128, u128, u128, &'static str);
 
 /// A scripted node: an account's code, the simulation's outcome and what it was sent.
 struct Node {
@@ -480,6 +512,10 @@ struct Node {
     receipts: Mutex<HashMap<String, Value>>,
     /// The relayer's mined nonce count (`latest`); its pending count is always 9.
     relayer_mined: Mutex<u64>,
+    /// `eth_simulateV1` of a swap: (sell before, sell after, buy before, buy after,
+    /// status), or an RPC error; and every params it was asked.
+    swap_sim: Mutex<Result<SwapSim, String>>,
+    swap_simulated: Mutex<Vec<Value>>,
 }
 
 impl Default for Node {
@@ -495,6 +531,14 @@ impl Default for Node {
             receipt: Mutex::new(Value::Null),
             receipts: Mutex::default(),
             relayer_mined: Mutex::new(9),
+            swap_sim: Mutex::new(Ok((
+                50_000_000,
+                40_000_000,
+                0,
+                21_000_000_000_000_000_000,
+                "0x1",
+            ))),
+            swap_simulated: Mutex::default(),
         }
     }
 }
@@ -567,6 +611,25 @@ impl EvmRpc for Node {
                 }
             }
             "eth_getTransactionByHash" => Value::Null,
+            "eth_simulateV1" => {
+                self.swap_simulated.lock().unwrap().push(params.clone());
+                let (sb, sa, bb, ba, status) = match &*self.swap_sim.lock().unwrap() {
+                    Ok(v) => *v,
+                    Err(e) => return Err(RpcError::Rpc(json!({ "message": e }))),
+                };
+                let txs = params[0]["blockStateCalls"][0]["calls"]
+                    .as_array()
+                    .unwrap()
+                    .len()
+                    - 4;
+                let read = |n: u128| json!({ "status": "0x1", "returnData": word(n), "gasUsed": "0x5000" });
+                let mut calls = vec![read(sb), read(bb)];
+                calls.extend((0..txs).map(
+                    |_| json!({ "status": status, "returnData": "0x", "gasUsed": "0x30000" }),
+                ));
+                calls.extend([read(sa), read(ba)]);
+                json!([{ "calls": calls }])
+            }
             other => panic!("unexpected {other}"),
         })
     }
@@ -618,6 +681,7 @@ fn prepare_request(calls: &[Call]) -> PrepareRequest {
         chain_id: 8453,
         account: ACCOUNT.to_string(),
         calls: inputs(calls),
+        quote_id: None,
     }
 }
 
@@ -650,6 +714,7 @@ fn submit_request(f: &Fixture, plan: &PrepareResponse, calls: &[Call]) -> Submit
                 s: format!("0x{:x}", a.s()),
             }
         }),
+        quote_id: None,
     }
 }
 
@@ -1119,4 +1184,300 @@ async fn a_nonce_taken_unseen_is_charged_at_its_reservation() {
     );
     // No replacement was sent for a nonce already taken.
     assert_eq!(f.node.sent.lock().unwrap().len(), 1);
+}
+
+// DEX swaps bound to a stored quote (`crate::dex`)
+
+fn swap_calls() -> Vec<Call> {
+    crate::dex::evm::tests::live_calls()
+        .into_iter()
+        .map(|(to, value, data)| Call { to, value, data })
+        .collect()
+}
+
+/// A fixture holding a quote for the live 10 USDC → AERO swap; returns its id.
+fn with_quote(f: &Fixture, edit: impl FnOnce(&mut StoredQuote)) -> Uuid {
+    let raw = crate::dex::evm::tests::live_calls();
+    let mut quote = crate::dex::evm::tests::stored_quote(f.user, &raw);
+    edit(&mut quote);
+    let id = quote.id;
+    f.backend.0.lock().unwrap().quotes.push(quote);
+    id
+}
+
+fn quoted(mut request: PrepareRequest, id: Uuid) -> PrepareRequest {
+    request.quote_id = Some(id.to_string());
+    request
+}
+
+#[tokio::test]
+async fn a_quoted_swap_is_simulated_sent_and_spent_once() {
+    let f = fixture();
+    let id = with_quote(&f, |_| {});
+    let calls = swap_calls();
+    let plan = f
+        .sponsor
+        .prepare(f.user, quoted(prepare_request(&calls), id))
+        .await
+        .unwrap();
+    // Prepare simulates the approve and the swap from the account in one block.
+    let sim = f.node.swap_simulated.lock().unwrap()[0].clone();
+    let block = &sim[0]["blockStateCalls"][0];
+    let sent_calls = block["calls"].as_array().unwrap();
+    assert_eq!(sent_calls.len(), 6);
+    assert_eq!(sent_calls[2]["from"].as_str().unwrap(), ACCOUNT.to_string());
+    assert_eq!(sent_calls[2]["to"].as_str().unwrap(), USDC_BASE.to_string());
+    assert!(block.get("stateOverrides").is_none());
+    assert!(plan.fee_usd_micros > 0 && plan.fee_usd_micros < 50_000);
+
+    let mut submit = submit_request(&f, &plan, &calls);
+    submit.quote_id = Some(id.to_string());
+    f.sponsor.submit(f.user, submit.clone()).await.unwrap();
+    // Submit simulates the relayer's own execute, the fresh account as delegated.
+    let sim = f.node.swap_simulated.lock().unwrap()[1].clone();
+    let block = &sim[0]["blockStateCalls"][0];
+    assert_eq!(
+        block["calls"][2]["from"].as_str().unwrap(),
+        f.sponsor.relayer().to_string()
+    );
+    assert_eq!(
+        block["stateOverrides"][format!("{ACCOUNT:#x}")]["code"],
+        format!("0xef0100{}", alloy_primitives::hex::encode(CALIBUR))
+    );
+    assert_eq!(f.backend.0.lock().unwrap().spent, vec![id]);
+    assert_eq!(f.node.sent.lock().unwrap().len(), 1);
+
+    // Replayed (the first one landed): refused before anything is sent, and the
+    // reservation it made is given back.
+    *f.node.receipt.lock().unwrap() = json!({
+        "status": "0x1", "gasUsed": "0x186a0", "effectiveGasPrice": "0x5b8d80", "l1Fee": "0x0",
+    });
+    let replay = f.sponsor.submit(f.user, submit).await;
+    assert!(
+        matches!(&replay, Err(AppError::Conflict(m)) if m.contains("already used")),
+        "{replay:?}"
+    );
+    assert_eq!(f.node.sent.lock().unwrap().len(), 1);
+    let m = f.backend.0.lock().unwrap();
+    assert_eq!(m.reserved.len(), 2);
+    assert_eq!(m.released, vec![m.reserved[1].id]);
+}
+
+/// Prepares the live swap for `id`, then signs what the plan says.
+async fn signed_swap(f: &Fixture, id: Uuid) -> SubmitRequest {
+    let calls = swap_calls();
+    let plan = f
+        .sponsor
+        .prepare(f.user, quoted(prepare_request(&calls), id))
+        .await
+        .unwrap();
+    let mut submit = submit_request(f, &plan, &calls);
+    submit.quote_id = Some(id.to_string());
+    submit
+}
+
+#[tokio::test]
+async fn a_swap_over_the_allowance_keeps_its_quote() {
+    // Finding 8: the ledger refuses (402) before the quote is spent, so the person can
+    // pay their own gas with the same quote.
+    let f = fixture();
+    let id = with_quote(&f, |_| {});
+    let submit = signed_swap(&f, id).await;
+    f.backend.0.lock().unwrap().remaining = 0;
+    let r = f.sponsor.submit(f.user, submit).await;
+    assert!(matches!(r, Err(AppError::GasNotCovered)), "{r:?}");
+    assert!(f.backend.0.lock().unwrap().spent.is_empty());
+    assert!(f.node.sent.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_quoted_swaps_batch_cant_outlive_its_quote() {
+    // Finding 8: fee bumps can land a batch up to its deadline, so a quoted swap's
+    // deadline is at most a minute past the quote's expiry.
+    let f = fixture();
+    let id = with_quote(&f, |q| q.expires_at = NOW + 120);
+    let submit = signed_swap(&f, id).await;
+    assert_eq!(submit.deadline, NOW + 180);
+    f.sponsor.submit(f.user, submit).await.unwrap();
+    // A batch signed for the usual ten minutes is refused for a quoted swap.
+    let id = with_quote(&f, |q| q.expires_at = NOW + 120);
+    let mut long = signed_swap(&f, id).await;
+    let batch = Batch {
+        chain_id: 8453,
+        account: ACCOUNT,
+        calls: swap_calls(),
+        nonce: U256::from_str_radix(&long.nonce, 10).unwrap(),
+        executor: f.sponsor.relayer(),
+        deadline: NOW + DEADLINE_SECS,
+        salt: calibur_salt(0),
+    };
+    long.deadline = NOW + DEADLINE_SECS;
+    long.signature = sign_batch(&batch);
+    long.authorization = None;
+    *f.node.receipt.lock().unwrap() = json!({
+        "status": "0x1", "gasUsed": "0x186a0", "effectiveGasPrice": "0x5b8d80", "l1Fee": "0x0",
+    });
+    let r = f.sponsor.submit(f.user, long).await;
+    assert!(
+        matches!(&r, Err(AppError::BadRequest(m)) if m.contains("outlives its quote")),
+        "{r:?}"
+    );
+}
+
+#[tokio::test]
+async fn quoted_swaps_are_refused_while_dex_sponsoring_is_off_or_for_the_ineligible() {
+    // Findings 2 and 4.
+    let f = fixture();
+    let id = with_quote(&f, |_| {});
+    let calls = swap_calls();
+    f.backend.0.lock().unwrap().dex_sponsor = Some(AppError::Unsupported("off".into()));
+    let r = f
+        .sponsor
+        .prepare(f.user, quoted(prepare_request(&calls), id))
+        .await;
+    assert!(matches!(r, Err(AppError::Unsupported(_))), "{r:?}");
+    f.backend.0.lock().unwrap().dex_sponsor = Some(AppError::GasNotCovered);
+    let r = f
+        .sponsor
+        .prepare(f.user, quoted(prepare_request(&calls), id))
+        .await;
+    assert!(matches!(r, Err(AppError::GasNotCovered)), "{r:?}");
+    // A quote issued as one the wallet pays for isn't Honey's to pay later.
+    f.backend.0.lock().unwrap().dex_sponsor = None;
+    let unsponsored = with_quote(&f, |q| q.sponsored = false);
+    let r = f
+        .sponsor
+        .prepare(f.user, quoted(prepare_request(&calls), unsponsored))
+        .await;
+    assert!(matches!(r, Err(AppError::GasNotCovered)), "{r:?}");
+    assert!(f.node.swap_simulated.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn quoted_swaps_that_differ_are_refused() {
+    let f = fixture();
+    let id = with_quote(&f, |_| {});
+    let calls = swap_calls();
+    let refused = |r: Result<PrepareResponse, AppError>| {
+        assert!(matches!(r, Err(AppError::BadRequest(_))), "{r:?}");
+    };
+    // An extra call, a missing approve, a bigger approve, an unlimited approve.
+    let mut extra = calls.clone();
+    extra.push(usdc_call(FRIEND, 1));
+    refused(
+        f.sponsor
+            .prepare(f.user, quoted(prepare_request(&extra), id))
+            .await,
+    );
+    refused(
+        f.sponsor
+            .prepare(f.user, quoted(prepare_request(&calls[1..]), id))
+            .await,
+    );
+    for amount in [U256::from(10_000_001u64), U256::MAX] {
+        let mut more = calls.clone();
+        more[0].data = crate::dex::evm::approve_data(crate::dex::chains::KYBER_ROUTER, amount);
+        refused(
+            f.sponsor
+                .prepare(f.user, quoted(prepare_request(&more), id))
+                .await,
+        );
+    }
+    // The same calls aimed at another router.
+    let mut router = calls.clone();
+    router[1].to = FRIEND;
+    refused(
+        f.sponsor
+            .prepare(f.user, quoted(prepare_request(&router), id))
+            .await,
+    );
+    // Without the quote, a router call is not a transfer.
+    refused(f.sponsor.prepare(f.user, prepare_request(&calls)).await);
+    // Unknown, someone else's, and expired quotes.
+    refused(
+        f.sponsor
+            .prepare(f.user, quoted(prepare_request(&calls), Uuid::new_v4()))
+            .await,
+    );
+    refused(
+        f.sponsor
+            .prepare(Uuid::new_v4(), quoted(prepare_request(&calls), id))
+            .await
+            .map_err(|e| match e {
+                AppError::Forbidden => AppError::BadRequest("not owned".into()),
+                e => e,
+            }),
+    );
+    let expired = with_quote(&f, |q| q.expires_at = NOW - 1);
+    refused(
+        f.sponsor
+            .prepare(f.user, quoted(prepare_request(&calls), expired))
+            .await,
+    );
+    // A quote whose stored router is off the allowlist (a bad store) is still refused.
+    let stranger = with_quote(&f, |q| {
+        let raw = crate::dex::evm::quote_calls(
+            crate::dex::evm::tests::USDC,
+            FRIEND,
+            U256::from(10_000_000u64),
+            crate::dex::evm::tests::live_swap(),
+        );
+        q.evm_calls = Some(crate::dex::evm::stored_calls(&raw));
+    });
+    let mut to_stranger = calls.clone();
+    to_stranger[0].data = crate::dex::evm::approve_data(FRIEND, U256::from(10_000_000u64));
+    to_stranger[1].to = FRIEND;
+    refused(
+        f.sponsor
+            .prepare(f.user, quoted(prepare_request(&to_stranger), stranger))
+            .await,
+    );
+    assert!(
+        f.node.swap_simulated.lock().unwrap().is_empty(),
+        "refused before simulating"
+    );
+}
+
+#[tokio::test]
+async fn a_swap_that_pays_too_little_or_cant_be_simulated_is_not_sponsored() {
+    let f = fixture();
+    let id = with_quote(&f, |_| {});
+    let calls = swap_calls();
+    // One wei of AERO short of the quote's minimum.
+    let min: u128 = crate::dex::evm::tests::LIVE_MIN.parse().unwrap();
+    *f.node.swap_sim.lock().unwrap() = Ok((50_000_000, 40_000_000, 0, min - 1, "0x1"));
+    let short = f
+        .sponsor
+        .prepare(f.user, quoted(prepare_request(&calls), id))
+        .await;
+    assert!(matches!(short, Err(AppError::BadRequest(_))), "{short:?}");
+    // Spends more USDC than quoted.
+    *f.node.swap_sim.lock().unwrap() = Ok((50_000_000, 39_999_999, 0, min, "0x1"));
+    let more = f
+        .sponsor
+        .prepare(f.user, quoted(prepare_request(&calls), id))
+        .await;
+    assert!(matches!(more, Err(AppError::BadRequest(_))), "{more:?}");
+    // Reverts.
+    *f.node.swap_sim.lock().unwrap() = Ok((50_000_000, 40_000_000, 0, min, "0x0"));
+    let reverts = f
+        .sponsor
+        .prepare(f.user, quoted(prepare_request(&calls), id))
+        .await;
+    assert!(
+        matches!(reverts, Err(AppError::BadRequest(_))),
+        "{reverts:?}"
+    );
+    // A node without eth_simulateV1: Honey doesn't pay.
+    *f.node.swap_sim.lock().unwrap() = Err("method not found".into());
+    let unknown = f
+        .sponsor
+        .prepare(f.user, quoted(prepare_request(&calls), id))
+        .await;
+    assert!(
+        matches!(unknown, Err(AppError::GasNotCovered)),
+        "{unknown:?}"
+    );
+    assert!(f.backend.0.lock().unwrap().spent.is_empty());
+    assert!(f.node.sent.lock().unwrap().is_empty());
 }

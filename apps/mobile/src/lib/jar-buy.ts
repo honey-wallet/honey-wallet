@@ -39,7 +39,21 @@ import {
 import { api } from '@/lib/api';
 import { confirmOwner } from '@/lib/auth';
 import { backendSessionToken } from '@/lib/backend-session';
+import { type PlannedRoute, planRoute, type RouteAsk, routeStatus } from '@/lib/best-route';
 import { prepareEvmSend } from '@/lib/dapp-sign';
+import {
+  DEX_CHAIN_IDS,
+  type DexChain,
+  type DexDeps,
+  dexAssetId,
+  dexChainOf,
+  fetchAllDexTokens,
+  isDexChain,
+  quoteDex,
+  routeLabel,
+  untilNoBatch,
+  usdcOn,
+} from '@/lib/dex';
 import { sendSponsored, sponsorEvm } from '@/lib/evm-gas';
 import { assertNoSponsoredInFlight } from '@/lib/evm-in-flight';
 import {
@@ -54,6 +68,7 @@ import {
   recipientOn,
   sameAddress,
 } from '@/lib/intents-quote';
+import { allowAuto, type DexLeg, isDexLeg, swapLeg } from '@/lib/jar-dex';
 import type { Route } from '@/lib/jar-routes';
 import type { prepareSend } from '@/lib/send';
 import { TEST_MODE } from '@/lib/test-mode';
@@ -67,19 +82,29 @@ export const USDC_BASE_ASSET = 'nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bd
 const USDC_DECIMALS = 6;
 
 /** Networks a jar can be paid from: the ones lib/send.ts pays USDC on. */
-export type PayChain = 'Base' | 'Ethereum' | 'Solana' | 'NEAR';
+export type PayChain = 'Base' | 'Arbitrum' | 'Polygon' | 'Ethereum' | 'Solana' | 'NEAR';
 /**
  * NEAR Intents' asset for the USDC lib/send.ts pays on each network (its canonical
  * contract: Circle's USDC on Ethereum and Base, the Solana mint, NEAR's native USDC).
  */
 export const USDC_ORIGINS: Record<PayChain, string> = {
   Base: USDC_BASE_ASSET,
+  // From 1Click's /v0/tokens on 2026-11-14 (Polygon's is an `omdep` asset, not `omft`).
+  Arbitrum: 'nep141:arb-0xaf88d065e77c8cc2239327c5edb3a432268e5831.omft.near',
+  Polygon: 'nep141:pol-0x3c499c542cef5e3811e1192ce70d8cc03d5c3359.omdep.near',
   Ethereum: 'nep141:eth-0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48.omft.near',
   Solana: 'nep141:sol-5ce3bf3a31af18be40ba30f721101b4341690186.omft.near',
   NEAR: 'nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1',
 };
 /** Tie-break when two networks hold the same: cheapest to pay from first. */
-export const PAY_CHAINS: readonly PayChain[] = ['Base', 'Solana', 'NEAR', 'Ethereum'];
+export const PAY_CHAINS: readonly PayChain[] = [
+  'Base',
+  'Solana',
+  'NEAR',
+  'Arbitrum',
+  'Polygon',
+  'Ethereum',
+];
 const isPayChain = (c: string): c is PayChain => (PAY_CHAINS as readonly string[]).includes(c);
 
 export { checkDeadline, MAX_SLIPPAGE_BPS };
@@ -105,7 +130,8 @@ export type BuyLeg = {
   minAmountOut: string;
   deadline: string;
   txHash?: string;
-  status: JarBuyState | 'NOT_SENT';
+  /** `HOLDING_USDC`: a DEX leg's USDC reached the token's chain but the swap didn't run. */
+  status: JarBuyState | 'NOT_SENT' | 'HOLDING_USDC';
   /** The network whose USDC paid this leg; Base when absent (older jars, group shares). */
   origin?: PayChain;
   /** Atomic units of the token the quote expected to deliver. */
@@ -114,7 +140,46 @@ export type BuyLeg = {
   amountOut?: string;
   /** The delivered token's decimals (NEAR Intents' list), once known. */
   decimals?: number;
+  /**
+   * `dex`: a token NEAR Intents doesn't list, bought on its own chain through an
+   * aggregator (lib/jar-dex). When bridged, the deposit fields above are the 1Click swap
+   * carrying USDC to that chain; absent, it's a NEAR Intents leg.
+   */
+  route?: 'intents' | 'dex';
+  dex?: DexLeg;
+  /** "BTC (as WBTC on Arbitrum)": what the leg holds when it isn't the pick itself. */
+  holdAs?: string;
+  /** Why a DEX, not NEAR Intents (lib/best-route): one plain line for the jar. */
+  why?: string;
 };
+
+/** One leg that can't be quoted or paid, and why, in one plain line. */
+export type LegProblem = { symbol: string; reason: string };
+
+/** A jar buy that stopped: every leg that couldn't go, each with its reason. */
+export class JarBuyError extends Error {
+  readonly legs: LegProblem[];
+  constructor(legs: LegProblem[], tail = 'Nothing was paid.') {
+    super(`${legs.map((l) => `${l.symbol}: ${l.reason}`).join(' ')} ${tail}`.trim());
+    this.legs = legs;
+  }
+}
+
+const reasonOf = (e: unknown, fallback = 'Something went wrong.') =>
+  e instanceof Error && e.message ? e.message.replace(/\s*Nothing was paid\.?$/, '') : fallback;
+
+/** Rejects with `message` when `promise` takes longer than `ms`: nothing waits forever. */
+export function withinTime<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(message)), ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+/** The longest any one quoting step may take. */
+export const STEP_MS = 20_000;
 
 export type AskedLeg = {
   symbol: string;
@@ -123,6 +188,19 @@ export type AskedLeg = {
   micro: bigint;
   assetId: string;
   recipient: string;
+  /** A DEX pick this 1Click leg carries USDC for (to the wallet's own address there). */
+  dex?: DexPick;
+};
+
+/** A pick bought through a DEX on its own chain (or, wrapped, on the paying chain). */
+type DexPick = {
+  symbol: string;
+  chain: DexChain;
+  token: string;
+  decimals: number;
+  micro: bigint;
+  /** From the route planner: its checked quote, its value, and why it's a DEX. */
+  planned?: PlannedRoute;
 };
 
 /** Dollars to integer micro-USDC. Every sum happens on these, never on floats. */
@@ -142,11 +220,15 @@ function payer(): AddedWallet & { addresses: NonNullable<AddedWallet['addresses'
 /** The paying wallet's Base address (where a swap refunds); throws when it can't pay. */
 export const payerEvm = () => payer().addresses.evm as string;
 
+/** USDC balances per network: the ones jars pay from, and every DEX chain. */
+export type UsdcBalances = Partial<Record<PayChain | DexChain, bigint>>;
+
 /** Integer micro-USDC per network, from the wallet's balances. */
 export function usdcByChain(holdings: Pick<PortfolioHolding, 'chain' | 'symbol' | 'amount'>[]) {
-  const out: Partial<Record<PayChain, bigint>> = {};
+  const out: UsdcBalances = {};
   for (const h of holdings) {
-    if (h.symbol !== 'USDC' || !isPayChain(h.chain) || !(h.amount > 0)) continue;
+    if (h.symbol !== 'USDC' || !(isPayChain(h.chain) || isDexChain(h.chain)) || !(h.amount > 0))
+      continue;
     // Rounded down: never count a fraction of a cent that isn't there.
     const micro = BigInt(Math.floor(h.amount * 10 ** USDC_DECIMALS));
     out[h.chain] = (out[h.chain] ?? 0n) + micro;
@@ -203,8 +285,8 @@ export function planOrigins(
 }
 
 export type JarBuyDeps = {
-  /** USDC per payable network for this wallet, in micro-USDC; null when unreadable. */
-  balances: (wallet: AddedWallet) => Promise<Partial<Record<PayChain, bigint>> | null>;
+  /** USDC per network for this wallet, in micro-USDC; null when unreadable. */
+  balances: (wallet: AddedWallet) => Promise<UsdcBalances | null>;
   quote: typeof api.jarBuyQuote;
   status: typeof api.jarBuyStatus;
   token: () => string | null;
@@ -216,6 +298,14 @@ export type JarBuyDeps = {
   /** Honey paying the Base legs' gas in one batch (EIP-7702), when it will. */
   sponsorEvm: typeof sponsorEvm;
   sendSponsored: typeof sendSponsored;
+  /** NEAR Intents' asset for USDC on a DEX chain (what a bridged DEX leg buys). */
+  usdcAsset: (chain: DexChain, fetcher: typeof fetch) => Promise<string | null>;
+  /** DEX quotes and sends (lib/dex). */
+  dex: Partial<DexDeps>;
+  /** DEX tokens' prices, for the value check. */
+  dexPrices: () => Promise<Record<string, number>>;
+  /** The route planner (lib/best-route): NEAR Intents unless it can't do the leg. */
+  route: (ask: RouteAsk) => Promise<PlannedRoute>;
 };
 
 /** A 1Click token's id, decimals and USD price (null when 1Click has none). */
@@ -240,12 +330,25 @@ const defaults: JarBuyDeps = {
   tokens: async (fetcher) => (await import('@/lib/intents-swap')).fetchSwapTokens(fetcher),
   sponsorEvm,
   sendSponsored,
+  usdcAsset: async (chain, fetcher) => {
+    if (chain === 'Base' || chain === 'Ethereum' || chain === 'Solana') return USDC_ORIGINS[chain];
+    const { fetchSwapTokens, swapAssetOf } = await import('@/lib/intents-swap');
+    return swapAssetOf(await fetchSwapTokens(fetcher), { symbol: 'USDC', chain })?.assetId ?? null;
+  },
+  dex: {},
+  dexPrices: async () =>
+    Object.fromEntries(
+      (await fetchAllDexTokens()).map((t) => [dexAssetId(t.chain, t.address), t.priceUsd]),
+    ),
+  route: (ask) => planRoute(ask),
 };
 
 /** Routes with money on them that can't be paid in full: any one stops the whole buy. */
 export const unpayable = (routes: Route[]) =>
   routes.filter(
-    (r) => r.usd > 0 && (r.status !== 'ok' || !r.legs.length || r.legs.some((l) => !l.assetId)),
+    (r) =>
+      r.usd > 0 &&
+      (r.status !== 'ok' || !r.legs.length || r.legs.some((l) => !l.assetId && !l.dex)),
   );
 
 /** Live quotes for every routed leg, each paid from a network holding the USDC. Nothing is signed yet. */
@@ -273,11 +376,28 @@ export async function quoteJarBuy(
       } or pick another token. Nothing was paid.`,
     );
   // NEAR Intents finds its own liquidity, so pools on the same chain merge into one
-  // swap per asset; the split that remains is across chains.
+  // swap per asset; the split that remains is across chains. Tokens it doesn't list
+  // are DEX picks, bought on their own chain (lib/jar-dex).
   const legs: AskedLeg[] = [];
+  const picks: DexPick[] = [];
   for (const r of routes)
     for (const l of r.legs) {
       if (!(l.usd > 0)) continue;
+      if (l.dex) {
+        const chain = dexChainOf(l.dex.chain);
+        if (!chain) throw new Error(`${r.symbol} has no route. Nothing was paid.`);
+        const same = picks.find((p) => p.chain === chain && p.token === l.dex?.address);
+        if (same) same.micro += toMicro(l.usd);
+        else
+          picks.push({
+            symbol: r.symbol,
+            chain,
+            token: l.dex.address,
+            decimals: l.dex.decimals,
+            micro: toMicro(l.usd),
+          });
+        continue;
+      }
       if (!l.assetId) throw new Error(`${r.symbol} has no NEAR Intents route. Nothing was paid.`);
       const recipient = recipientOn(l.chain, addresses);
       if (!recipient) throw new Error(`This wallet has no ${l.chain} address.`);
@@ -292,13 +412,101 @@ export async function quoteJarBuy(
           recipient,
         });
     }
-  if (!legs.length) throw new Error('No live routes yet. Try again in a moment.');
-  const total = legs.reduce((s, l) => s + l.micro, 0n);
+  if (!legs.length && !picks.length) throw new Error('No live routes yet. Try again in a moment.');
+  const total = [...legs, ...picks].reduce((s, l) => s + l.micro, 0n);
   if (total > toMicro(MAX_BUY_USD)) throw new Error(`Buys are capped at $${MAX_BUY_USD}.`);
   // Paid from whichever network holds the USDC (the wallet's live balances).
   const balances = await d.balances(wallet).catch(() => null);
   if (!balances) throw new Error('Couldn’t check your USDC. Try again in a moment.');
-  const origins = planOrigins(legs, balances);
+  // A DEX pick is paid from USDC on its own chain when the wallet holds enough there
+  // (one swap, nothing crosses chains); the rest is carried there by NEAR Intents.
+  const left: UsdcBalances = { ...balances };
+  const sameChain = new Set<DexPick>();
+  for (const p of [...picks].sort((a, b) => (b.micro > a.micro ? 1 : b.micro < a.micro ? -1 : 0))) {
+    if ((left[p.chain] ?? 0n) < p.micro) continue;
+    left[p.chain] = (left[p.chain] ?? 0n) - p.micro;
+    sameChain.add(p);
+  }
+  // NEAR Intents legs first (largest balance that covers them), then each bridge from
+  // any other network that covers it.
+  const planned = legs.length ? planOrigins(legs, left) : [];
+  planned.forEach((chain, i) => {
+    left[chain] = (left[chain] ?? 0n) - (legs[i] as AskedLeg).micro;
+  });
+  // Each NEAR Intents leg asks the route planner (lib/best-route): it stays on NEAR
+  // Intents unless 1Click can't do it (too small for its minimum, fees over half, no
+  // answer); then it's bought where the money is, through a DEX on the paying chain
+  // (BTC as WBTC on Arbitrum). A leg nothing can buy says why, and nothing is paid.
+  const problems: LegProblem[] = [];
+  const routed = await Promise.all(
+    legs.map(async (l, i) => {
+      const origin = planned[i] as PayChain;
+      if (!isDexChain(origin)) return null;
+      const from = recipientOn(origin, addresses);
+      if (!from) return null;
+      try {
+        return await withinTime(
+          d.route({
+            fromChain: origin,
+            fromToken: usdcOn(origin),
+            amount: l.micro,
+            toToken: l.assetId,
+            taker: l.recipient,
+            fromAddress: from,
+            slippageBps,
+            wrapped: true,
+            walletId: wallet.id,
+          }),
+          STEP_MS,
+          'Finding a route took too long.',
+        );
+      } catch (e) {
+        // A refusal is the leg's answer; an unreachable planner leaves it on NEAR Intents.
+        const status = routeStatus(e);
+        if (status !== null && status !== 404 && status !== 401)
+          problems.push({ symbol: l.symbol, reason: reasonOf(e) });
+        return null;
+      }
+    }),
+  );
+  if (problems.length) throw new JarBuyError(problems);
+  const intents: PayChain[] = [];
+  for (const [i, l] of [...legs.entries()].reverse()) {
+    const r = routed[i];
+    const origin = planned[i] as PayChain;
+    if (r?.dex && isDexChain(origin)) {
+      // Bought where the money is: a same-chain DEX swap, its USDC already set aside.
+      const pick: DexPick = {
+        symbol: l.symbol,
+        chain: origin,
+        token: r.dex.quote.buyToken,
+        decimals: r.best.buyDecimals,
+        micro: l.micro,
+        planned: r,
+      };
+      picks.push(pick);
+      sameChain.add(pick);
+      legs.splice(i, 1);
+    } else intents.unshift(origin);
+  }
+  const origins: PayChain[] = [...intents];
+  for (const p of picks) {
+    if (sameChain.has(p)) continue;
+    const assetId = await d.usdcAsset(p.chain, d.fetcher).catch(() => null);
+    const recipient = p.chain === 'Solana' ? addresses.solana : addresses.evm;
+    if (!assetId || !recipient)
+      throw new Error(`Couldn’t route USDC to ${p.chain} for ${p.symbol}. Nothing was paid.`);
+    const origin = [...PAY_CHAINS]
+      .filter((c) => c !== p.chain && (left[c] ?? 0n) >= p.micro)
+      .sort((a, b) => ((left[b] ?? 0n) > (left[a] ?? 0n) ? 1 : -1))[0];
+    if (!origin)
+      throw new Error(
+        `You need ${usd(p.micro)} in USDC on one network to buy ${p.symbol}. Nothing was paid.`,
+      );
+    left[origin] = (left[origin] ?? 0n) - p.micro;
+    legs.push({ symbol: p.symbol, chain: p.chain, micro: p.micro, assetId, recipient, dex: p });
+    origins.push(origin);
+  }
   const groups = new Map<PayChain, number[]>();
   origins.forEach((chain, i) => {
     groups.set(chain, [...(groups.get(chain) ?? []), i]);
@@ -309,19 +517,35 @@ export async function quoteJarBuy(
     const refundTo = recipientOn(origin, addresses);
     if (!refundTo) throw new Error(`This wallet has no ${origin} address.`);
     const asked = indexes.map((i) => legs[i] as AskedLeg);
-    const quote = await d.quote(token, {
-      originAsset: USDC_ORIGINS[origin],
-      refundTo,
-      slippageBps,
-      legs: asked.map((l) => ({
-        destinationAsset: l.assetId,
-        amount: l.micro.toString(),
-        recipient: l.recipient,
-      })),
-    });
-    checkQuote(quote, asked, { refundTo, slippageBps, origin });
-    // Don't take the server's word for where a deposit address pays out: ask 1Click.
-    await Promise.all(quote.legs.map((q) => verifyWithOneClick(q, refundTo, d.fetcher, origin)));
+    let quote: JarBuyQuote;
+    try {
+      quote = await withinTime(
+        d.quote(token, {
+          originAsset: USDC_ORIGINS[origin],
+          refundTo,
+          slippageBps,
+          legs: asked.map((l) => ({
+            destinationAsset: l.assetId,
+            amount: l.micro.toString(),
+            recipient: l.recipient,
+          })),
+        }),
+        STEP_MS,
+        'NEAR Intents took too long to quote.',
+      );
+      checkQuote(quote, asked, { refundTo, slippageBps, origin });
+      // Don't take the server's word for where a deposit address pays out: ask 1Click.
+      await withinTime(
+        Promise.all(quote.legs.map((q) => verifyWithOneClick(q, refundTo, d.fetcher, origin))),
+        STEP_MS,
+        'NEAR Intents took too long to confirm the quote.',
+      );
+    } catch (e) {
+      // One quote covers every leg paid from this network: each says why.
+      throw new JarBuyError(
+        asked.map((l) => ({ symbol: l.dex?.symbol ?? l.symbol, reason: reasonOf(e) })),
+      );
+    }
     quotes.push(quote);
     indexes.forEach((i, k) => {
       const l = legs[i] as AskedLeg;
@@ -347,10 +571,104 @@ export async function quoteJarBuy(
     throw new Error(`Buys are capped at $${capUsd > 0 ? capUsd.toFixed(0) : 0} for now.`);
   // The buy is signed without showing each quote, so a leg that would lose most of its
   // value to fees or a thin market stops it here, as a swap would be.
-  const tokens = await d.tokens(d.fetcher).catch(() => null);
-  if (!tokens) throw new Error('Couldn’t price this buy right now. Try again. Nothing was paid.');
-  checkValueKept(out, tokens);
-  return { quote: quotes[0] as JarBuyQuote, quotes, legs: out };
+  if (out.length) {
+    const tokens = await withinTime(d.tokens(d.fetcher), STEP_MS, 'timed out').catch(() => null);
+    if (!tokens) throw new Error('Couldn’t price this buy right now. Try again. Nothing was paid.');
+    checkValueKept(out, tokens);
+  }
+  // DEX picks: a live quote for each (sold from the USDC that will be there: the bridge's
+  // guaranteed minimum), checked, and held to the same floor.
+  const unplanned = picks.some((p) => !p.planned);
+  const dexPrices = unplanned
+    ? await withinTime(d.dexPrices(), STEP_MS, 'timed out').catch(() => null)
+    : {};
+  if (!dexPrices)
+    throw new Error('Couldn’t price this buy right now. Try again. Nothing was paid.');
+  const dexProblems: LegProblem[] = [];
+  for (const p of picks) {
+    const i = legs.findIndex((l) => l.dex === p);
+    const bridge = i >= 0 ? (out[i] as BuyLeg) : null;
+    const sell = bridge ? BigInt(bridge.minAmountOut) : p.micro;
+    const taker = p.chain === 'Solana' ? addresses.solana : addresses.evm;
+    if (!taker) throw new Error(`This wallet has no ${p.chain} address.`);
+    let quoted: Awaited<ReturnType<typeof quoteDex>>;
+    try {
+      // The planner's quote, already checked, when it is still for this exact sale.
+      quoted =
+        p.planned?.dex && p.planned.dex.ask.sellAmount === sell
+          ? p.planned.dex
+          : await withinTime(
+              quoteDex(
+                {
+                  chain: p.chain,
+                  sellToken: usdcOn(p.chain),
+                  buyToken: p.token,
+                  sellAmount: sell,
+                  taker,
+                  slippageBps,
+                  walletId: wallet.id,
+                },
+                d.dex,
+              ),
+              STEP_MS,
+              'The DEX took too long to quote.',
+            );
+    } catch (e) {
+      dexProblems.push({ symbol: p.symbol, reason: reasonOf(e) });
+      continue;
+    }
+    const asset = dexAssetId(p.chain, p.token);
+    const price = dexPrices[asset];
+    // A wrapped buy is valued as the planner valued it (one WBTC counts as one BTC).
+    const kept = price
+      ? (Number(quoted.quote.minBuyAmount) / 10 ** p.decimals) * price
+      : (p.planned?.best.minOutUsd ?? 0);
+    if (!(kept >= fromMicro(p.micro) * MIN_VALUE_KEPT)) {
+      dexProblems.push({
+        symbol: p.symbol,
+        reason: 'Fees would take more than half of this swap. Buy more or pick another token.',
+      });
+      continue;
+    }
+    const dex: DexLeg = {
+      chain: p.chain,
+      taker,
+      token: p.token,
+      decimals: p.decimals,
+      aggregator: quoted.quote.aggregator,
+      slippageBps,
+      bridged: !!bridge,
+      stage: bridge ? 'bridging' : 'ready',
+      usdc: sell.toString(),
+      quotedSell: sell.toString(),
+      quotedMin: quoted.quote.minBuyAmount,
+    };
+    const leg: BuyLeg = {
+      ...(bridge ?? {
+        symbol: p.symbol,
+        chain: p.chain,
+        usd: fromMicro(p.micro),
+        depositAddress: asset,
+        amountIn: p.micro.toString(),
+        deadline: new Date(quoted.quote.expiresAt).toISOString(),
+        status: 'NOT_SENT' as const,
+      }),
+      destinationAsset: asset,
+      minAmountOut: quoted.quote.minBuyAmount,
+      quotedOut: quoted.quote.buyAmount,
+      decimals: p.decimals,
+      route: 'dex',
+      dex,
+      ...(p.planned?.holdAs ? { holdAs: p.planned.holdAs } : {}),
+      why:
+        p.planned?.why ??
+        `Not on NEAR Intents, so this uses ${routeLabel(quoted.quote.aggregator, p.chain, false)}. Swaps here are public on-chain.`,
+    };
+    if (bridge) out[i] = leg;
+    else out.push(leg);
+  }
+  if (dexProblems.length) throw new JarBuyError(dexProblems);
+  return { quote: quotes[0] as JarBuyQuote | undefined, quotes, legs: out };
 }
 
 /**
@@ -468,18 +786,44 @@ export async function payJarBuy(
   const from = wallet.addresses.evm as Hex;
   const total = legs.reduce((s, l) => s + BigInt(l.amountIn), 0n);
   if (total > toMicro(MAX_BUY_USD)) throw new Error(`Buys are capped at $${MAX_BUY_USD}.`);
-  for (const l of legs) checkDeadline(l.deadline);
+  // Same-chain DEX legs pay no deposit: they're re-quoted when sent (lib/dex).
+  for (const l of legs) if (paysDeposit(l)) checkDeadline(l.deadline);
   if (
     !(await d.confirm(reason ?? `Buy $${fromMicro(total).toFixed(2)} across ${legs.length} swaps`))
   )
     throw new Error('Buy cancelled.');
   const out = legs.map((l) => ({ ...l }));
-  const onBase = out.some((l) => (l.origin ?? 'Base') === 'Base');
+  // This one confirmation also covers the DEX half of bridged legs while the app is open
+  // (lib/jar-dex explains why it can't be signed now).
+  allowAuto(out);
+  // Same-chain DEX swaps go first: if the price moved past your max slippage, nothing
+  // else has been paid yet.
+  const swappedOn = new Set<string>();
+  for (const [i, leg] of out.entries()) {
+    if (paysDeposit(leg) || !isDexLeg(leg)) continue;
+    // A second swap on one EVM chain waits for the first to land (one Calibur sequence).
+    if (swappedOn.has(leg.dex.chain) && leg.dex.chain !== 'Solana')
+      await untilNoBatch(DEX_CHAIN_IDS[leg.dex.chain], leg.dex.taker, d.dex);
+    swappedOn.add(leg.dex.chain);
+    try {
+      out[i] = await swapLeg(leg, BigInt(leg.minAmountOut), {
+        dex: d.dex,
+        wallet: () => ({ id: wallet.id, addresses: wallet.addresses }),
+      });
+    } catch (e) {
+      throw new JarBuyError([{ symbol: leg.symbol, reason: reasonOf(e) }], '');
+    }
+    onLeg?.(out.map((l) => ({ ...l })));
+  }
+  const deposits = out.filter(paysDeposit);
+  const onBase = deposits.some((l) => (l.origin ?? 'Base') === 'Base');
   const network = evmNetwork(BASE_CHAIN_ID);
   if (onBase && !network) throw new Error('Base is not available.');
   const client = network ? createPublicClient({ transport: http(network.rpc) }) : null;
   const key = onBase ? await privateKeyOf(wallet.id, 'evm') : null;
   const stillActive = () => wallets.get().activeId === wallet.id;
+  // The leg being paid, so a failure says which.
+  let paying = 'Payment';
   try {
     let nonce = 0;
     // Honey pays the Base legs' gas in one batch when it will: one transaction for all.
@@ -487,7 +831,11 @@ export async function payJarBuy(
     if (key && client) {
       if (evmAddressOfKey(key).toLowerCase() !== from.toLowerCase())
         throw new Error('Wallet key does not match.');
-      const baseLegs = out.filter((l) => (l.origin ?? 'Base') === 'Base');
+      const baseLegs = deposits.filter((l) => (l.origin ?? 'Base') === 'Base');
+      // A DEX swap of this jar's on Base went out first: its batch must land before the
+      // deposits' batch is signed (one Calibur sequence).
+      if (baseLegs.length && out.some((l) => isDexLeg(l) && !l.dex.bridged && l.chain === 'Base'))
+        await untilNoBatch(BASE_CHAIN_ID, from, d.dex);
       const sponsorship =
         baseLegs.length <= 6 && baseLegs.every((l) => isAddress(l.depositAddress))
           ? await d.sponsorEvm({
@@ -507,7 +855,8 @@ export async function payJarBuy(
         nonce = await client.getTransactionCount({ address: from, blockTag: 'pending' });
       }
     }
-    for (const leg of out) {
+    for (const leg of deposits) {
+      paying = leg.symbol;
       // The confirm prompt may have sat open; never pay into an expiring quote.
       checkDeadline(leg.deadline);
       const origin = leg.origin ?? 'Base';
@@ -554,6 +903,7 @@ export async function payJarBuy(
         leg.txHash = (await plan.execute(stillActive)).hash;
       }
       leg.status = 'KNOWN_DEPOSIT_TX';
+      if (leg.dex) leg.dex = { ...leg.dex, bridgeStatus: 'KNOWN_DEPOSIT_TX' };
       onLeg?.(out.map((l) => ({ ...l })));
       const token = d.token();
       if (token)
@@ -561,11 +911,18 @@ export async function payJarBuy(
           .jarBuyDeposit(token, { depositAddress: leg.depositAddress, txHash: leg.txHash })
           .catch(() => undefined); // NEAR Intents also sees the deposit on its own.
     }
+  } catch (e) {
+    // Every failure names its leg: the jar screen shows it, never a silent stop.
+    if (e instanceof JarBuyError) throw e;
+    throw new JarBuyError([{ symbol: paying, reason: reasonOf(e) }], '');
   } finally {
     key?.fill(0);
   }
   return out;
 }
+
+/** Whether a leg pays a NEAR Intents deposit (every leg but a same-chain DEX swap). */
+export const paysDeposit = (l: BuyLeg) => !(isDexLeg(l) && !l.dex.bridged);
 
 const KNOWN: readonly JarBuyState[] = [
   'PENDING_DEPOSIT',
@@ -592,7 +949,8 @@ export async function refreshJarBuy(
   const token = d.token();
   return Promise.all(
     legs.map(async (l): Promise<BuyLeg> => {
-      if (!l.txHash || l.status === 'REFUNDED' || l.status === 'FAILED') return l;
+      // DEX legs move on through lib/jar-dex (which asks this about their bridge).
+      if (isDexLeg(l) || !l.txHash || l.status === 'REFUNDED' || l.status === 'FAILED') return l;
       if (l.status === 'SUCCESS' && l.amountOut) return l;
       const s = token ? await d.status(token, l.depositAddress).catch(() => null) : null;
       let status = s && known(s.status) ? s.status : null;

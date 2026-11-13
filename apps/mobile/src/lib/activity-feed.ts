@@ -1,7 +1,9 @@
 import type { ChainActivityItem } from '@honey-wallet/api-client';
 import { formatUnits } from 'viem';
+import type { DexSwapRecord } from '@/lib/dex';
 import type { IntentsSwap, SwapStatus } from '@/lib/intents-swap';
 import type { BuyLeg } from '@/lib/jar-buy';
+import type { DexLeg } from '@/lib/jar-dex';
 import type { Activity } from '@/lib/mock-wallet';
 import { dayLabel, formatAmount, monthLabel, toActivity } from '@/lib/portfolio';
 import type { ThesisJar } from '@/lib/thesis';
@@ -16,6 +18,7 @@ import type { ThesisJar } from '@/lib/thesis';
 
 export const swapRowId = (depositAddress: string) => `swap:${depositAddress}`;
 export const jarBuyRowId = (jarId: string) => `jarbuy:${jarId}`;
+export const dexSwapRowId = (hash: string) => `dexswap:${hash}`;
 
 /** What a swap's (or a jar buy leg's) 1Click status means, for a row and its pill. */
 export function swapState(status: SwapStatus | BuyLeg['status']): {
@@ -33,6 +36,8 @@ export function swapState(status: SwapStatus | BuyLeg['status']): {
       return { tone: 'failed', text: 'Expired' };
     case 'NOT_SENT':
       return { tone: 'failed', text: 'Not sent' };
+    case 'HOLDING_USDC':
+      return { tone: 'failed', text: 'Holding USDC' };
     case 'INCOMPLETE_DEPOSIT':
       return { tone: 'failed', text: 'Incomplete deposit' };
     case 'PROCESSING':
@@ -98,6 +103,36 @@ export function swapRecords(
     });
 }
 
+/** This wallet's DEX swaps (Swap, jar sales): the on-chain row of each gives way to it. */
+export function dexSwapRecords(
+  swaps: DexSwapRecord[],
+  walletId: string,
+  now = new Date(),
+): LocalRecord[] {
+  return swaps
+    .filter((s) => s.walletId === walletId)
+    .map((s) => {
+      const date = new Date(s.at);
+      const sold = units(s.sell.amount, s.sell.decimals) ?? '';
+      const got = units(s.buy.amount, s.buy.decimals) ?? '';
+      return {
+        at: s.at,
+        hashes: [s.hash],
+        row: {
+          id: dexSwapRowId(s.hash),
+          kind: 'swapped',
+          title:
+            s.status === 'SUCCESS' ? 'Swapped' : s.status === 'FAILED' ? 'Swap failed' : 'Swapping',
+          symbol: s.buy.symbol,
+          detail: `${sold} ${s.sell.symbol} → ${got} ${s.buy.symbol}`,
+          swap: { from: [s.sell.symbol, sold], to: [s.buy.symbol, got] },
+          month: monthLabel(date, now),
+          date: dayLabel(date),
+        },
+      };
+    });
+}
+
 /** Jars bought from this phone with real NEAR Intents swaps (at least one leg paid). */
 export function jarBuyRecords(jars: ThesisJar[], now = new Date()): LocalRecord[] {
   return jars
@@ -108,6 +143,11 @@ export function jarBuyRecords(jars: ThesisJar[], now = new Date()): LocalRecord[
       const usd = legs.reduce((s, l) => s + l.usd, 0);
       const moving = legs.some((l) => swapState(l.status).tone === 'waiting');
       const bought = legs.filter((l) => l.status === 'SUCCESS').length;
+      // A DEX leg says where it stands: its USDC on the way, or held for you.
+      const waiting = legs.find(
+        (l) => dexOf(l)?.stage === 'bridging' && swapState(l.status).tone === 'waiting',
+      );
+      const held = legs.find((l) => l.status === 'HOLDING_USDC');
       const note = moving
         ? ' · buying'
         : bought === legs.length
@@ -115,6 +155,11 @@ export function jarBuyRecords(jars: ThesisJar[], now = new Date()): LocalRecord[
           : bought === 0
             ? ' · refunded'
             : ` · ${bought} of ${legs.length} bought`;
+      const detail = waiting
+        ? `Buying ${waiting.symbol} · waiting for USDC on ${dexOf(waiting)?.chain}`
+        : held
+          ? `${held.symbol} · holding USDC on ${dexOf(held)?.chain}`
+          : `$${usd.toFixed(2)} into ${j.name}${note}`;
       return {
         at: date.getTime(),
         hashes: legs.flatMap((l) => (l.txHash ? [l.txHash] : [])),
@@ -123,13 +168,15 @@ export function jarBuyRecords(jars: ThesisJar[], now = new Date()): LocalRecord[
           kind: 'swapped',
           title: 'Jar buy',
           symbol: legs[0]?.symbol ?? 'USDC',
-          detail: `$${usd.toFixed(2)} into ${j.name}${note}`,
+          detail,
           month: monthLabel(date, now),
           date: dayLabel(date),
         },
       };
     });
 }
+
+const dexOf = (l: BuyLeg): DexLeg | undefined => (l.route === 'dex' ? l.dex : undefined);
 
 const sameHash = (a: string, b: string) =>
   a.startsWith('0x') ? a.toLowerCase() === b.toLowerCase() : a === b;

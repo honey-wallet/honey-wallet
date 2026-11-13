@@ -54,8 +54,16 @@ import { isSwapQuote, isSwapQuoteConfiguration, isSwapQuoteRequest } from './swa
 import type {
   AaveIntent,
   ApiErrorBody,
+  BestRoute,
+  BestRouteRequest,
   Capabilities,
   ChartRangeId,
+  DexChain,
+  DexQuote,
+  DexQuoteRequest,
+  DexRoute,
+  DexRouteRequest,
+  DexTokens,
   EvmSponsorPlan,
   EvmSponsorPrepareRequest,
   EvmSponsorStatus,
@@ -425,6 +433,70 @@ export function createApiClient({ baseUrl, fetch: fetchImpl = fetch }: ApiClient
         throw error;
       }
     },
+    /** The DEX universe on one chain: safe tokens only unless `all`. */
+    dexTokens: (chain: DexChain, options: { all?: boolean } = {}, init?: RequestInit) =>
+      request<DexTokens>(
+        `/api/v1/dex/tokens?chain=${encodeURIComponent(chain)}${options.all ? '&all=1' : ''}`,
+        init,
+      ),
+    /** A stored, executable DEX quote (KyberSwap on EVM, Jupiter on Solana). */
+    dexQuote: (token: string, input: DexQuoteRequest, init?: RequestInit) =>
+      request<DexQuote>(
+        '/api/v1/dex/quote',
+        authorizedJson(
+          token,
+          {
+            chain: input.chain,
+            sellToken: input.sellToken,
+            buyToken: input.buyToken,
+            sellAmount: input.sellAmount,
+            taker: input.taker,
+            ...(input.slippageBps === undefined ? {} : { slippageBps: input.slippageBps }),
+            ...(input.sponsor === undefined ? {} : { sponsor: input.sponsor }),
+          },
+          init,
+        ),
+      ),
+    /** The route a swap or jar leg takes: NEAR Intents first, a DEX only as a fallback. */
+    bestRoute: (token: string, input: BestRouteRequest, init?: RequestInit) =>
+      request<BestRoute>(
+        '/api/v1/routes/best',
+        authorizedJson(
+          token,
+          {
+            fromChain: input.fromChain,
+            fromToken: input.fromToken,
+            amount: input.amount,
+            ...(input.toChain === undefined ? {} : { toChain: input.toChain }),
+            toToken: input.toToken,
+            taker: input.taker,
+            ...(input.fromAddress === undefined ? {} : { fromAddress: input.fromAddress }),
+            ...(input.slippageBps === undefined ? {} : { slippageBps: input.slippageBps }),
+            ...(input.privateOnly ? { privateOnly: true } : {}),
+            ...(input.wrapped ? { wrapped: true } : {}),
+          },
+          init,
+        ),
+      ),
+    /** The legs of a buy or sell across chains (1Click USDC plus DEX legs). */
+    dexRoute: (token: string, input: DexRouteRequest, init?: RequestInit) =>
+      request<DexRoute>(
+        '/api/v1/dex/route',
+        authorizedJson(
+          token,
+          {
+            fromChain: input.fromChain,
+            fromToken: input.fromToken,
+            amount: input.amount,
+            toChain: input.toChain,
+            toToken: input.toToken,
+            taker: input.taker,
+            ...(input.fromAddress === undefined ? {} : { fromAddress: input.fromAddress }),
+            ...(input.slippageBps === undefined ? {} : { slippageBps: input.slippageBps }),
+          },
+          init,
+        ),
+      ),
     /** The signed-in person's free gas, and which chains Honey pays fees on now. */
     gasAllowance: (token: string, init?: RequestInit) =>
       request<GasAllowance>('/api/v1/gas/allowance', authorized(token, init)),
@@ -436,7 +508,13 @@ export function createApiClient({ baseUrl, fetch: fetchImpl = fetch }: ApiClient
     solanaSponsor: (token: string, input: SolanaSponsorRequest, init?: RequestInit) =>
       request<SolanaSponsorResult>(
         '/api/v1/gas/solana/sponsor',
-        authorizedJson(token, { transaction: input.transaction }, init),
+        authorizedJson(
+          token,
+          input.quoteId === undefined
+            ? { transaction: input.transaction }
+            : { transaction: input.transaction, quoteId: input.quoteId },
+          init,
+        ),
       ),
     /** Asks Honey's NEAR relayer to pay the gas of a token send or Intents deposit. */
     nearGasRelay: (token: string, input: NearGasRelayRequest, init?: RequestInit) =>
@@ -453,7 +531,12 @@ export function createApiClient({ baseUrl, fetch: fetchImpl = fetch }: ApiClient
         '/api/v1/gas/evm/prepare',
         authorizedJson(
           token,
-          { chainId: input.chainId, account: input.account, calls: input.calls },
+          {
+            chainId: input.chainId,
+            account: input.account,
+            calls: input.calls,
+            ...(input.quoteId === undefined ? {} : { quoteId: input.quoteId }),
+          },
           init,
         ),
       ),
@@ -471,6 +554,7 @@ export function createApiClient({ baseUrl, fetch: fetchImpl = fetch }: ApiClient
             deadline: input.deadline,
             signature: input.signature,
             authorization: input.authorization,
+            ...(input.quoteId === undefined ? {} : { quoteId: input.quoteId }),
           },
           init,
         ),

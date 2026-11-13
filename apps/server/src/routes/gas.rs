@@ -33,6 +33,7 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::{
+    dex::DexService,
     error::AppError,
     gas_allowance::{self, AllowanceView, ChainView, GasLimits, Reservation},
     identity::Identity,
@@ -70,6 +71,8 @@ struct GasState {
     /// Ledger names of the EVM chains Honey's EIP-7702 sponsor pays on (`gas_evm`).
     evm_chains: Vec<&'static str>,
     limits: GasLimits,
+    /// DEX quotes a sponsored Solana swap must match.
+    dex: Option<Arc<DexService>>,
 }
 
 /// The routes with limits from the environment; `near` is used only when
@@ -80,6 +83,7 @@ pub fn router(
     solana: Option<Arc<SolanaRelayer>>,
     near: Option<Arc<Relayer>>,
     evm_chains: Vec<&'static str>,
+    dex: Option<Arc<DexService>>,
 ) -> Router {
     let near_on = matches!(
         std::env::var("NEAR_GAS_RELAY_ENABLED")
@@ -87,7 +91,7 @@ pub fn router(
             .trim(),
         "1" | "true"
     );
-    router_with(
+    router_with_dex(
         identity,
         market,
         solana,
@@ -95,6 +99,7 @@ pub fn router(
         GasLimits::from_env(),
         super::jar_dao::FeeLimits::from_env().relayer_floor,
         evm_chains,
+        dex,
     )
 }
 
@@ -106,6 +111,23 @@ pub fn router_with(
     limits: GasLimits,
     near_floor: u128,
     evm_chains: Vec<&'static str>,
+) -> Router {
+    router_with_dex(
+        identity, market, solana, near, limits, near_floor, evm_chains, None,
+    )
+}
+
+/// [`router_with`] plus DEX quotes, so `/gas/solana/sponsor` can pay for quoted swaps.
+#[allow(clippy::too_many_arguments)]
+pub fn router_with_dex(
+    identity: Option<Identity>,
+    market: Option<Arc<MarketData>>,
+    solana: Option<Arc<SolanaRelayer>>,
+    near: Option<Arc<Relayer>>,
+    limits: GasLimits,
+    near_floor: u128,
+    evm_chains: Vec<&'static str>,
+    dex: Option<Arc<DexService>>,
 ) -> Router {
     Router::new()
         .route("/gas/allowance", get(allowance))
@@ -119,6 +141,7 @@ pub fn router_with(
             near_floor,
             evm_chains,
             limits,
+            dex,
         })
 }
 
@@ -177,6 +200,9 @@ struct SolanaSponsorRequest {
     /// Wire transaction (base64): Honey's relayer as fee payer (empty first signature),
     /// the user's signature second.
     transaction: String,
+    /// A Jupiter swap: the DEX quote (`POST /dex/quote`) whose transaction this is.
+    #[serde(default)]
+    quote_id: Option<String>,
 }
 
 async fn solana_sponsor(
@@ -192,6 +218,33 @@ async fn solana_sponsor(
     let Json(input) = input.map_err(|e| AppError::BadRequest(e.body_text()))?;
     if input.transaction.len() > 2_048 {
         return Err(AppError::PayloadTooLarge);
+    }
+    if let Some(id) = &input.quote_id {
+        let dex = s.dex.as_ref().ok_or_else(|| {
+            AppError::Unsupported("Honey isn't paying gas for swaps right now".into())
+        })?;
+        // Off, or not for this person: refused before the quote is even looked up.
+        dex.sponsor_check(user).await?;
+        let id: Uuid = id
+            .trim()
+            .parse()
+            .map_err(|_| AppError::BadRequest("invalid quote id".into()))?;
+        let quote = dex
+            .stored(user, id)
+            .await?
+            .ok_or_else(|| AppError::BadRequest("that swap quote expired; review again".into()))?;
+        return relayer
+            .sponsor_swap(
+                identity.pool(),
+                s.market.as_deref(),
+                user,
+                &input.transaction,
+                &quote,
+                dex,
+                &s.limits,
+            )
+            .await
+            .map(Json);
     }
     relayer
         .sponsor(

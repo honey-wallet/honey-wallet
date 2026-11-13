@@ -1189,3 +1189,74 @@ async fn near_relays_pay_gas_for_token_sends_only() {
     assert_eq!(state.lock().unwrap().sent.len(), 2);
     db.close().await;
 }
+
+// ---------- who may have DEX swaps sponsored (docs/routing/AUDIT.md finding 4) ----------
+
+#[tokio::test]
+#[ignore = "requires isolated TEST_DATABASE_URL"]
+async fn dex_sponsorship_needs_a_verified_sign_in_and_an_older_account_or_history() {
+    use honey_server::dex::{PgGate, SponsorGate};
+    let db = TestDatabase::new().await;
+    let identity = identity(&db);
+    bearer(&identity, 1).await;
+    let user = user_of(&db, 1).await;
+    let gate = PgGate {
+        pool: db.pool.clone(),
+        min_account_days: 7,
+    };
+    // A fresh wallet: free to make by the thousand.
+    assert!(!gate.eligible(user).await.unwrap());
+    // A linked Apple or Google sign-in alone isn't enough on a day-old account.
+    sqlx::query(
+        "INSERT INTO user_verified_identities (user_id, firebase_uid, provider)
+         VALUES ($1, 'firebase-uid-1', 'apple.com')",
+    )
+    .bind(user)
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    assert!(!gate.eligible(user).await.unwrap());
+    // Free gas used (and settled) more than a day ago counts as history.
+    sqlx::query(
+        "INSERT INTO gas_charges (id, user_id, chain, usd_micros, state, kind, created_at)
+         VALUES ($1, $2, 'base', 1000, 'settled', 'evm_sponsor', clock_timestamp() - interval '2 days')",
+    )
+    .bind(Uuid::new_v4())
+    .bind(user)
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    assert!(gate.eligible(user).await.unwrap());
+    // Or an account older than the minimum.
+    bearer(&identity, 2).await;
+    let older = user_of(&db, 2).await;
+    sqlx::query(
+        "INSERT INTO user_verified_identities (user_id, firebase_uid, provider)
+         VALUES ($1, 'firebase-uid-2', 'google.com')",
+    )
+    .bind(older)
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    assert!(!gate.eligible(older).await.unwrap());
+    sqlx::query(
+        "UPDATE users SET created_at = clock_timestamp() - interval '8 days' WHERE id = $1",
+    )
+    .bind(older)
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    assert!(gate.eligible(older).await.unwrap());
+    // Without the verified sign-in, age doesn't help.
+    bearer(&identity, 3).await;
+    let unverified = user_of(&db, 3).await;
+    sqlx::query(
+        "UPDATE users SET created_at = clock_timestamp() - interval '90 days' WHERE id = $1",
+    )
+    .bind(unverified)
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    assert!(!gate.eligible(unverified).await.unwrap());
+    db.close().await;
+}

@@ -123,7 +123,108 @@ const curve = (start: number, drift: number, n = 30) =>
 
 const DAY = 86_400_000;
 
+/**
+ * Test mode's DEX jar: tokens NEAR Intents doesn't list, bought on their own chain
+ * (lib/jar-dex). AERO's USDC is still on its way to Base; GRAIL's swap didn't run, so
+ * its USDC waits on Arbitrum with Finish and Move back in Activity.
+ */
+const DEX_SAMPLE: ThesisJar = {
+  id: 'onchain-summer',
+  name: 'Onchain summer',
+  thesis: 'The busiest L2 exchanges keep their fees.',
+  creator: ME,
+  visibility: 'members',
+  members: [{ id: 'me', name: ME, units: 50 }],
+  picks: [
+    {
+      symbol: 'AERO',
+      name: 'Aerodrome',
+      chain: 'Base',
+      weight: 50,
+      match: 'direct',
+      reason: 'Base’s main exchange',
+      color: tokenColor('AERO'),
+    },
+    {
+      symbol: 'GRAIL',
+      name: 'Camelot',
+      chain: 'Arbitrum',
+      weight: 50,
+      match: 'direct',
+      reason: 'Arbitrum’s own exchange',
+      color: tokenColor('GRAIL'),
+    },
+  ],
+  history: [50, 50],
+  invested: 50,
+  copiers: 0,
+  copyFee: 0,
+  createdAt: Date.now() - 600_000,
+  mine: true,
+  buy: [
+    {
+      symbol: 'AERO',
+      chain: 'Base',
+      usd: 25,
+      destinationAsset: 'dex:base:0x940181a94a35a4569e4529a3cdfb74e38fd98631',
+      depositAddress: 'GQuoteSampleDeposit1111111111111111111111111',
+      amountIn: '25000000',
+      minAmountOut: '30000000000000000000',
+      deadline: new Date(Date.now() + 900_000).toISOString(),
+      txHash: '5ampLeTxAERo1111111111111111111111111111111111111111111111111111111',
+      status: 'PROCESSING',
+      origin: 'Solana',
+      decimals: 18,
+      route: 'dex',
+      dex: {
+        chain: 'Base',
+        taker: '',
+        token: '0x940181a94A35A4569E4529A3CDfB74e38FD98631',
+        decimals: 18,
+        aggregator: 'KyberSwap',
+        slippageBps: 100,
+        bridged: true,
+        stage: 'bridging',
+        usdc: '24750000',
+        quotedSell: '24750000',
+        quotedMin: '30000000000000000000',
+        bridgeStatus: 'PROCESSING',
+      },
+    },
+    {
+      symbol: 'GRAIL',
+      chain: 'Arbitrum',
+      usd: 25,
+      destinationAsset: 'dex:arbitrum:0x3d9907f9a368ad0a51be60f7da3b97cf940982d8',
+      depositAddress: '0x5a3e5a3e5a3e5a3e5a3e5a3e5a3e5a3e5a3e5a3e',
+      amountIn: '25000000',
+      minAmountOut: '60000000000000000',
+      deadline: new Date(Date.now() + 900_000).toISOString(),
+      txHash: `0x${'5a'.repeat(32)}`,
+      status: 'HOLDING_USDC',
+      decimals: 18,
+      route: 'dex',
+      dex: {
+        chain: 'Arbitrum',
+        taker: '',
+        token: '0x3d9907F9a368ad0a51Be60f7Da3b97cf940982D8',
+        decimals: 18,
+        aggregator: 'KyberSwap',
+        slippageBps: 100,
+        bridged: true,
+        stage: 'holding',
+        usdc: '24800000',
+        quotedSell: '24800000',
+        quotedMin: '60000000000000000',
+        bridgeStatus: 'SUCCESS',
+        error: 'The price moved past your max slippage.',
+      },
+    },
+  ],
+};
+
 const SEED: ThesisJar[] = [
+  DEX_SAMPLE,
   {
     id: 'ai-capex',
     name: 'AI capex boom',

@@ -1,7 +1,7 @@
 import type { ChainActivityItem } from '@honey-wallet/api-client';
 import * as Clipboard from 'expo-clipboard';
 import { router, useLocalSearchParams } from 'expo-router';
-import type { ReactNode } from 'react';
+import { type ReactNode, useState } from 'react';
 // import { Share, Text, View } from 'react-native';
 import { Text, View } from 'react-native';
 import { PressableScale } from '@/components/motion/PressableScale';
@@ -12,9 +12,11 @@ import { Copyable, DetailGroup, ExplorerLink, StatusPill } from '@/components/sh
 import { closeSheet, SheetScreen, StatRow } from '@/components/sheets/Sheet';
 import { EmptyState, TokenIcon } from '@/components/wallet/parts';
 import { swapState } from '@/lib/activity-feed';
+import { type DexSwapRecord, routeLabel, useDexSwaps } from '@/lib/dex';
 import { tap } from '@/lib/haptics';
 import { type IntentsSwap, unitsText, useIntentsSwaps } from '@/lib/intents-swap';
 import type { BuyLeg } from '@/lib/jar-buy';
+import { dexLegText, finishJar, holdingUsdc, isDexLeg, moveBackJar } from '@/lib/jar-dex';
 import { LOADS } from '@/lib/loads';
 import {
   ACTIVITY,
@@ -26,7 +28,7 @@ import {
 } from '@/lib/mock-wallet';
 import { formatAmount, portfolios } from '@/lib/portfolio';
 import { type ThesisJar, useThesisJars } from '@/lib/thesis';
-import { showToast } from '@/lib/toast';
+import { showErrorToast, showToast } from '@/lib/toast';
 import { makeStyles } from '@/theme';
 
 const TITLE = {
@@ -73,11 +75,16 @@ const intentsUrl = (depositAddress: string) =>
 export default function ActivitySheet() {
   const { id = '' } = useLocalSearchParams<{ id: string }>();
   const swaps = useIntentsSwaps();
+  const dexSwaps = useDexSwaps();
   const jars = useThesisJars();
   const read = portfolios.useValue();
   if (id.startsWith('swap:')) {
     const swap = swaps[id.slice('swap:'.length)];
     return swap ? <SwapDetail swap={swap} /> : <NotFound />;
+  }
+  if (id.startsWith('dexswap:')) {
+    const swap = dexSwaps[id.slice('dexswap:'.length)];
+    return swap ? <DexSwapDetail swap={swap} /> : <NotFound />;
   }
   if (id.startsWith('jarbuy:')) {
     const jar = jars.find((j) => j.id === id.slice('jarbuy:'.length));
@@ -230,36 +237,75 @@ function SwapDetail({ swap: s }: { swap: IntentsSwap }) {
   );
 }
 
-/** A jar bought from this phone: each token's NEAR Intents swap and its status. */
+/**
+ * A jar bought from this phone: each token's NEAR Intents swap and its status. A DEX leg
+ * holding USDC (its swap didn't run) offers Move back and Finish.
+ */
 function JarBuyDetail({ jar, legs }: { jar: ThesisJar; legs: BuyLeg[] }) {
   const styles = useStyles();
   const paid = legs.filter((l) => l.txHash);
+  const held = paid.filter((l) => isDexLeg(l) && holdingUsdc(l));
+  const [busy, setBusy] = useState(false);
+  const act = (run: (id: string) => Promise<void>, done: string) => async () => {
+    if (busy) return;
+    tap();
+    setBusy(true);
+    try {
+      await run(jar.id);
+      showToast(done);
+    } catch (e) {
+      const text = e instanceof Error ? e.message : '';
+      if (!/cancel/i.test(text)) showErrorToast(text || 'That didn’t go through. Try again.');
+    } finally {
+      setBusy(false);
+    }
+  };
   const usd = paid.reduce((sum, l) => sum + l.usd, 0);
   const states = paid.map((l) => swapState(l.status));
   const bought = paid.filter((l) => l.status === 'SUCCESS').length;
-  const overall = states.some((x) => x.tone === 'waiting')
-    ? { tone: 'waiting' as const, text: 'Buying' }
-    : bought === paid.length
-      ? { tone: 'done' as const, text: 'Complete' }
-      : bought === 0
-        ? { tone: 'failed' as const, text: 'Refunded' }
-        : { tone: 'failed' as const, text: `${bought} of ${paid.length} bought` };
+  const overall = held.length
+    ? { tone: 'failed' as const, text: 'Holding USDC' }
+    : states.some((x) => x.tone === 'waiting')
+      ? { tone: 'waiting' as const, text: 'Buying' }
+      : bought === paid.length
+        ? { tone: 'done' as const, text: 'Complete' }
+        : bought === 0
+          ? { tone: 'failed' as const, text: 'Refunded' }
+          : { tone: 'failed' as const, text: `${bought} of ${paid.length} bought` };
   return (
     <SheetScreen
       title="Jar buy"
       footer={
-        <View style={styles.actions}>
-          <PillButton
-            label="Open jar"
-            variant="secondary"
-            onPress={() => {
-              tap();
-              router.push({ pathname: '/jar/[id]', params: { id: jar.id } });
-            }}
-            style={styles.flex}
-          />
-          <PillButton label="Done" onPress={() => closeSheet()} style={styles.flex} />
-        </View>
+        held.length ? (
+          <View style={styles.actions}>
+            <PillButton
+              label="Move back"
+              variant="secondary"
+              disabled={busy}
+              onPress={act(moveBackJar, 'Moving your USDC back')}
+              style={styles.flex}
+            />
+            <PillButton
+              label="Finish"
+              disabled={busy}
+              onPress={act(finishJar, 'Buying')}
+              style={styles.flex}
+            />
+          </View>
+        ) : (
+          <View style={styles.actions}>
+            <PillButton
+              label="Open jar"
+              variant="secondary"
+              onPress={() => {
+                tap();
+                router.push({ pathname: '/jar/[id]', params: { id: jar.id } });
+              }}
+              style={styles.flex}
+            />
+            <PillButton label="Done" onPress={() => closeSheet()} style={styles.flex} />
+          </View>
+        )
       }
     >
       <View style={styles.summary}>
@@ -288,7 +334,7 @@ function JarBuyDetail({ jar, legs }: { jar: ThesisJar; legs: BuyLeg[] }) {
           <StatRow
             key={l.depositAddress}
             label={`${l.symbol} on ${l.chain}`}
-            value={`${formatUsd(l.usd)} · ${states[i]?.text ?? ''}`}
+            value={`${formatUsd(l.usd)} · ${dexLegText(l) ?? states[i]?.text ?? ''}`}
           />
         ))}
       </DetailGroup>
@@ -304,6 +350,52 @@ function JarBuyDetail({ jar, legs }: { jar: ThesisJar; legs: BuyLeg[] }) {
           ) : null,
         )}
         <StatRow label="Bought" value={when(jar.createdAt)} />
+      </DetailGroup>
+    </SheetScreen>
+  );
+}
+
+/** A DEX swap made in this app (Swap, or a jar sale): what went in, the least out. */
+function DexSwapDetail({ swap: s }: { swap: DexSwapRecord }) {
+  const styles = useStyles();
+  const state =
+    s.status === 'SUCCESS'
+      ? { tone: 'done' as const, text: 'Complete' }
+      : s.status === 'FAILED'
+        ? { tone: 'failed' as const, text: 'Didn’t go through' }
+        : { tone: 'waiting' as const, text: 'Swapping' };
+  const sold = amountOf(s.sell.amount, s.sell.decimals) ?? '';
+  const got = amountOf(s.buy.amount, s.buy.decimals) ?? '';
+  return (
+    <SheetScreen
+      title={s.status === 'SUCCESS' ? 'Swapped' : 'Swap'}
+      footer={<Footer copy={s.hash} toast="Transaction ID copied" />}
+    >
+      <View style={styles.summary}>
+        <TokenIcon symbol={s.buy.symbol} chain={s.chain} size={40} />
+        <TextsReveal
+          id={s.hash}
+          align="center"
+          first={
+            <Text style={styles.amount}>
+              {sold} {s.sell.symbol} → {got} {s.buy.symbol}
+            </Text>
+          }
+        />
+        <StatusPill
+          tone={state.tone}
+          icon={
+            state.tone === 'done' ? 'checkCircle' : state.tone === 'failed' ? 'warning' : 'clock'
+          }
+          text={state.text}
+        />
+      </View>
+      <DetailGroup>
+        <StatRow label="You paid" value={`${sold} ${s.sell.symbol} on ${s.chain}`} />
+        <StatRow label="You get at least" value={`${got} ${s.buy.symbol}`} />
+        <StatRow label="Route" value={routeLabel(s.aggregator, s.chain, false)} />
+        <StatRow label="Transaction" value={<TxValue hash={s.hash} chain={s.chain} />} />
+        <StatRow label="Sent" value={when(s.at)} />
       </DetailGroup>
     </SheetScreen>
   );

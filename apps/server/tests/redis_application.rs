@@ -458,3 +458,40 @@ async fn unavailable_redis_never_creates_a_local_pairing_mailbox() {
         Err(AppError::Busy)
     ));
 }
+
+#[tokio::test]
+#[ignore = "requires isolated TEST_REDIS_URL"]
+async fn dex_provider_pacing_is_one_schedule_across_replicas() {
+    // docs/routing/AUDIT.md finding 3: two replicas share one provider's slots, and a
+    // caller whose slot is further than the bound gets Busy at once.
+    use honey_server::dex::pacer::Pacer;
+    let namespace = format!("test:{}", Uuid::new_v4().simple());
+    let (a, b) = (store(&namespace), store(&namespace));
+    let interval = Duration::from_millis(300);
+    let max = Duration::from_millis(500);
+    let (one, two) = (
+        Pacer::new("kyber", interval, max),
+        Pacer::new("kyber", interval, max),
+    );
+    one.share(a.clone());
+    two.share(b);
+    // Slots 0, 300 ms and 600 ms (past the 500 ms bound) across the two replicas.
+    let started = std::time::Instant::now();
+    let (first, second) = futures_util::join!(one.wait(), two.wait());
+    first.unwrap();
+    second.unwrap();
+    assert!(started.elapsed() >= Duration::from_millis(250), "spaced");
+    let refused = std::time::Instant::now();
+    let (third, fourth) = futures_util::join!(one.wait(), two.wait());
+    // At ~300 ms in, the next slot is 600 ms: one more fits (300 ms away), the one after
+    // (600 ms away) is refused at once rather than queued.
+    assert_eq!(
+        [third.is_ok(), fourth.is_ok()]
+            .iter()
+            .filter(|ok| **ok)
+            .count(),
+        1
+    );
+    assert!(refused.elapsed() < Duration::from_millis(450));
+    cleanup_domain(&a, "dex-pace").await;
+}

@@ -1,7 +1,9 @@
 pub mod aave;
 pub mod account_identity;
+pub mod best_route;
 pub mod capabilities;
 pub mod confidential_intents;
+pub mod dex;
 pub mod gas;
 pub mod gas_evm;
 pub mod health;

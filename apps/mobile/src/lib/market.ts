@@ -7,6 +7,7 @@ import type {
 import { ApiError } from '@honey-wallet/api-client';
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '@/lib/api';
+import { dexMarketRows, dexTokenList, loadDexTokens } from '@/lib/dex-tokens';
 import { CHAINS, type Chain, MARKET, type MarketToken } from '@/lib/mock-wallet';
 import { createStore } from '@/lib/store';
 import { TEST_MODE } from '@/lib/test-mode';
@@ -401,16 +402,21 @@ export function matchesQuery(t: { symbol: string; name: string; aliases?: string
 export function useMarketList(): MarketToken[] {
   const list = listing.useValue();
   const saved = savedListing.useValue();
+  // Tokens NEAR Intents doesn't list, traded through a DEX on their own chain (lib/dex),
+  // follow the market list.
+  const { tokens: dex } = dexTokenList.useValue();
   useEffect(() => {
     void loadListing();
+    loadDexTokens();
   }, []);
   const tokens = list.tokens ?? saved.tokens ?? [];
   const all = useTokenMarkets(enrichedSymbols(tokens), true);
   const live = useMemo(() => liveMarketList(tokens, all), [tokens, all]);
+  const withDex = useMemo(() => [...live, ...dexMarketRows(live, dex ?? [])], [live, dex]);
   // Test mode lists the same live tokens as the real app (2026-11-13: Build your own
   // showed only the 7 samples); the samples only stand in until the list arrives.
-  if (TEST_MODE && !live.length) return MARKET;
-  return live;
+  if (TEST_MODE && !live.length) return [...MARKET, ...dexMarketRows(MARKET, dex ?? [])];
+  return withDex;
 }
 
 export function liveMarketList(

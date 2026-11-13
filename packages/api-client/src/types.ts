@@ -950,6 +950,8 @@ export interface GasChain {
  */
 export interface SolanaSponsorRequest {
   transaction: string;
+  /** A Jupiter swap: the `DexQuote.quoteId` whose `solana.transaction` this is. */
+  quoteId?: string;
 }
 
 export interface SolanaSponsorResult {
@@ -995,6 +997,8 @@ export interface EvmSponsorPrepareRequest {
   chainId: number;
   account: string;
   calls: EvmSponsorCall[];
+  /** A DEX swap: the `DexQuote.quoteId` whose `evm.calls` these are, exactly. */
+  quoteId?: string;
 }
 
 /** What the wallet signs (EIP-712 `SignedBatchedCall` under Calibur's domain). */
@@ -1037,6 +1041,8 @@ export interface EvmSponsorSubmitRequest {
   /** 65 bytes, 0x hex. */
   signature: string;
   authorization: EvmSponsorAuthorization | null;
+  /** A DEX swap: the same `quoteId` as the prepare. */
+  quoteId?: string;
 }
 
 export interface EvmSponsorSubmitted {
@@ -1638,4 +1644,235 @@ export interface SocialInboxItem {
   /** Unix milliseconds. */
   at: number;
   read: boolean;
+}
+
+/** A chain DEX routing quotes on. */
+export type DexChain = 'base' | 'arbitrum' | 'polygon' | 'ethereum' | 'solana';
+
+/**
+ * Why a token is or isn't tradable. Blocking flags include `unchecked`, `honeypot`,
+ * `buy_tax`, `sell_tax`, `tax_unknown`, `blacklist`, `owner_can_mint`,
+ * `transfer_pausable`, `freezable`, `transfer_fee`, `token_2022`, `low_liquidity`,
+ * `low_volume`, `too_new` and `price_mismatch`; `upgradeable` is listed but doesn't block.
+ */
+export interface DexSafety {
+  ok: boolean;
+  flags: string[];
+}
+
+/** `GET /api/v1/dex/tokens?chain=…[&all=1]`: one token of the DEX universe. */
+export interface DexToken {
+  chain: DexChain;
+  /** Lowercase 0x hex on EVM, base58 mint on Solana. */
+  address: string;
+  symbol: string;
+  name: string;
+  decimals: number;
+  logoUrl?: string;
+  priceUsd: number;
+  liquidityUsd?: number;
+  volume24hUsd?: number;
+  /** Always `dex`: bought through an aggregator, not 1Click. */
+  route: 'dex';
+  safety: DexSafety;
+}
+
+export interface DexTokens {
+  tokens: DexToken[];
+}
+
+/** `POST /api/v1/dex/quote` (signed in). */
+export interface DexQuoteRequest {
+  chain: DexChain;
+  sellToken: string;
+  buyToken: string;
+  /** Base units, decimal. */
+  sellAmount: string;
+  /** The wallet that swaps (and receives). */
+  taker: string;
+  /** Default 100 (1%), at most 300. */
+  slippageBps?: number;
+  /**
+   * Ask Honey to pay the gas (default true). On Solana a sponsored quote names Honey's
+   * relayer as fee payer; pass `false` to get a transaction your wallet pays for.
+   */
+  sponsor?: boolean;
+}
+
+/** `DexQuote.unsponsoredReason`. */
+export type DexUnsponsoredReason = 'off' | 'verify' | 'new_token_account';
+
+/**
+ * Capability ids for DEX routing (`/api/v1/capabilities`): `dex_swaps` is on when the
+ * server quotes DEX swaps (`DEX_ENABLED`); `dex_sponsored_swaps` when Honey may also pay
+ * their gas (`DEX_SPONSOR_ENABLED`). Off, `/dex/*` answer 422 `unsupported`.
+ */
+export const DEX_CAPABILITIES = { swaps: 'dex_swaps', sponsored: 'dex_sponsored_swaps' } as const;
+
+/** One call of a DEX swap batch (an exact approve, then the router call). */
+export interface DexEvmCall {
+  to: string;
+  data: string;
+  /** Wei, decimal. */
+  value: string;
+}
+
+export interface DexQuote {
+  /** Pass to `/gas/evm/prepare|submit` or `/gas/solana/sponsor` as `quoteId`. */
+  quoteId: string;
+  chain: DexChain;
+  aggregator: 'kyberswap' | 'jupiter';
+  sellToken: string;
+  buyToken: string;
+  sellAmount: string;
+  buyAmount: string;
+  /** What the swap guarantees (the router reverts below it). */
+  minBuyAmount: string;
+  /** Percent: 0.5 means 0.5%. Quotes above 5% are refused. */
+  priceImpactPct?: number;
+  /** ISO 8601. Re-quote after it. */
+  expiresAt: string;
+  /** Whether Honey pays the gas (EVM: through `/gas/evm/*` with `quoteId`). */
+  sponsored: boolean;
+  /**
+   * Why Honey isn't paying the gas (only when `sponsored` is false): `off` (Honey isn't
+   * paying for swaps here right now), `verify` (free gas on swaps needs a linked Apple or
+   * Google sign-in and an account at least 7 days old, or earlier free-gas use) or
+   * `new_token_account` (Solana: the wallet doesn't hold the token yet, so it pays the fee
+   * and the ~0.002 SOL rent of its new token account).
+   */
+  unsponsoredReason?: DexUnsponsoredReason;
+  /** EVM: the calls for one EIP-7702 batch, in order. */
+  evm?: { calls: DexEvmCall[] };
+  /** Solana: an unsigned v0 transaction (base64) to sign as the taker. */
+  solana?: { transaction: string; feePayer: string };
+  warnings: string[];
+  /** USD value of the sell side, from Honey's prices. */
+  sellAmountUsd: number;
+}
+
+/** `POST /api/v1/dex/route` (signed in): a buy or sell across chains. */
+export interface DexRouteRequest {
+  fromChain: DexChain;
+  fromToken: string;
+  /** Base units of `fromToken`, decimal. */
+  amount: string;
+  toChain: DexChain;
+  toToken: string;
+  /** Your address on `toChain`. */
+  taker: string;
+  /** Your address on `fromChain` (refunds, the first DEX leg); defaults to `taker`. */
+  fromAddress?: string;
+  slippageBps?: number;
+}
+
+/** A 1Click leg: USDC on one chain to USDC on another (the jar-buy leg shape). */
+export interface DexRouteIntentsLeg {
+  kind: 'intents';
+  fromChain: DexChain;
+  toChain: DexChain;
+  originAsset: string;
+  destinationAsset: string;
+  depositAddress: string;
+  depositMemo: string | null;
+  amountIn: string;
+  amountOut: string;
+  minAmountOut: string;
+  amountOutUsd: string | null;
+  deadline: string;
+  recipient: string;
+  refundTo: string;
+  slippageBps: number;
+  signature: string | null;
+}
+
+/**
+ * A DEX leg. `requote`: built for an earlier leg's minimum; call `/dex/quote` again with
+ * the amount that actually arrived before executing it.
+ */
+export interface DexRouteDexLeg extends DexQuote {
+  kind: 'dex';
+  requote: boolean;
+}
+
+export type DexRouteLeg = DexRouteIntentsLeg | DexRouteDexLeg;
+
+export interface DexRoute {
+  legs: DexRouteLeg[];
+  /** ISO 8601: the earliest leg expiry. */
+  expiresAt: string;
+}
+
+/**
+ * `POST /api/v1/routes/best` (signed in): the route a swap or jar leg takes. NEAR
+ * Intents first; a DEX only when 1Click can't do the trade (`BestRoute.fallback`).
+ */
+export interface BestRouteRequest {
+  fromChain: DexChain;
+  /** Address (mint on Solana), `native`, or a 1Click asset id. */
+  fromToken: string;
+  /** Base units of `fromToken`, decimal. */
+  amount: string;
+  /** May be omitted when `toToken` is a 1Click asset id. */
+  toChain?: DexChain;
+  toToken: string;
+  /** Your address on the destination chain. */
+  taker: string;
+  /** Your address on `fromChain`; defaults to `taker`. */
+  fromAddress?: string;
+  slippageBps?: number;
+  /** Settings → Swaps "Private routes only": never fall back to a DEX. */
+  privateOnly?: boolean;
+  /** Jars: may buy the pick's canonical wrapped version on the paying chain. */
+  wrapped?: boolean;
+}
+
+export type RouteLegKind = 'intents' | 'dex';
+export type RouteKind = 'intents' | 'dex' | 'wrapped' | 'intents_dex' | 'dex_intents';
+/** Why a DEX route was used: (a) not listed, (b) amount refused, (c) fees over half, (d) 1Click failed. */
+export type RouteFallback = 'not_listed' | 'amount' | 'fees' | 'failed';
+
+export interface PlannedLeg {
+  kind: RouteLegKind;
+  /** `near_intents`, `kyberswap` or `jupiter`. */
+  provider: string;
+  fromChain: string;
+  toChain: string;
+  sellToken: string;
+  buyToken: string;
+  amountIn: string;
+  amountOut: string;
+  minAmountOut: string;
+}
+
+export interface RouteOption {
+  kind: RouteKind;
+  /** "NEAR Intents", "KyberSwap on Base", "NEAR Intents, then Jupiter on Solana". */
+  label: string;
+  legs: PlannedLeg[];
+  buyToken: string;
+  buyChain: string;
+  buySymbol: string | null;
+  buyDecimals: number;
+  /** "BTC (as WBTC on Arbitrum)" for a wrapped buy. */
+  holdAs?: string;
+  amountOut: string;
+  minAmountOut: string;
+  minOutUsd: number;
+  gasUsd: number;
+  sponsored: boolean;
+  netUsd: number;
+  seconds: number;
+  /** The executable DEX quote of a one-swap route (`dex`, `wrapped`). */
+  dexQuote?: DexQuote;
+}
+
+export interface BestRoute {
+  best: RouteOption;
+  fallback?: RouteFallback;
+  /** The Review's plain line when a DEX is used. */
+  fallbackText?: string;
+  alternatives: RouteOption[];
+  dropped: { kind: RouteKind; reason: string }[];
+  amountInUsd?: number;
 }

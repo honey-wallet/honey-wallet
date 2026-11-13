@@ -15,6 +15,8 @@ import {
 import { Chip } from '@/components/wallet/Chip';
 import { EmptyState, NetworkGrid, TokenIcon } from '@/components/wallet/parts';
 import { SearchField } from '@/components/wallet/SearchField';
+import { dexTokenList, loadDexTokens } from '@/lib/dex';
+import { dexPickerEntries } from '@/lib/dex-tokens';
 import { tap } from '@/lib/haptics';
 import {
   BLOCKCHAINS,
@@ -119,10 +121,14 @@ function LiveTokens({
   const view = useWalletView();
   const holdings = 'holdings' in view ? (view.holdings ?? []) : [];
   const picked = useSwap()[side];
-  const { tokens, failed } = swapTokenList.useValue();
+  const { tokens: oneClick, failed } = swapTokenList.useValue();
+  // Tokens NEAR Intents doesn't list but Honey's DEX route trades on their own chain.
+  const { tokens: dex } = dexTokenList.useValue();
+  const tokens = oneClick ? [...oneClick, ...dexPickerEntries(dex ?? [], oneClick)] : null;
   const [query, setQuery] = useState('');
   const [chain, setChain] = useState<string | null>(null);
   useEffect(loadSwapTokens, []);
+  useEffect(loadDexTokens, []);
 
   // By asset when the server matched the holding in this list (look-alikes never merge);
   // the chain's own coin, which carries no asset id, by symbol and network.

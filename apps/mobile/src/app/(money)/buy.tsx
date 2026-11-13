@@ -3,6 +3,7 @@ import { Text, View } from 'react-native';
 import { Icon, type IconName } from '@/components/Icon';
 import { PressableScale } from '@/components/motion/PressableScale';
 import { SheetScreen } from '@/components/sheets/Sheet';
+import { dexAssetId, fetchAllDexTokens, findDexToken } from '@/lib/dex-tokens';
 import { tap } from '@/lib/haptics';
 import { fetchSwapTokens, sameToken, swapRefForSymbol } from '@/lib/intents-swap';
 import { leaveSheetTo } from '@/lib/navigation';
@@ -105,9 +106,19 @@ function openSwap(buySymbol?: string) {
   if (buySymbol) {
     const before = swap.get().buy;
     fetchSwapTokens()
-      .then((tokens) => {
+      .then(async (tokens) => {
         const ref = swapRefForSymbol(tokens, buySymbol);
-        if (ref && sameToken(swap.get().buy, before)) pickToken('buy', ref);
+        if (!sameToken(swap.get().buy, before)) return;
+        if (ref) return pickToken('buy', ref);
+        // Not on NEAR Intents: Honey's DEX route, paid with USDC on the token's chain.
+        const dex = findDexToken(await fetchAllDexTokens(), buySymbol);
+        if (!dex || !sameToken(swap.get().buy, before)) return;
+        pickToken('sell', { symbol: 'USDC', chain: dex.chain });
+        pickToken('buy', {
+          symbol: dex.symbol,
+          chain: dex.chain,
+          assetId: dexAssetId(dex.chain, dex.address),
+        });
       })
       .catch(() => {});
   }

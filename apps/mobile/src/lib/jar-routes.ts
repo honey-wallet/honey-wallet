@@ -1,4 +1,10 @@
 import { useEffect, useState } from 'react';
+import {
+  type DexToken,
+  fetchAllDexTokens,
+  findDexToken,
+  SAMPLE_DEX_TOKENS,
+} from '@/lib/dex-tokens';
 import { TEST_MODE } from '@/lib/test-mode';
 /**
  * Splits each jar buy across the places it trades. A pick like NVDA can trade as a
@@ -21,9 +27,21 @@ export type Venue = {
   feeBps: number;
   /** One-off cost to move funds to this chain; 0 where the funds already are. */
   bridgeUsd: number;
+  /** A token NEAR Intents doesn't list: bought through a DEX on its chain (lib/dex). */
+  dex?: DexRef;
 };
 
-export type Leg = { chain: string; venue: string; usd: number; units: number; assetId?: string };
+/** The DEX token a leg buys. */
+export type DexRef = { chain: string; address: string; decimals: number };
+
+export type Leg = {
+  chain: string;
+  venue: string;
+  usd: number;
+  units: number;
+  assetId?: string;
+  dex?: DexRef;
+};
 
 export type Route = {
   symbol: string;
@@ -109,6 +127,7 @@ export function planRoute(
         usd: legUsd,
         units: legUsd / price,
         assetId: v.assetId,
+        ...(v.dex ? { dex: v.dex } : {}),
       };
     })
     .filter((l) => l.usd > 0)
@@ -138,6 +157,20 @@ export const describeRoute = (route: Route) =>
           ? 'Couldn’t check routes. Try again in a moment'
           : [...new Set(route.legs.map((l) => l.venue).filter(Boolean))].join(' + ') ||
             'Best route via NEAR Intents';
+
+/** Whether any leg of the route buys through a DEX (a token NEAR Intents doesn't list). */
+export const viaDex = (route: Route) => route.legs.some((l) => !!l.dex);
+
+/** The venue for a DEX token: its chain's pool, carried there by NEAR Intents off Base. */
+export const dexVenue = (t: DexToken): Venue => ({
+  chain: t.chain,
+  venue: 'DEX',
+  // The server only lists tokens above its liquidity floor; unknown depth is that floor.
+  depthUsd: Math.max(t.liquidityUsd ?? 0, MIN_DEPTH_USD),
+  feeBps: 30,
+  bridgeUsd: t.chain === FUNDING_CHAIN ? 0 : BRIDGE_USD,
+  dex: { chain: t.chain, address: t.address, decimals: t.decimals },
+});
 
 /** Routes that can't be paid as they are (anything but `ok` with money on it). */
 export const blockedRoutes = (routes: Route[]) =>
@@ -199,6 +232,8 @@ export function sampleRoute(
   usd: number,
   maxSlippage = DEFAULT_MAX_SLIPPAGE,
 ) {
+  const dex = SAMPLE[pick.symbol] ? null : findDexToken(SAMPLE_DEX_TOKENS, pick.symbol, pick.chain);
+  if (dex) return planRoute(pick.symbol, usd, dex.priceUsd, [dexVenue(dex)], maxSlippage);
   const known = SAMPLE[pick.symbol];
   const venues = known?.venues ?? [
     { chain: pick.chain, venue: 'Best pool', depthUsd: 1_000_000, feeBps: 30, bridgeUsd: 0.5 },
@@ -216,9 +251,14 @@ type LiveVenues = { price: number; venues: Venue[] };
 type LiveAnswer = LiveVenues | 'none' | 'error';
 const venueCache = new Map<string, { at: number; value: Promise<LiveAnswer> }>();
 
-/** Live venues for a symbol from the server (DexScreener depth, 1Click prices). */
-function liveVenues(symbol: string): Promise<LiveAnswer> {
-  const hit = venueCache.get(symbol);
+/**
+ * Live venues for a symbol from the server (DexScreener depth, 1Click prices). A token
+ * NEAR Intents can't deliver is looked for in Honey's DEX list (lib/dex), on the pick's
+ * chain first; NEAR Intents stays the route for everything it lists.
+ */
+function liveVenues(symbol: string, chain: string): Promise<LiveAnswer> {
+  const key = `${symbol}:${chain}`;
+  const hit = venueCache.get(key);
   if (hit && Date.now() - hit.at < 30_000) return hit.value;
   const value = import('@/lib/api')
     .then(({ api }) => api.marketVenues(symbol))
@@ -239,8 +279,13 @@ function liveVenues(symbol: string): Promise<LiveAnswer> {
             })),
           };
     })
-    .catch((): LiveAnswer => 'error');
-  venueCache.set(symbol, { at: Date.now(), value });
+    .catch((): LiveAnswer => 'error')
+    .then(async (answer): Promise<LiveAnswer> => {
+      if (answer !== 'none' && answer !== 'error') return answer;
+      const dex = findDexToken(await fetchAllDexTokens().catch(() => []), symbol, chain);
+      return dex ? { price: dex.priceUsd, venues: [dexVenue(dex)] } : answer;
+    });
+  venueCache.set(key, { at: Date.now(), value });
   return value;
 }
 
@@ -255,12 +300,13 @@ export function useRoutes(
 ): { routes: Route[]; live: boolean } {
   const sample = picks.map((p) => sampleRoute(p, (amount * p.weight) / 100, maxSlippage));
   const [live, setLive] = useState<Record<string, LiveAnswer>>({});
-  const symbols = picks.map((p) => p.symbol).join(',');
+  const symbols = picks.map((p) => `${p.symbol}:${p.chain}`).join(',');
   useEffect(() => {
     if (TEST_MODE || !symbols) return;
     let alive = true;
-    for (const symbol of symbols.split(',')) {
-      void liveVenues(symbol).then((v) => {
+    for (const pick of symbols.split(',')) {
+      const [symbol = '', chain = ''] = pick.split(':');
+      void liveVenues(symbol, chain).then((v) => {
         if (alive) setLive((prev) => ({ ...prev, [symbol]: v }));
       });
     }

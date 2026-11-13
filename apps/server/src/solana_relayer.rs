@@ -46,6 +46,13 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use crate::{
+    dex::{
+        DexChain, DexService,
+        solana::{
+            associated_token_address, check_jupiter_amounts, check_swap, decode_key, token_amount,
+        },
+        store::{StoredQuote, unix_now},
+    },
     error::AppError,
     gas_allowance::{self, GasLimits, Reservation},
     json_rpc::RpcError,
@@ -571,6 +578,21 @@ pub fn parse_sol(text: &str) -> Option<u64> {
     whole.checked_mul(1_000_000_000)?.checked_add(fraction)
 }
 
+/// What a checked, co-signed transaction may cost Honey.
+struct Outlay<'a> {
+    /// The wire transaction, base64.
+    encoded: String,
+    signature: String,
+    /// Fee plus rent, lamports.
+    worst: u64,
+    rent: u64,
+    new_accounts: i64,
+    /// The relayer's balance above its floor.
+    room: u128,
+    /// The DEX quote it executes, spent once the ledger has reserved the charge.
+    quote: Option<(&'a StoredQuote, &'a DexService)>,
+}
+
 /// Sends user payments with Honey's relayer as fee payer.
 pub struct SolanaRelayer {
     key: SolanaKey,
@@ -766,6 +788,213 @@ impl SolanaRelayer {
             ));
         }
 
+        self.reserve_and_send(
+            pool,
+            market,
+            user,
+            limits,
+            Outlay {
+                encoded,
+                signature,
+                worst,
+                rent,
+                new_accounts,
+                room,
+                quote: None,
+            },
+        )
+        .await
+    }
+
+    /// A Jupiter swap bound to a DEX quote Honey issued this person (`crate::dex`): the
+    /// message must be byte-for-byte the quoted one (Honey's relayer as fee payer, the
+    /// taker second), unexpired and unused, pass [`crate::dex::solana::check_swap`] (Honey
+    /// never pays a token account's rent in a swap), carry a Jupiter route instruction
+    /// whose own amounts match the quote ([`check_jupiter_amounts`]), and simulate with
+    /// the relayer losing at most the fee and the taker's output token account rising by
+    /// at least the quote's minimum. Only with DEX sponsoring on and for a person who may
+    /// have swaps sponsored (`DexService::sponsor_check`). Then the same ledger, send and
+    /// settle as any payment; the quote is spent only once the ledger has reserved it.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn sponsor_swap(
+        &self,
+        pool: &PgPool,
+        market: Option<&MarketData>,
+        user: Uuid,
+        transaction: &str,
+        quote: &StoredQuote,
+        quotes: &DexService,
+        limits: &GasLimits,
+    ) -> Result<Sponsored, AppError> {
+        quotes.sponsor_check(user).await?;
+        let bytes = STANDARD
+            .decode(transaction.trim())
+            .map_err(|_| AppError::BadRequest("transaction is not base64".into()))?;
+        let mut wire = Wire::decode(&bytes).map_err(|why| AppError::BadRequest(why.into()))?;
+        let stale = || AppError::BadRequest("that swap quote expired; review again".into());
+        if quote.chain != DexChain::Solana || !quote.sponsored || quote.expires_at <= unix_now() {
+            return Err(stale());
+        }
+        let quoted = quote
+            .solana_message
+            .as_deref()
+            .and_then(|m| STANDARD.decode(m).ok())
+            .ok_or_else(stale)?;
+        if wire.message != quoted {
+            return Err(AppError::BadRequest(
+                "that transaction isn't the quoted swap".into(),
+            ));
+        }
+        let taker = decode_key(&quote.taker).ok_or_else(stale)?;
+        let checked = check_swap(&wire.message, &self.key.public(), &taker)
+            .map_err(|why| AppError::BadRequest(why.into()))?;
+        let sell: u64 = quote.sell_amount.parse().map_err(|_| stale())?;
+        let min: u64 = quote.min_buy_amount.parse().map_err(|_| stale())?;
+        check_jupiter_amounts(&wire.message, sell, min)
+            .map_err(|why| AppError::BadRequest(format!("that swap isn't the quote: {why}")))?;
+        if wire.signatures.len() != 2 {
+            return Err(AppError::BadRequest("wrong number of signatures".into()));
+        }
+        UnparsedPublicKey::new(&ED25519, taker)
+            .verify(&wire.message, &wire.signatures[1])
+            .map_err(|_| AppError::BadRequest("your signature doesn't match".into()))?;
+        let valid = self
+            .read(
+                "isBlockhashValid",
+                json!([b58(&checked.blockhash), { "commitment": "confirmed" }]),
+            )
+            .await?;
+        if valid["value"] != Value::Bool(true) {
+            return Err(AppError::BadRequest(
+                "this transaction expired; sign it again".into(),
+            ));
+        }
+        let network = self
+            .read(
+                "getFeeForMessage",
+                json!([STANDARD.encode(&wire.message), { "commitment": "confirmed" }]),
+            )
+            .await?["value"]
+            .as_u64()
+            .ok_or(AppError::Busy)?;
+        let worst = checked.fee_lamports.max(network);
+        if worst > self.limits.max_lamports {
+            return Err(AppError::GasNotCovered);
+        }
+        let relayer = self.fee_payer();
+        let before = self.balance(&relayer).await?;
+        if before < self.limits.floor_lamports.saturating_add(worst) {
+            tracing::warn!("solana relayer is at its floor");
+            return Err(AppError::GasNotCovered);
+        }
+        let room = u128::from(before.saturating_sub(self.limits.floor_lamports));
+
+        // The taker's output account: the associated account under the mint's own
+        // (classic) token program.
+        let mint = decode_key(&quote.buy_token).ok_or(AppError::Busy)?;
+        let mint_info = self
+            .read(
+                "getAccountInfo",
+                json!([quote.buy_token, { "encoding": "base64", "commitment": "processed" }]),
+            )
+            .await?;
+        if mint_info["value"]["owner"].as_str() != Some(TOKEN_PROGRAM) {
+            return Err(AppError::Unsupported(
+                "Honey pays for swaps into classic SPL tokens only".into(),
+            ));
+        }
+        let program = decode_key(TOKEN_PROGRAM).ok_or(AppError::Busy)?;
+        let ata = associated_token_address(&taker, &mint, &program).ok_or(AppError::Busy)?;
+        let ata_text = b58(&ata);
+        let held = self
+            .read(
+                "getAccountInfo",
+                json!([ata_text, { "encoding": "base64", "commitment": "processed" }]),
+            )
+            .await?;
+        let amount_of = |v: &Value| -> Option<u64> {
+            if v.is_null() {
+                return Some(0);
+            }
+            let data = STANDARD.decode(v["data"][0].as_str()?).ok()?;
+            token_amount(&data)
+        };
+        let held_before = amount_of(&held["value"]).ok_or(AppError::Busy)?;
+
+        wire.signatures[0] = self.key.sign(&wire.message);
+        let signature = bs58::encode(wire.signatures[0]).into_string();
+        let encoded = STANDARD.encode(wire.encode());
+        let simulated = self
+            .read(
+                "simulateTransaction",
+                json!([encoded, {
+                    "encoding": "base64", "commitment": "confirmed", "sigVerify": true,
+                    "replaceRecentBlockhash": false,
+                    "accounts": { "encoding": "base64", "addresses": [relayer, ata_text] }
+                }]),
+            )
+            .await?;
+        let value = &simulated["value"];
+        if value.is_null() || !value["err"].is_null() {
+            return Err(AppError::BadRequest("that swap would fail".into()));
+        }
+        let Some(after) = value["accounts"][0]["lamports"].as_u64() else {
+            return Err(AppError::Unsupported(
+                "Solana didn't say what this would cost".into(),
+            ));
+        };
+        if before.saturating_sub(after) > worst {
+            tracing::error!("solana swap refused: simulated relayer outflow above estimate");
+            return Err(AppError::BadRequest(
+                "this transaction spends Honey's SOL".into(),
+            ));
+        }
+        let held_after = amount_of(&value["accounts"][1]).ok_or_else(|| {
+            AppError::BadRequest("that swap would fail: no output account".into())
+        })?;
+        if held_after < held_before || held_after - held_before < min {
+            return Err(AppError::BadRequest(
+                "that swap would fail: it pays less than the quote's minimum".into(),
+            ));
+        }
+        self.reserve_and_send(
+            pool,
+            market,
+            user,
+            limits,
+            Outlay {
+                encoded,
+                signature,
+                worst,
+                rent: 0,
+                new_accounts: 0,
+                room,
+                quote: Some((quote, quotes)),
+            },
+        )
+        .await
+    }
+
+    /// Reserves `outlay` in the gas ledger, spends its DEX quote (if any; a quote someone
+    /// already used releases the reservation), sends the co-signed transaction, waits a
+    /// little for it and settles at what the fee payer really lost.
+    async fn reserve_and_send(
+        &self,
+        pool: &PgPool,
+        market: Option<&MarketData>,
+        user: Uuid,
+        limits: &GasLimits,
+        outlay: Outlay<'_>,
+    ) -> Result<Sponsored, AppError> {
+        let Outlay {
+            encoded,
+            signature,
+            worst,
+            rent,
+            new_accounts,
+            room,
+            quote,
+        } = outlay;
         let usd = gas_allowance::usd_micros(market, "solana", u128::from(worst)).await?;
         // The rent's share of the charge is capped per person by `new_accounts`.
         let exempt = if rent > 0 {
@@ -793,6 +1022,18 @@ impl SolanaRelayer {
             limits,
         )
         .await?;
+        // A quote pays for one swap only, and is spent only once the ledger said yes (a
+        // person over their allowance keeps their quote).
+        if let Some((quote, quotes)) = quote {
+            let spent = quotes.spend(quote).await;
+            if !matches!(spent, Ok(true)) {
+                gas_allowance::release(pool, &charge).await?;
+                spent?;
+                return Err(AppError::Conflict(
+                    "that swap quote was already used; review again".into(),
+                ));
+            }
+        }
 
         match self
             .rpc(
