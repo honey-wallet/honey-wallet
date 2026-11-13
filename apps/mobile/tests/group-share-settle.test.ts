@@ -72,11 +72,49 @@ describe('settleShare', () => {
     expect(depositTx).not.toHaveBeenCalled();
   });
 
-  it('clears a payment that never got a hash once 1Click still hasn’t seen it late', async () => {
-    const state = await settleShare('g1', { status: status('PENDING_DEPOSIT'), now: () => LATE });
-    expect(state).toBe('not_sent');
-    // Pay comes back.
+  it('clears a payment that never got a hash only on two late PENDING_DEPOSIT answers, minutes apart', async () => {
+    const pendingAt = (now: number) =>
+      settleShare('g1', { status: status('PENDING_DEPOSIT'), now: () => now });
+    // A single PENDING_DEPOSIT: not cleared yet.
+    expect(await pendingAt(LATE)).toBe('waiting');
+    expect(pendingShareOf('g1')).toBeDefined();
+    expect(await pendingAt(LATE + 60_000)).toBe('waiting');
+    expect(pendingShareOf('g1')).toBeDefined();
+    // The second, 3 minutes on: Pay comes back.
+    expect(await pendingAt(LATE + 3 * 60_000)).toBe('not_sent');
     expect(pendingShareOf('g1')).toBeUndefined();
+  });
+
+  it('stays waiting when the status read fails after the deadline (security review)', async () => {
+    for (const read of [
+      status(null),
+      async () => ({}),
+      async () => {
+        throw new Error('1Click is down');
+      },
+    ]) {
+      for (const now of [LATE, LATE + 10 * 60_000, LATE + 60 * 60_000])
+        expect(
+          await settleShare('g1', { status: read, now: () => now }).catch(() => 'waiting'),
+        ).toBe('waiting');
+      expect(pendingShareOf('g1')).toBeDefined();
+    }
+  });
+
+  it('starts over when 1Click sees the payment between two answers', async () => {
+    expect(await settleShare('g1', { status: status('PENDING_DEPOSIT'), now: () => LATE })).toBe(
+      'waiting',
+    );
+    expect(await settleShare('g1', { status: status('PROCESSING'), now: () => LATE })).toBe(
+      'waiting',
+    );
+    expect(
+      await settleShare('g1', {
+        status: status('PENDING_DEPOSIT'),
+        now: () => LATE + 5 * 60_000,
+      }),
+    ).toBe('waiting');
+    expect(pendingShareOf('g1')).toBeDefined();
   });
 
   it('reads a deposit with a hash on Base: reverted or dropped clears it, landed waits', async () => {

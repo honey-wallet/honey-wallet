@@ -123,7 +123,15 @@ export const friendPicks = createStore<SocialProfileCard[]>([]);
  * The quote's `deadline` and the deposit's `txHash` (when it's known) are kept too, so a
  * payment that never reached 1Click stops "paying" (nov14-c audit 1).
  */
-type PendingShare = { depositAddress: string; at: number; deadline?: string; txHash?: string };
+// type PendingShare = { depositAddress: string; at: number; deadline?: string; txHash?: string };
+type PendingShare = {
+  depositAddress: string;
+  at: number;
+  deadline?: string;
+  txHash?: string;
+  /** When 1Click first answered PENDING_DEPOSIT past the deadline and grace (server clock). */
+  unseenAt?: number;
+};
 const pendingShares = createStore<Record<string, PendingShare>>(
   {},
   { persist: 'group-jars.pending' },
@@ -482,6 +490,8 @@ export async function payShare(g: SocialGroup, nearUsdc: number | null) {
 
 /** How long after its deadline a share 1Click never saw counts as not paid (as Swap's). */
 const SHARE_GRACE_MS = 10 * 60_000;
+/** Two PENDING_DEPOSIT answers this far apart before a share with no hash is cleared. */
+const SHARE_UNSEEN_CONFIRM_MS = 3 * 60_000;
 /** A share saved before deadlines were kept: its quote ran at most this long. */
 const LEGACY_DEADLINE_MS = 30 * 60_000;
 
@@ -524,6 +534,8 @@ export async function settleShare(
       const { [groupId]: _, ...rest } = all;
       return rest;
     });
+  const remember = (share: PendingShare) =>
+    pendingShares.set((all) => ({ ...all, [groupId]: share }));
   if (status === 'REFUNDED' || status === 'FAILED') {
     clear();
     return 'refunded';
@@ -534,14 +546,31 @@ export async function settleShare(
     // on Base, a deposit that reverted or was dropped (two reads, lib/deposit-tx) means
     // nothing was paid, and so does one that never got a hash. Pay comes back; a deposit
     // arriving that late is refunded by 1Click.
-    const unseen = !status || status === 'PENDING_DEPOSIT';
+    // const unseen = !status || status === 'PENDING_DEPOSIT';
+    // Replaced 14 Nov (security review): a failed or empty status read is not "unseen";
+    // only 1Click positively answering PENDING_DEPOSIT is. Fail closed: keep waiting.
+    if (status !== 'PENDING_DEPOSIT') {
+      // Seen paid and moving: forget any earlier "unseen" answer.
+      if (status && pending.unseenAt !== undefined) remember({ ...pending, unseenAt: undefined });
+      return 'waiting';
+    }
     const deadline = pending.deadline
       ? Date.parse(pending.deadline)
       : pending.at + LEGACY_DEADLINE_MS;
-    if (!unseen || !(d.now() > deadline + SHARE_GRACE_MS)) return 'waiting';
+    const now = d.now();
+    // if (!unseen || !(d.now() > deadline + SHARE_GRACE_MS)) return 'waiting';
+    if (!(now > deadline + SHARE_GRACE_MS)) return 'waiting';
     if (pending.txHash) {
       const tx = await d.depositTx('Base', pending.txHash).catch(() => 'unknown' as const);
       if (tx !== 'failure' && tx !== 'missing') return 'waiting';
+    } else {
+      // No hash to read on Base: two PENDING_DEPOSIT answers, minutes apart, before Pay
+      // comes back (as lib/deposit-tx asks two "missing" reads).
+      if (pending.unseenAt === undefined) {
+        remember({ ...pending, unseenAt: now });
+        return 'waiting';
+      }
+      if (now - pending.unseenAt < SHARE_UNSEEN_CONFIRM_MS) return 'waiting';
     }
     clear();
     return 'not_sent';
