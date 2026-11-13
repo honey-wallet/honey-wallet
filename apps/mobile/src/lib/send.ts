@@ -150,6 +150,8 @@ export type SendDeps = {
   sendSponsored: typeof sendSponsored;
   /** Honey's free gas on Solana (fee payer) and NEAR (relayer). */
   freeGas: FreeGasDeps;
+  /** Whether this device has a Honey session (free gas needs one). */
+  signedIn: () => Promise<boolean>;
   /**
    * Asks before the wallet pays a fee Honey said it would pay. Never `confirm`: flows
    * that confirmed everything up front (jar buys and sells) pass a quiet `confirm`, and
@@ -180,6 +182,7 @@ const defaults: SendDeps = {
   sponsorEvm,
   sendSponsored,
   freeGas,
+  signedIn: async () => !!(await import('@/lib/backend-session')).backendSessionToken(),
   confirmFallback: (reason) => confirmOwner(reason, true),
   waitExpired: waitForBlockhashExpiry,
   inFlight: assertNoSponsoredInFlight,
@@ -295,7 +298,11 @@ export async function prepareSend(
       amount: units,
       token: tokenContract,
       decimals: token?.decimals,
-    }).catch((error: unknown) => {
+    }).catch(async (error: unknown) => {
+      // Sending a token signed out on a network Honey pays for, the wallet fell back to
+      // paying its own fee; with no ETH/POL that fails. Say the real fix instead.
+      if (tokenContract && SPONSORED_CHAIN_IDS.includes(chainId) && !(await d.signedIn()))
+        throw new Error(`Sign in to Honey to send on ${chain}: Honey pays the network fee.`);
       // The shared transfer code names the fee coin ETH; Polygon pays fees in POL.
       if (coin !== 'ETH' && error instanceof Error)
         throw new Error(error.message.replace(/\bETH\b/g, coin));

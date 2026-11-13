@@ -1,0 +1,94 @@
+import { beforeEach, expect, it, vi } from 'vitest';
+
+const m = vi.hoisted(() => {
+  type Listener = () => void;
+  const store = <T>(value: T) => {
+    let v = value;
+    const ls = new Set<Listener>();
+    return {
+      get: () => v,
+      set: (next: T) => {
+        v = next;
+        for (const l of ls) l();
+      },
+      subscribe: (l: Listener) => {
+        ls.add(l);
+        return () => ls.delete(l);
+      },
+    };
+  };
+  return {
+    store,
+    wallets: store({ activeId: 'main' }),
+    walletLoad: store({ ready: false, error: false }),
+    appLock: store({ enabled: false, unlocked: true }),
+    session: store({ profile: null as null | object, busy: false, review: null }),
+    changed: vi.fn(),
+    resume: vi.fn(async () => {}),
+    available: vi.fn(async () => true),
+    appListeners: new Set<(s: string) => void>(),
+  };
+});
+
+vi.mock('react-native', () => ({
+  AppState: {
+    currentState: 'active',
+    addEventListener: (_: string, l: (s: string) => void) => {
+      m.appListeners.add(l);
+      return { remove: () => m.appListeners.delete(l) };
+    },
+  },
+}));
+vi.mock('@/lib/wallets', () => ({ wallets: m.wallets, walletLoad: m.walletLoad }));
+vi.mock('@/lib/app-lock', () => ({ appLock: m.appLock }));
+vi.mock('@/lib/backend-session', () => ({
+  backendSession: m.session,
+  backendVisibility: vi.fn(),
+  backendWalletChanged: m.changed,
+  clearBackendSession: vi.fn(),
+  refreshResumeAvailability: m.available,
+  resumeBackendSession: m.resume,
+  suspendBackendSession: vi.fn(),
+}));
+
+import { startBackendLifecycle } from '@/lib/backend-lifecycle';
+
+const flush = () => new Promise((r) => setTimeout(r, 0));
+
+beforeEach(() => {
+  m.wallets.set({ activeId: 'main' });
+  m.walletLoad.set({ ready: false, error: false });
+  m.changed.mockClear();
+  m.resume.mockClear();
+});
+
+it('keeps the saved session through the cold-start wallet load, then resumes it quietly', async () => {
+  const stop = startBackendLifecycle();
+  // Launch: the placeholder wallet becomes the saved one, then loading finishes.
+  m.wallets.set({ activeId: 'acct-1' });
+  m.walletLoad.set({ ready: true, error: false });
+  await flush();
+  expect(m.changed).not.toHaveBeenCalled();
+  expect(m.resume).toHaveBeenCalledWith({ silent: true });
+  stop();
+});
+
+it('still forgets the session when you really switch wallets', async () => {
+  m.walletLoad.set({ ready: true, error: false });
+  m.wallets.set({ activeId: 'acct-1' });
+  const stop = startBackendLifecycle();
+  m.wallets.set({ activeId: 'acct-2' });
+  expect(m.changed).toHaveBeenCalledTimes(1);
+  stop();
+});
+
+it('resumes quietly when the app comes back to the front', async () => {
+  m.walletLoad.set({ ready: true, error: false });
+  const stop = startBackendLifecycle();
+  await flush();
+  m.resume.mockClear();
+  for (const l of m.appListeners) l('active');
+  await flush();
+  expect(m.resume).toHaveBeenCalledWith({ silent: true });
+  stop();
+});
