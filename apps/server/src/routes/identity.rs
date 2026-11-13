@@ -34,6 +34,8 @@ pub(crate) struct AuthenticatedApiAdmission {
     trusted_proxy_cidrs: Vec<crate::config::TrustedProxyCidr>,
     global_limit: i32,
     peer_limit: i32,
+    /// Sessions to key signed-in callers by (portfolio reads); none elsewhere.
+    identity: Option<Identity>,
 }
 
 impl AuthenticatedApiAdmission {
@@ -48,7 +50,14 @@ impl AuthenticatedApiAdmission {
             trusted_proxy_cidrs,
             global_limit: AUTHENTICATED_API_GLOBAL_LIMIT,
             peer_limit: AUTHENTICATED_API_PEER_LIMIT,
+            identity: None,
         }
+    }
+
+    /// Counts signed-in portfolio readers by account rather than address.
+    pub(crate) fn with_identity(mut self, identity: Option<Identity>) -> Self {
+        self.identity = identity;
+        self
     }
 }
 
@@ -180,12 +189,54 @@ const PORTFOLIO_FRESH_GLOBAL_LIMIT: i32 = 6_000;
 const PORTFOLIO_FRESH_PEER_LIMIT: i32 = 30;
 
 /// Any portfolio read that misses the server's cache (an address nobody read in the last
-/// 20-60 s, or a `fresh` one) fans out to about nine node and explorer calls, so those
-/// get their own budget per client, far below the 6,000 a minute public reads allow.
-/// Over it, the read is answered from older cached data, or refused when there is none.
-/// Balances stay readable signed out.
+/// 40-60 s, or a `fresh` one) fans out to about nine node and explorer calls, so those
+/// get their own budget, far below the 6,000 a minute public reads allow: per account
+/// for a signed-in caller (a valid bearer token), else per address, with an IPv4 address
+/// given room for a carrier NAT's worth of phones (an app polling every 30 s misses about
+/// five times a minute). Over it, the read is answered from older cached data, or
+/// refused when there is none. Balances stay readable signed out, and a limiter that
+/// can't answer (Redis down) lets the read through.
 const PORTFOLIO_UNCACHED_GLOBAL_LIMIT: i32 = 12_000;
-const PORTFOLIO_UNCACHED_PEER_LIMIT: i32 = 120;
+// Replaced (review): one limit per address for everyone.
+// const PORTFOLIO_UNCACHED_PEER_LIMIT: i32 = 120;
+const PORTFOLIO_UNCACHED_USER_LIMIT: i32 = 120;
+const PORTFOLIO_UNCACHED_IPV4_LIMIT: i32 = 600;
+const PORTFOLIO_UNCACHED_IPV6_LIMIT: i32 = 120;
+
+/// The uncached-read quota's subject and per-subject limit: the account behind a valid
+/// bearer token, else the client's address bucket.
+async fn portfolio_subject(
+    identity: Option<&Identity>,
+    token: Option<&str>,
+    client: Option<IpAddr>,
+) -> Option<(String, i32)> {
+    if let (Some(identity), Some(token)) = (identity, token)
+        && let Ok(profile) = identity.authenticate(token).await
+    {
+        return Some((
+            format!("user:{}", profile.user_id),
+            PORTFOLIO_UNCACHED_USER_LIMIT,
+        ));
+    }
+    let ip = client?;
+    let limit = match ip.to_canonical() {
+        IpAddr::V4(_) => PORTFOLIO_UNCACHED_IPV4_LIMIT,
+        IpAddr::V6(_) => PORTFOLIO_UNCACHED_IPV6_LIMIT,
+    };
+    Some((format!("ip:{}", client_bucket(ip)), limit))
+}
+
+/// Whether a quota answer admits the read: only a real "over the limit" refuses it.
+fn admitted(answer: Result<(), AppError>) -> bool {
+    match answer {
+        Ok(()) => true,
+        Err(AppError::TooManyRequests) => false,
+        Err(error) => {
+            tracing::warn!(%error, "portfolio read quota unavailable; reading upstream");
+            true
+        }
+    }
+}
 
 pub(crate) async fn limit_fresh_portfolio_reads_by_ip(
     State(state): State<AuthenticatedApiAdmission>,
@@ -193,26 +244,57 @@ pub(crate) async fn limit_fresh_portfolio_reads_by_ip(
     next: Next,
 ) -> Response {
     let client = client_ip_from_request(state.trust_proxy, &state.trusted_proxy_cidrs, &request);
+    // Replaced (review): keyed by account when signed in, IPv4 given more room, and a
+    // Redis error admits the read instead of refusing it.
+    // let gate = {
+    //     let redis = state.redis.clone();
+    //     let bucket = client
+    //         .as_ref()
+    //         .ok()
+    //         .map(|ip| client_bucket(*ip).to_string());
+    //     let (global, peer) = (
+    //         state.global_limit.min(PORTFOLIO_UNCACHED_GLOBAL_LIMIT),
+    //         state.peer_limit.min(PORTFOLIO_UNCACHED_PEER_LIMIT),
+    //     );
+    //     crate::portfolio::MissGate::new(move || {
+    //         let (redis, bucket) = (redis.clone(), bucket.clone());
+    //         async move {
+    //             let Some(bucket) = bucket else {
+    //                 return false;
+    //             };
+    //             redis
+    //                 .rate_limit_pair("portfolio_uncached", &bucket, global, peer)
+    //                 .await
+    //                 .is_ok()
+    //         }
+    //     })
+    // };
     let gate = {
         let redis = state.redis.clone();
-        let bucket = client
-            .as_ref()
-            .ok()
-            .map(|ip| client_bucket(*ip).to_string());
-        let (global, peer) = (
-            state.global_limit.min(PORTFOLIO_UNCACHED_GLOBAL_LIMIT),
-            state.peer_limit.min(PORTFOLIO_UNCACHED_PEER_LIMIT),
-        );
+        let identity = state.identity.clone();
+        // Authenticated only when the read misses the cache.
+        let token = bearer(request.headers()).ok().map(str::to_owned);
+        let ip = client.as_ref().ok().copied();
+        let global = state.global_limit.min(PORTFOLIO_UNCACHED_GLOBAL_LIMIT);
+        let peer_cap = state.peer_limit;
         crate::portfolio::MissGate::new(move || {
-            let (redis, bucket) = (redis.clone(), bucket.clone());
+            let (redis, identity, token) = (redis.clone(), identity.clone(), token.clone());
             async move {
-                let Some(bucket) = bucket else {
+                let Some((subject, limit)) =
+                    portfolio_subject(identity.as_ref(), token.as_deref(), ip).await
+                else {
                     return false;
                 };
-                redis
-                    .rate_limit_pair("portfolio_uncached", &bucket, global, peer)
-                    .await
-                    .is_ok()
+                admitted(
+                    redis
+                        .rate_limit_pair(
+                            "portfolio_uncached",
+                            &subject,
+                            global,
+                            limit.min(peer_cap),
+                        )
+                        .await,
+                )
             }
         })
     };
@@ -446,6 +528,30 @@ pub(crate) fn bearer(headers: &HeaderMap) -> Result<&str, AppError> {
 mod proxy_tests {
     use super::*;
     use axum::body::Body;
+
+    #[test]
+    fn only_a_real_refusal_denies_a_portfolio_read() {
+        assert!(admitted(Ok(())));
+        assert!(!admitted(Err(AppError::TooManyRequests)));
+        assert!(admitted(Err(AppError::Busy)));
+    }
+
+    #[tokio::test]
+    async fn portfolio_readers_without_a_session_are_counted_by_address() {
+        let v4: IpAddr = "203.0.113.7".parse().unwrap();
+        let v6: IpAddr = "2001:db8:1:2:3:4:5:6".parse().unwrap();
+        assert_eq!(
+            portfolio_subject(None, Some("token"), Some(v4)).await,
+            Some(("ip:203.0.113.7".into(), PORTFOLIO_UNCACHED_IPV4_LIMIT))
+        );
+        assert_eq!(
+            portfolio_subject(None, None, Some(v6)).await,
+            Some(("ip:2001:db8:1:2::".into(), PORTFOLIO_UNCACHED_IPV6_LIMIT))
+        );
+        assert_eq!(portfolio_subject(None, None, None).await, None);
+        // A carrier NAT's phones polling every 30 s (about five misses a minute each).
+        const { assert!(PORTFOLIO_UNCACHED_IPV4_LIMIT >= 100 * 5) };
+    }
 
     fn state(trust_proxy: bool, trusted: &str) -> AuthState {
         AuthState {
