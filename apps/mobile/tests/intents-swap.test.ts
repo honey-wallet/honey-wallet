@@ -21,6 +21,7 @@ const {
   executeSwapPayment,
   fetchSwapTokens,
   intentsSwaps,
+  isFinal,
   needsMemoWarning,
   parseOneClickTokens,
   prepareSwapPayment,
@@ -30,6 +31,7 @@ const {
   readyToPay,
   refreshSwap,
   FALLBACK_SWAP_TOKENS,
+  hiddenPayoutWarning,
   shownInWallet,
   swapRefForSymbol,
   swapStage,
@@ -496,6 +498,12 @@ const swap = (over: Record<string, unknown> = {}) => ({
 describe('verifySwapWithOneClick', () => {
   it('accepts a deposit address 1Click says pays and refunds this wallet', async () => {
     await expect(verifySwapWithOneClick(swap(), oneClick())).resolves.toBe(25);
+    const own = oneClick({
+      appFees: [
+        { recipient: '5880ad2b362620fadf759cbceb1cd5737ce8c6ed7fb8e9942881e6731f9247dd', fee: 20 },
+      ],
+    });
+    await expect(verifySwapWithOneClick(swap(), own)).resolves.toBe(25);
   });
 
   it('refuses when 1Click’s record differs in any term, or 1Click is down', async () => {
@@ -512,6 +520,16 @@ describe('verifySwapWithOneClick', () => {
       oneClick({}, { minAmountOut: '1' }),
       oneClick({}, { depositAddress: OTHER }),
       oneClick({}, { depositMemo: '123' }),
+      // A fee to anyone but 1Click's own small entry (money audit 2).
+      oneClick({ appFees: [{ recipient: 'mallory.near', fee: 4000 }] }),
+      oneClick({
+        appFees: [
+          {
+            recipient: '5880ad2b362620fadf759cbceb1cd5737ce8c6ed7fb8e9942881e6731f9247dd',
+            fee: 30,
+          },
+        ],
+      }),
     ])
       await expect(verifySwapWithOneClick(swap(), fetcher)).rejects.toThrow('The quote changed');
     await expect(verifySwapWithOneClick(swap(), oneClick({}, {}, false))).rejects.toThrow(
@@ -833,6 +851,37 @@ describe('quote → pay', () => {
       (await refreshSwap(unpaid, { ...late, fetcher: status('PENDING_DEPOSIT') })).status,
     ).toBe('EXPIRED');
   });
+
+  it('settles a sent deposit 1Click never saw once past its deadline and grace (money audit 7)', async () => {
+    const pending = (async () =>
+      new Response(
+        JSON.stringify({
+          status: 'PENDING_DEPOSIT',
+          quoteResponse: { quoteRequest: {}, quote: {} },
+        }),
+      )) as unknown as typeof fetch;
+    const sent = swap({ status: 'KNOWN_DEPOSIT_TX' as const, txHash: `0x${'d'.repeat(64)}` });
+    const late = { token: () => null, now: () => Date.parse('2026-11-09T12:30:00Z') };
+    const at = async (state: 'success' | 'failure' | 'missing' | 'unknown', now = late) => {
+      const depositTx = vi.fn(async () => state);
+      const next = await refreshSwap(sent, { ...now, fetcher: pending, depositTx });
+      return { next, depositTx };
+    };
+    const reverted = await at('failure');
+    expect(reverted.depositTx).toHaveBeenCalledWith('Base', `0x${'d'.repeat(64)}`);
+    expect(reverted.next.status).toBe('FAILED');
+    const dropped = (await at('missing')).next;
+    expect(dropped.status).toBe('EXPIRED');
+    // Both are final: the in-flight bar and polling stop.
+    expect(isFinal(reverted.next) && isFinal(dropped)).toBe(true);
+    // Landed or unreadable: left as sent.
+    expect((await at('success')).next.status).toBe('KNOWN_DEPOSIT_TX');
+    expect((await at('unknown')).next.status).toBe('KNOWN_DEPOSIT_TX');
+    // Before the deadline and grace: not even looked at.
+    const early = await at('missing', { token: () => null, now: () => NOW });
+    expect(early.next.status).toBe('KNOWN_DEPOSIT_TX');
+    expect(early.depositTx).not.toHaveBeenCalled();
+  });
 });
 
 describe('payout wording', () => {
@@ -843,6 +892,17 @@ describe('payout wording', () => {
     expect(shownInWallet('Arbitrum')).toBe(true);
     expect(shownInWallet('Polygon')).toBe(true);
     expect(shownInWallet('Optimism')).toBe(false);
+  });
+
+  it('warns on the review, before Confirm, when the payout lands on a chain Honey doesn’t show (money audit 4)', () => {
+    const on = (chain: string, externalRecipient = false) =>
+      hiddenPayoutWarning({ buy: { symbol: 'USDT', chain }, externalRecipient });
+    for (const chain of ['BNB Chain', 'Avalanche', 'Optimism', 'Gnosis'])
+      expect(on(chain)).toContain(`Honey doesn’t show ${chain} balances`);
+    expect(on('Base')).toBeNull();
+    expect(on('Solana')).toBeNull();
+    // An address you typed has its own warning.
+    expect(on('BNB Chain', true)).toBeNull();
   });
 
   it('warns about exchange memos on chains that use them', () => {
@@ -879,12 +939,12 @@ describe('a quote kept fresh at Confirm', () => {
     expect(d.quote).not.toHaveBeenCalled();
   });
 
-  it('re-quotes one about to run out and goes on when the price held within slippage', async () => {
-    // 49104000 is within 1% of the 49500000 shown.
+  it('re-quotes one about to run out and shows a lower minimum even within slippage (money audit 5)', async () => {
+    // 49104000 is within 1% of the 49500000 shown, but less: shown for one more tap.
     const d = deps('49600000', '49104000');
     const r = await readyToPay({ swap: swap(), plan: plan() as never }, d);
     expect(d.quote).toHaveBeenCalledTimes(1);
-    expect(r.pay).toBe(true);
+    expect(r.pay).toBe(false);
     expect(r.swap).toMatchObject({
       depositAddress: FRESH,
       minAmountOut: '49104000',
@@ -897,6 +957,26 @@ describe('a quote kept fresh at Confirm', () => {
       expect.objectContaining({ to: FRESH }),
     );
     expect(priceMoved(swap(), r.swap)).toBe(true);
+  });
+
+  it('goes straight on when the fresh minimum is at least the one shown', async () => {
+    const same = await readyToPay(
+      { swap: swap(), plan: plan() as never },
+      deps('50000000', '49500000'),
+    );
+    expect(same.pay).toBe(true);
+    expect(same.swap.depositAddress).toBe(FRESH);
+    const better = await readyToPay(
+      { swap: swap(), plan: plan() as never },
+      deps('50100000', '49599000'),
+    );
+    expect(better.pay).toBe(true);
+    // One unit less than shown: re-confirmed.
+    const less = await readyToPay(
+      { swap: swap(), plan: plan() as never },
+      deps('49999999', '49499999'),
+    );
+    expect(less.pay).toBe(false);
   });
 
   it('shows a price that moved past slippage and waits for one more tap', async () => {

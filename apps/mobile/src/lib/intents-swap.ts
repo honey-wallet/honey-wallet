@@ -27,6 +27,7 @@ import {
 import { formatUnits, isAddress } from 'viem';
 import { api } from '@/lib/api';
 import { backendSessionToken } from '@/lib/backend-session';
+import { depositTxState } from '@/lib/deposit-tx';
 import {
   atomic,
   checkDeadline,
@@ -154,6 +155,18 @@ export function ownAddressOn(
 
 /** Chains whose balances the wallet shows (Home, Portfolio): the ones it pays from. */
 export const shownInWallet = (chain: string) => Object.values(PAYABLE).includes(chain as Chain);
+
+/**
+ * What the review says before Confirm when the payout lands at this wallet's own address
+ * on a chain Honey doesn't show (BNB Chain, Avalanche, Optimism, Gnosis…): the funds are
+ * yours, but Home won't list them. Null when the chain is shown or the address was typed.
+ */
+export function hiddenPayoutWarning(
+  swap: Pick<IntentsSwap, 'buy' | 'externalRecipient'>,
+): string | null {
+  if (swap.externalRecipient || shownInWallet(swap.buy.chain)) return null;
+  return `${swap.buy.symbol} goes to your address on ${swap.buy.chain}. Honey doesn’t show ${swap.buy.chain} balances yet: you’ll see it in an explorer or another wallet, not on Home.`;
+}
 
 /**
  * Chains where exchanges often need a memo or tag with the address. A swap can't add one,
@@ -693,6 +706,8 @@ export type SwapDeps = {
   nearFtReady: (token: string, account: string) => Promise<boolean>;
   prepare: typeof prepareSend;
   now: () => number;
+  /** A sent deposit's state on its own chain (lib/deposit-tx). */
+  depositTx: typeof depositTxState;
 };
 
 const defaults: SwapDeps = {
@@ -703,6 +718,7 @@ const defaults: SwapDeps = {
   prepare: prepareSend,
   // The server's clock: deadlines are set on it, and a phone's may be minutes off.
   now: serverNow,
+  depositTx: (chain, hash) => depositTxState(chain, hash),
 };
 
 /** A live, verified quote for selling `amount` (decimal text) of `sell` for `buy`. Nothing is signed. */
@@ -915,11 +931,17 @@ export const withinSlippage = (
   BigInt(fresh.minAmountOut) >=
   (BigInt(shown.minAmountOut) * BigInt(10_000 - shown.slippageBps)) / 10_000n;
 
+/** A fresh minimum at least the one on screen: nothing you'd get is less than you saw. */
+export const noWorse = (
+  shown: Pick<IntentsSwap, 'minAmountOut'>,
+  fresh: Pick<IntentsSwap, 'minAmountOut'>,
+) => BigInt(fresh.minAmountOut) >= BigInt(shown.minAmountOut);
+
 /**
  * At Confirm: a quote with `REQUOTE_BELOW_MS` or more left is paid as it is. One with
- * less is quoted again first; if the fresh minimum is within the swap's slippage of the
- * one shown, it goes straight on to Face ID with the fresh quote (`pay`), otherwise the
- * new price is shown and needs one more tap. Throws `REFRESH_FAILED` when re-quoting fails.
+ * less is quoted again first; if the fresh minimum is at least the one shown, it goes
+ * straight on to Face ID with the fresh quote (`pay`), otherwise the new price is shown
+ * and needs one more tap. Throws `REFRESH_FAILED` when re-quoting fails.
  */
 export async function readyToPay(
   shown: ReadySwap,
@@ -928,7 +950,9 @@ export async function readyToPay(
   const d = { ...defaults, ...deps };
   if (!nearExpiry(shown.swap, d.now())) return { ...shown, pay: true };
   const fresh = await refreshQuote(shown.swap, deps);
-  return { ...fresh, pay: withinSlippage(shown.swap, fresh.swap) };
+  // return { ...fresh, pay: withinSlippage(shown.swap, fresh.swap) };
+  // Replaced 14 Nov (money audit 5): up to 1% less went to Face ID unseen.
+  return { ...fresh, pay: noWorse(shown.swap, fresh.swap) };
 }
 
 const alreadyUsed = () =>
@@ -1108,7 +1132,17 @@ export async function refreshSwap(
   if (status === 'PENDING_DEPOSIT') {
     // Never step back from "sent"; an address nobody paid runs out after its deadline.
     const late = d.now() > Date.parse(swap.deadline) + EXPIRY_GRACE_MS;
-    if (swap.status === 'KNOWN_DEPOSIT_TX') return swap;
+    // if (swap.status === 'KNOWN_DEPOSIT_TX') return swap;
+    // Replaced 14 Nov (money audit 7): a deposit 1Click never saw by the deadline and its
+    // grace is read on its own chain. Reverted: nothing was paid (FAILED); unknown to the
+    // chain: it was dropped (EXPIRED). Either way it stops, and so does the in-flight bar.
+    if (swap.status === 'KNOWN_DEPOSIT_TX') {
+      if (!late || !swap.txHash) return swap;
+      const tx = await d.depositTx(swap.sell.chain, swap.txHash).catch(() => 'unknown' as const);
+      if (tx === 'failure') return { ...swap, status: 'FAILED' };
+      if (tx === 'missing') return { ...swap, status: 'EXPIRED' };
+      return swap;
+    }
     return { ...swap, status: late ? 'EXPIRED' : swap.status };
   }
   return { ...swap, status, destinationTxHashes, refundedAmount };

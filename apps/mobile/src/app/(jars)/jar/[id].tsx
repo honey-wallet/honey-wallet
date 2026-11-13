@@ -111,6 +111,8 @@ const HERO_ICON = 56;
 const FINAL = new Set(['SUCCESS', 'REFUNDED', 'FAILED', 'NOT_SENT', 'HOLDING_USDC']);
 const STATE_TEXT: Record<string, string> = {
   NOT_SENT: 'Not sent',
+  // Its payment may have gone out; its status settles it (money audit 1).
+  SENDING: 'Sending',
   PENDING_DEPOSIT: 'Waiting for payment',
   KNOWN_DEPOSIT_TX: 'Payment seen',
   PROCESSING: 'Swapping',

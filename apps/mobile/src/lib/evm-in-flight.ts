@@ -1,5 +1,6 @@
 import type { Rpc } from '@honey-wallet/keyring';
 import { persistence } from '@/lib/persistence';
+import { serverNow } from '@/lib/server-clock';
 import { createStore } from '@/lib/store';
 
 /**
@@ -81,7 +82,9 @@ export async function assertNoSponsoredInFlight(
   const live = await (async () => {
     const rpc = deps.rpc ?? evmRpc(chainId);
     const seq = async () => (await readWalletGasState(rpc, account)).seq;
-    return liveBatch(chainId, account, seq, (deps.now ?? Date.now)());
+    // return liveBatch(chainId, account, seq, (deps.now ?? Date.now)());
+    // Replaced 14 Nov (money audit 6): batch deadlines are Honey's, on the server's clock.
+    return liveBatch(chainId, account, seq, (deps.now ?? serverNow)());
   })().catch(() => 'unknown' as const);
   if (live)
     throw new Error(

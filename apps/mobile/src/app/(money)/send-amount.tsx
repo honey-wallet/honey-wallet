@@ -18,6 +18,7 @@ import { FlowTray, InlineTray } from '@/components/sheets/Tray';
 import { Spinner } from '@/components/trade/SwapReview';
 import {
   applyKey,
+  floorNumber,
   Keypad,
   PercentChips,
   TypedAmount,
@@ -201,7 +202,12 @@ export default function SendAmountSheet() {
           chain,
           symbol,
           to: recipient.address,
-          amount: trimNumber(
+          // amount: trimNumber(
+          //   tokenValue,
+          //   symbol === 'USDC' ? 6 : Math.min(8, sendToken?.decimals ?? 8),
+          // ),
+          // Replaced 14 Nov (money audit 8): what's sent is rounded down, never up.
+          amount: floorNumber(
             tokenValue,
             symbol === 'USDC' ? 6 : Math.min(8, sendToken?.decimals ?? 8),
           ),
@@ -415,10 +421,16 @@ export default function SendAmountSheet() {
                       hitSlop={10}
                       onPress={() => {
                         tap();
+                        // setAmount(
+                        //   unit === 'usd'
+                        //     ? trimNumber(money.fromUsd(token.usd), money.decimals)
+                        //     : trimNumber(token.amount, 8),
+                        // );
+                        // Replaced 14 Nov (money audit 8): rounded down, never past the balance.
                         setAmount(
                           unit === 'usd'
-                            ? trimNumber(money.fromUsd(token.usd), money.decimals)
-                            : trimNumber(token.amount, 8),
+                            ? floorNumber(money.fromUsd(token.usd), money.decimals)
+                            : floorNumber(token.amount, 8),
                         );
                       }}
                     >

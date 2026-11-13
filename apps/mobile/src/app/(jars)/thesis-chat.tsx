@@ -20,7 +20,8 @@ import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle, Defs, LinearGradient, Path, Stop, Text as SvgText } from 'react-native-svg';
 import { Icon } from '@/components/Icon';
-import { ChatRow } from '@/components/jars/ChatRow';
+import { CitedText, SourcesRow } from '@/components/jars/Citations';
+// import { ChatRow } from '@/components/jars/ChatRow'; (Recent chats, commented out below)
 import { IdeaGrid, PickIcon, StrategyCard } from '@/components/jars/JarParts';
 import { ChatChart } from '@/components/jars/ThesisCharts';
 import { ThesisProgress, Understood } from '@/components/jars/ThesisLive';
@@ -33,11 +34,13 @@ import { SheetRow } from '@/components/sheets/Sheet';
 import { CopyStepper } from '@/components/social/parts';
 import { HeaderShortcut } from '@/components/wallet/HeaderShortcut';
 import { copyText } from '@/lib/copy';
+import { useMoney } from '@/lib/fx';
 import { tap } from '@/lib/haptics';
 import { chartableTokens } from '@/lib/market';
 import { goBackOr } from '@/lib/navigation';
 import { COPY_STEPS, useSettings } from '@/lib/settings';
 import {
+  cashShare,
   hostOf,
   linksIn,
   type Pick,
@@ -49,28 +52,33 @@ import {
   withAmount,
 } from '@/lib/thesis';
 import {
+  bearBullets,
   type ChatMessage,
   type ChatPart,
   chatAsk,
   chatDraft,
+  chatPending,
   chatStake,
   leftOut,
-  money,
+  // money, (amounts read in the user's currency now: shortMoney(useMoney().format))
   nearestStep,
   newMessage,
+  plainWithSources,
   projection,
   RETRY,
   replay,
   reply,
   SWING,
+  shortMoney,
 } from '@/lib/thesis-chat';
-import {
-  fetchPastChats,
-  type HistoryRow,
-  hiddenChats,
-  historySections,
-  visibleChats,
-} from '@/lib/thesis-history';
+// Recent chats on the empty state, commented out below:
+// import {
+//   fetchPastChats,
+//   type HistoryRow,
+//   hiddenChats,
+//   historySections,
+//   visibleChats,
+// } from '@/lib/thesis-history';
 import { showToast } from '@/lib/toast';
 import { tokenColor } from '@/lib/token-colors';
 import { Gate } from '@/lib/warnings';
@@ -108,7 +116,8 @@ const stakeAt = (amount: number) => {
 function plainText(message: ChatMessage) {
   return message.parts
     .flatMap((p) => {
-      if (p.type === 'text') return [p.text];
+      // if (p.type === 'text') return [p.text];
+      if (p.type === 'text') return [plainWithSources(p.text, p.sources)];
       if (p.type === 'strategy' && p.proposal.picks.length)
         return [
           `${p.proposal.thesis} (${p.proposal.risk.toLowerCase()} risk)`,
@@ -133,6 +142,7 @@ function plainText(message: ChatMessage) {
 export default function ThesisChatScreen() {
   const styles = useStyles();
   const c = useTheme();
+  const fx = useMoney();
   const insets = useSafeAreaInsets();
   const { idea, run, said } = useLocalSearchParams<{
     idea?: string;
@@ -233,6 +243,8 @@ export default function ThesisChatScreen() {
           update,
           signal,
           stake: stakeAt,
+          // Amounts in the words as Create jar shows them: the user's currency.
+          format: shortMoney(fx.format),
           ...chartableTokens(),
         });
       },
@@ -272,12 +284,14 @@ export default function ThesisChatScreen() {
   };
 
   /** New chat: back to the empty chat, whatever was going on. */
+  // biome-ignore lint/correctness/noUnusedVariables: kept for New chat, off the top bar for now.
   const fresh = () => {
     working.current?.abort();
     working.current = null;
     strategy.current = null;
     retry.current = null;
     chatStake.set(null);
+    chatPending.set(null);
     setBusy(false);
     setMessages([]);
     setDraft('');
@@ -302,6 +316,7 @@ export default function ThesisChatScreen() {
   // biome-ignore lint/correctness/useExhaustiveDependencies: once, on open
   useEffect(() => {
     chatStake.set(null);
+    chatPending.set(null);
     if (run) open(run);
     else if (idea) send(idea);
     return () => {
@@ -339,6 +354,7 @@ export default function ThesisChatScreen() {
           <Text style={styles.title}>Thesis agent</Text>
         </View>
         <View style={[styles.side, styles.sideEnd]}>
+          {/* New chat taken off the top bar (2026-11-14, the user's call); History stays.
           <HeaderShortcut
             icon="pencil"
             label="New chat"
@@ -347,6 +363,7 @@ export default function ThesisChatScreen() {
               if (empty) input.current?.focus();
             }}
           />
+          */}
           <HeaderShortcut
             icon="history"
             label="History"
@@ -531,19 +548,20 @@ export default function ThesisChatScreen() {
  */
 function Welcome({ onIdea }: { onIdea: (text: string) => void }) {
   const styles = useStyles();
-  const hidden = hiddenChats.useValue();
-  const [recent, setRecent] = useState<HistoryRow[]>([]);
-  useEffect(() => {
-    let live = true;
-    fetchPastChats()
-      .then(({ chats }) => {
-        if (live) setRecent(historySections(visibleChats(chats, hidden)).flatMap((s) => s.rows));
-      })
-      .catch(() => {});
-    return () => {
-      live = false;
-    };
-  }, [hidden]);
+  // The Recent list is off the empty state (2026-11-14, the user's call); History has them.
+  // const hidden = hiddenChats.useValue();
+  // const [recent, setRecent] = useState<HistoryRow[]>([]);
+  // useEffect(() => {
+  //   let live = true;
+  //   fetchPastChats()
+  //     .then(({ chats }) => {
+  //       if (live) setRecent(historySections(visibleChats(chats, hidden)).flatMap((s) => s.rows));
+  //     })
+  //     .catch(() => {});
+  //   return () => {
+  //     live = false;
+  //   };
+  // }, [hidden]);
   return (
     <ScrollView
       style={styles.flexFill}
@@ -560,6 +578,7 @@ function Welcome({ onIdea }: { onIdea: (text: string) => void }) {
       </View>
       {/* The Jars page's idea cards, each starting the conversation with its idea. */}
       <IdeaGrid onPick={onIdea} />
+      {/* Recent chats, off the empty state (2026-11-14, the user's call).
       {recent.length ? (
         <View style={styles.recent}>
           <View style={styles.recentHead}>
@@ -581,6 +600,7 @@ function Welcome({ onIdea }: { onIdea: (text: string) => void }) {
           ))}
         </View>
       ) : null}
+      */}
     </ScrollView>
   );
 }
@@ -613,6 +633,7 @@ function Message({
       </View>
     );
   const text = plainText(message);
+  const cited = message.parts.flatMap((p) => (p.type === 'text' ? (p.sources ?? []) : []));
   const working = busy && last;
   // Quick replies belong to the newest answer only, as in ChatGPT.
   const parts = last ? message.parts : message.parts.filter((p) => p.type !== 'replies');
@@ -639,6 +660,8 @@ function Message({
           onVariant={onVariant}
         />
       ))}
+      {/* The sites the answer cites, under it. */}
+      {!working && cited.length ? <SourcesRow sources={cited} /> : null}
       {/* Copy, rate and share sit right under the answer; its next steps under them. */}
       {!working && text ? (
         <View style={styles.actions}>
@@ -760,7 +783,13 @@ function Part({
   const styles = useStyles();
   switch (part.type) {
     case 'text':
-      return <StreamText text={part.text} stream={stream} />;
+      // return <StreamText text={part.text} stream={stream} />;
+      // Cited text shows its sources as pills, inline; the rest types itself out.
+      return part.sources?.length ? (
+        <CitedText text={part.text} sources={part.sources} style={styles.agentText} />
+      ) : (
+        <StreamText text={part.text} stream={stream} />
+      );
     case 'understood':
       return <Understood theme={part.theme} picks={part.picks} />;
     case 'stages':
@@ -811,6 +840,7 @@ function AnswerCard({
   const styles = useStyles();
   // The amount on Create jar, shared with the chat's words and the projection.
   const stake = chatStake.useValue();
+  const fx = useMoney();
   const levels = RISKS.filter((r) => proposal.byRisk?.[r]);
   const [level, setLevel] = useState<Risk>(proposal.risk);
   const variant = (r: Risk): Proposal =>
@@ -818,8 +848,17 @@ function AnswerCard({
       ? proposal
       : { ...withAmount(proposal.byRisk[r] as Proposal, proposal.amount), byRisk: proposal.byRisk };
   const shown = variant(level);
-  const cash = shown.cashPct && shown.cashPct > 0 ? shown.cashPct : 0;
-  const left = leftOut(shown.unmatched);
+  // const cash = shown.cashPct && shown.cashPct > 0 ? shown.cashPct : 0;
+  // The same cash the bar and its legend draw, so the row and subtitle agree with them.
+  const cash = cashShare(shown.picks, shown.cashPct);
+  // const left = leftOut(shown.unmatched);
+  // Only what Honey left out with a reason worth reading; a bare "Ether" says nothing.
+  const left = leftOut(shown.unmatched).filter((u) => u.note);
+  const bear = bearBullets(shown.bearCase);
+  // Compact by default (2026-11-14, "too much slop text"): one line per pick; the
+  // "Wrong if" lines, Left out and What could go wrong open behind Read more.
+  const [more, setMore] = useState(false);
+  const hasMore = left.length > 0 || bear.length > 0 || shown.picks.some((p) => p.wrongIf);
   const riskSwitch =
     levels.length > 1 ? (
       <SegmentedTabs<Risk>
@@ -834,7 +873,7 @@ function AnswerCard({
       />
     ) : null;
   const leftOutBlock = left.length ? (
-    <View>
+    <View style={styles.moreBlock}>
       <Text style={styles.sectionLabel}>Left out</Text>
       <View style={styles.list}>
         {left.map((u) => (
@@ -869,9 +908,13 @@ function AnswerCard({
     <StrategyCard
       picks={shown.picks}
       name={shown.thesis}
+      // meta={`${shown.risk} risk · ${shown.picks.length} ${
+      //   shown.picks.length === 1 ? 'token' : 'tokens'
+      // }`}
       meta={`${shown.risk} risk · ${shown.picks.length} ${
         shown.picks.length === 1 ? 'token' : 'tokens'
-      }`}
+      }${cash ? ` + ${cash}% cash` : ''}`}
+      cashPct={cash}
       split
     >
       {riskSwitch}
@@ -886,15 +929,28 @@ function AnswerCard({
               key={`${p.symbol}-${p.chain}`}
               leading={<PickIcon pick={p} size={32} />}
               title={p.symbol}
+              // subtitle={
+              //   p.wrongIf ? (
+              //     <View style={styles.flex}>
+              //       {p.reason ? <Text style={styles.rowReason}>{p.reason}</Text> : null}
+              //       <Text style={styles.footnote}>{wrongIfLine(p.wrongIf)}</Text>
+              //     </View>
+              //   ) : (
+              //     p.reason
+              //   )
+              // }
+              // One line of reason; its "Wrong if" only behind Read more.
               subtitle={
-                p.wrongIf ? (
-                  <View style={styles.flex}>
-                    {p.reason ? <Text style={styles.rowReason}>{p.reason}</Text> : null}
+                <View style={styles.flex}>
+                  {p.reason ? (
+                    <Text style={styles.rowReason} numberOfLines={more ? undefined : 1}>
+                      {p.reason}
+                    </Text>
+                  ) : null}
+                  {more && p.wrongIf ? (
                     <Text style={styles.footnote}>{wrongIfLine(p.wrongIf)}</Text>
-                  </View>
-                ) : (
-                  p.reason
-                )
+                  ) : null}
+                </View>
               }
               value={`${p.weight}%`}
             />
@@ -908,20 +964,42 @@ function AnswerCard({
           ) : null}
         </ContentSwap>
       ) : null}
-      {leftOutBlock}
-      {shown.bearCase?.length ? (
-        <View>
+      {/* {leftOutBlock} and What could go wrong now open behind Read more. */}
+      {hasMore ? (
+        <PressableScale
+          accessibilityRole="button"
+          accessibilityState={{ expanded: more }}
+          hitSlop={8}
+          scaleTo={0.97}
+          onPress={() => {
+            tap();
+            setMore((m) => !m);
+          }}
+          style={styles.readMore}
+        >
+          <Text style={styles.readMoreText}>{more ? 'Show less' : 'Read more'}</Text>
+        </PressableScale>
+      ) : null}
+      {more ? leftOutBlock : null}
+      {more && bear.length ? (
+        <View style={styles.moreBlock}>
           <Text style={styles.sectionLabel}>What could go wrong</Text>
           <View style={styles.list}>
-            {shown.bearCase.map((line) => (
+            {bear.map((line) => (
               <View key={line} style={styles.listItem}>
                 <Text style={styles.listText}>•</Text>
-                <Text style={[styles.listText, styles.shrink]}>{line}</Text>
+                {/* <Text style={[styles.listText, styles.shrink]}>{line}</Text> */}
+                <CitedText
+                  text={line}
+                  sources={shown.citations ?? proposal.citations}
+                  style={[styles.listText, styles.shrink]}
+                />
               </View>
             ))}
           </View>
         </View>
       ) : null}
+      {/* Removed from the card (2026-11-14, the user's call):
       {latest ? (
         <Text
           style={styles.footnote}
@@ -932,6 +1010,7 @@ function AnswerCard({
           Crypto is high risk. Only put in what you can afford to lose.
         </Text>
       ) : null}
+      */}
       {latest ? (
         <CopyStepper
           primary
@@ -939,6 +1018,8 @@ function AnswerCard({
           label="Create jar"
           start={stake ?? undefined}
           onAmount={(amount) => chatStake.set(amount)}
+          // "Create jar $5", in the user's currency, not "5 [USDC]" (2026-11-14).
+          format={shortMoney(fx.format)}
           onCopy={(amount) => {
             tap();
             // The level on screen is the one bought.
@@ -1009,6 +1090,8 @@ function ProjectionCard({ risk }: { risk: Risk }) {
   const stake = chatStake.useValue();
   const { copyAmount } = useSettings();
   const amount = stake ?? copyAmount;
+  // The user's currency, as Create jar shows it (was `money`, always dollars).
+  const fxMoney = shortMoney(useMoney().format);
   const [width, setWidth] = useState(0);
   const { low, mid, high } = projection(amount, risk);
   const H = 156;
@@ -1033,10 +1116,13 @@ function ProjectionCard({ risk }: { risk: Risk }) {
   return (
     <View style={styles.card}>
       {/* The likely outcome leads; the range sits under it, as a price and its move. */}
-      <Text style={styles.muted}>{money(amount)} in 12 months, likely</Text>
-      <Text style={styles.cardValue}>{money(end(mid))}</Text>
+      {/* <Text style={styles.muted}>{money(amount)} in 12 months, likely</Text> */}
+      {/* <Text style={styles.cardValue}>{money(end(mid))}</Text> */}
+      <Text style={styles.muted}>{fxMoney(amount)} in 12 months, likely</Text>
+      <Text style={styles.cardValue}>{fxMoney(end(mid))}</Text>
       <Text style={styles.muted}>
-        Between {money(end(low))} and {money(end(high))}
+        {/* Between {money(end(low))} and {money(end(high))} */}
+        Between {fxMoney(end(low))} and {fxMoney(end(high))}
       </Text>
       <View onLayout={(e) => setWidth(e.nativeEvent.layout.width)} style={styles.projChart}>
         {width > 0 ? (
@@ -1085,7 +1171,8 @@ function ProjectionCard({ risk }: { risk: Risk }) {
                   fontWeight="600"
                   fontFamily="system-ui, -apple-system, sans-serif"
                 >
-                  {money(e.v)}
+                  {/* {money(e.v)} */}
+                  {fxMoney(e.v)}
                 </SvgText>
               );
             })}
@@ -1198,6 +1285,9 @@ const useStyles = makeStyles((c) => ({
   agentText: { color: c.text, fontSize: 16, lineHeight: 23 },
   muted: { color: c.textSecondary, fontSize: 14 },
   // A section's quiet label, as on a jar's page (15pt, secondary).
+  readMore: { alignSelf: 'flex-start' },
+  readMoreText: { color: c.accentText, fontSize: 15, fontWeight: '600' },
+  moreBlock: { gap: 0 },
   sectionLabel: { marginBottom: 4, color: c.textSecondary, fontSize: 15 },
   list: { gap: 6 },
   listItem: { flexDirection: 'row', gap: 8 },

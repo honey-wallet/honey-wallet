@@ -86,6 +86,25 @@ describe('chart requests in the idea chat', () => {
     ).toBeNull();
   });
 
+  it('reads "against" as a question, not a chart, unless a token is named', () => {
+    const xaut = {
+      picks: [{ symbol: 'XAUT', name: 'Tether Gold' }, { symbol: 'BTC' }],
+      named,
+      listed,
+    };
+    // From the user's phone (2026-11-14): this drew XAUT's chart twice.
+    expect(chartAsk('How can I hedge against this ?', xaut)).toBeNull();
+    expect(chartAsk('how to protect against a crash', xaut)).toBeNull();
+    expect(chartAsk('what if gold falls', xaut)).toBeNull();
+    expect(chartAsk('how should I size this', xaut)).toBeNull();
+    expect(chartAsk('what is the downside', xaut)).toBeNull();
+    expect(chartAsk('risks of these picks', xaut)).toBeNull();
+    expect(chartAsk('versus the market', xaut)).toBeNull();
+    // Named tokens still compare.
+    expect(chartAsk('XAUT against BTC', xaut)?.symbols).toEqual(['XAUT', 'BTC']);
+    expect(chartAsk('compare the picks', xaut)?.picks).toBe(true);
+  });
+
   it('finds tokens in the order they are named, once each', () => {
     expect(symbolsIn('RENDER, then tao, then render again', picks)).toEqual(['RENDER', 'TAO']);
   });

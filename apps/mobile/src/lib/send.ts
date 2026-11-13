@@ -37,6 +37,8 @@ import {
 } from '@/lib/gas';
 import {
   ftTransferTx,
+  NEAR_DID_NOT_RUN,
+  nearDidNotRun,
   prepare,
   prepareDelegate,
   viewFtBalance,
@@ -665,9 +667,16 @@ async function prepareNearFt(
         assertWallet(wallet, isCurrent);
         once.spend();
         const delegate = await prepareDelegate(rpc, from, tx.receiverId, tx.actions);
-        const relayed = await signNearDelegate(wallet.id, delegate, d.keyOf)
-          .then((signed) => d.freeGas.nearRelay(signed))
-          .catch(() => null);
+        // const relayed = await signNearDelegate(wallet.id, delegate, d.keyOf)
+        //   .then((signed) => d.freeGas.nearRelay(signed))
+        //   .catch(() => null);
+        // Replaced 14 Nov (money audit 9): a signing error is said as it is (nothing left the
+        // device), and NEAR running it and failing is "nothing was sent", not "may have".
+        const signed = await signNearDelegate(wallet.id, delegate, d.keyOf);
+        const relayed = await d.freeGas.nearRelay(signed).catch((error: unknown) => {
+          if (nearDidNotRun(error)) throw new Error(NEAR_DID_NOT_RUN);
+          return null;
+        });
         if (relayed)
           return {
             hash: relayed.txHash,

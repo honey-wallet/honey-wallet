@@ -54,3 +54,38 @@ export function signedPct(fraction: number, minus = '-') {
 
 /** A chance: "<1%" under one percent, as Polymarket writes it; otherwise a whole percentage. */
 export const chanceText = (v: number) => (v < 0.01 ? '<1%' : `${Math.round(v * 100)}%`);
+
+/**
+ * A share of a balance for the keypad, rounded down at `decimals` places, never up past
+ * what's held (money audit 8: `toFixed` rounded 0.123456789 up to 0.12345679). Read from
+ * the number's shortest decimal text, so 0.29 stays 0.29 rather than floating to 0.28.
+ */
+export function floorNumber(n: number, decimals: number) {
+  if (!(n > 0) || !Number.isFinite(n)) return '0';
+  let s = String(n);
+  if (/e/i.test(s)) s = n.toFixed(20);
+  const [int = '0', frac = ''] = s.split('.');
+  const kept = frac.slice(0, Math.max(0, decimals)).replace(/0+$/, '');
+  return kept ? `${int}.${kept}` : int;
+}
+
+/**
+ * Exact decimal text ("0.0123456789") cut to `sig` significant digits, rounded down: a
+ * "≥" minimum must never show more than is guaranteed (money audit 10: `toPrecision`
+ * rounded 0.01234569 up). Whole-number digits are all kept.
+ */
+export function floorSignificant(text: string, sig = 6) {
+  const m = /^(\d+)(?:\.(\d*))?$/.exec(text.trim());
+  if (!m) return text;
+  const int = (m[1] ?? '0').replace(/^0+(?=\d)/, '');
+  const frac = m[2] ?? '';
+  const intDigits = int === '0' ? 0 : int.length;
+  let keep: number;
+  if (intDigits) keep = Math.max(0, sig - intDigits);
+  else {
+    const lead = /^0*/.exec(frac)?.[0].length ?? 0;
+    keep = lead + sig;
+  }
+  const kept = frac.slice(0, keep).replace(/0+$/, '');
+  return kept ? `${int}.${kept}` : int;
+}

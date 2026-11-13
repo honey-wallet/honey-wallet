@@ -396,6 +396,85 @@ pub fn check_jupiter_amounts(
     Ok(route)
 }
 
+/// Where each exact-in route instruction names, by account position: the user transfer
+/// authority, the user's source token account, its destination token account(s), and the
+/// source and destination mints when it has them (Jupiter v6's on-chain IDL, read
+/// 2026-11-14). `route` (v1) names no source mint.
+struct RouteAccounts {
+    authority: usize,
+    source: usize,
+    destination: usize,
+    source_mint: Option<usize>,
+    destination_mint: Option<usize>,
+}
+
+fn route_accounts(data: &[u8]) -> Option<RouteAccounts> {
+    let disc: [u8; 8] = data.get(..8)?.try_into().ok()?;
+    let at = |authority, source, destination, source_mint, destination_mint| RouteAccounts {
+        authority,
+        source,
+        destination,
+        source_mint,
+        destination_mint,
+    };
+    match disc {
+        JUPITER_SHARED_ROUTE_V2 => Some(at(1, 2, 5, Some(6), Some(7))),
+        JUPITER_ROUTE_V2 => Some(at(0, 1, 2, Some(3), Some(4))),
+        JUPITER_ROUTE => Some(at(1, 2, 3, None, Some(5))),
+        JUPITER_SHARED_ROUTE => Some(at(2, 3, 6, Some(7), Some(8))),
+        _ => None,
+    }
+}
+
+/// The route sells `sell_mint` from the taker's own associated token account (classic
+/// token program), signed by the taker, into the taker's own account for `buy_mint`
+/// (money audit 11, 2026-11-14): `check_jupiter_amounts` alone would pass the same amount
+/// of another token. Mints loaded from a lookup table aren't readable here; the two
+/// accounts, derived from the mints, already fix both tokens.
+pub fn check_jupiter_accounts(
+    message: &[u8],
+    taker: &[u8; 32],
+    sell_mint: &[u8; 32],
+    buy_mint: &[u8; 32],
+) -> Result<(), &'static str> {
+    let msg = MessageV0::decode(message)?;
+    let token = decode_key(TOKEN_PROGRAM).ok_or("bad token program")?;
+    let source = associated_token_address(taker, sell_mint, &token).ok_or("no source account")?;
+    let output = associated_token_address(taker, buy_mint, &token).ok_or("no output account")?;
+    let mut routes = 0usize;
+    for ix in &msg.instructions {
+        let Some(program) = msg.keys.get(ix.program) else {
+            return Err("bad instruction");
+        };
+        if b58(program) != JUPITER_V6 {
+            continue;
+        }
+        let at = route_accounts(&ix.data).ok_or("not an exact-in Jupiter route")?;
+        let key = |i: usize| ix.accounts.get(i).and_then(|&k| msg.keys.get(k));
+        if key(at.authority) != Some(taker) {
+            return Err("the swap isn't signed by you");
+        }
+        if key(at.source) != Some(&source) {
+            return Err("the swap sells from another account");
+        }
+        if key(at.destination) != Some(&output) {
+            return Err("the swap pays another account");
+        }
+        let mint_ok = |i: Option<usize>, mint: &[u8; 32]| match i.and_then(|i| ix.accounts.get(i)) {
+            Some(&k) if k < msg.keys.len() => &msg.keys[k] == mint,
+            _ => true,
+        };
+        if !mint_ok(at.source_mint, sell_mint) || !mint_ok(at.destination_mint, buy_mint) {
+            return Err("the swap trades another token");
+        }
+        routes += 1;
+    }
+    if routes != 1 {
+        return Err("not one Jupiter route");
+    }
+    Ok(())
+}
+
 // Program derived addresses
 
 /// Whether 32 bytes are a point on ed25519 (the check `Pubkey::is_on_curve` makes:
@@ -609,6 +688,26 @@ mod tests {
                 positive_slippage_bps: 0,
             })
         );
+    }
+
+    #[test]
+    fn the_live_route_sells_the_takers_own_usdc_into_its_own_account() {
+        let taker = decode_key(TAKER).unwrap();
+        let usdc = decode_key(super::super::chains::USDC_SOLANA).unwrap();
+        let jup = decode_key("JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN").unwrap();
+        let m = message();
+        assert_eq!(check_jupiter_accounts(&m, &taker, &usdc, &jup), Ok(()));
+        // The same message read as selling or buying another token: refused.
+        assert!(check_jupiter_accounts(&m, &taker, &jup, &jup).is_err());
+        assert!(check_jupiter_accounts(&m, &taker, &usdc, &usdc).is_err());
+        // Another wallet's account as the source: refused.
+        let other = decode_key(PAYER).unwrap();
+        assert!(check_jupiter_accounts(&m, &other, &usdc, &jup).is_err());
+        // The source account index pointed at another static key: refused.
+        let mut moved = m.clone();
+        let accounts = find_instruction_accounts(&m, 2);
+        moved[accounts + 2] = moved[accounts + 5];
+        assert!(check_jupiter_accounts(&moved, &taker, &usdc, &jup).is_err());
     }
 
     #[test]

@@ -23,7 +23,7 @@ impl Prompt {
 
 pub const UNDERSTAND: Prompt = Prompt {
     name: "understand",
-    version: "understand/6",
+    version: "understand/7",
     file: include_str!("prompts/understand.md"),
 };
 
@@ -35,11 +35,18 @@ pub const PICK: Prompt = Prompt {
 
 pub const CRITIC: Prompt = Prompt {
     name: "critic",
-    version: "critic/5",
+    version: "critic/6",
     file: include_str!("prompts/critic.md"),
 };
 
-pub const ALL: [&Prompt; 3] = [&UNDERSTAND, &PICK, &CRITIC];
+/// Follow-up questions on a finished strategy (`POST /theses/ask`).
+pub const ASK: Prompt = Prompt {
+    name: "ask",
+    version: "ask/1",
+    file: include_str!("prompts/ask.md"),
+};
+
+pub const ALL: [&Prompt; 4] = [&UNDERSTAND, &PICK, &CRITIC, &ASK];
 
 pub fn versions() -> BTreeMap<String, String> {
     ALL.iter()
@@ -66,6 +73,6 @@ mod tests {
             assert!(p.body().to_lowercase().contains("ticker"), "{}", p.name);
         }
         assert!(UNDERSTAND.body().contains("{{CATEGORIES}}"));
-        assert_eq!(versions().len(), 3);
+        assert_eq!(versions().len(), 4);
     }
 }

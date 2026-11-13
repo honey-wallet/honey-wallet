@@ -12,7 +12,7 @@ use serde_json::Value;
 
 use super::{
     evm::{floor_bps, parse_amount},
-    solana::{MessageV0, check_jupiter_amounts, decode_key},
+    solana::{MessageV0, check_jupiter_accounts, check_jupiter_amounts, decode_key},
 };
 use crate::{error::AppError, solana_relayer::Wire};
 
@@ -128,6 +128,15 @@ pub fn check_order(
     let sell_amount = u64::try_from(amount).map_err(|_| upstream("amount"))?;
     let min_u64 = u64::try_from(min).map_err(|_| upstream("threshold"))?;
     check_jupiter_amounts(&wire.message, sell_amount, min_u64).map_err(upstream)?;
+    // ...and that it sells exactly `sell` from the taker's own account into its own.
+    let mint = |m: &str| decode_key(m).ok_or_else(|| upstream("mint"));
+    check_jupiter_accounts(
+        &wire.message,
+        &decode_key(taker).ok_or_else(|| upstream("taker"))?,
+        &mint(sell)?,
+        &mint(buy)?,
+    )
+    .map_err(upstream)?;
     let price_impact_pct = body["priceImpactPct"]
         .as_str()
         .and_then(|p| p.parse::<f64>().ok())

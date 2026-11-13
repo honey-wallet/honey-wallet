@@ -36,6 +36,7 @@ import { confirmOwner } from '@/lib/auth';
 import { backendSessionToken } from '@/lib/backend-session';
 import { type PlannedRoute, planRoute, type RouteAsk, routeStatus } from '@/lib/best-route';
 import { prepareEvmSend } from '@/lib/dapp-sign';
+import { depositTxState } from '@/lib/deposit-tx';
 import {
   DEX_CHAIN_IDS,
   type DexChain,
@@ -74,6 +75,7 @@ import { allowAuto, type DexLeg, isDexLeg, swapLeg } from '@/lib/jar-dex';
 import type { Route } from '@/lib/jar-routes';
 import { gasReserve, holdingOf, isUsdc, PAY_BUFFER_BPS } from '@/lib/pay-with';
 import type { prepareSend } from '@/lib/send';
+import { serverNow } from '@/lib/server-clock';
 import type { TokenRef } from '@/lib/swap';
 import { TEST_MODE } from '@/lib/test-mode';
 import { privateKeyOf } from '@/lib/vault';
@@ -146,7 +148,12 @@ export type BuyLeg = {
   deadline: string;
   txHash?: string;
   /** `HOLDING_USDC`: a DEX leg's USDC reached the token's chain but the swap didn't run. */
-  status: JarBuyState | 'NOT_SENT' | 'HOLDING_USDC';
+  // status: JarBuyState | 'NOT_SENT' | 'HOLDING_USDC';
+  /**
+   * `SENDING`: recorded before its deposit is signed, and kept when the app can't tell
+   * whether it went out; status polling settles it (money audit 1, as Swap does).
+   */
+  status: JarBuyState | 'NOT_SENT' | 'HOLDING_USDC' | 'SENDING';
   /** The network whose USDC paid this leg; Base when absent (older jars, group shares). */
   origin?: PayChain;
   /** The token that paid this leg when it wasn't USDC; `amountIn` is then in its units. */
@@ -176,11 +183,29 @@ export type LegProblem = { symbol: string; reason: string };
 /** A jar buy that stopped: every leg that couldn't go, each with its reason. */
 export class JarBuyError extends Error {
   readonly legs: LegProblem[];
-  constructor(legs: LegProblem[], tail = 'Nothing was paid.') {
+  /** Every leg as it stood when the buy stopped, once paying had begun (to save the jar). */
+  readonly sent?: BuyLeg[];
+  constructor(legs: LegProblem[], tail = 'Nothing was paid.', sent?: BuyLeg[]) {
     super(`${legs.map((l) => `${l.symbol}: ${l.reason}`).join(' ')} ${tail}`.trim());
     this.legs = legs;
+    if (sent) this.sent = sent;
   }
 }
+
+/**
+ * A leg whose money went out, or may have (`SENDING`): it's kept on the jar so a retry
+ * never pays it twice, and its status settles it (money audit 1).
+ */
+export const wentOut = (l: Pick<BuyLeg, 'txHash' | 'status'>) =>
+  !!l.txHash || l.status === 'SENDING';
+
+/**
+ * Errors that mean the deposit was never signed or handed on: the leg goes back to
+ * `NOT_SENT`. Anything else after `SENDING` (a timeout, "may already have gone through")
+ * leaves it `SENDING` for polling to settle.
+ */
+const NOT_SENT_ERRORS =
+  /cancelled|Wallet changed|Wallet key does not match|Honey couldn’t send this one|gas offer didn’t check out|can’t pay this network fee|quote expired|nothing was sent|is not available/i;
 
 const reasonOf = (e: unknown, fallback = 'Something went wrong.') =>
   e instanceof Error && e.message ? e.message.replace(/\s*Nothing was paid\.?$/, '') : fallback;
@@ -332,6 +357,10 @@ export type JarBuyDeps = {
    * basis for the creator's fee when the copy is sold (lib/copy-fees).
    */
   copyOf?: string;
+  /** The server's clock (lib/server-clock), for deadlines. */
+  now: () => number;
+  /** A sent deposit's state on its own chain (lib/deposit-tx). */
+  depositTx: typeof depositTxState;
 };
 
 /**
@@ -378,6 +407,8 @@ const defaults: JarBuyDeps = {
       (await fetchAllDexTokens()).map((t) => [dexAssetId(t.chain, t.address), t.priceUsd]),
     ),
   route: (ask) => planRoute(ask),
+  now: serverNow,
+  depositTx: (chain, hash) => depositTxState(chain, hash),
 };
 
 /** Routes with money on them that can't be paid in full: any one stops the whole buy. */
@@ -498,6 +529,7 @@ export async function quoteJarBuy(
             fromAddress: from,
             slippageBps,
             wrapped: true,
+            toSymbol: l.symbol,
             walletId: wallet.id,
           }),
           STEP_MS,
@@ -1042,10 +1074,122 @@ export async function payJarBuy(
         wallet: () => ({ id: wallet.id, addresses: wallet.addresses }),
       });
     } catch (e) {
-      throw new JarBuyError([{ symbol: leg.symbol, reason: reasonOf(e) }], '');
+      // throw new JarBuyError([{ symbol: leg.symbol, reason: reasonOf(e) }], '');
+      // The swaps already made go back with it, to be saved (money audit 1).
+      throw new JarBuyError(
+        [{ symbol: leg.symbol, reason: reasonOf(e) }],
+        '',
+        out.map((l) => ({ ...l })),
+      );
     }
     onLeg?.(out.map((l) => ({ ...l })));
   }
+  // const deposits = out.filter(paysDeposit);
+  // const onBase = deposits.some((l) => (l.origin ?? 'Base') === 'Base');
+  // const network = evmNetwork(BASE_CHAIN_ID);
+  // if (onBase && !network) throw new Error('Base is not available.');
+  // const client = network ? createPublicClient({ transport: http(network.rpc) }) : null;
+  // const key = onBase ? await privateKeyOf(wallet.id, 'evm') : null;
+  // const stillActive = () => wallets.get().activeId === wallet.id;
+  // // The leg being paid, so a failure says which.
+  // let paying = 'Payment';
+  // try {
+  //   let nonce = 0;
+  //   // Honey pays the Base legs' gas in one batch when it will: one transaction for all.
+  //   let sponsoredHash: Hex | null = null;
+  //   if (key && client) {
+  //     if (evmAddressOfKey(key).toLowerCase() !== from.toLowerCase())
+  //       throw new Error('Wallet key does not match.');
+  //     const baseLegs = deposits.filter((l) => (l.origin ?? 'Base') === 'Base');
+  //     // A DEX swap of this jar's on Base went out first: its batch must land before the
+  //     // deposits' batch is signed (one Calibur sequence).
+  //     if (baseLegs.length && out.some((l) => isDexLeg(l) && !l.dex.bridged && l.chain === 'Base'))
+  //       await untilNoBatch(BASE_CHAIN_ID, from, d.dex);
+  //     const sponsorship =
+  //       baseLegs.length <= 6 && baseLegs.every((l) => isAddress(l.depositAddress))
+  //         ? await d.sponsorEvm({
+  //             chainId: BASE_CHAIN_ID,
+  //             account: from,
+  //             calls: baseLegs.map(baseDeposit),
+  //           })
+  //         : null;
+  //     if (sponsorship) {
+  //       for (const l of baseLegs) checkDeadline(l.deadline);
+  //       sponsoredHash = (await d.sendSponsored(key, sponsorship)).hash;
+  //     } else {
+  //       // A free-gas batch Honey may still send could land as well as these.
+  //       await assertNoSponsoredInFlight(BASE_CHAIN_ID, from);
+  //       nonce = await client.getTransactionCount({ address: from, blockTag: 'pending' });
+  //     }
+  //   }
+  //   for (const leg of deposits) {
+  //     paying = leg.symbol;
+  //     // The confirm prompt may have sat open; never pay into an expiring quote.
+  //     checkDeadline(leg.deadline);
+  //     const origin = leg.origin ?? 'Base';
+  //     if (origin === 'Base' && sponsoredHash) {
+  //       leg.txHash = sponsoredHash;
+  //     } else if (origin === 'Base') {
+  //       if (!key || !client) throw new Error('Base is not available.');
+  //       const call = baseDeposit(leg);
+  //       const prepared = await prepareEvmSend(
+  //         { from, to: call.to, value: toHex(call.value), data: call.data },
+  //         BASE_CHAIN_ID,
+  //       );
+  //       // Each Base leg takes the next nonce, so legs never replace one another.
+  //       const signed = await signEvmTransaction(key, { ...prepared.unsigned, nonce: nonce++ });
+  //       leg.txHash = await client.sendRawTransaction({ serializedTransaction: signed });
+  //     } else {
+  //       // You confirmed the whole buy above; lib/send.ts doesn't ask again per leg.
+  //       const symbol = leg.pay?.symbol ?? 'USDC';
+  //       const decimals = leg.pay?.decimals ?? USDC_DECIMALS;
+  //       const contract = leg.pay?.contract;
+  //       const plan = await d.prepare(
+  //         wallet,
+  //         {
+  //           chain: origin,
+  //           symbol,
+  //           to: leg.depositAddress,
+  //           amount: formatUnits(BigInt(leg.amountIn), decimals),
+  //           ...(contract ? { token: { contract, decimals } } : {}),
+  //         },
+  //         { confirm: async () => true },
+  //       );
+  //       let paid: bigint | null = null;
+  //       try {
+  //         paid = toBaseUnits(plan.amount, decimals);
+  //       } catch {
+  //         paid = null;
+  //       }
+  //       if (
+  //         plan.to !== leg.depositAddress ||
+  //         plan.chain !== origin ||
+  //         plan.symbol !== symbol ||
+  //         paid !== BigInt(leg.amountIn)
+  //       )
+  //         throw changed();
+  //       leg.txHash = (await plan.execute(stillActive)).hash;
+  //     }
+  //     leg.status = 'KNOWN_DEPOSIT_TX';
+  //     if (leg.dex) leg.dex = { ...leg.dex, bridgeStatus: 'KNOWN_DEPOSIT_TX' };
+  //     onLeg?.(out.map((l) => ({ ...l })));
+  //     const token = d.token();
+  //     if (token)
+  //       await api
+  //         .jarBuyDeposit(token, { depositAddress: leg.depositAddress, txHash: leg.txHash })
+  //         .catch(() => undefined); // NEAR Intents also sees the deposit on its own.
+  //   }
+  // } catch (e) {
+  //   // Every failure names its leg: the jar screen shows it, never a silent stop.
+  //   if (e instanceof JarBuyError) throw e;
+  //   throw new JarBuyError([{ symbol: paying, reason: reasonOf(e) }], '');
+  // } finally {
+  //   key?.fill(0);
+  // }
+  // Replaced 14 Nov (money audit 1): a leg whose outcome was unknown wasn't recorded, so
+  // the jar wasn't saved with it and a retry paid twice. Each leg is now `SENDING`, with
+  // its deposit address, before it's signed; on any stop the legs as they stand go back
+  // to the caller (`onLeg` and `JarBuyError.sent`) to save, and polling settles them.
   const deposits = out.filter(paysDeposit);
   const onBase = deposits.some((l) => (l.origin ?? 'Base') === 'Base');
   const network = evmNetwork(BASE_CHAIN_ID);
@@ -1053,6 +1197,21 @@ export async function payJarBuy(
   const client = network ? createPublicClient({ transport: http(network.rpc) }) : null;
   const key = onBase ? await privateKeyOf(wallet.id, 'evm') : null;
   const stillActive = () => wallets.get().activeId === wallet.id;
+  const tell = () => onLeg?.(out.map((l) => ({ ...l })));
+  const sending = (legs: BuyLeg[]) => {
+    for (const l of legs) l.status = 'SENDING';
+    tell();
+  };
+  const reported = async (leg: BuyLeg) => {
+    leg.status = 'KNOWN_DEPOSIT_TX';
+    if (leg.dex) leg.dex = { ...leg.dex, bridgeStatus: 'KNOWN_DEPOSIT_TX' };
+    tell();
+    const token = d.token();
+    if (token && leg.txHash)
+      await api
+        .jarBuyDeposit(token, { depositAddress: leg.depositAddress, txHash: leg.txHash })
+        .catch(() => undefined); // NEAR Intents also sees the deposit on its own.
+  };
   // The leg being paid, so a failure says which.
   let paying = 'Payment';
   try {
@@ -1077,7 +1236,12 @@ export async function payJarBuy(
           : null;
       if (sponsorship) {
         for (const l of baseLegs) checkDeadline(l.deadline);
+        paying = baseLegs.map((l) => l.symbol).join(', ');
+        sending(baseLegs);
         sponsoredHash = (await d.sendSponsored(key, sponsorship)).hash;
+        // The one batch paid every Base leg.
+        for (const l of baseLegs) l.txHash = sponsoredHash;
+        for (const l of baseLegs) await reported(l);
       } else {
         // A free-gas batch Honey may still send could land as well as these.
         await assertNoSponsoredInFlight(BASE_CHAIN_ID, from);
@@ -1085,13 +1249,13 @@ export async function payJarBuy(
       }
     }
     for (const leg of deposits) {
+      const origin = leg.origin ?? 'Base';
+      // Already paid by the sponsored batch above.
+      if (origin === 'Base' && sponsoredHash) continue;
       paying = leg.symbol;
       // The confirm prompt may have sat open; never pay into an expiring quote.
       checkDeadline(leg.deadline);
-      const origin = leg.origin ?? 'Base';
-      if (origin === 'Base' && sponsoredHash) {
-        leg.txHash = sponsoredHash;
-      } else if (origin === 'Base') {
+      if (origin === 'Base') {
         if (!key || !client) throw new Error('Base is not available.');
         const call = baseDeposit(leg);
         const prepared = await prepareEvmSend(
@@ -1100,6 +1264,7 @@ export async function payJarBuy(
         );
         // Each Base leg takes the next nonce, so legs never replace one another.
         const signed = await signEvmTransaction(key, { ...prepared.unsigned, nonce: nonce++ });
+        sending([leg]);
         leg.txHash = await client.sendRawTransaction({ serializedTransaction: signed });
       } else {
         // You confirmed the whole buy above; lib/send.ts doesn't ask again per leg.
@@ -1130,21 +1295,21 @@ export async function payJarBuy(
           paid !== BigInt(leg.amountIn)
         )
           throw changed();
+        sending([leg]);
         leg.txHash = (await plan.execute(stillActive)).hash;
       }
-      leg.status = 'KNOWN_DEPOSIT_TX';
-      if (leg.dex) leg.dex = { ...leg.dex, bridgeStatus: 'KNOWN_DEPOSIT_TX' };
-      onLeg?.(out.map((l) => ({ ...l })));
-      const token = d.token();
-      if (token)
-        await api
-          .jarBuyDeposit(token, { depositAddress: leg.depositAddress, txHash: leg.txHash })
-          .catch(() => undefined); // NEAR Intents also sees the deposit on its own.
+      await reported(leg);
     }
   } catch (e) {
+    // Never signed or handed on: back to not sent. Anything else stays `SENDING`.
+    const reason = reasonOf(e);
+    if (NOT_SENT_ERRORS.test(reason))
+      for (const l of out) if (l.status === 'SENDING' && !l.txHash) l.status = 'NOT_SENT';
+    tell();
+    const legs = out.map((l) => ({ ...l }));
     // Every failure names its leg: the jar screen shows it, never a silent stop.
-    if (e instanceof JarBuyError) throw e;
-    throw new JarBuyError([{ symbol: paying, reason: reasonOf(e) }], '');
+    if (e instanceof JarBuyError) throw new JarBuyError(e.legs, '', legs);
+    throw new JarBuyError([{ symbol: paying, reason }], '', legs);
   } finally {
     key?.fill(0);
   }
@@ -1153,6 +1318,17 @@ export async function payJarBuy(
 
 /** Whether a leg pays a NEAR Intents deposit (every leg but a same-chain DEX swap). */
 export const paysDeposit = (l: BuyLeg) => !(isDexLeg(l) && !l.dex.bridged);
+
+/** How long after its deadline a deposit 1Click never saw counts as not paid (as Swap's). */
+const EXPIRY_GRACE_MS = 10 * 60_000;
+
+/** A leg that was `SENDING` and that 1Click has since seen paid (it has no hash of its own). */
+const wentPastSending = (l: BuyLeg) =>
+  !l.txHash &&
+  (l.status === 'KNOWN_DEPOSIT_TX' ||
+    l.status === 'PROCESSING' ||
+    l.status === 'INCOMPLETE_DEPOSIT' ||
+    (l.status === 'SUCCESS' && !l.amountOut));
 
 const KNOWN: readonly JarBuyState[] = [
   'PENDING_DEPOSIT',
@@ -1173,14 +1349,26 @@ const known = (s: unknown): s is JarBuyState => KNOWN.includes(s as JarBuyState)
  */
 export async function refreshJarBuy(
   legs: BuyLeg[],
-  deps: Partial<Pick<JarBuyDeps, 'token' | 'status' | 'fetcher'>> = {},
+  // deps: Partial<Pick<JarBuyDeps, 'token' | 'status' | 'fetcher'>> = {},
+  deps: Partial<Pick<JarBuyDeps, 'token' | 'status' | 'fetcher' | 'now' | 'depositTx'>> = {},
 ) {
   const d = { ...defaults, ...deps };
   const token = d.token();
   return Promise.all(
     legs.map(async (l): Promise<BuyLeg> => {
       // DEX legs move on through lib/jar-dex (which asks this about their bridge).
-      if (isDexLeg(l) || !l.txHash || l.status === 'REFUNDED' || l.status === 'FAILED') return l;
+      // if (isDexLeg(l) || !l.txHash || l.status === 'REFUNDED' || l.status === 'FAILED') return l;
+      // Replaced 14 Nov (money audit 1): a `SENDING` leg has no hash yet but is asked about
+      // by its deposit address; a leg never paid is `NOT_SENT` and isn't.
+      if (
+        isDexLeg(l) ||
+        (!l.txHash && l.status !== 'SENDING' && !wentPastSending(l)) ||
+        l.status === 'NOT_SENT' ||
+        l.status === 'HOLDING_USDC' ||
+        l.status === 'REFUNDED' ||
+        l.status === 'FAILED'
+      )
+        return l;
       if (l.status === 'SUCCESS' && l.amountOut) return l;
       const s = token ? await d.status(token, l.depositAddress).catch(() => null) : null;
       let status = s && known(s.status) ? s.status : null;
@@ -1191,8 +1379,21 @@ export async function refreshJarBuy(
         if (status === 'SUCCESS') amountOut = deliveredAmount(record);
       }
       if (!status) return l;
+      const late = d.now() > Date.parse(l.deadline) + EXPIRY_GRACE_MS;
+      // Never seen paid, and past its deadline and grace: it didn't go out (money audit 1).
+      if (status === 'PENDING_DEPOSIT' && l.status === 'SENDING')
+        return late ? { ...l, status: 'NOT_SENT' } : l;
       // Never step back from "payment seen" to "waiting".
-      if (status === 'PENDING_DEPOSIT' && l.status === 'KNOWN_DEPOSIT_TX') return l;
+      // if (status === 'PENDING_DEPOSIT' && l.status === 'KNOWN_DEPOSIT_TX') return l;
+      // Replaced 14 Nov (money audit 7): past the deadline and grace, the deposit is read on
+      // its own chain: reverted (FAILED) or dropped (NOT_SENT) settles it.
+      if (status === 'PENDING_DEPOSIT' && l.status === 'KNOWN_DEPOSIT_TX') {
+        if (!late || !l.txHash) return l;
+        const tx = await d.depositTx(l.origin ?? 'Base', l.txHash).catch(() => 'unknown' as const);
+        if (tx === 'failure') return { ...l, status: 'FAILED' };
+        if (tx === 'missing') return { ...l, status: 'NOT_SENT' };
+        return l;
+      }
       return { ...l, status, ...(status === 'SUCCESS' && amountOut ? { amountOut } : {}) };
     }),
   );

@@ -30,17 +30,38 @@ const quoteSwap = vi.fn(
     minAmountOut: '9700000',
     buyDecimals: 6,
     usdOutMin: 9.7,
+    slippageBps: 100,
+    deadline: new Date(Date.now() + payoutLeft).toISOString(),
     status: 'QUOTED',
   }),
 );
+/** How long the onward quote has left once the DEX swap lands; and the re-quote's minimum. */
+let payoutLeft = 600_000;
+let freshMin = '9700000';
+const requoteSwap = vi.fn(async (swap: { depositAddress: string; minAmountOut: string }) => ({
+  ...swap,
+  depositAddress: `${swap.depositAddress}-fresh`,
+  minAmountOut: freshMin,
+  deadline: new Date(Date.now() + 600_000).toISOString(),
+}));
+let prepareFails = false;
 
 vi.mock('@/lib/intents-swap', () => ({
   MAX_INPUT_DECIMALS: 8,
   SWAP_SLIPPAGE_BPS: 100,
   fetchSwapTokens: async () => [],
   quoteSwap: (input: never) => quoteSwap(input),
+  requoteSwap: (swap: never) => requoteSwap(swap),
+  // As lib/intents-swap's: no worse than the reviewed minimum less its slippage.
+  withinSlippage: (
+    shown: { minAmountOut: string; slippageBps: number },
+    fresh: { minAmountOut: string },
+  ) =>
+    BigInt(fresh.minAmountOut) >=
+    (BigInt(shown.minAmountOut) * BigInt(10_000 - shown.slippageBps)) / 10_000n,
   prepareSwapPayment: async (swap: { depositAddress: string }) => {
     calls.push(`prepare ${swap.depositAddress}`);
+    if (prepareFails) throw new Error('Couldn’t confirm the swap with NEAR Intents. Try again.');
     return { to: swap.depositAddress };
   },
   executeSwapPayment: async (swap: { depositAddress: string }) => {
@@ -119,6 +140,10 @@ const jar = (buy: Leg[]): Jar => ({
 beforeEach(() => {
   calls.length = 0;
   quoteSwap.mockClear();
+  requoteSwap.mockClear();
+  payoutLeft = 600_000;
+  freshMin = '9700000';
+  prepareFails = false;
   outstandingBatches.set({});
   dexSwaps.set({});
 });
@@ -182,6 +207,35 @@ describe('selling a DEX-bought token', () => {
       status: 'SUCCESS',
       units: '10000000000',
     });
+  });
+
+  it('re-quotes the onward swap only when it ran out, and only pays one within the slippage reviewed (money audit 3)', async () => {
+    const sell = async () => {
+      const api = fakeServer();
+      const d = dexDeps(api, deviceRpc({ [TX('a')]: '0x1' }));
+      const j = jar([dexLeg('Arbitrum', GRAIL, 'GRAIL')]);
+      thesisJars.set([j]);
+      const q = await quoteJarSell(j, 6, 12, { dex: d }, 'USDC');
+      return executeJarSell(j, q, () => true, { confirm: async () => true, dex: d });
+    };
+    // Any other failure is not a reason to re-quote: the USDC stays, nothing more is paid.
+    prepareFails = true;
+    await expect(sell()).rejects.toThrow('The USDC is in your wallet');
+    expect(requoteSwap).not.toHaveBeenCalled();
+    expect(calls).toEqual(['prepare dep-Arbitrum']);
+    // Ran out while the DEX swap landed: a fresh quote 0.5% lower is within the 1% reviewed.
+    prepareFails = false;
+    calls.length = 0;
+    payoutLeft = 30_000;
+    freshMin = '9651500';
+    await sell();
+    expect(requoteSwap).toHaveBeenCalledTimes(1);
+    expect(calls).toEqual(['prepare dep-Arbitrum-fresh', 'pay dep-Arbitrum-fresh']);
+    // One 2% lower: refused, nothing paid onward.
+    calls.length = 0;
+    freshMin = '9506000';
+    await expect(sell()).rejects.toThrow('max slippage');
+    expect(calls).toEqual([]);
   });
 
   it('sells nothing onward when the DEX swap reverts', async () => {

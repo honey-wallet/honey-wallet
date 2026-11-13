@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { chanceText, formatPrice, formatUsd, signedPct } from '@/lib/format';
+import {
+  chanceText,
+  floorNumber,
+  floorSignificant,
+  formatPrice,
+  formatUsd,
+  signedPct,
+} from '@/lib/format';
 
 // The helpers each screen used to keep its own copy of (14 Nov cleanup).
 const oldSigned = (f: number) => `${f >= 0 ? '+' : ''}${(f * 100).toFixed(1)}%`;
@@ -24,5 +31,36 @@ describe('format', () => {
     expect(formatPrice(0.1234)).toBe('$0.123');
     expect(formatPrice(0.999)).toBe('$1.00');
     expect(formatPrice(80649.68)).toBe('$80,649.68');
+  });
+});
+
+describe('floorNumber (money audit 8)', () => {
+  it('rounds a Max or balance tap down, never up past what is held', () => {
+    // The audit's probe: toFixed(8) gave 0.12345679, more than held.
+    expect((0.123456789).toFixed(8)).toBe('0.12345679');
+    expect(floorNumber(0.123456789, 8)).toBe('0.12345678');
+    expect(floorNumber(0.12345678999999, 8)).toBe('0.12345678');
+    expect(floorNumber(1.999, 2)).toBe('1.99');
+    // Float noise doesn't take a cent off a balance that has it.
+    expect(floorNumber(0.29, 2)).toBe('0.29');
+    expect(floorNumber(0.57, 8)).toBe('0.57');
+    expect(floorNumber(12, 8)).toBe('12');
+    expect(floorNumber(1e-7, 8)).toBe('0.0000001');
+    expect(floorNumber(1e-9, 8)).toBe('0');
+    expect(floorNumber(0, 8)).toBe('0');
+    expect(floorNumber(Number.NaN, 8)).toBe('0');
+  });
+});
+
+describe('floorSignificant (money audit 10)', () => {
+  it('cuts a minimum to 6 significant digits, rounding down', () => {
+    // toPrecision(6) showed 0.0123457, more than the 0.01234569 guaranteed.
+    expect(Number((0.01234569).toPrecision(6))).toBe(0.0123457);
+    expect(floorSignificant('0.01234569')).toBe('0.0123456');
+    expect(floorSignificant('1.9999999')).toBe('1.99999');
+    expect(floorSignificant('49.104')).toBe('49.104');
+    expect(floorSignificant('1234567.89')).toBe('1234567');
+    expect(floorSignificant('0')).toBe('0');
+    expect(floorSignificant('12')).toBe('12');
   });
 });

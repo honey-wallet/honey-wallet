@@ -571,6 +571,7 @@ export function CopyStepper({
   verb = 'Copy',
   start: startAmount,
   onAmount,
+  format,
 }: {
   /** The word before the amount: Copy for someone's jar, Create jar for your own idea. */
   verb?: string;
@@ -582,6 +583,11 @@ export function CopyStepper({
   start?: number;
   /** Told the amount whenever − or + changes it. */
   onAmount?: (amount: number) => void;
+  /**
+   * The amount in the user's currency ("Create jar $5") instead of a number and the USDC
+   * logo (the thesis chat, 2026-11-14).
+   */
+  format?: (usd: number) => string;
 }) {
   const styles = useStyles();
   const c = useTheme();
@@ -640,7 +646,8 @@ export function CopyStepper({
           size={size}
           label={label}
           // accessibilityLabel={`${label}, ${amount} USDC`}
-          accessibilityLabel={`${label}, ${dollars(amount)}`}
+          // accessibilityLabel={format ? `${label}, ${format(amount)}` : `${label}, ${amount} USDC`}
+          accessibilityLabel={`${label}, ${(format ?? dollars)(amount)}`}
           onPress={() => onCopy(amount)}
         >
           {/* Copy keeps its icon; "Create jar" reads fine on its own. */}
@@ -651,11 +658,12 @@ export function CopyStepper({
           ) : null}
           <Animated.View layout={glide} style={styles.copyWords}>
             <Text style={copyText}>{verb} </Text>
-            {/* Dollars, not USDC: what pays is picked from what the wallet holds. */}
+            {/* Dollars, not USDC: what pays is picked from what the wallet holds. A caller's
+                own `format` wins (e.g. the chat's Create jar). */}
             {/* <TextSwap text={String(amount)} direction={direction} style={copyText} />
             <Text style={copyText}> </Text>
             <TokenIcon symbol="USDC" size={20} /> */}
-            <TextSwap text={dollars(amount)} direction={direction} style={copyText} />
+            <TextSwap text={(format ?? dollars)(amount)} direction={direction} style={copyText} />
           </Animated.View>
         </PillButton>
       </Animated.View>

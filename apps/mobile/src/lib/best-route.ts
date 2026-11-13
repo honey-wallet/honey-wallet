@@ -32,6 +32,7 @@ import {
   parseDexQuote,
   sameToken,
 } from '@/lib/dex';
+import { serverNow } from '@/lib/server-clock';
 import { createStore } from '@/lib/store';
 
 /** Settings → Swaps: "Private routes only (NEAR Intents)". Off: fallback allowed. */
@@ -55,6 +56,14 @@ export const CANONICAL: Readonly<Record<string, { symbol: string; family: 'BTC' 
 export const canonicalOf = (chain: DexChain, address: string) =>
   CANONICAL[`${chain}:${address.toLowerCase()}`] ?? null;
 
+/** The family a pick's symbol belongs to (BTC, WBTC, cbBTC; ETH, WETH), as the server reads it. */
+export function familyOf(symbol: string | undefined): 'BTC' | 'ETH' | null {
+  const s = symbol?.trim().toUpperCase();
+  if (s === 'BTC' || s === 'WBTC' || s === 'CBBTC') return 'BTC';
+  if (s === 'ETH' || s === 'WETH') return 'ETH';
+  return null;
+}
+
 export type RouteAsk = {
   fromChain: DexChain;
   /** Address (mint on Solana), `native`, or a 1Click asset id. */
@@ -71,6 +80,8 @@ export type RouteAsk = {
   slippageBps: number;
   /** Jars: may hold the pick's wrapped version on the paying chain. */
   wrapped?: boolean;
+  /** The pick's symbol (BTC, ETH…): a wrapped version must be of its family. */
+  toSymbol?: string;
   /** The wallet whose key signs a DEX swap. */
   walletId: string;
 };
@@ -104,7 +115,9 @@ const defaults: RouteDeps = {
       return null;
     }
   },
-  now: () => Date.now(),
+  // now: () => Date.now(),
+  // Replaced 14 Nov (money audit 6): expiries are set on the server's clock (lib/server-clock).
+  now: serverNow,
   privateOnly: () => privateRoutes.get().on,
 };
 
@@ -227,7 +240,12 @@ export async function planRoute(
     const quote = parseDexQuote(best.dexQuote);
     if (!quote || quote.chain !== ask.fromChain) throw changed();
     const wrapped = best.kind === 'wrapped';
-    if (wrapped ? !canonicalOf(quote.chain, quote.buyToken) : quote.chain !== ask.toChain)
+    // if (wrapped ? !canonicalOf(quote.chain, quote.buyToken) : quote.chain !== ask.toChain)
+    //   throw changed();
+    // Replaced 14 Nov (money audit 12): a wrapped version must also be of the pick's own
+    // family (WBTC for BTC, never WETH), not just any curated token.
+    const family = wrapped ? canonicalOf(quote.chain, quote.buyToken)?.family : null;
+    if (wrapped ? !family || family !== familyOf(ask.toSymbol) : quote.chain !== ask.toChain)
       throw changed();
     const dexAsk: DexAsk = {
       chain: quote.chain,

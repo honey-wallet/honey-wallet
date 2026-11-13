@@ -118,6 +118,31 @@ describe('verifyWithOneClick', () => {
     await expect(verifyWithOneClick(leg(), ME, status({}))).resolves.toBeUndefined();
   });
 
+  it('allows only 1Click’s own fee of 25 bps or less on a buy with no fee declared (money audit 2)', async () => {
+    const ONE_CLICK = '5880ad2b362620fadf759cbceb1cd5737ce8c6ed7fb8e9942881e6731f9247dd';
+    for (const appFees of [
+      undefined,
+      [],
+      [{ recipient: ONE_CLICK, fee: 1 }],
+      [{ recipient: ONE_CLICK, fee: 25 }],
+    ])
+      await expect(verifyWithOneClick(leg(), ME, status({ appFees }))).resolves.toBeUndefined();
+    for (const appFees of [
+      [{ recipient: 'mallory.near', fee: 4000 }],
+      [{ recipient: 'mallory.near', fee: 1 }],
+      [{ recipient: ONE_CLICK, fee: 26 }],
+      [
+        { recipient: ONE_CLICK, fee: 1 },
+        { recipient: 'mallory.near', fee: 1 },
+      ],
+      [{ recipient: ONE_CLICK, fee: 1.5 }],
+      'all of it',
+    ])
+      await expect(verifyWithOneClick(leg(), ME, status({ appFees }))).rejects.toThrow(
+        'The quote changed',
+      );
+  });
+
   it('refuses terms the app didn’t ask for (slippage, minimum, swap type)', async () => {
     for (const [req, q] of [
       [{ slippageTolerance: 5000 }, {}],

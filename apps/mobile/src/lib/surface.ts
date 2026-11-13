@@ -63,9 +63,10 @@ export const COPY_FEES = true;
 
 /**
  * Settings that change nothing yet, hidden outside test mode until they're wired:
- * amounts always print in USD (no FX), there are no translations, a custom network
- * cost isn't applied to sends, and smart wallets are a demo state.
+ * there are no translations, a custom network cost isn't applied to sends, and smart
+ * wallets are a demo state. (Local currency is live since lib/fx converts amounts.)
  */
+// Was: "amounts always print in USD (no FX), there are no translations, …" (2026-11-14).
 export const UNWIRED_SETTINGS = TEST_MODE;
 
 /**

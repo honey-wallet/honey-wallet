@@ -41,6 +41,7 @@ import { HeaderActions } from '@/components/wallet/HeaderActions';
 import { HeaderShortcut } from '@/components/wallet/HeaderShortcut';
 import {
   applyKey,
+  floorNumber,
   Keypad,
   PercentChips,
   TypedAmount,
@@ -66,7 +67,7 @@ import { type Multisig, useActiveMultisig, useSigner } from '@/lib/multisig';
 import { goBackOr } from '@/lib/navigation';
 import { isWeb } from '@/lib/platform';
 import type { TradeMode } from '@/lib/settings';
-import { LANDING } from '@/lib/surface';
+import { addMoneyHref, LANDING, SOON } from '@/lib/surface';
 import { type TokenRef, updateSwap, useSwap } from '@/lib/swap';
 import { showDemoToast } from '@/lib/toast';
 import { SHARED_WALLET_MODES, useTradeTabs } from '@/lib/trade-modes';
@@ -365,7 +366,10 @@ function SwapForm() {
         action={
           multisig
             ? { label: 'Receive', onPress: () => router.push('/receive') }
-            : { label: 'Add money', onPress: () => router.push('/buy-cash') }
+            : // Card buying is Coming soon outside test mode: addMoneyHref sends you to
+              // Receive then, not to a dead Buy page (2026-11-14).
+              // { label: 'Add money', onPress: () => router.push('/buy-cash') }
+              { label: 'Add money', onPress: () => router.push(addMoneyHref()) }
         }
       />
     );
@@ -426,8 +430,12 @@ function SwapForm() {
               hitSlop={10}
               onPress={() => {
                 tap();
+                // setSellAmount(
+                //   unit === 'usd' ? trimNumber(balance * price, 2) : trimNumber(balance, 8),
+                // );
+                // Replaced 14 Nov (money audit 8): rounded down, never past the balance.
                 setSellAmount(
-                  unit === 'usd' ? trimNumber(balance * price, 2) : trimNumber(balance, 8),
+                  unit === 'usd' ? floorNumber(balance * price, 2) : floorNumber(balance, 8),
                 );
               }}
             >
@@ -581,12 +589,14 @@ function SwapForm() {
       {/* None of the token being sold: the next step is getting some, not typing. */}
       {!balance && !balancesLoading ? (
         <PillButton
-          label={multisig ? `Receive ${sell}` : `Buy ${sell}`}
+          // label={multisig ? `Receive ${sell}` : `Buy ${sell}`}
+          label={multisig || SOON.buyCash ? `Receive ${sell}` : `Buy ${sell}`}
           onPress={() => {
             tap();
-            router.push(
-              multisig ? '/receive' : { pathname: '/buy-cash', params: { symbol: sell } },
-            );
+            // router.push(
+            //   multisig ? '/receive' : { pathname: '/buy-cash', params: { symbol: sell } },
+            // );
+            router.push(multisig ? '/receive' : addMoneyHref(sell));
           }}
           style={styles.swapCta}
         />

@@ -11,6 +11,7 @@ import {
 import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { Icon } from '@/components/Icon';
 import { PressableScale } from '@/components/motion/PressableScale';
+import { floorNumber } from '@/lib/format';
 import { keypress, tap } from '@/lib/haptics';
 import { isWeb } from '@/lib/platform';
 import { makeStyles, radius, useTheme } from '@/theme';
@@ -24,6 +25,8 @@ export function trimNumber(n: number, decimals: number) {
   const s = n.toFixed(decimals);
   return s.includes('.') ? s.replace(/0+$/, '').replace(/\.$/, '') : s;
 }
+
+export { floorNumber };
 
 const SHARES = [
   ['25%', 0.25],
@@ -66,7 +69,9 @@ export function PercentChips({
           scaleTo={PRESS_SCALE}
           onPress={() => {
             tap();
-            onPick(trimNumber(balance * share, decimals));
+            // onPick(trimNumber(balance * share, decimals));
+            // Replaced 14 Nov (money audit 8): rounded down, never past the balance.
+            onPick(floorNumber(balance * share, decimals));
           }}
           style={[styles.chip, empty && styles.chipOff]}
         >

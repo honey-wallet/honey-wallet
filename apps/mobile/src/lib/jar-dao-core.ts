@@ -52,6 +52,19 @@ import type { Member, Multisig, Proposal, ProposalAction } from '@/lib/multisig'
 
 export type Rpc = (method: string, params: unknown) => Promise<unknown>;
 
+/**
+ * Honey's relayer sent the delegate and NEAR ran it, but it failed (the server's 409
+ * "NEAR didn't run that"): its actions reverted, so nothing moved, and its nonce is used,
+ * so it can never land later. Not "may already have gone through" (money audit 9).
+ */
+export const nearDidNotRun = (error: unknown) =>
+  !!error &&
+  typeof error === 'object' &&
+  (error as { status?: unknown }).status === 409 &&
+  /didn[’']t run/i.test(String((error as { message?: unknown }).message ?? ''));
+
+export const NEAR_DID_NOT_RUN = 'NEAR didn’t run that, so nothing was sent. Try again in a moment.';
+
 /** A transaction ready to sign: one receiver, FunctionCall actions only. */
 export type Prepared = NearCallTx;
 
@@ -173,7 +186,13 @@ export async function sendViaRelayer(
   if (!(await lacksGas(deps.rpc, deps.signerId, actions))) return { kind: 'self' };
   const delegate = await prepareDelegate(deps.rpc, deps.signerId, receiverId, actions);
   const signed = await deps.sign(delegate);
-  const result = await deps.relay(signed).catch(() => null);
+  // const result = await deps.relay(signed).catch(() => null);
+  // Replaced 14 Nov (money audit 9): NEAR ran it and it failed, so nothing moved and its
+  // nonce is spent: said plainly, never "may already have gone through".
+  const result = await deps.relay(signed).catch((error: unknown) => {
+    if (nearDidNotRun(error)) throw new Error(NEAR_DID_NOT_RUN);
+    return null;
+  });
   return result?.txHash ? { kind: 'relayed', txHash: result.txHash } : { kind: 'unsent', delegate };
 }
 

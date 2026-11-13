@@ -22,6 +22,7 @@ import {
   usdcOn,
   waitForDex,
 } from '@/lib/dex';
+import { DEADLINE_MARGIN_MS, msLeft, QuoteRanOut, REQUOTE_BELOW_MS } from '@/lib/intents-quote';
 import {
   executeSwapPayment,
   fetchSwapTokens,
@@ -29,17 +30,20 @@ import {
   MAX_INPUT_DECIMALS,
   prepareSwapPayment,
   quoteSwap,
+  requoteSwap,
   SWAP_SLIPPAGE_BPS,
   type SwapDeps,
   swapRefForSymbol,
   tokenRef,
   unitsText,
+  withinSlippage,
 } from '@/lib/intents-swap';
 import { type BuyLeg, USDC_BASE_ASSET } from '@/lib/jar-buy';
 import { isDexLeg } from '@/lib/jar-dex';
 import { buyMoving, heldUnits, refreshJarValues } from '@/lib/jar-holdings';
 import { formatUsd } from '@/lib/mock-wallet';
 import { prepareSend } from '@/lib/send';
+import { serverNow } from '@/lib/server-clock';
 import type { TokenRef } from '@/lib/swap';
 import { type JarSell, type ThesisJar, thesisJars } from '@/lib/thesis';
 
@@ -278,6 +282,12 @@ export async function executeJarSell(
   } = {},
 ): Promise<IntentsSwap[]> {
   if (q.jarId !== jar.id) throw new Error('The quote changed. Review again.');
+  // Every swap's deadline, on the server's clock, before paying any (money audit 13): a
+  // sell never stops halfway on a quote that ran out while the prompt sat open. A DEX
+  // sale's onward swap is paid once its DEX swap lands, so it's checked then (`sellDex`).
+  const runningOut = (margin: number) =>
+    q.swaps.some(({ swap }) => !(msLeft(swap.deadline, (deps.now ?? serverNow)()) >= margin));
+  if (runningOut(REQUOTE_BELOW_MS)) throw new QuoteRanOut();
   const confirm =
     deps.confirm ??
     (async (reason: string) => (await import('@/lib/auth')).confirmOwner(reason, true));
@@ -286,6 +296,7 @@ export async function executeJarSell(
     !(await confirm(`Sell ${formatUsd(q.usdOut)} of ${jar.name}${n > 1 ? ` in ${n} swaps` : ''}`))
   )
     throw new Error('Sell cancelled');
+  if (runningOut(DEADLINE_MARGIN_MS)) throw new QuoteRanOut();
   const prepare = deps.prepare ?? prepareSend;
   // You confirmed the whole sell above; each payment doesn't ask again.
   const quiet: typeof prepareSend = (wallet, input, sendDeps) =>
@@ -375,14 +386,24 @@ async function sellDex(
     const quiet: typeof prepareSend = (wallet, input, sendDeps) =>
       (deps.prepare ?? prepareSend)(wallet, input, { ...sendDeps, confirm: async () => true });
     let payout = sale.payout;
-    const plan = await prepareSwapPayment(payout, { ...deps, prepare: quiet }).catch(async () => {
-      // The quote ran out while the DEX swap landed: the same swap, quoted again.
-      payout = await quoteSwap(
-        { sell: payout.sell, buy: payout.buy, amount: unitsText(payout.amountIn, 6) },
-        deps,
-      );
-      return prepareSwapPayment(payout, { ...deps, prepare: quiet });
-    });
+    // const plan = await prepareSwapPayment(payout, { ...deps, prepare: quiet }).catch(async () => {
+    //   // The quote ran out while the DEX swap landed: the same swap, quoted again.
+    //   payout = await quoteSwap(
+    //     { sell: payout.sell, buy: payout.buy, amount: unitsText(payout.amountIn, 6) },
+    //     deps,
+    //   );
+    //   return prepareSwapPayment(payout, { ...deps, prepare: quiet });
+    // });
+    // Replaced 14 Nov (money audit 3): any failure was re-quoted and paid unseen. Now only
+    // a quote that ran out (or nearly) while the DEX swap landed is asked for again, and
+    // the new one is paid only when its minimum is within the slippage reviewed.
+    if (!(msLeft(payout.deadline, (deps.now ?? serverNow)()) >= REQUOTE_BELOW_MS)) {
+      const fresh = await requoteSwap(payout, deps);
+      if (!withinSlippage(payout, fresh))
+        throw new Error('The price moved past your max slippage since you reviewed it');
+      payout = fresh;
+    }
+    const plan = await prepareSwapPayment(payout, { ...deps, prepare: quiet });
     return await executeSwapPayment(payout, plan, () => true, deps);
   } catch (error) {
     const why = error instanceof Error ? error.message : '';

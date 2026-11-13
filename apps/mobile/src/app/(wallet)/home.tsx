@@ -177,6 +177,9 @@ function HomeScreen() {
   const empty = !!view.empty;
   // A real wallet's balances are read from its chains; sample ones only pretend to load.
   const loading = firstLoad || ('loading' in view && !!view.loading);
+  // The balances couldn't be read and none were read before: not $0.00 and "No tokens
+  // yet" (that was a funded wallet looking empty), but a way to try again (2026-11-14).
+  const failed = 'error' in view && !!view.error;
   // A new wallet has no trades yet, whatever the demo data says.
   // const sections = SECTIONS.filter((s) => s !== 'Trades' || (hasTrades && !empty));
   // review: no trading in the extension, so the browser never shows the Trades tab.
@@ -211,7 +214,8 @@ function HomeScreen() {
       // Shared wallets are off for now (2026-11-13): group jars replace them. The one in
       // use keeps its card; no nudge about others.
       (multisig || (SHARED_WALLETS && nudgeShown)) && 'approvals',
-      !loading && (empty || (isMain && !setupComplete(onboarding))) && 'activation',
+      // !loading && (empty || (isMain && !setupComplete(onboarding))) && 'activation',
+      !loading && !failed && (empty || (isMain && !setupComplete(onboarding))) && 'activation',
       // review: no Savings in the extension, so no Earn promo there.
       // earnPromo && !loading && !ratesLoading && !empty && 'earn',
       // earnPromo && !isWeb && !loading && !ratesLoading && !empty && 'earn',
@@ -315,11 +319,17 @@ function HomeScreen() {
               <View style={[styles.row, styles.gutter, styles.balanceRow]}>
                 <View style={styles.flex}>
                   {/* Tap the balance to hide or show it. */}
-                  <BalanceAmount style={styles.balance} fractionStyle={styles.cents} />
+                  {/* <BalanceAmount style={styles.balance} fractionStyle={styles.cents} /> */}
+                  {failed ? (
+                    <Text style={styles.balance}>–</Text>
+                  ) : (
+                    <BalanceAmount style={styles.balance} fractionStyle={styles.cents} />
+                  )}
                   {/* A brand-new wallet shows a flat day, as the phone does, so the
                       layout is the same from the first launch. */}
                   <PressableScale
-                    style={styles.changeRow}
+                    style={[styles.changeRow, failed && styles.hiddenRow]}
+                    disabled={failed}
                     hitSlop={6}
                     scaleTo={0.98}
                     onPress={() => openPortfolio()}
@@ -510,6 +520,14 @@ function HomeScreen() {
             >
               {shownSection === 'Tokens' && (
                 <SkeletonReveal loading={loading} skeleton={<SkeletonList count={5} />}>
+                  {visible.length === 0 && failed && (
+                    <EmptyState
+                      icon="refresh"
+                      title="Couldn’t load your balances"
+                      hint="Check your connection and try again."
+                      action={{ label: 'Try again', onPress: () => void refresh() }}
+                    />
+                  )}
                   {/* A new shared wallet starts empty: say how to fund it. */}
                   {/* A new wallet: the Add money card above is how tokens get here. */}
                   {visible.length === 0 && empty && (
@@ -519,7 +537,8 @@ function HomeScreen() {
                       hint="Tokens you buy or receive will show up here."
                     />
                   )}
-                  {visible.length === 0 && !empty && (
+                  {/* {visible.length === 0 && !empty && ( */}
+                  {visible.length === 0 && !empty && !failed && (
                     <EmptyState
                       icon="receive"
                       title={hidden.length > 0 ? 'Every token is hidden' : 'Nothing here yet'}
@@ -587,7 +606,9 @@ function HomeScreen() {
               style={styles.gutter}
               crossfade={{
                 scrollY,
-                balance: loading ? '' : hideBalance ? HIDDEN_AMOUNT : money.format(view.usd),
+                // balance: loading ? '' : hideBalance ? HIDDEN_AMOUNT : money.format(view.usd),
+                balance:
+                  loading || failed ? '' : hideBalance ? HIDDEN_AMOUNT : money.format(view.usd),
               }}
             />
           </Rise>
@@ -709,6 +730,8 @@ const useStyles = makeStyles((c) => ({
     gap: 5,
     alignSelf: 'flex-start',
   },
+  // Keeps its height, so the page doesn't jump when the balances come back.
+  hiddenRow: { opacity: 0 },
   changeAmount: {
     color: c.text,
     opacity: 0.85,
