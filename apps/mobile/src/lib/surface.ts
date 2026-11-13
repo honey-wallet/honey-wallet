@@ -40,8 +40,11 @@ export const SOON = {
   buyCash: !TEST_MODE,
   /** Selling crypto for cash: no off-ramp provider either. Swapping is live. */
   sellCash: !TEST_MODE,
-  /** Selling a jar back to USDC through NEAR Intents isn't wired yet. */
-  jarSell: !TEST_MODE,
+  /**
+   * Selling a jar is live (2026-11-13): one Swap per token back to USDC on Base, through
+   * the same quote, 1Click checks and payment as Swap (lib/jar-sell).
+   */
+  jarSell: false,
   /** Earning on a token: the markets' rates only, no deposits. */
   earn: !TEST_MODE,
 } as const;
