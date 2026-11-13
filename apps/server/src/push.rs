@@ -9,8 +9,17 @@
 //! registered devices get them. A claimed item is never retried: a missed push still
 //! shows on the bell. Items older than 15 minutes are claimed without sending, so
 //! turning push on later doesn't flood anyone.
+//!
+//! Devices Expo reports as gone are forgotten: `DeviceNotRegistered` or
+//! `InvalidCredentials` in a ticket (the answer to a send) or, 15 minutes later, in its
+//! receipt. `InvalidCredentials` is also what a broken project credential looks like, so
+//! it only counts when Expo accepted something else in the same answer.
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
 
 use anyhow::Context;
 use axum::{
@@ -26,6 +35,14 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 pub const EXPO_PUSH_URL: &str = "https://exp.host/--/api/v2/push/send";
+/// Where delivery receipts are read; next to the send endpoint.
+const RECEIPTS_PATH: (&str, &str) = ("/push/send", "/push/getReceipts");
+/// Expo keeps receipts for a day and recommends asking after about 15 minutes.
+const RECEIPT_DELAY: Duration = Duration::from_secs(15 * 60);
+/// Receipt ids asked per request (Expo's limit is 1,000).
+const RECEIPT_BATCH: usize = 1_000;
+/// Tickets waiting for their receipt, at most (the oldest are dropped).
+const PENDING_MAX: usize = 20_000;
 /// Expo takes at most 100 messages per request.
 const BATCH: usize = 100;
 /// Items claimed per flush.
@@ -46,6 +63,9 @@ pub struct Push {
     client: reqwest::Client,
     endpoint: String,
     access_token: Option<Zeroizing<String>>,
+    receipts_endpoint: String,
+    /// (sent at, ticket id, token), oldest first, until their receipt is read.
+    pending: Mutex<VecDeque<(Instant, String, String)>>,
 }
 
 impl Push {
@@ -73,8 +93,10 @@ impl Push {
                 .user_agent("HoneyWallet/0.1 push")
                 .build()
                 .context("push http client")?,
+            receipts_endpoint: endpoint.replace(RECEIPTS_PATH.0, RECEIPTS_PATH.1),
             endpoint,
             access_token,
+            pending: Mutex::new(VecDeque::new()),
         })
     }
 
@@ -126,6 +148,10 @@ impl Push {
     /// Sends ready-made Expo messages in batches of 100 and forgets the devices Expo
     /// says are gone. Returns how many Expo accepted.
     pub async fn send_all(&self, messages: &[Value]) -> anyhow::Result<usize> {
+        // Audit #6: receipts of earlier sends that are due are read first.
+        if let Err(error) = self.check_receipts().await {
+            tracing::warn!(error = %error, "push receipts check failed");
+        }
         let mut accepted = 0;
         let mut gone = Vec::new();
         for batch in messages.chunks(BATCH) {
@@ -133,14 +159,56 @@ impl Push {
             accepted += ok;
             gone.extend(dead);
         }
+        self.forget(&gone).await?;
+        Ok(accepted)
+    }
+
+    async fn forget(&self, gone: &[String]) -> anyhow::Result<()> {
         if !gone.is_empty() {
             sqlx::query("DELETE FROM push_tokens WHERE token = ANY($1)")
-                .bind(&gone)
+                .bind(gone)
                 .execute(&self.pool)
                 .await
                 .context("forget unregistered devices")?;
         }
-        Ok(accepted)
+        Ok(())
+    }
+
+    /// Reads the receipts of tickets sent at least `RECEIPT_DELAY` ago and forgets the
+    /// devices they say are gone. Returns how many were forgotten.
+    pub async fn check_receipts(&self) -> anyhow::Result<usize> {
+        let due: Vec<(String, String)> = {
+            let mut pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
+            let mut due = Vec::new();
+            while pending
+                .front()
+                .is_some_and(|(at, _, _)| at.elapsed() >= RECEIPT_DELAY)
+            {
+                let (_, id, token) = pending.pop_front().expect("checked");
+                due.push((id, token));
+            }
+            due
+        };
+        let mut gone = Vec::new();
+        for chunk in due.chunks(RECEIPT_BATCH) {
+            let ids: Vec<&str> = chunk.iter().map(|(id, _)| id.as_str()).collect();
+            let mut request = self
+                .client
+                .post(&self.receipts_endpoint)
+                .header("accept", "application/json")
+                .json(&json!({ "ids": ids }));
+            if let Some(token) = &self.access_token {
+                request = request.bearer_auth(token.as_str());
+            }
+            // A receipt that can't be read is not asked for again.
+            let response = request.send().await.context("expo receipts request")?;
+            let status = response.status();
+            let body: Value = response.json().await.unwrap_or(Value::Null);
+            anyhow::ensure!(status.is_success(), "expo receipts answered {status}");
+            gone.extend(read_receipts(chunk, &body));
+        }
+        self.forget(&gone).await?;
+        Ok(gone.len())
     }
 
     /// One request to Expo; how many it accepted and the tokens it says are gone.
@@ -157,8 +225,102 @@ impl Push {
         let status = response.status();
         let body: Value = response.json().await.unwrap_or(Value::Null);
         anyhow::ensure!(status.is_success(), "expo push answered {status}");
-        Ok(read_tickets(batch, &body))
+        // Replaced (audit #6): tickets' receipt ids are kept to be checked later.
+        // Ok(read_tickets(batch, &body))
+        let tickets = read_ticket_receipts(batch, &body);
+        if !tickets.receipts.is_empty() {
+            let mut pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
+            let now = Instant::now();
+            for (id, token) in tickets.receipts {
+                pending.push_back((now, id, token));
+            }
+            while pending.len() > PENDING_MAX {
+                pending.pop_front();
+            }
+        }
+        Ok((tickets.ok, tickets.gone))
     }
+}
+
+/// What one answer from Expo's send endpoint said.
+#[derive(Debug, Default, PartialEq)]
+pub struct Tickets {
+    pub ok: usize,
+    /// Tokens of devices that are gone.
+    pub gone: Vec<String>,
+    /// (receipt id, token) for each accepted message.
+    pub receipts: Vec<(String, String)>,
+}
+
+/// Whether an Expo error says this device can't be reached any more.
+fn gone_error(details: &Value) -> Option<GoneKind> {
+    match details["error"].as_str()? {
+        "DeviceNotRegistered" => Some(GoneKind::Unregistered),
+        "InvalidCredentials" => Some(GoneKind::Credentials),
+        _ => None,
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum GoneKind {
+    Unregistered,
+    Credentials,
+}
+
+/// The gone tokens of one answer: every `DeviceNotRegistered`, and `InvalidCredentials`
+/// only when something else in the same answer went through (all of them refused looks
+/// like Honey's own credentials, which must not wipe every device).
+fn settle_gone(found: Vec<(GoneKind, String)>, any_ok: bool) -> Vec<String> {
+    let refused_all = !any_ok && found.iter().any(|(k, _)| *k == GoneKind::Credentials);
+    if refused_all {
+        tracing::error!(
+            "expo refused every message with InvalidCredentials: check EAS push credentials"
+        );
+    }
+    found
+        .into_iter()
+        .filter(|(kind, _)| *kind == GoneKind::Unregistered || any_ok)
+        .map(|(_, token)| token)
+        .collect()
+}
+
+/// Tickets come back in message order: count the `ok`s, keep their receipt ids, and
+/// collect the tokens of devices Expo says are gone.
+pub fn read_ticket_receipts(batch: &[Value], body: &Value) -> Tickets {
+    let tickets = body["data"].as_array().cloned().unwrap_or_default();
+    let mut out = Tickets::default();
+    let mut found = Vec::new();
+    for (message, ticket) in batch.iter().zip(tickets.iter()) {
+        let Some(token) = message["to"].as_str() else {
+            continue;
+        };
+        if ticket["status"] == "ok" {
+            out.ok += 1;
+            if let Some(id) = ticket["id"].as_str() {
+                out.receipts.push((id.to_string(), token.to_string()));
+            }
+        } else if let Some(kind) = gone_error(&ticket["details"]) {
+            found.push((kind, token.to_string()));
+        }
+    }
+    out.gone = settle_gone(found, out.ok > 0);
+    out
+}
+
+/// Receipts come back keyed by id: the tokens of devices they say are gone.
+pub fn read_receipts(asked: &[(String, String)], body: &Value) -> Vec<String> {
+    let receipts = &body["data"];
+    let mut any_ok = false;
+    let mut found = Vec::new();
+    for (id, token) in asked {
+        let receipt = &receipts[id.as_str()];
+        if receipt["status"] == "ok" {
+            any_ok = true;
+        } else if let Some(kind) = gone_error(&receipt["details"]) {
+            found.push((kind, token.clone()));
+        }
+    }
+    settle_gone(found, any_ok)
 }
 
 /// Expo messages: one per item and registered device. The data names the inbox item
@@ -185,22 +347,25 @@ pub fn messages(items: &[Item], tokens: &HashMap<Uuid, Vec<String>>) -> Vec<Valu
     out
 }
 
-/// Tickets come back in message order: count the `ok`s and collect the tokens of
-/// devices Expo says are no longer registered.
+/// Tickets come back in message order: how many Expo accepted and the tokens of
+/// devices it says are gone ([`read_ticket_receipts`]).
 pub fn read_tickets(batch: &[Value], body: &Value) -> (usize, Vec<String>) {
-    let tickets = body["data"].as_array().cloned().unwrap_or_default();
-    let mut ok = 0;
-    let mut gone = Vec::new();
-    for (message, ticket) in batch.iter().zip(tickets.iter()) {
-        if ticket["status"] == "ok" {
-            ok += 1;
-        } else if ticket["details"]["error"] == "DeviceNotRegistered"
-            && let Some(token) = message["to"].as_str()
-        {
-            gone.push(token.to_string());
-        }
-    }
-    (ok, gone)
+    // Replaced (audit #6): InvalidCredentials counts too, and receipt ids are kept.
+    // let tickets = body["data"].as_array().cloned().unwrap_or_default();
+    // let mut ok = 0;
+    // let mut gone = Vec::new();
+    // for (message, ticket) in batch.iter().zip(tickets.iter()) {
+    //     if ticket["status"] == "ok" {
+    //         ok += 1;
+    //     } else if ticket["details"]["error"] == "DeviceNotRegistered"
+    //         && let Some(token) = message["to"].as_str()
+    //     {
+    //         gone.push(token.to_string());
+    //     }
+    // }
+    // (ok, gone)
+    let tickets = read_ticket_receipts(batch, body);
+    (tickets.ok, tickets.gone)
 }
 
 /// After a successful write to `router`'s routes, pushes what it put in the inbox (in
@@ -288,5 +453,48 @@ mod tests {
         ] });
         assert_eq!(read_tickets(&batch, &body), (1, vec!["t2".to_string()]));
         assert_eq!(read_tickets(&batch, &json!({})), (0, vec![]));
+    }
+
+    #[test]
+    fn invalid_credentials_drop_a_token_only_when_others_went_through() {
+        let batch = vec![json!({ "to": "real" }), json!({ "to": "fake" })];
+        let invalid = json!({ "status": "error", "details": { "error": "InvalidCredentials" } });
+        let body = json!({ "data": [{ "status": "ok", "id": "r1" }, invalid.clone()] });
+        let tickets = read_ticket_receipts(&batch, &body);
+        assert_eq!(tickets.ok, 1);
+        assert_eq!(tickets.gone, vec!["fake".to_string()]);
+        assert_eq!(tickets.receipts, vec![("r1".into(), "real".into())]);
+        // Everything refused: Honey's credentials, not the devices; nobody is forgotten.
+        let body = json!({ "data": [invalid.clone(), invalid] });
+        assert_eq!(
+            read_ticket_receipts(&batch, &body).gone,
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn receipts_forget_gone_devices() {
+        let asked = vec![
+            ("r1".to_string(), "t1".to_string()),
+            ("r2".to_string(), "t2".to_string()),
+            ("r3".to_string(), "t3".to_string()),
+            ("r4".to_string(), "t4".to_string()),
+        ];
+        let body = json!({ "data": {
+            "r1": { "status": "ok" },
+            "r2": { "status": "error", "details": { "error": "DeviceNotRegistered" } },
+            "r3": { "status": "error", "details": { "error": "InvalidCredentials" } },
+            "r4": { "status": "error", "details": { "error": "MessageRateExceeded" } },
+        } });
+        assert_eq!(
+            read_receipts(&asked, &body),
+            vec!["t2".to_string(), "t3".to_string()]
+        );
+        // No receipt went through: only the unregistered device is forgotten.
+        let body = json!({ "data": {
+            "r2": { "status": "error", "details": { "error": "DeviceNotRegistered" } },
+            "r3": { "status": "error", "details": { "error": "InvalidCredentials" } },
+        } });
+        assert_eq!(read_receipts(&asked, &body), vec!["t2".to_string()]);
     }
 }

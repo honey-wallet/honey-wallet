@@ -56,8 +56,10 @@
 //! - A sender is named by handle only through an address its person proved; otherwise
 //!   by its short address.
 //! - Each person counts for at most [`MAX_WALLETS_PER_PERSON`] wallets per cycle, their
-//!   own ones first, and wallets are taken owned first, then one per person in turn,
-//!   so nobody can push others out of the [`MAX_WALLETS`] read each cycle.
+//!   own ones first, and wallets are taken from people with a verified Apple or Google
+//!   sign-in first, then owned, then one per person in turn, so nobody (nor a swarm of
+//!   free wallet accounts) can push others out of the [`MAX_WALLETS`] read each cycle.
+//!   Tokens Expo reports as gone (tickets and receipts) are forgotten (`push`).
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
@@ -601,10 +603,48 @@ pub fn group_watched(rows: Vec<WatchRow>) -> Vec<Watched> {
 }
 
 /// The wallets of phones seen (registered) in the last 30 days, at most `limit`, and
-/// at most [`MAX_WALLETS_PER_PERSON`] per person (their owned ones first). Owned
-/// wallets come first, then one per person in turn, so declaring many addresses (or
-/// someone else's) never pushes anyone else's wallet out.
+/// at most [`MAX_WALLETS_PER_PERSON`] per person (their owned ones first). People with
+/// a linked Apple or Google sign-in come first, then owned wallets, then one per person
+/// in turn, so declaring many addresses (or someone else's), or a swarm of free wallet
+/// accounts with made-up push tokens, never pushes a real person's wallet out.
 pub async fn watched_wallets(pool: &PgPool, limit: i64) -> anyhow::Result<Vec<Watched>> {
+    // Replaced (audit #6): the same query, ranking verified people ahead of owned wallets.
+    // let rows: Vec<WatchRow> = sqlx::query_as(
+    //     "WITH watching AS (
+    //          SELECT t.token, t.user_id, t.updated_at, w.evm, w.solana, w.near
+    //          FROM push_tokens t JOIN push_wallets w ON w.token = t.token
+    //          WHERE t.updated_at > clock_timestamp() - interval '30 days'
+    //          UNION ALL
+    //          SELECT t.token, t.user_id, t.updated_at, '0x' || encode(m.address, 'hex'),
+    //                 NULL, NULL
+    //          FROM push_tokens t JOIN wallet_memberships m ON m.user_id = t.user_id
+    //          WHERE NOT t.wallets_declared
+    //            AND t.updated_at > clock_timestamp() - interval '30 days'
+    //      ), per_person AS (
+    //          SELECT user_id, evm, solana, near, max(updated_at) AS seen,
+    //                 EXISTS (SELECT 1 FROM wallet_memberships m
+    //                         WHERE m.user_id = watching.user_id
+    //                           AND m.address = decode(substr(watching.evm, 3), 'hex')) AS owned
+    //          FROM watching GROUP BY user_id, evm, solana, near
+    //      ), ranked AS (
+    //          SELECT *,
+    //                 row_number() OVER (PARTITION BY user_id
+    //                     ORDER BY owned DESC, seen DESC, evm, solana, near) AS pick,
+    //                 row_number() OVER (PARTITION BY user_id, owned
+    //                     ORDER BY seen DESC, evm, solana, near) AS turn
+    //          FROM per_person
+    //      ), chosen AS (
+    //          SELECT * FROM ranked WHERE pick <= $2
+    //          ORDER BY owned DESC, turn, seen DESC, user_id
+    //          LIMIT $1
+    //      )
+    //      SELECT w.token, w.user_id, w.evm, w.solana, w.near, c.owned
+    //      FROM chosen c JOIN watching w ON w.user_id = c.user_id
+    //          AND w.evm IS NOT DISTINCT FROM c.evm
+    //          AND w.solana IS NOT DISTINCT FROM c.solana
+    //          AND w.near IS NOT DISTINCT FROM c.near
+    //      ORDER BY c.owned DESC, c.turn, c.seen DESC, c.user_id, w.token",
+    // )
     let rows: Vec<WatchRow> = sqlx::query_as(
         "WITH watching AS (
              SELECT t.token, t.user_id, t.updated_at, w.evm, w.solana, w.near
@@ -620,7 +660,9 @@ pub async fn watched_wallets(pool: &PgPool, limit: i64) -> anyhow::Result<Vec<Wa
              SELECT user_id, evm, solana, near, max(updated_at) AS seen,
                     EXISTS (SELECT 1 FROM wallet_memberships m
                             WHERE m.user_id = watching.user_id
-                              AND m.address = decode(substr(watching.evm, 3), 'hex')) AS owned
+                              AND m.address = decode(substr(watching.evm, 3), 'hex')) AS owned,
+                    EXISTS (SELECT 1 FROM user_verified_identities v
+                            WHERE v.user_id = watching.user_id) AS verified
              FROM watching GROUP BY user_id, evm, solana, near
          ), ranked AS (
              SELECT *,
@@ -631,7 +673,7 @@ pub async fn watched_wallets(pool: &PgPool, limit: i64) -> anyhow::Result<Vec<Wa
              FROM per_person
          ), chosen AS (
              SELECT * FROM ranked WHERE pick <= $2
-             ORDER BY owned DESC, turn, seen DESC, user_id
+             ORDER BY verified DESC, owned DESC, turn, seen DESC, user_id
              LIMIT $1
          )
          SELECT w.token, w.user_id, w.evm, w.solana, w.near, c.owned
@@ -639,7 +681,7 @@ pub async fn watched_wallets(pool: &PgPool, limit: i64) -> anyhow::Result<Vec<Wa
              AND w.evm IS NOT DISTINCT FROM c.evm
              AND w.solana IS NOT DISTINCT FROM c.solana
              AND w.near IS NOT DISTINCT FROM c.near
-         ORDER BY c.owned DESC, c.turn, c.seen DESC, c.user_id, w.token",
+         ORDER BY c.verified DESC, c.owned DESC, c.turn, c.seen DESC, c.user_id, w.token",
     )
     .bind(limit)
     .bind(MAX_WALLETS_PER_PERSON)
