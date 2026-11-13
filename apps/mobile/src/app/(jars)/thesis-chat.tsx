@@ -17,6 +17,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Line, Path, Text as SvgText } from 'react-native-svg';
 import { Icon } from '@/components/Icon';
 import { Facts, IdeaGrid, StrategyCard } from '@/components/jars/JarParts';
+import { StepsCard } from '@/components/jars/StepsCard';
 import { HoneyLogo } from '@/components/logo/HoneyLogo';
 import { PressableScale } from '@/components/motion/PressableScale';
 import { PillButton } from '@/components/onboarding/PillButton';
@@ -397,31 +398,18 @@ function Part({
   latest: boolean;
 }) {
   const styles = useStyles();
-  const c = useTheme();
   switch (part.type) {
     case 'text':
       return <StreamText text={part.text} stream={stream} />;
     case 'stages':
-      return part.done ? (
-        <View style={styles.doneRow}>
-          <Icon name="checkCircle" size={14} color={c.success} />
-          <Text style={styles.muted}>Researched, checked prices and routes</Text>
-        </View>
-      ) : (
-        <View style={styles.card}>
-          {STAGES.map((label, i) => (
-            <View key={label} style={styles.stage}>
-              {i < part.at ? (
-                <Icon name="checkCircle" size={16} color={c.success} />
-              ) : i === part.at ? (
-                <ActivityIndicator size="small" color={c.textSecondary} />
-              ) : (
-                <View style={styles.pending} />
-              )}
-              <Text style={[styles.stageText, i > part.at && styles.muted]}>{label}</Text>
-            </View>
-          ))}
-        </View>
+      // A checklist with a summary header: open while it works, folded once done.
+      return (
+        <StepsCard
+          title="Researching your idea"
+          doneTitle="Researched your idea"
+          steps={STAGES}
+          at={part.done ? STAGES.length : part.at}
+        />
       );
     case 'strategy':
       return <AnswerCard proposal={part.proposal} latest={latest} />;
@@ -696,11 +684,7 @@ const useStyles = makeStyles((c) => ({
   },
   agentText: { color: c.text, fontSize: 16, lineHeight: 23 },
   muted: { color: c.textSecondary, fontSize: 14 },
-  doneRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   card: { padding: 16, gap: 12, ...radius(20), backgroundColor: c.card },
-  stage: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  stageText: { color: c.text, fontSize: 15 },
-  pending: { width: 16, height: 16, borderRadius: 8, borderWidth: 1.5, borderColor: c.divider },
   cardHead: { flexDirection: 'row', alignItems: 'center', gap: 14 },
   cardValue: { color: c.text, fontSize: 26, fontWeight: '700', fontVariant: ['tabular-nums'] },
   sources: { gap: 6 },
