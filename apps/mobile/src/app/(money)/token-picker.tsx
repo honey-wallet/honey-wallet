@@ -31,7 +31,14 @@ import {
   tokenRef,
 } from '@/lib/intents-swap';
 import { PAY_CHAINS } from '@/lib/jar-buy';
-import { CHAINS, formatBalance, formatPrice, formatUsd, tokenName } from '@/lib/mock-wallet';
+import {
+  CHAINS,
+  chainSymbol,
+  formatBalance,
+  formatPrice,
+  formatUsd,
+  tokenName,
+} from '@/lib/mock-wallet';
 import { isUsdc, jarPayWith } from '@/lib/pay-with';
 import { pickToken, type TokenRef, useSwap } from '@/lib/swap';
 import { useWalletView } from '@/lib/wallet-view';
@@ -271,6 +278,7 @@ function LiveTokens({
             <Chip
               key={code}
               label={chainName(code)}
+              leading={<TokenIcon symbol={chainSymbol(chainName(code))} size={18} />}
               selected={chain === code}
               onPress={() => {
                 tap();
@@ -286,7 +294,7 @@ function LiveTokens({
   if (!tokens)
     return (
       <SheetScreen scroll>
-        <SheetHeader title={jar ? 'Pay with' : side === 'sell' ? 'Swap from' : 'Swap to'} />
+        {jar ? <SheetHeader title="Pay with" /> : null}
         {failed && jar ? (
           usdcRow
         ) : failed ? (
@@ -314,6 +322,7 @@ function LiveTokens({
 
   return (
     <SheetScreen scroll sticky={sticky}>
+      {/* Swap's picker opens straight on the list (14 Nov): no "Swap from" title or intro.
       <SheetHeader title={jar ? 'Pay with' : side === 'sell' ? 'Swap from' : 'Swap to'} />
       {side === 'sell' && !jar && !q && !chain && (
         <Text style={styles.note}>
@@ -321,6 +330,8 @@ function LiveTokens({
           {listed.length} tokens on {chains.length} networks.
         </Text>
       )}
+      */}
+      {jar ? <SheetHeader title="Pay with" /> : null}
       {(yours.length > 0 || usdcRow) && <SheetSection title="Your tokens · balance" />}
       {usdcRow}
       {yours.map(ownRow)}
