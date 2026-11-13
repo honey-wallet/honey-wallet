@@ -71,7 +71,7 @@ pub struct FeeLimits {
     pub relay_daily: u128,
     /// `JAR_RELAY_USER_DAILY_BUDGET_NEAR` (0.05): relayed gas one person gets per 24 hours.
     pub relay_user_daily: u128,
-    /// `RELAYER_BALANCE_FLOOR_NEAR` (1): Honey stops paying before its relayer drops below.
+    /// `RELAYER_BALANCE_FLOOR_NEAR` (0.2): Honey stops paying before its relayer drops below.
     pub relayer_floor: u128,
     /// `SPONSOR_REQUIRE_VERIFIED_IDENTITY` (off): top-ups and relays only for wallets
     /// linked to a Sign in with Apple or Google.
@@ -85,7 +85,7 @@ impl Default for FeeLimits {
             sponsor_user: YOCTO_PER_NEAR / 5,
             relay_daily: YOCTO_PER_NEAR / 4,
             relay_user_daily: YOCTO_PER_NEAR / 20,
-            relayer_floor: YOCTO_PER_NEAR,
+            relayer_floor: YOCTO_PER_NEAR / 5,
             require_verified_identity: false,
         }
     }
@@ -1061,7 +1061,7 @@ mod tests {
         let limits = FeeLimits::default();
         // Sized for a ~5 NEAR relayer: a day of top-ups can't reach the floor alone.
         assert_eq!(limits.sponsor_daily, YOCTO_PER_NEAR);
-        assert_eq!(limits.relayer_floor, YOCTO_PER_NEAR);
+        assert_eq!(limits.relayer_floor, YOCTO_PER_NEAR / 5);
         assert!(limits.relay_daily < limits.sponsor_daily);
         assert!(!limits.require_verified_identity);
         // A person's 30-day top-ups cover a creator's DAO deposit and a member top-up.
