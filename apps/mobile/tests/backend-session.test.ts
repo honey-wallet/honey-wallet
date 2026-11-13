@@ -540,3 +540,82 @@ it("signing out of the app forgets every wallet's saved session", async () => {
   await forgetSavedBackendSession({ everyWallet: true });
   expect(stored()).toBeNull();
 });
+
+it('Sign out on one wallet forgets every saved wallet of the same Honey account', async () => {
+  const linked = '0x0000000000000000000000000000000000000002';
+  mocks.accounts.mockResolvedValue([
+    { id: 'real', addresses: { evm: address } },
+    { id: 'linked', addresses: { evm: linked } },
+  ]);
+  // Two wallets linked to one backend user, each signed in on this phone.
+  await prepareBackendSignIn();
+  await approveBackendSignIn();
+  mocks.active = 'linked';
+  backendWalletChanged();
+  const linkedProfile = {
+    userId: id,
+    wallet: {
+      id: '00000000-0000-4000-8000-000000000004',
+      address: linked,
+      chainId: 'eip155:1',
+      accountKind: 'eoa',
+    },
+  };
+  mocks.address.mockReturnValue(linked);
+  mocks.challenge.mockImplementation(async () => ({
+    ...challenge(),
+    message: challenge().message.replace(address, linked),
+  }));
+  mocks.verify.mockImplementation(async () => ({
+    accessToken: 'e'.repeat(64),
+    expiresAt: new Date(Date.now() + 900000).toISOString(),
+    refreshToken: 'f'.repeat(64),
+    refreshExpiresAt: new Date(Date.now() + 30 * 86400_000).toISOString(),
+    deviceId: '00000000-0000-4000-8000-000000000005',
+    profile: linkedProfile,
+  }));
+  mocks.profile.mockResolvedValue(linkedProfile);
+  await prepareBackendSignIn();
+  await approveBackendSignIn();
+  expect(backendSessionToken()).toBe('e'.repeat(64));
+  expect(stored()).toContain('c'.repeat(64));
+  // Sign out (Session screen) on the linked wallet.
+  await forgetSavedBackendSession();
+  expect(stored()).toBeNull();
+  // The other wallet's suspended family was revoked on the server too.
+  expect(mocks.refresh).toHaveBeenCalledWith(
+    'c'.repeat(64),
+    '00000000-0000-4000-8000-000000000002',
+  );
+  mocks.active = 'real';
+  backendWalletChanged();
+  expect(await refreshResumeAvailability()).toBe(false);
+  mocks.active = 'linked';
+  backendWalletChanged();
+  expect(await refreshResumeAvailability()).toBe(false);
+});
+it('Sign out leaves a wallet of a different Honey account alone', async () => {
+  mocks.accounts.mockResolvedValue([
+    { id: 'real', addresses: { evm: address } },
+    { id: 'stranger', addresses: { evm: address } },
+  ]);
+  await prepareBackendSignIn();
+  await approveBackendSignIn();
+  mocks.active = 'stranger';
+  backendWalletChanged();
+  const otherUser = { ...profile, userId: '00000000-0000-4000-8000-000000000009' };
+  mocks.verify.mockImplementation(async () => ({
+    accessToken: 'e'.repeat(64),
+    expiresAt: new Date(Date.now() + 900000).toISOString(),
+    refreshToken: 'f'.repeat(64),
+    refreshExpiresAt: new Date(Date.now() + 30 * 86400_000).toISOString(),
+    deviceId: '00000000-0000-4000-8000-000000000005',
+    profile: otherUser,
+  }));
+  mocks.profile.mockResolvedValue(otherUser);
+  await prepareBackendSignIn();
+  await approveBackendSignIn();
+  await forgetSavedBackendSession();
+  expect(stored()).toContain('c'.repeat(64));
+  expect(stored()).not.toContain('f'.repeat(64));
+});

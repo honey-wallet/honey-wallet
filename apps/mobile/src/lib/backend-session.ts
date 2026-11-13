@@ -286,6 +286,15 @@ async function deleteStoredRefresh(accountId?: string | null) {
   });
 }
 
+/** Forgets several wallets' saved families at once. */
+async function deleteStoredRefreshes(accountIds: string[]) {
+  await serially(async () => {
+    const families = await readFamilies();
+    for (const accountId of accountIds) delete families[accountId];
+    await writeFamilies(families);
+  });
+}
+
 /** The server turned the refresh token away (spent, revoked or expired): it never works again. */
 function rejectedGrant(error: unknown) {
   return (
@@ -557,7 +566,9 @@ function resetBackendSession(error: string | null): string | null {
 
 /**
  * Explicitly forget a suspended family; refresh then logout when no access token remains.
- * The active wallet's by default; `everyWallet` (signing out of the app) forgets them all.
+ * Sign out is for the Honey account, not one wallet: every saved family of the same backend
+ * user goes (wallets linked to one account would otherwise resume it). `everyWallet`
+ * (signing out of the app) forgets them all.
  */
 export async function forgetSavedBackendSession({
   everyWallet = false,
@@ -565,6 +576,7 @@ export async function forgetSavedBackendSession({
   everyWallet?: boolean;
 } = {}) {
   const accountId = activeAccountId ?? wallets.get().activeId;
+  const signedInAs = backendSession.get().profile?.userId ?? null;
   // Was the one saved family; now every wallet's, filtered below (2026-11-14).
   // const savedPromise = loadStoredRefresh().catch(() => null);
   const savedPromise = serially(readFamilies).catch(() => ({}) as Record<string, StoredRefresh>);
@@ -572,7 +584,19 @@ export async function forgetSavedBackendSession({
   // const saved = await savedPromise;
   // await SecureStore.deleteItemAsync(REFRESH_KEY).catch(() => {});
   const families = await savedPromise;
-  await deleteStoredRefresh(everyWallet ? null : accountId).catch(() => {});
+  // Who is signing out: the live session's user, else the active wallet's saved one.
+  const userId = signedInAs ?? families[accountId]?.userId ?? null;
+  const mine = (saved: StoredRefresh) =>
+    everyWallet || saved.accountId === accountId || (!!userId && saved.userId === userId);
+  // await deleteStoredRefresh(everyWallet ? null : accountId).catch(() => {});
+  if (everyWallet) await deleteStoredRefresh(null).catch(() => {});
+  else
+    await deleteStoredRefreshes([
+      accountId,
+      ...Object.values(families)
+        .filter(mine)
+        .map((saved) => saved.accountId),
+    ]).catch(() => {});
   // if (previous) {
   //   await revokeWithinDeadline(previous);
   //   return;
@@ -588,7 +612,8 @@ export async function forgetSavedBackendSession({
   // A live access token revokes its own family; a suspended one is refreshed, then revoked.
   const suspended = Object.values(families).filter(
     (saved) =>
-      (everyWallet || saved.accountId === accountId) &&
+      // (everyWallet || saved.accountId === accountId) &&
+      mine(saved) &&
       !(previous && saved.accountId === accountId) &&
       Date.parse(saved.refreshExpiresAt) > Date.now(),
   );
