@@ -126,6 +126,11 @@ describe('the answer card', () => {
       { symbol: 'TAO', weight: 100 },
     ]);
     expect(splitWithCash([], 100)).toEqual([]);
+    // The row and subtitle use the same cash as the bar, even from inconsistent data.
+    const { cashShare } = await import('@/lib/thesis');
+    expect(cashShare(picks, 17)).toBe(17);
+    expect(cashShare([{ weight: 40 }, { weight: 25 }], 10)).toBe(35);
+    expect(cashShare([{ weight: 100 }])).toBe(0);
   });
 
   it('keeps What could go wrong to three short bullets', async () => {

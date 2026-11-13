@@ -40,6 +40,7 @@ import { chartableTokens } from '@/lib/market';
 import { goBackOr } from '@/lib/navigation';
 import { COPY_STEPS, useSettings } from '@/lib/settings';
 import {
+  cashShare,
   hostOf,
   linksIn,
   type Pick,
@@ -847,7 +848,9 @@ function AnswerCard({
       ? proposal
       : { ...withAmount(proposal.byRisk[r] as Proposal, proposal.amount), byRisk: proposal.byRisk };
   const shown = variant(level);
-  const cash = shown.cashPct && shown.cashPct > 0 ? shown.cashPct : 0;
+  // const cash = shown.cashPct && shown.cashPct > 0 ? shown.cashPct : 0;
+  // The same cash the bar and its legend draw, so the row and subtitle agree with them.
+  const cash = cashShare(shown.picks, shown.cashPct);
   // const left = leftOut(shown.unmatched);
   // Only what Honey left out with a reason worth reading; a bare "Ether" says nothing.
   const left = leftOut(shown.unmatched).filter((u) => u.note);

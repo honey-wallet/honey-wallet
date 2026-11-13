@@ -542,17 +542,22 @@ function checkStopped(signal?: AbortSignal) {
 
 /** What the agent is asked: the idea, and the amount and risk to size it for. */
 /**
- * A strategy's whole split as one list that adds up to 100: its picks, then the cash the
- * risk rules kept in USDC (2026-11-14: the bar showed XAUT and BTC as 60/40 while the
- * rows said 50 / 33 and 17% in USDC). The cash is `cashPct`, or whatever the picks leave
- * when it's missing; a USDC pick takes it in. Weights already at 100 are left as they are.
+ * The share a strategy keeps in USDC, as every place shows it (bar, legend, subtitle and
+ * the "Kept in USDC" row): its `cashPct`, or what its picks leave when that's more
+ * (2026-11-14: the bar showed XAUT and BTC as 60/40 while the rows said 50 / 33 and 17%
+ * in USDC).
  */
+export function cashShare(picks: readonly { weight: number }[], cashPct = 0): number {
+  const total = picks.reduce((sum, p) => sum + p.weight, 0);
+  return Math.max(0, Math.round(Math.max(cashPct, total > 0 ? 100 - total : 0)));
+}
+
+/** The split's picks and cash together (see `cashShare`), adding up to 100. */
 export function splitWithCash<T extends { symbol: string; weight: number }>(
   picks: readonly T[],
   cashPct = 0,
 ): { symbol: string; weight: number }[] {
-  const total = picks.reduce((sum, p) => sum + p.weight, 0);
-  const cash = Math.max(0, Math.round(Math.max(cashPct, total > 0 ? 100 - total : 0)));
+  const cash = cashShare(picks, cashPct);
   const out = picks.map((p) => ({ symbol: p.symbol, weight: p.weight }));
   if (!cash || !picks.length) return out;
   const usdc = out.find((p) => p.symbol.toUpperCase() === 'USDC');
