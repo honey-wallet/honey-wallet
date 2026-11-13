@@ -8,7 +8,9 @@
 //! The app maps `stage` through intake, understand, strategize, done and failed only;
 //! everything else on a run (`step`, `events`, `partial`, `thinking`, `steps`) is additive.
 
+pub mod ask;
 pub mod categories;
+pub mod citations;
 pub mod history;
 pub mod intake;
 pub mod near_ai;
@@ -854,6 +856,12 @@ impl ThesisService {
             .understand(run, &intent, &buyable, &budget, started)
             .await
             .ok_or(AI_DOWN)?;
+        // Citations point at the numbered sources; a marker that points nowhere goes.
+        let sources: Vec<citations::Source> = citations::numbered(&intent.links)
+            .into_iter()
+            .map(|(s, _)| s)
+            .collect();
+        let thesis = cite_checked(thesis, sources.len());
         self.record(run, "Thesis", json!(thesis)).await;
         if let Some(message) = stop_message(&thesis) {
             self.event(run, first_sentence(&thesis.rationale)).await;
@@ -1023,6 +1031,9 @@ impl ThesisService {
                     thesis.bear_case.clone()
                 } else {
                     o.bear_case
+                        .iter()
+                        .map(|b| citations::clean_markers(b, sources.len()))
+                        .collect()
                 };
                 (o.trims, o.report, bear)
             }
@@ -1145,6 +1156,7 @@ impl ThesisService {
                 cash_pct,
                 note,
                 by_risk: None,
+                sources: Vec::new(),
             }
         };
         let pick_variant = |r: Risk| {
@@ -1160,6 +1172,7 @@ impl ThesisService {
             medium: pick_variant(Risk::Medium),
             high: pick_variant(Risk::High),
         }));
+        strategy.sources = sources.clone();
         let summary = if strategy.picks.is_empty() {
             "Ready: nothing to buy right now; keep it in USDC".to_string()
         } else {
@@ -1190,15 +1203,17 @@ impl ThesisService {
         Ok(())
     }
 
+    /// The pages the run read, numbered for citations (`[1]`, `[2]`).
     fn sources(intent: &IntentRecord) -> String {
-        let mut sources = String::new();
-        for link in &intent.links {
-            if let LinkResult::Read(content) = link {
-                sources.push_str(&intake::untrusted_block(content));
-                sources.push('\n');
-            }
-        }
-        sources
+        // let mut sources = String::new();
+        // for link in &intent.links {
+        //     if let LinkResult::Read(content) = link {
+        //         sources.push_str(&intake::untrusted_block(content));
+        //         sources.push('\n');
+        //     }
+        // }
+        // sources
+        citations::prompt_block(&citations::numbered(&intent.links))
     }
 
     /// The thesis, or `None` when the model never produced a valid one. Fixtures only
@@ -1596,6 +1611,15 @@ pub fn validate_thesis(value: &Value) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+/// The thesis with only citation markers that point at one of `count` sources.
+fn cite_checked(mut thesis: Thesis, count: usize) -> Thesis {
+    thesis.rationale = citations::clean_markers(&thesis.rationale, count);
+    for b in &mut thesis.bear_case {
+        *b = citations::clean_markers(b, count);
+    }
+    thesis
 }
 
 /// Unknown or "none" categories become no category (the shortlist then uses names only).

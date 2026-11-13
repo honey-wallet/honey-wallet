@@ -5,7 +5,10 @@ use super::jar_buys::Quota;
 use crate::{
     error::AppError,
     identity::Identity,
-    thesis::{Artifact, RunView, StartThesis, ThesisService},
+    thesis::{
+        Artifact, RunView, StartThesis, ThesisService,
+        ask::{AskAnswer, AskError, AskRequest},
+    },
 };
 use axum::{
     Json, Router,
@@ -27,6 +30,14 @@ const RUNS: Quota = Quota {
     per_user: 5,
 };
 
+/// Follow-up questions per minute: each is one model call (two with its retry) and a
+/// news search, so a little more room than runs but the same shape.
+const ASKS: Quota = Quota {
+    domain: "thesis_ask",
+    global: 60,
+    per_user: 10,
+};
+
 #[derive(Clone)]
 struct StateData {
     identity: Option<Identity>,
@@ -36,6 +47,7 @@ struct StateData {
 pub fn router(identity: Option<Identity>, service: Arc<ThesisService>) -> Router {
     Router::new()
         .route("/theses", post(start).get(list))
+        .route("/theses/ask", post(ask))
         .route("/theses/{id}", get(view))
         .route("/theses/{id}/artifacts", get(artifacts))
         .route("/theses/{id}/events", get(events))
@@ -85,6 +97,29 @@ async fn start(
             dry_run: state.service.dry_run(),
         }),
     ))
+}
+
+/// `POST /theses/ask`: a follow-up question on a strategy, answered in a few sentences,
+/// maybe with a changed set of picks (checked against what Honey can buy).
+async fn ask(
+    State(state): State<StateData>,
+    headers: HeaderMap,
+    body: Result<Json<AskRequest>, JsonRejection>,
+) -> Result<Json<AskAnswer>, AppError> {
+    let owner = user(&state, &headers).await?;
+    let identity = state.identity.as_ref().ok_or(AppError::Unauthorized)?;
+    ASKS.charge(identity, &owner.to_string()).await?;
+    let Json(input) = body.map_err(|_| AppError::BadRequest("invalid question".into()))?;
+    state
+        .service
+        .ask(owner, input)
+        .await
+        .map(Json)
+        .map_err(|e| match e {
+            AskError::BadRequest(m) => AppError::BadRequest(m),
+            AskError::NotFound => AppError::NotFound,
+            AskError::Busy | AskError::AiDown => AppError::Busy,
+        })
 }
 
 #[derive(serde::Deserialize)]
@@ -279,5 +314,6 @@ mod tests {
     fn thesis_runs_have_a_global_ceiling() {
         super::super::jar_buys::tests::assert_valid(RUNS);
         assert_eq!(RUNS.global, 20);
+        super::super::jar_buys::tests::assert_valid(ASKS);
     }
 }

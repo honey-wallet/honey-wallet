@@ -133,7 +133,9 @@ import type {
   StealthJarSession,
   SwapIntent,
   SwapQuoteRequest,
+  ThesisAnswer,
   ThesisArtifact,
+  ThesisAskRequest,
   ThesisHistory,
   ThesisRun,
   ThesisStarted,
@@ -626,6 +628,9 @@ export function createApiClient({ baseUrl, fetch: fetchImpl = fetch }: ApiClient
       const suffix = params.size > 0 ? `?${params}` : '';
       return validated(`/api/v1/theses${suffix}`, isThesisHistory, authorized(token, init));
     },
+    /** A follow-up question on a strategy: a short answer, maybe a changed set of picks. */
+    askThesis: (token: string, input: ThesisAskRequest, init?: RequestInit) =>
+      validated('/api/v1/theses/ask', isThesisAnswer, authorizedJson(token, input, init)),
     thesisArtifacts: (token: string, runId: string, init?: RequestInit) =>
       validated(
         `/api/v1/theses/${encodeURIComponent(runId)}/artifacts`,
@@ -1310,6 +1315,16 @@ function isThesisStarted(value: unknown): value is ThesisStarted {
 }
 
 const THESIS_STAGES = new Set(['intake', 'understand', 'strategize', 'done', 'failed']);
+
+function isThesisAnswer(value: unknown): value is ThesisAnswer {
+  const v = value as ThesisAnswer | null;
+  return (
+    !!v &&
+    typeof v.answer === 'string' &&
+    typeof v.dryRun === 'boolean' &&
+    (v.picks === undefined || Array.isArray(v.picks))
+  );
+}
 
 function isThesisHistory(value: unknown): value is ThesisHistory {
   const v = value as ThesisHistory | null;

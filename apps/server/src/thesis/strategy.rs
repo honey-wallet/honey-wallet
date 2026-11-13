@@ -140,6 +140,10 @@ pub struct Strategy {
     /// the app can switch levels without a new run. Absent inside the variants.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub by_risk: Option<Box<ByRisk>>,
+    /// The pages the run read, numbered as the `[n]` markers in the thesis rationale and
+    /// bear case cite them. On the top level only.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<super::citations::Source>,
 }
 
 #[derive(Debug, Clone, Serialize)]
