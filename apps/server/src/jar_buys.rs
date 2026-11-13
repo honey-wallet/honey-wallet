@@ -424,6 +424,17 @@ impl JarBuys {
             return Err(AppError::BadRequest("invalid copy".into()));
         }
         let copier = owner.parse::<uuid::Uuid>().ok();
+        // Copied units are keyed on the refund address: it must be a wallet this person
+        // signed in with, or a modified app could sell from a wallet with no copies on
+        // record. EVM only: the server has no proof of anyone's Solana or NEAR address.
+        if !input.intents
+            && let (Some(pool), Some(copier)) = (&self.pool, copier)
+            && !copy_fees::refund_allowed(pool, copier, &input.refund_to).await?
+        {
+            return Err(AppError::BadRequest(
+                "refunds must go to a wallet you signed in with".into(),
+            ));
+        }
         if input.copy_of.is_some() {
             self.check_outstanding(copier).await?;
         }
@@ -561,20 +572,28 @@ impl JarBuys {
             ));
         }
         self.owners.check(&input.deposit_address, owner).await?;
-        // A paid copy buy now counts towards the outstanding cap, a paid sell's units are
-        // spoken for (audit H2, M2). Best effort: 1Click also sees the deposit itself.
-        if let Some(pool) = &self.pool
-            && let Err(error) = copy_fees::mark_deposited(pool, &input.deposit_address).await
-        {
-            tracing::warn!(%error, "copy fee deposit not marked");
-        }
+        // // A paid copy buy now counts towards the outstanding cap, a paid sell's units are
+        // // spoken for (audit H2, M2). Best effort: 1Click also sees the deposit itself.
+        // if let Some(pool) = &self.pool
+        //     && let Err(error) = copy_fees::mark_deposited(pool, &input.deposit_address).await
+        // {
+        //     tracing::warn!(%error, "copy fee deposit not marked");
+        // }
         self.call(
             self.client
                 .post(format!("{}/deposit/submit", self.origin))
                 .json(&json!({ "depositAddress": input.deposit_address, "txHash": input.tx_hash })),
         )
-        .await
-        .map(|_| ())
+        .await?;
+        // Only once 1Click took the transaction: a paid copy buy counts towards the
+        // outstanding cap, a paid sell's units are spoken for. A bare report from the app
+        // shields nothing (1Click seeing the deposit marks it too, `mark_if_seen`).
+        if let Some(pool) = &self.pool
+            && let Err(error) = copy_fees::mark_deposited(pool, &input.deposit_address).await
+        {
+            tracing::warn!(%error, "copy fee deposit not marked");
+        }
+        Ok(())
     }
 
     pub async fn status(&self, owner: &str, deposit_address: &str) -> Result<LegStatus, AppError> {
@@ -597,6 +616,9 @@ impl JarBuys {
         // {
         //     tracing::warn!(%error, "copy buy not settled");
         // }
+        if let Some(pool) = &self.pool {
+            mark_if_seen(pool, deposit_address, &status.status).await;
+        }
         if let Some(pool) = &self.pool
             && let Some(outcome) =
                 copy_fees::outcome(&status.status, status.amount_out.as_deref(), false)
@@ -686,6 +708,7 @@ impl JarBuys {
         .await;
         for ((address, expired), found) in quoted.iter().zip(looked) {
             let Some((status, out)) = found else { continue };
+            mark_if_seen(pool, address, &status).await;
             if let Some(outcome) = copy_fees::outcome(&status, out.as_deref(), *expired) {
                 copy_fees::settle_lot(pool, address, &outcome).await?;
             }
@@ -713,6 +736,7 @@ impl JarBuys {
         .await;
         for ((address, expired), found) in quoted.iter().zip(looked) {
             let Some((status, out)) = found else { continue };
+            mark_if_seen(pool, address, &status).await;
             if let Some(outcome) = copy_fees::outcome(&status, out.as_deref(), *expired) {
                 // copy_fees::settle_sale(pool, address, &outcome).await?;
                 // An overlap is logged and left unsettled; it doesn't stop this quote.
@@ -1106,6 +1130,16 @@ fn settled_units(status: &LegStatus) -> Option<Option<&str>> {
     }
 }
 */
+
+/// 1Click has seen a deposit (it's known, being processed or done): mark it paid, so a
+/// copy buy counts towards the cap and a sell's units are spoken for. Best effort.
+async fn mark_if_seen(pool: &sqlx::PgPool, deposit_address: &str, status: &str) {
+    if copy_fees::deposit_seen(status)
+        && let Err(error) = copy_fees::mark_deposited(pool, deposit_address).await
+    {
+        tracing::warn!(%error, "copy fee deposit not marked");
+    }
+}
 
 /// The copier's open transaction while a sell is allocated and recorded.
 type SaleTx = sqlx::Transaction<'static, sqlx::Postgres>;

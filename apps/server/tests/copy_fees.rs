@@ -43,6 +43,8 @@ struct Double {
     paid_usd: Option<String>,
     /// On-chain balances by (address, asset), for the balance cap.
     balances: HashMap<(String, String), u128>,
+    /// Whether `/deposit/submit` takes a reported transaction.
+    accept_deposits: bool,
 }
 
 /// 1Click double: USDC at $1 and ETH at $3,000 (both 18 decimals here), quotes that
@@ -54,6 +56,7 @@ async fn one_click(double: Arc<Mutex<Double>>) -> (Arc<MarketData>, String) {
     ])
     .to_string();
     let quotes = double.clone();
+    let deposits = double.clone();
     let statuses = double;
     let app = Router::new()
         .route(
@@ -101,6 +104,23 @@ async fn one_click(double: Arc<Mutex<Double>>) -> (Arc<MarketData>, String) {
             }),
         )
         .route(
+            "/deposit/submit",
+            post({
+                let double = deposits.clone();
+                move || {
+                    let accept = double.lock().unwrap().accept_deposits;
+                    async move {
+                        if accept {
+                            axum::Json(json!({})).into_response()
+                        } else {
+                            (StatusCode::BAD_REQUEST, axum::Json(json!({ "message": "unknown tx" })))
+                                .into_response()
+                        }
+                    }
+                }
+            }),
+        )
+        .route(
             "/status",
             get(move |Query(q): Query<HashMap<String, String>>| {
                 let double = statuses.clone();
@@ -142,6 +162,27 @@ async fn user(pool: &sqlx::PgPool, wallet: Option<[u8; 20]>) -> Uuid {
         .bind(Uuid::new_v4())
         .bind(id)
         .bind(address.as_slice())
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+    // Everyone here also signed in with the two test wallets quotes refund to (under
+    // their own chain ids, so the same address can belong to several test people).
+    // (Someone with no wallet at all stays without.)
+    for (n, wallet) in [WALLET_A, WALLET_B]
+        .iter()
+        .enumerate()
+        .filter(|_| wallet.is_some())
+    {
+        let chain = 100 + (id.as_u128() % 1_000_000) as i64 * 2 + n as i64;
+        sqlx::query(
+            "INSERT INTO wallet_memberships (id, user_id, chain_id, address, account_kind)
+             VALUES ($1, $2, $3, $4, 'eoa')",
+        )
+        .bind(Uuid::new_v4())
+        .bind(id)
+        .bind(chain)
+        .bind(hex::decode(&wallet[2..]).unwrap())
         .execute(pool)
         .await
         .unwrap();
@@ -871,6 +912,77 @@ async fn only_a_real_copy_counts() {
     copied(&buys, &double, &me, jar, BOUGHT_FOR, BOUGHT).await;
     buys.quote(&me, sell_from(WALLET_A, "1")).await.ok();
     assert_eq!(copy_fees::earnings(&pool, creator).await.unwrap()[0].2, 1);
+    db.close().await;
+}
+
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn refunds_go_only_to_a_wallet_the_seller_signed_in_with() {
+    let db = TestDatabase::new().await;
+    let (buys, double, _, copier, _, jar) = setup(&db, true).await;
+    let me = copier.to_string();
+    copied(&buys, &double, &me, jar, BOUGHT_FOR, BOUGHT).await;
+    holds(&double, WALLET_A, 50_000_000_000_000_000);
+    // A refund to a wallet nobody linked would sell copied units with no copies on
+    // record there: refused.
+    let elsewhere = "0x00000000000000000000000000000000000000d0";
+    assert!(matches!(
+        buys.quote(&me, sell_from(elsewhere, BOUGHT)).await,
+        Err(AppError::BadRequest(_))
+    ));
+    assert!(buys.quote(&me, sell_from(WALLET_A, BOUGHT)).await.is_ok());
+    db.close().await;
+}
+
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn a_bare_deposit_report_shields_nothing() {
+    let db = TestDatabase::new().await;
+    let pool = db.pool.clone();
+    let (buys, double, _, copier, ana, jar) = setup(&db, true).await;
+    let me = copier.to_string();
+    copied(&buys, &double, &me, jar, BOUGHT_FOR, BOUGHT).await;
+    holds(&double, WALLET_A, 50_000_000_000_000_000);
+    let deposited = |address: String| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, bool>(
+                "SELECT deposited_at IS NOT NULL FROM copy_sales WHERE deposit_address = $1",
+            )
+            .bind(address)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    let report = |address: &str| honey_server::jar_buys::DepositRequest {
+        deposit_address: address.into(),
+        tx_hash: "0xfeed".into(),
+    };
+
+    // 1Click refuses the reported transaction: nothing is marked, and the next sell is
+    // still charged on those units.
+    let first = buys.quote(&me, sell_from(WALLET_A, BOUGHT)).await.unwrap();
+    let first_deposit = first.legs[0].deposit_address.clone();
+    assert!(buys.deposit(&me, report(&first_deposit)).await.is_err());
+    assert!(!deposited(first_deposit.clone()).await);
+    let again = buys.quote(&me, sell_from(WALLET_A, BOUGHT)).await.unwrap();
+    assert_eq!(fees_of(&again), vec![(account(ana), 333)]);
+
+    // 1Click takes it: now the units are spoken for.
+    double.lock().unwrap().accept_deposits = true;
+    buys.deposit(&me, report(&first_deposit)).await.unwrap();
+    assert!(deposited(first_deposit).await);
+
+    // 1Click seeing a deposit on its own marks it too.
+    let other = again.legs[0].deposit_address.clone();
+    double
+        .lock()
+        .unwrap()
+        .swaps
+        .insert(other.clone(), json!({ "status": "KNOWN_DEPOSIT_TX" }));
+    buys.status(&me, &other).await.unwrap();
+    assert!(deposited(other).await);
     db.close().await;
 }
 

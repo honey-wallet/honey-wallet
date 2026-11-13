@@ -580,6 +580,31 @@ pub async fn quoted_lots(
     .map_err(unavailable)
 }
 
+/// Whether 1Click's status says it has the deposit (known, processing or done).
+pub fn deposit_seen(status: &str) -> bool {
+    matches!(status, "KNOWN_DEPOSIT_TX" | "PROCESSING" | "SUCCESS")
+}
+
+/// Whether a quote may refund to `refund_to`: an EVM address must be one of the wallets
+/// this person signed in with (`wallet_memberships`); others can't be checked here.
+pub async fn refund_allowed(pool: &PgPool, user: Uuid, refund_to: &str) -> Result<bool, AppError> {
+    let address = normalize_address(refund_to);
+    let Some(hex) = address.strip_prefix("0x") else {
+        return Ok(true);
+    };
+    let Ok(bytes) = hex::decode(hex) else {
+        return Ok(false);
+    };
+    sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM wallet_memberships WHERE user_id = $1 AND address = $2)",
+    )
+    .bind(user)
+    .bind(bytes)
+    .fetch_one(pool)
+    .await
+    .map_err(unavailable)
+}
+
 /// Marks a deposit the app says it paid: a copy buy's (it now counts towards the
 /// outstanding cap) or a sell's (its units are now spoken for), under the copier's lock.
 pub async fn mark_deposited(pool: &PgPool, deposit_address: &str) -> Result<(), AppError> {
@@ -866,10 +891,13 @@ pub async fn quoted_sales(
     asset: &str,
 ) -> Result<Vec<(String, bool)>, AppError> {
     sqlx::query_as(
+        // "... AND deposited_at IS NOT NULL ORDER BY created_at LIMIT $3",
+        // Paid ones first; then unpaid ones still open, so 1Click seeing their deposit
+        // marks them (a bare report from the app doesn't).
         "SELECT deposit_address, coalesce(expires_at < clock_timestamp(), false)
          FROM copy_sales WHERE copier = $1 AND asset = $2 AND state = 'quoted'
-           AND deposited_at IS NOT NULL
-         ORDER BY created_at LIMIT $3",
+           AND (deposited_at IS NOT NULL OR expires_at > clock_timestamp())
+         ORDER BY (deposited_at IS NULL), created_at LIMIT $3",
     )
     .bind(copier)
     .bind(asset)
