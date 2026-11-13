@@ -26,6 +26,8 @@ async function staySignedIn() {
     if (!(await refreshResumeAvailability())) return;
     const session = backendSession.get();
     if (session.profile || session.busy || session.review) return;
+    // Covers a switch back to a wallet that was signed in, not only the cold start.
+    restoring.set(true);
     await resumeBackendSession({ silent: true });
   } finally {
     restoring.set(false);
@@ -40,6 +42,18 @@ async function staySignedIn() {
 export const restoringSession = createStore(true);
 const restoring = restoringSession;
 export const useRestoringSession = () => restoring.useValue();
+
+/**
+ * Hides Sign in while a saved session is about to resume: coming back from the background
+ * cleared the profile, and Sign in flashed up on every return (2026-11-14). Never for long.
+ */
+let holdTimer: ReturnType<typeof setTimeout> | undefined;
+function holdSignIn() {
+  if (!backendSession.get().resumeAvailable) return;
+  restoring.set(true);
+  clearTimeout(holdTimer);
+  holdTimer = setTimeout(() => restoring.set(false), 8000);
+}
 
 /** Wires the backend session to the app's lifecycle; returns the cleanup. */
 export function startBackendLifecycle() {
@@ -64,6 +78,8 @@ export function startBackendLifecycle() {
     if (activeId === null || activeId === wallets.get().activeId) return;
     activeId = wallets.get().activeId;
     backendWalletChanged();
+    // The wallet switched to may have its own saved session (switching back resumes it).
+    void staySignedIn();
   });
   let locked = appLock.get().enabled && !appLock.get().unlocked;
   const removeLock = appLock.subscribe(() => {
@@ -73,11 +89,15 @@ export function startBackendLifecycle() {
     locked = nowLocked;
   });
   const visibility = AppState.addEventListener('change', (state: AppStateStatus) => {
+    // Before the suspend clears the profile, so the app-switcher snapshot and the return
+    // don't show Sign in.
+    if (state === 'background' || state === 'active') holdSignIn();
     backendVisibility(state);
     if (state === 'active') void staySignedIn();
   });
   return () => {
     clearTimeout(giveUp);
+    clearTimeout(holdTimer);
     removeLoad();
     removeWallet();
     removeLock();

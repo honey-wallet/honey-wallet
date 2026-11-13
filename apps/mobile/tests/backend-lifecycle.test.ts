@@ -22,7 +22,12 @@ const m = vi.hoisted(() => {
     wallets: store({ activeId: 'main' }),
     walletLoad: store({ ready: false, error: false }),
     appLock: store({ enabled: false, unlocked: true }),
-    session: store({ profile: null as null | object, busy: false, review: null }),
+    session: store({
+      profile: null as null | object,
+      busy: false,
+      review: null,
+      resumeAvailable: false,
+    }),
     changed: vi.fn(),
     resume: vi.fn(async () => {}),
     available: vi.fn(async () => true),
@@ -73,12 +78,48 @@ it('keeps the saved session through the cold-start wallet load, then resumes it 
   stop();
 });
 
-it('still forgets the session when you really switch wallets', async () => {
+// Replaced by the test below: a switch now puts the session away instead (2026-11-14).
+// it('still forgets the session when you really switch wallets', async () => {
+//   m.walletLoad.set({ ready: true, error: false });
+//   m.wallets.set({ activeId: 'acct-1' });
+//   const stop = startBackendLifecycle();
+//   m.wallets.set({ activeId: 'acct-2' });
+//   expect(m.changed).toHaveBeenCalledTimes(1);
+//   stop();
+// });
+
+it('puts the session away when you really switch wallets, then tries the new one quietly', async () => {
   m.walletLoad.set({ ready: true, error: false });
   m.wallets.set({ activeId: 'acct-1' });
   const stop = startBackendLifecycle();
+  await flush();
+  m.resume.mockClear();
   m.wallets.set({ activeId: 'acct-2' });
   expect(m.changed).toHaveBeenCalledTimes(1);
+  await flush();
+  expect(m.resume).toHaveBeenCalledWith({ silent: true });
+  stop();
+});
+
+it('keeps Sign in hidden from the background until the saved session is back', async () => {
+  m.walletLoad.set({ ready: true, error: false });
+  const { restoringSession } = await import('@/lib/backend-lifecycle');
+  const stop = startBackendLifecycle();
+  await flush();
+  expect(restoringSession.get()).toBe(false);
+  m.session.set({ profile: { id: 'p' }, busy: false, review: null, resumeAvailable: true });
+  for (const l of m.appListeners) l('background');
+  expect(restoringSession.get()).toBe(true);
+  m.session.set({ profile: null, busy: false, review: null, resumeAvailable: true });
+  let finish = () => {};
+  m.resume.mockImplementationOnce(() => new Promise<void>((r) => (finish = r)));
+  for (const l of m.appListeners) l('active');
+  await flush();
+  expect(restoringSession.get()).toBe(true);
+  finish();
+  await flush();
+  expect(restoringSession.get()).toBe(false);
+  m.session.set({ profile: null, busy: false, review: null, resumeAvailable: false });
   stop();
 });
 
