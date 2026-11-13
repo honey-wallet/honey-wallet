@@ -10,7 +10,15 @@ import {
   type GroupJarState,
   useGroupJar,
 } from '@/components/jars/GroupJar';
-import { JarHoldingRow, JarIcon, layersOf, Mix, Owners, People } from '@/components/jars/JarParts';
+import {
+  JarHoldingRow,
+  JarIcon,
+  layersOf,
+  Mix,
+  Owners,
+  People,
+  SplitBar,
+} from '@/components/jars/JarParts';
 import { ActionMenu } from '@/components/motion/ActionMenu';
 import { NumberPopIn } from '@/components/motion/NumberPopIn';
 import { PressableRow } from '@/components/motion/PressableRow';
@@ -87,6 +95,7 @@ import { SOCIAL } from '@/lib/surface';
 import { TEST_MODE } from '@/lib/test-mode';
 import { jarReturn, jarValue, ME, type ThesisJar, updateJarBuy, useThesisJars } from '@/lib/thesis';
 import { showErrorToast } from '@/lib/toast';
+import { tokenColor } from '@/lib/token-colors';
 import { requireSignIn } from '@/lib/wallet-gate';
 import { Gate } from '@/lib/warnings';
 import { makeStyles, radius, useTheme } from '@/theme';
@@ -557,6 +566,9 @@ function JarBody({
   const preview = jar.id.startsWith(POST_PREFIX);
   // Someone's jar whose owner hides returns: a dash and no line, never a flat "+0.0%".
   const noReturns = !jar.mine && !!jar.returnsHidden;
+  const flat =
+    data.length < 2 ||
+    Math.max(...data) - Math.min(...data) <= Math.max(Math.abs(data[0] ?? 0), 1) * 0.0005;
   return (
     <View>
       {/* The coin page's hero: the number (your jar's value, or its return since launch),
@@ -601,7 +613,9 @@ function JarBody({
         </View>
       </View>
 
-      {noReturns ? null : (
+      {/* A jar that hasn't moved yet (new, or every point the same) skips the chart: a
+          flat line under half a screen of empty grid said nothing (review 2026-11-13). */}
+      {noReturns || (!chartLoading && flat) ? null : (
         <>
           <View onLayout={(e) => setWidth(e.nativeEvent.layout.width)}>
             <SkeletonReveal
@@ -635,7 +649,13 @@ function JarBody({
           // The split everywhere else shows (Feed, How much?, Launch), then each holding.
           <>
             <View style={styles.split}>
-              <Mix picks={jar.picks} tappable />
+              <SplitBar
+                slices={jar.picks.map((p, i) => ({
+                  symbol: p.symbol,
+                  weight: p.weight,
+                  color: tokenColor(p.symbol, i),
+                }))}
+              />
             </View>
             {jar.picks.map((p) => (
               <JarHoldingRow
@@ -965,7 +985,7 @@ const useStyles = makeStyles((c) => ({
   ranges: { marginTop: 8, paddingHorizontal: 12 },
   aboutHeadSkeleton: { marginBottom: 8 },
   section: { marginTop: 28 },
-  split: { marginBottom: 8 },
+  split: { marginTop: 2, marginBottom: 12 },
   // DetailGroup brings its own 16pt space above its title.
   detail: { marginTop: 12 },
   heading: { marginBottom: 10, color: c.textSecondary, fontSize: 15 },
