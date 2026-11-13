@@ -8,19 +8,19 @@ import { Sticky } from '@/components/motion/Sticky';
 import { PillButton } from '@/components/onboarding/PillButton';
 import { KeyboardFooter } from '@/components/sheets/KeyboardFooter';
 import { Chip } from '@/components/wallet/Chip';
-import { PushedScreen, SCREEN, TokenIcon } from '@/components/wallet/parts';
+import { Change, PushedScreen, SCREEN, TokenIcon } from '@/components/wallet/parts';
 import { SearchField } from '@/components/wallet/SearchField';
 import { tap } from '@/lib/haptics';
 import { uniqueBySymbol, useMarketList } from '@/lib/market';
-import type { MarketToken } from '@/lib/mock-wallet';
+import { formatCompactUsd, formatPrice, type MarketToken } from '@/lib/mock-wallet';
 import { manualProposal } from '@/lib/thesis';
 import { chatDraft } from '@/lib/thesis-chat';
 import { makeStyles, useTheme } from '@/theme';
 
 /** More than this and a jar stops being a view and becomes an index. */
 const MAX_PICKS = 8;
-/** Rows drawn before a search narrows them; the list is every token 1Click delivers. */
-const SHOWN = 60;
+/** Rows drawn per page as you scroll; the list is every token 1Click delivers. */
+const SHOWN = 40;
 /** Stablecoins aren't a bet; they'd only dilute the jar. */
 const SKIP = new Set(['USDC', 'USDT', 'DAI', 'USDE', 'PYUSD']);
 
@@ -46,21 +46,17 @@ export default function BuildJarScreen() {
   // A new search starts from the first page.
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset whenever the search changes.
   useEffect(() => setLimit(SHOWN), [q]);
-  const tokens = list
+  // Search's Top tokens, in its order (most traded first), drawn a page at a time as
+  // you scroll, so the list never ends until the tokens do.
+  const matches = list
     .filter(
       (t) =>
         !SKIP.has(t.symbol.toUpperCase()) &&
         (!q || t.symbol.toLowerCase().includes(q) || t.name.toLowerCase().includes(q)),
     )
-    // Searching can still match hundreds: draw a page at a time.
-    .slice(0, q ? limit : SHOWN);
-  const more = q
-    ? list.filter(
-        (t) =>
-          !SKIP.has(t.symbol.toUpperCase()) &&
-          (t.symbol.toLowerCase().includes(q) || t.name.toLowerCase().includes(q)),
-      ).length - tokens.length
-    : 0;
+    .sort((a, b) => b.volume - a.volume);
+  const tokens = matches.slice(0, limit);
+  const more = matches.length > tokens.length;
   const isPicked = (t: MarketToken) => picked.some((p) => keyOf(p) === keyOf(t));
   const toggle = (t: MarketToken) => {
     tap();
@@ -77,6 +73,7 @@ export default function BuildJarScreen() {
     <PushedScreen
       title="Build your own"
       fallback="/jars"
+      onEndReached={more ? () => setLimit((n) => n + SHOWN) : undefined}
       footer={
         // Rides above the keyboard while searching, so Continue is never covered.
         <KeyboardFooter under={insets.bottom + SCREEN.footerBottom} style={styles.flex}>
@@ -134,34 +131,28 @@ export default function BuildJarScreen() {
               onPress={() => toggle(item)}
               style={[styles.row, full && styles.off]}
             >
-              <TokenIcon symbol={item.symbol} size={36} />
+              {/* Search's Top tokens row: logo, name and volume, price and the day's move. */}
+              <TokenIcon symbol={item.symbol} size={40} />
               <View style={styles.flex}>
                 <Text style={styles.name} numberOfLines={1}>
                   {item.name}
                 </Text>
                 <Text style={styles.meta} numberOfLines={1}>
-                  {item.symbol}
+                  {item.volume ? `${formatCompactUsd(item.volume)} Vol` : item.symbol}
                 </Text>
               </View>
+              {item.price ? (
+                <View style={styles.end}>
+                  <Text style={styles.name}>{formatPrice(item.price)}</Text>
+                  <Change value={item.change} />
+                </View>
+              ) : null}
               <View style={[styles.check, on && styles.checkOn]}>
                 {on ? <Icon name="check" size={13} color={c.onPrimary} /> : null}
               </View>
             </PressableRow>
           );
         })}
-        {more > 0 ? (
-          <PressableRow
-            accessibilityRole="button"
-            onPress={() => {
-              tap();
-              setLimit((n) => n + SHOWN);
-            }}
-            style={styles.row}
-          >
-            <Icon name="chevronDown" size={14} color={c.textSecondary} />
-            <Text style={styles.meta}>Show {Math.min(SHOWN, more)} more</Text>
-          </PressableRow>
-        ) : null}
       </View>
     </PushedScreen>
   );
@@ -198,6 +189,10 @@ const useStyles = makeStyles((c) => ({
   },
   off: {
     opacity: 0.4,
+  },
+  end: {
+    alignItems: 'flex-end',
+    gap: 2,
   },
   name: {
     color: c.text,

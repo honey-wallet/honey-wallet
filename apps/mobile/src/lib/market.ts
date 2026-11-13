@@ -292,12 +292,15 @@ export function uniqueBySymbol<T extends { symbol: string }>(list: T[]): T[] {
 export function useMarketList(): MarketToken[] {
   const list = listing.useValue();
   useEffect(() => {
-    if (!TEST_MODE) void loadListing();
+    void loadListing();
   }, []);
   const tokens = list.tokens ?? [];
-  const all = useTokenMarkets(enrichedSymbols(tokens), !TEST_MODE);
-  if (TEST_MODE) return MARKET;
-  return liveMarketList(tokens, all);
+  const all = useTokenMarkets(enrichedSymbols(tokens), true);
+  const live = liveMarketList(tokens, all);
+  // Test mode lists the same live tokens as the real app (2026-11-13: Build your own
+  // showed only the 7 samples); the samples only stand in until the list arrives.
+  if (TEST_MODE && !live.length) return MARKET;
+  return live;
 }
 
 export function liveMarketList(

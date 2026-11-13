@@ -4,8 +4,8 @@ import { View } from 'react-native';
 import { StrategyCard } from '@/components/jars/JarParts';
 import { SkeletonBar } from '@/components/motion/Skeleton';
 import { PillButton } from '@/components/onboarding/PillButton';
-import { SheetScreen, SheetText, StatRow } from '@/components/sheets/Sheet';
-import { SocialAvatar } from '@/components/social/parts';
+import { SheetScreen, StatRow } from '@/components/sheets/Sheet';
+import { PersonByline } from '@/components/social/parts';
 import { dollars } from '@/lib/group-jar-core';
 import {
   declineGroup,
@@ -17,7 +17,7 @@ import {
   useGroup,
 } from '@/lib/group-jars';
 import { tap } from '@/lib/haptics';
-import { leaveSheetTo } from '@/lib/navigation';
+import { SHEET_EXIT } from '@/lib/navigation';
 import { showErrorToast, showToast } from '@/lib/toast';
 import { makeStyles } from '@/theme';
 
@@ -42,7 +42,11 @@ export default function GroupInviteSheet() {
   const answered =
     !!g && busy !== 'decline' && (g.myState !== 'invited' || g.status !== 'inviting');
   useEffect(() => {
-    if (answered) leaveSheetTo(`/group/${id}`);
+    // All sheets off first (the invite can sit on another sheet), then the group as a
+    // full page; pushed into a sheet it opened with a doubled top inset.
+    if (!answered) return;
+    router.dismissAll();
+    setTimeout(() => router.push({ pathname: '/group/[id]', params: { id } }), SHEET_EXIT);
   }, [answered, id]);
 
   const answer = async (kind: 'join' | 'decline') => {
@@ -78,7 +82,7 @@ export default function GroupInviteSheet() {
 
   return (
     <SheetScreen
-      title={`${g.creator.displayName} invited you`}
+      title="You're invited"
       footer={
         <View style={styles.footer}>
           <PillButton
@@ -95,12 +99,9 @@ export default function GroupInviteSheet() {
         </View>
       }
     >
-      {/* Who's asking, by face, as a DM request shows it. */}
+      {/* Who's asking, as their Feed post would show them. */}
       <View style={styles.from}>
-        <SocialAvatar who={g.creator} size={40} />
-        <View style={styles.flex}>
-          <SheetText lead>Everyone puts in the same and owns an equal part.</SheetText>
-        </View>
+        <PersonByline who={g.creator} at={g.createdAt} />
       </View>
       <StrategyCard split picks={groupPicks(g)} name={g.name} meta={`by @${g.creator.handle}`} />
       <View style={styles.rows}>
@@ -113,8 +114,7 @@ export default function GroupInviteSheet() {
 }
 
 const useStyles = makeStyles(() => ({
-  from: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 12 },
-  flex: { flex: 1 },
+  from: { marginBottom: 14 },
   rows: { marginTop: 16, gap: 2 },
   footer: { gap: 10 },
 }));

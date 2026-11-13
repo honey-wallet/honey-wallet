@@ -14,7 +14,9 @@ import {
 import Animated, {
   Extrapolation,
   interpolate,
+  runOnJS,
   useAnimatedProps,
+  useAnimatedReaction,
   useAnimatedScrollHandler,
   useAnimatedStyle,
   useReducedMotion,
@@ -677,6 +679,7 @@ export function PushedScreen({
   overlay,
   scroll = true,
   contentStyle,
+  onEndReached,
   children,
 }: {
   title: ReactNode;
@@ -684,6 +687,8 @@ export function PushedScreen({
   right?: ReactNode;
   footer?: ReactNode;
   overlay?: ReactNode;
+  /** Called as the content nears its end, e.g. to draw the next page of a long list. */
+  onEndReached?: () => void;
   /** Set false for screens that lay out their own content (e.g. a fixed panel). */
   scroll?: boolean;
   contentStyle?: StyleProp<ViewStyle>;
@@ -705,6 +710,15 @@ export function PushedScreen({
   // reads as "more below" rather than a sliver.
   const contentH = useSharedValue(0);
   const viewportH = useSharedValue(0);
+  // Within about two screens of rows from the end: ask for more (once per approach).
+  const more = onEndReached;
+  useAnimatedReaction(
+    () => contentH.value > 0 && contentH.value - viewportH.value - scrollY.value < 600,
+    (near, was) => {
+      if (near && !was && more) runOnJS(more)();
+    },
+    [more],
+  );
   const footerRule = useAnimatedStyle(() => ({
     opacity: interpolate(
       contentH.value - viewportH.value - scrollY.value,

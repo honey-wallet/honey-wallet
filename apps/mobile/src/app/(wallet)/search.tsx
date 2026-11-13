@@ -136,6 +136,9 @@ function useMarketSettled(list: { symbol: string }[]) {
   return list.slice(0, 12).every((t) => all[t.symbol] && !all[t.symbol].loading);
 }
 
+/** Search's "Earn more" cards; removed for now (2026-11-13). */
+const EARN_SECTION = false;
+
 export default function SearchScreen() {
   const styles = useStyles();
   const c = useTheme();
@@ -399,8 +402,9 @@ export default function SearchScreen() {
             }
 
             {/* Sample rates (EARN) for a feature that isn't live yet: every card opened
-                "Earn markets are not available yet". Test mode only until it is. */}
-            {prefs.searchShowEarn && TEST_MODE && (
+                "Earn markets are not available yet". Off everywhere for now, test mode
+                too (2026-11-13). */}
+            {EARN_SECTION && prefs.searchShowEarn && TEST_MODE && (
               <>
                 <Text style={[styles.heading, styles.section]}>
                   {POSITIONS.length && !empty ? 'Earn more' : 'Start earning'}

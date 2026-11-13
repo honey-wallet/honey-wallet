@@ -100,6 +100,50 @@ const openJar = (jar: SocialJar) => {
   router.push({ pathname: '/jar/[id]', params: { id: openSocialJar(jar) } });
 };
 
+/**
+ * A person as a Feed post's header shows them: face, then "Name · 3h" with the @handle
+ * under it. For anything a person sent you (an invite) so it reads like their post.
+ */
+export function PersonByline({
+  who,
+  at,
+  onPress,
+}: {
+  who: SocialProfileCard;
+  at?: number;
+  onPress?: () => void;
+}) {
+  const styles = useStyles();
+  const open = onPress ?? (() => openProfile(who.handle));
+  return (
+    <View style={styles.postHead}>
+      <PressableScale
+        accessibilityRole="button"
+        accessibilityLabel={`${who.displayName}, open profile`}
+        scaleTo={0.94}
+        onPress={open}
+      >
+        <SocialAvatar who={who} size={40} />
+      </PressableScale>
+      <View style={styles.flex}>
+        <View style={styles.rowHead}>
+          <Text style={styles.rowName} numberOfLines={1} onPress={open} suppressHighlighting>
+            {who.displayName}
+          </Text>
+          {at ? (
+            <Text style={styles.rowTime} numberOfLines={1}>
+              · {timeAgo(at)}
+            </Text>
+          ) : null}
+        </View>
+        <Text style={styles.rowHandle} numberOfLines={1}>
+          @{who.handle}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
 export function SocialAvatar({ who, size }: { who: SocialProfileCard; size: number }) {
   return <Avatar name={who.displayName} size={size} seed={who.avatarSeed || who.handle} />;
 }

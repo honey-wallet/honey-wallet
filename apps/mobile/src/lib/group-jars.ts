@@ -18,6 +18,7 @@ import {
 } from '@honey-wallet/api-client';
 import { daoAccountId, USDC_INTENTS } from '@honey-wallet/keyring';
 import { api } from '@/lib/api';
+import { confirmOwner } from '@/lib/auth';
 import { backendSessionToken } from '@/lib/backend-session';
 import {
   advanceDemo,
@@ -82,8 +83,22 @@ if (TEST_MODE) {
 async function demo(id: string, action?: DemoAction) {
   const g = groups.get()[id] ?? demoGroups()[id];
   if (!g) throw new Error('This group isn’t available');
+  // Anything that signs (money in, out, or a vote) asks for Face ID, as the real one
+  // does, even though nothing is sent.
+  const reason = action ? DEMO_SIGNS[action] : undefined;
+  if (reason && !(await confirmOwner(reason(g), true))) throw new Error('Cancelled');
   return put(withMe(action ? advanceDemo(g, action) : g));
 }
+
+/** What the Face ID prompt says for each demo action that would sign on chain. */
+const DEMO_SIGNS: Partial<Record<DemoAction, (g: SocialGroup) => string>> = {
+  create: (g) => `Create ${g.name}`,
+  pay: (g) => `Add your $${g.shareUsd.toFixed(2)}`,
+  buy: (g) => `Buy ${g.name}`,
+  approve: () => 'Approve the vote',
+  leave: () => 'Propose leaving',
+  cashout: () => 'Propose cashing out',
+};
 
 /** Friends picked on Launch's "Who's in" (the picker tray writes, Launch reads). */
 export const friendPicks = createStore<SocialProfileCard[]>([]);
