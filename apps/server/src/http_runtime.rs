@@ -205,9 +205,16 @@ pub async fn envelope(
             "x-request-id",
             HeaderValue::from_str(&request_id).expect("UUID is a header value"),
         );
-        response
-            .headers_mut()
-            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+        // Everything is no-store except a successful share-link read (`/public/*`), whose
+        // handler says how long caches may keep it (routes/social/public.rs).
+        let shareable = route.starts_with("/api/v1/public/")
+            && response.status().is_success()
+            && response.headers().contains_key(header::CACHE_CONTROL);
+        if !shareable {
+            response
+                .headers_mut()
+                .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+        }
         if let Some(id) = trace_id {
             response.headers_mut().insert(
                 "x-trace-id",

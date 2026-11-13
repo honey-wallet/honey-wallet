@@ -1595,6 +1595,40 @@ export interface SocialPost {
   mine: boolean;
 }
 
+/**
+ * `GET /public/jars/{id}`: a published jar for its share link (honeywallet.org/j/…), as a
+ * signed-out viewer of the Feed sees it. Cacheable; never carries the owner's own fields.
+ */
+export interface PublicJarSnapshot {
+  id: string;
+  name: string;
+  thesis: string;
+  /** Empty when the owner hides what it holds. */
+  picks: SocialPick[];
+  owner: SocialProfileCard;
+  /** Unix milliseconds. */
+  publishedAt: number;
+  copies: number;
+  /** Since publishing, as a fraction; null while prices are unavailable or hidden. */
+  returnSincePublish: number | null;
+  /** Value index (1.0 at publish) over the last 30 days; empty when hidden. */
+  spark: number[];
+  holdingsHidden: boolean;
+  returnsHidden: boolean;
+  copyable: boolean;
+}
+
+/** `GET /public/posts/{id}`: a thesis for its share link (honeywallet.org/p/…). */
+export interface PublicThesisSnapshot {
+  id: string;
+  body: string;
+  tokens: SocialPostToken[];
+  jarId: string | null;
+  author: SocialProfileCard;
+  /** Unix milliseconds. */
+  at: number;
+}
+
 export interface SocialPostRequest {
   /** 1–280 characters. */
   body: string;

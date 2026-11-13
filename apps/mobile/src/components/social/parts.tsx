@@ -459,10 +459,11 @@ export const buyToo = (symbol: string, chain: string) =>
 /**
  * Copy a post's move at an amount, straight to the usual review: a token to Swap (paid
  * in USDC on Base), a jar to its copy review, a thesis's tokens to a jar of them in
- * equal parts. Asks for a wallet and a sign-in first.
+ * equal parts. Asks for a wallet and a sign-in first, then comes back to `resume` (e.g.
+ * the jar page a share link opened) rather than the Feed.
  */
-export function copyNow(target: BuyTarget, amount: number, action: string) {
-  if (!requireSignIn(action)) return;
+export function copyNow(target: BuyTarget, amount: number, action: string, resume?: string) {
+  if (!requireSignIn(action, resume)) return;
   tap();
   if ('jar' in target) {
     const jar = thesisJars.get().find((j) => j.id === target.jar);

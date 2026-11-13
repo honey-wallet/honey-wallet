@@ -75,12 +75,12 @@ import {
 } from '@/lib/saved';
 import {
   isNotFound,
+  loadPostJar,
   loadProfile,
   loadSocialJar,
   POST_PREFIX,
   pct,
   previewPostOf,
-  resolvePostJar,
   SOCIAL_PREFIX,
   type SocialPost,
   type SocialProfile,
@@ -156,18 +156,15 @@ export default function JarScreen() {
   // biome-ignore lint/correctness/useExhaustiveDependencies: `attempt` is the Retry trigger.
   useEffect(() => {
     if (haveJar || !hydrated) return;
-    // A thesis from a link: wherever this phone has the post.
-    if (id.startsWith(POST_PREFIX)) {
-      if (!resolvePostJar(id)) setFailed('missing');
-      return;
-    }
-    if (!id.startsWith(SOCIAL_PREFIX)) {
+    // A thesis from a link: wherever this phone has the post, else fetched.
+    const thesis = id.startsWith(POST_PREFIX);
+    if (!thesis && !id.startsWith(SOCIAL_PREFIX)) {
       setFailed('missing');
       return;
     }
     let live = true;
     setFailed(null);
-    loadSocialJar(id)
+    (thesis ? loadPostJar(id) : loadSocialJar(id))
       .then((found) => {
         if (!live) return;
         if (!found) setFailed('missing');
@@ -306,6 +303,20 @@ function JarPage({ jar, id }: { jar: ThesisJar | undefined; id: string }) {
             following={owner?.followedByMe ?? false}
             saved={isStrategySaved(savedState, jarKey(serverId))}
           />
+        ) : jar?.mine && SOCIAL && !jar.groupId && !jar.sharedWallet ? (
+          // Your jar that only you see: a link needs it public, so Share posts it first
+          // (jar-post), then opens the share sheet.
+          <ActionMenu
+            bare
+            actions={[
+              {
+                label: 'Share',
+                icon: 'share',
+                onPress: () =>
+                  router.push({ pathname: '/jar-post', params: { id: jar.id, share: '1' } }),
+              },
+            ]}
+          />
         ) : undefined
       }
       footer={
@@ -346,8 +357,9 @@ function JarPage({ jar, id }: { jar: ThesisJar | undefined; id: string }) {
                       { tokens: jar.picks.map((p) => ({ symbol: p.symbol, chain: p.chain })) },
                       amount,
                       'copy this thesis',
+                      `/jar/${jar.id}`,
                     )
-                  : copyNow({ jar: jar.id }, amount, `copy ${jar.name}`)
+                  : copyNow({ jar: jar.id }, amount, `copy ${jar.name}`, `/jar/${jar.id}`)
               }
             />
           </View>

@@ -18,6 +18,13 @@ import { api } from '@/lib/api';
 import { backendSession, backendSessionToken } from '@/lib/backend-session';
 import { DEMO_FRIENDS, demoCollabPost, setDemoHandle } from '@/lib/group-demo';
 import { getProfile } from '@/lib/profile';
+import {
+  jarLink,
+  POST_JAR_PREFIX,
+  postLink,
+  profileLink,
+  SOCIAL_JAR_PREFIX,
+} from '@/lib/share-links';
 import { createStore } from '@/lib/store';
 import { TEST_MODE } from '@/lib/test-mode';
 import { type Pick, type ThesisJar, thesisJars } from '@/lib/thesis';
@@ -430,7 +437,7 @@ export async function recordCopy(socialJarId: string) {
 }
 
 /** Public jars from the server live in the phone's jar list under this id prefix. */
-export const SOCIAL_PREFIX = 'social-';
+export const SOCIAL_PREFIX = SOCIAL_JAR_PREFIX;
 
 /** The server id behind a jar on this phone: a public jar opened here, or one of yours
  * you published. Null for a private jar. */
@@ -483,7 +490,7 @@ export function historyOf(jar: { spark: number[]; returnSincePublish: number | n
 }
 
 /** The id a thesis with no jar of its own gets when opened as a jar page. */
-export const POST_PREFIX = 'post-';
+export const POST_PREFIX = POST_JAR_PREFIX;
 
 /** Theses opened as a jar page: kept for the session only, never in your jar list. */
 const postJars = createStore<Record<string, ThesisJar>>({});
@@ -551,6 +558,21 @@ export function resolvePostJar(localId: string): ThesisJar | null {
   ];
   const post = posts.find((x) => x?.id === postId);
   if (!post) return null;
+  openPostJar(post);
+  return postJars.get()[localId] ?? null;
+}
+
+/**
+ * A thesis jar page from a share link (`post-…`): the post wherever this phone has it,
+ * else fetched. A thesis about one of its author's jars opens that jar instead (its id
+ * then differs from `localId`). Null for any other id.
+ */
+export async function loadPostJar(localId: string): Promise<ThesisJar | null> {
+  if (!localId.startsWith(POST_PREFIX)) return null;
+  const known = resolvePostJar(localId);
+  if (known) return known;
+  const post = await api.socialGetPost(localId.slice(POST_PREFIX.length), backendSessionToken());
+  if (post.jarId) return loadSocialJar(`${SOCIAL_PREFIX}${post.jarId}`);
   openPostJar(post);
   return postJars.get()[localId] ?? null;
 }
@@ -967,12 +989,9 @@ export function useBoard(window: SocialLeaderboardWindow) {
   return { jars: state.boards[window] ?? null, error: !!state.boardErrors[window] };
 }
 
-// Share links. The web pages at these paths show the post, jar or profile with
-// "Open in Honey" (apps/web).
-const WEB = 'https://honeywallet.org';
-export const postLink = (id: string) => `${WEB}/p/${id}`;
-export const profileLink = (handle: string) => `${WEB}/u/${handle}`;
-export const jarLink = (id: string) => `${WEB}/j/${id}`;
+// Share links (lib/share-links): the site shows the post, jar or profile as Honey's card,
+// and with Honey installed the same link opens it here.
+export { jarLink, postLink, profileLink };
 
 async function share(message: string, url: string) {
   try {
@@ -997,8 +1016,10 @@ export function shareJar(jar: SocialJar) {
   return share(`${jar.name} by @${jar.owner.handle} on Honey${ret}`, jarLink(jar.id));
 }
 
-/** Shares a public jar by its server id (from its page). */
+/** Shares a public jar by its server id (from its page); one of yours says your @handle. */
 export function shareJarById(id: string, name: string, owner: string) {
+  const yours = social.get().me?.jars.find((j) => j.id === id);
+  if (yours) return shareJar(yours);
   return share(`${name} by @${owner} on Honey`, jarLink(id));
 }
 

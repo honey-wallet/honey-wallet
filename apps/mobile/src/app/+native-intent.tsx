@@ -1,5 +1,6 @@
 import { isAuthCallback } from '@/lib/auth-callback';
 import { takeEmailLink } from '@/lib/identity-flows';
+import { appPathOfShareLink } from '@/lib/share-links';
 import { holdWalletConnectUri, walletConnectUriFromLink } from '@/lib/walletconnect-uri';
 
 /**
@@ -18,6 +19,11 @@ export function redirectSystemPath({ path, initial }: { path: string; initial: b
     if (uri) holdWalletConnectUri(uri);
     return '/wc';
   }
+  // A shared jar, thesis or profile (honeywallet.org/j/…, /p/…, /u/…): its page, where
+  // Copy buys it. Signed out or without a wallet it still opens; Copy asks for one first
+  // and comes back here (lib/wallet-gate).
+  const shared = appPathOfShareLink(path);
+  if (shared) return shared;
   const inApp = withoutWebPrefix(path);
   if (isSwitchedOffProduct(inApp)) return '/trade';
   return withoutPaymentPrefill(inApp);

@@ -3,7 +3,13 @@
     "details": [
       {
         "appIDs": ["38V69R9TA5.com.honeywallet.app"],
-        "components": [{ "/": "/app", "comment": "Open Honey" }, { "/": "/app/*" }]
+        "components": [
+          { "/": "/app", "comment": "Open Honey" },
+          { "/": "/app/*" },
+          { "/": "/j/*", "comment": "A shared jar" },
+          { "/": "/p/*", "comment": "A shared thesis" },
+          { "/": "/u/*", "comment": "A shared profile" }
+        ]
       }
     ]
   },

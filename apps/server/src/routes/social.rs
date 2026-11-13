@@ -32,9 +32,13 @@
 //! People search (`GET /social/people?q=`) finds anyone with a handle by handle prefix
 //! or by a name word, and serves only their card and follower count (what a private
 //! account's profile serves anyway). People without a handle have no profile to find.
+//! Share links (`public`): one published jar or thesis as a signed-out viewer sees it,
+//! cacheable, for the site's share pages and their preview images.
 
 mod groups;
+mod public;
 pub(crate) use groups::{majority, record_created};
+pub use public::{JarSnapshot, ThesisSnapshot};
 
 use std::{
     collections::HashMap,
@@ -237,6 +241,7 @@ fn build(
         .route("/social/trades", post(record_trade))
         .route("/social/holders", get(holders))
         .merge(groups::routes())
+        .merge(public::routes())
         .with_state(SocialState {
             identity,
             market,
