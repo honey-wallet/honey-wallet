@@ -8,7 +8,7 @@ import {
   swapRefForSymbol,
   swapTokenList,
 } from '@/lib/intents-swap';
-import { SOON } from '@/lib/surface';
+// import { SOON } from '@/lib/surface'; // Unused since Buy always opens its sheet (14 Nov).
 import { swap, type TokenRef, updateSwap } from '@/lib/swap';
 
 type Holding = { symbol: string; chain: string; usd: number; amount: number; assetId?: string };
@@ -66,11 +66,14 @@ export function presetBuy(holdings: readonly Holding[], symbol?: string) {
  * Buy: while buying with cash is coming soon, straight to Swap set up to buy `symbol`
  * with what you hold; once cash is live, the choice between the two (the Buy sheet).
  */
-export function openBuy(holdings: readonly Holding[], symbol?: string) {
-  if (!SOON.buyCash) {
-    router.push({ pathname: '/buy', params: symbol ? { symbol } : {} });
-    return;
-  }
-  presetBuy(holdings, symbol);
-  router.navigate('/trade');
+export function openBuy(_holdings: readonly Holding[], symbol?: string) {
+  // Always the Buy sheet, like Sell (14 Nov): "Buy with card" dimmed as Coming soon, then
+  // Swap. It used to skip straight to Swap while cash was coming soon.
+  router.push({ pathname: '/buy', params: symbol ? { symbol } : {} });
+  // if (!SOON.buyCash) {
+  //   router.push({ pathname: '/buy', params: symbol ? { symbol } : {} });
+  //   return;
+  // }
+  // presetBuy(holdings, symbol);
+  // router.navigate('/trade');
 }
