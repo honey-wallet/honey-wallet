@@ -24,7 +24,8 @@ import {
 import { NftGallery } from '@/components/home/NftGallery';
 import { TradesList, useHasTrades } from '@/components/home/PositionsList';
 import { Icon, type IconName } from '@/components/Icon';
-import { JarList } from '@/components/jars/JarParts';
+import { exposureSlices, JarList } from '@/components/jars/JarParts';
+import { TokenArc } from '@/components/jars/TokenArc';
 import { HoneyJar } from '@/components/logo/HoneyJar';
 import { HoneyMascot } from '@/components/logo/HoneyMascot';
 import { Accordion, AccordionChevron } from '@/components/motion/Accordion';
@@ -66,7 +67,7 @@ import { isWeb } from '@/lib/platform';
 import { HIDDEN_AMOUNT, updateSettings, useSettings } from '@/lib/settings';
 import { EXTENSION, SHARED_WALLETS, SOCIAL, WALLET } from '@/lib/surface';
 import { useTabReselect } from '@/lib/tab-reselect';
-import { useThesisJars } from '@/lib/thesis';
+import { type ThesisJar, useThesisJars } from '@/lib/thesis';
 import { showToast } from '@/lib/toast';
 import { requireWallet, useHasWallet } from '@/lib/wallet-gate';
 import { useWalletView } from '@/lib/wallet-view';
@@ -800,5 +801,40 @@ function HomeJars() {
         action={{ label: 'Create a jar', onPress: () => router.push('/jar-create') }}
       />
     );
-  return <JarList jars={mine} />;
+  return (
+    <View>
+      <JarsRing jars={mine} />
+      <JarList jars={mine} />
+    </View>
+  );
+}
+
+/** The widest the ring draws, so it never fills a tablet. */
+const RING_MAX = 240;
+
+/**
+ * What your jars hold, as the Jars page drew it: the token ring with the Honey mark,
+ * counting the tokens in its middle. Home's Jars tab is where your jars live now (the
+ * tab bar's jar button opens Create), so the ring sits here, over the list.
+ */
+function JarsRing({ jars }: { jars: ThesisJar[] }) {
+  const [width, setWidth] = useState(0);
+  const slices = exposureSlices(jars);
+  // One token is a solid ring saying 100%: nothing to show.
+  if (slices.length < 2) return null;
+  return (
+    <View
+      style={{ alignItems: 'center', paddingVertical: 12 }}
+      onLayout={(e) => setWidth(e.nativeEvent.layout.width)}
+    >
+      {width > 0 ? (
+        <TokenArc
+          slices={slices}
+          total={String(slices.length)}
+          label="tokens"
+          width={Math.min(width, RING_MAX)}
+        />
+      ) : null}
+    </View>
+  );
 }
