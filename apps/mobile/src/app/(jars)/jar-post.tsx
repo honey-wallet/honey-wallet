@@ -32,7 +32,8 @@ export default function JarPostSheet() {
     if (!text || posting) return;
     tap();
     setPosting(true);
-    const next = { ...jar, thesis: text };
+    // Posting puts it on the Feed, so it's Everyone's from now on.
+    const next = { ...jar, thesis: text, visibility: 'public' as const };
     thesisJars.set((list) => list.map((j) => (j.id === jar.id ? next : j)));
     try {
       if (!TEST_MODE && !(await publishJar(next))) throw new Error('Couldn’t post it. Try again.');

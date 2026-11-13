@@ -44,7 +44,13 @@ export function JarAmount({
   initial,
   onChange,
   hold,
+  sell,
 }: {
+  /**
+   * Selling out of a jar instead of paying in: the cap is what the jar holds (not your
+   * USDC), and the quick amounts are 25%, 50% and Max of it.
+   */
+  sell?: { available: number };
   /** Quick amounts above the keys (the Feed's Buy sheet uses smaller ones). */
   presets?: number[];
   /** The amount it opens with (e.g. the Copy amount from Settings); empty otherwise. */
@@ -57,18 +63,24 @@ export function JarAmount({
   header?: ReactNode;
   /** The line under a typed amount, e.g. the copy fee. */
   note?: string;
-  cta: string;
+  /** The button's words; a function gets the typed amount (e.g. "Sell $3.20"). */
+  cta: string | ((amount: number) => string);
   onDone: (amount: number) => void;
 }) {
   const styles = useStyles();
-  const { real, available, watchOnly, loading, failed } = useJarFunds();
+  const funds = useJarFunds();
+  const { real } = funds;
+  const available = sell ? sell.available : funds.available;
+  const watchOnly = !sell && funds.watchOnly;
+  const loading = !sell && funds.loading;
+  const failed = !sell && funds.failed;
   const [typed, setTyped] = useState(() => (initial && initial > 0 ? trimNumber(initial, 2) : ''));
   const amount = Number(typed) || 0;
   useEffect(() => {
     onChange?.(amount);
   }, [amount, onChange]);
   // Until the balance is read, "not enough" would be a guess: wait instead.
-  const tooMuch = real && !loading && !failed && amount > available;
+  const tooMuch = (sell ? true : real) && !loading && !failed && amount > available;
   const max = trimNumber(available, 2);
   // Running past the balance shakes the amount once, with the error haptic.
   const shaken = useOverShake(tooMuch);
@@ -88,24 +100,41 @@ export function JarAmount({
                 : failed
                   ? 'Couldn’t check your balance. Pull to refresh your Wallet, then try again'
                   : tooMuch
-                    ? `You have ${formatUsd(available)} USDC on Base`
+                    ? sell
+                      ? `The jar holds ${formatUsd(available)}`
+                      : `You have ${formatUsd(available)} USDC on Base`
                     : amount && note
                       ? note
-                      : `${formatUsd(available)} USDC${real ? ' on Base' : ''} available`
+                      : sell
+                        ? `${formatUsd(available)} in this jar`
+                        : `${formatUsd(available)} USDC${real ? ' on Base' : ''} available`
           }
           style={[styles.hint, tooMuch && styles.error]}
         />
       </View>
       <View style={styles.presets}>
-        {presets.map((p) => (
-          <Chip
-            key={p}
-            label={`$${p}`}
-            accessibilityRole="radio"
-            selected={amount === p}
-            onPress={() => setTyped(String(p))}
-          />
-        ))}
+        {sell
+          ? [25, 50].map((pct) => {
+              const v = trimNumber((available * pct) / 100, 2);
+              return (
+                <Chip
+                  key={pct}
+                  label={`${pct}%`}
+                  accessibilityRole="radio"
+                  selected={amount > 0 && typed === v}
+                  onPress={() => setTyped(v)}
+                />
+              );
+            })
+          : presets.map((p) => (
+              <Chip
+                key={p}
+                label={`$${p}`}
+                accessibilityRole="radio"
+                selected={amount === p}
+                onPress={() => setTyped(String(p))}
+              />
+            ))}
         {available > 0 && !loading ? (
           <Chip
             label="Max"
@@ -127,8 +156,10 @@ export function JarAmount({
                 : !amount
                   ? 'Enter an amount'
                   : tooMuch
-                    ? 'Not enough USDC on Base'
-                    : (hold ?? cta)
+                    ? sell
+                      ? 'More than the jar holds'
+                      : 'Not enough USDC on Base'
+                    : (hold ?? (typeof cta === 'function' ? cta(amount) : cta))
         }
         disabled={!amount || tooMuch || watchOnly || loading || failed || !!hold}
         onPress={() => onDone(amount)}

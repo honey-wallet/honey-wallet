@@ -20,7 +20,7 @@ import { tap } from '@/lib/haptics';
 import { shortAddress } from '@/lib/mock-wallet';
 import { isWeb } from '@/lib/platform';
 import { setProfile, useProfile } from '@/lib/profile';
-import { JAR_VISIBILITY, shownVisibility, updateSettings, useSettings } from '@/lib/settings';
+import { JAR_VISIBILITY, updateSettings, useSettings } from '@/lib/settings';
 import { privacyOf, type SocialProfile, setPrivacy, socialError, useSocialMe } from '@/lib/social';
 import { SOCIAL } from '@/lib/surface';
 import { showErrorToast, showToast } from '@/lib/toast';
@@ -53,7 +53,7 @@ export default function SettingsScreen() {
 
   // Your public profile, once you've claimed a handle; signed out, the wallet stands in.
   const { me, loaded, signedIn } = useSocialMe();
-  const visibility = JAR_VISIBILITY.find((v) => v.id === shownVisibility(settings.jarVisibility));
+  const visibility = JAR_VISIBILITY.find((v) => v.id === settings.jarVisibility);
   const open = (href: Href) => () => {
     tap();
     router.push(href);

@@ -27,6 +27,12 @@ export type ChatMessage = { id: string; from: 'you' | 'agent'; parts: ChatPart[]
 /** The strategy the chat settled on, handed to the launch and edit screens. */
 export const chatDraft = createStore<Proposal | null>(null);
 
+/**
+ * Something to say in the chat when it's next on screen, e.g. "Make it low risk" from
+ * How much?'s risk tabs: the agent reworks the idea in the conversation, not in place.
+ */
+export const chatAsk = createStore<string | null>(null);
+
 let seq = 0;
 const id = () => `m${Date.now()}-${seq++}`;
 

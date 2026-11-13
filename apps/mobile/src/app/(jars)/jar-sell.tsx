@@ -1,40 +1,33 @@
 import { router, useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
-import { Text, View } from 'react-native';
-import { SegmentedTabs } from '@/components/motion/SegmentedTabs';
-import { PillButton } from '@/components/onboarding/PillButton';
-import { SheetScreen, StatRow } from '@/components/sheets/Sheet';
+import { JarAmount } from '@/components/jars/JarAmount';
+import { StrategyCard } from '@/components/jars/JarParts';
+import { SheetScreen } from '@/components/sheets/Sheet';
 import { SuccessPage } from '@/components/sheets/SuccessPage';
-import { TokenIcon } from '@/components/wallet/parts';
 import { confirmOwner } from '@/lib/auth';
 import { success, tap } from '@/lib/haptics';
 import { formatUsd } from '@/lib/mock-wallet';
 import { TEST_MODE } from '@/lib/test-mode';
 import { jarValue, thesisJars, useThesisJars } from '@/lib/thesis';
 import { showErrorToast } from '@/lib/toast';
-import { makeStyles } from '@/theme';
-
-const PARTS = ['25%', '50%', 'All'] as const;
-type Part = (typeof PARTS)[number];
-const SHARE: Record<Part, number> = { '25%': 0.25, '50%': 0.5, All: 1 };
 
 /**
- * Selling your jar, as any sale in Honey goes: how much (a quarter, half or all of it),
- * what each token turns into, one Face ID, then a receipt. Everything comes back as
- * USDC on Base, the money jars are bought with.
+ * Selling your jar, on the same screen as How much?: the jar's card, the amount with
+ * the keypad and quick amounts (25%, 50%, Max of the jar), then Sell, one Face ID and
+ * a receipt. It comes back as USDC on Base, the money jars are bought with.
  */
 export default function JarSellSheet() {
   const { id = '' } = useLocalSearchParams<{ id?: string }>();
   const jar = useThesisJars().find((j) => j.id === id);
-  const styles = useStyles();
-  const [part, setPart] = useState<Part>('All');
   const [stage, setStage] = useState<'review' | 'selling' | 'done'>('review');
   const [sold, setSold] = useState(0);
-  if (!jar) return null;
-  const value = jarValue(jar);
-  const usd = value * SHARE[part];
+  if (!jar && stage !== 'done') return null;
+  const value = jar ? jarValue(jar) : 0;
+  const cap = Math.floor(value * 100) / 100;
+  const all = sold >= cap - 0.01;
 
-  const sell = async () => {
+  const sell = async (usd: number) => {
+    if (!jar) return;
     tap();
     setStage('selling');
     try {
@@ -43,9 +36,10 @@ export default function JarSellSheet() {
       // Real sells (each token back to USDC through NEAR Intents) aren't wired yet:
       // test mode shows the whole flow; the real app says so plainly.
       if (!TEST_MODE) throw new Error('Selling jars from the app is coming soon');
-      const frac = SHARE[part];
+      const frac = Math.min(1, usd / (value || 1));
+      setSold(usd);
       thesisJars.set((list) =>
-        frac >= 1
+        frac >= 0.999
           ? list.filter((j) => j.id !== jar.id)
           : list.map((j) =>
               j.id === jar.id
@@ -57,7 +51,6 @@ export default function JarSellSheet() {
                 : j,
             ),
       );
-      setSold(usd);
       success();
       setStage('done');
     } catch (error) {
@@ -71,65 +64,30 @@ export default function JarSellSheet() {
     return (
       <SheetScreen title="" size="fill">
         <SuccessPage
-          title={SHARE[part] >= 1 ? 'Jar sold' : 'Sold'}
+          title={all ? 'Jar sold' : 'Sold'}
           amount={{ symbol: 'USDC', text: `${sold.toFixed(2)} USDC`, usd: formatUsd(sold) }}
-          rows={[
-            { label: 'From', value: jar.name },
-            { label: 'To', value: 'USDC on Base' },
-          ]}
+          rows={[{ label: 'To', value: 'USDC on Base' }]}
           onDone={() => {
             tap();
-            if (SHARE[part] >= 1) router.dismissAll();
+            if (all) router.dismissAll();
             else router.back();
           }}
         />
       </SheetScreen>
     );
+  if (!jar) return null;
 
   return (
-    <SheetScreen
-      title={`Sell ${jar.name}`}
-      size="fill"
-      footer={
-        <PillButton
-          label={stage === 'selling' ? 'Selling…' : `Sell ${formatUsd(usd)}`}
-          disabled={stage === 'selling' || usd <= 0}
-          onPress={() => void sell()}
-        />
-      }
-    >
-      <View style={styles.body}>
-        <SegmentedTabs<Part> options={[...PARTS]} value={part} onChange={setPart} fill />
-        <View style={styles.amount}>
-          <Text style={styles.big}>{formatUsd(usd)}</Text>
-          <Text style={styles.hint}>
-            {part === 'All' ? 'The whole jar' : `${part} of ${formatUsd(value)}`}
-          </Text>
-        </View>
-        <View>
-          {jar.picks.map((p) => (
-            <View key={p.symbol} style={styles.row}>
-              <TokenIcon symbol={p.symbol} size={28} />
-              <Text style={styles.symbol}>{p.symbol}</Text>
-              <Text style={styles.usd}>{formatUsd((usd * p.weight) / 100)}</Text>
-            </View>
-          ))}
-        </View>
-        <View>
-          <StatRow label="You get" value={`≈ ${usd.toFixed(2)} USDC`} />
-          <StatRow label="To" value="USDC on Base" />
-        </View>
-      </View>
+    <SheetScreen title="Sell" size="fill" onBack={() => router.back()}>
+      <JarAmount
+        sell={{ available: cap }}
+        initial={cap}
+        header={<StrategyCard split jar={jar} picks={jar.picks} name={jar.name} meta="Your jar" />}
+        note="Comes back as USDC on Base"
+        cta={(amount) => `Sell ${formatUsd(amount)}`}
+        hold={stage === 'selling' ? 'Selling…' : undefined}
+        onDone={(amount) => void sell(amount)}
+      />
     </SheetScreen>
   );
 }
-
-const useStyles = makeStyles((c) => ({
-  body: { gap: 20 },
-  amount: { alignItems: 'center', gap: 4, paddingVertical: 8 },
-  big: { color: c.text, fontSize: 44, fontWeight: '700', fontVariant: ['tabular-nums'] },
-  hint: { color: c.textSecondary, fontSize: 14 },
-  row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 8 },
-  symbol: { flex: 1, color: c.text, fontSize: 16, fontWeight: '500' },
-  usd: { color: c.textSecondary, fontSize: 15, fontVariant: ['tabular-nums'] },
-}));

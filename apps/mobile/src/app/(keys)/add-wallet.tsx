@@ -1,4 +1,4 @@
-import { type Href, router } from 'expo-router';
+import { type Href, router, useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
 import { View } from 'react-native';
 import { Icon, type IconName } from '@/components/Icon';
@@ -21,6 +21,8 @@ type Option = {
   title: string;
   hint: string;
   onPress: () => void;
+  /** Not available yet: shown dimmed, does nothing. */
+  soon?: boolean;
 };
 
 /**
@@ -29,7 +31,11 @@ type Option = {
  * (Keystone and other QR wallets).
  */
 export default function AddWalletSheet() {
-  const [page, setPage] = useState<Page>('main');
+  // `?page=hardware` opens straight on the hardware wallets (the switcher's row).
+  const params = useLocalSearchParams<{ page?: Page }>();
+  const [page, setPage] = useState<Page>(() =>
+    params.page === 'hardware' || params.page === 'import' ? params.page : 'main',
+  );
   const go = (next: Page) => () => setPage(next);
   const open = (href: Href) => () => router.push(href);
 
@@ -135,6 +141,13 @@ export default function AddWalletSheet() {
           onPress: open({ pathname: '/hardware-wallet', params: { device: 'keystone' } }),
         },
         {
+          icon: 'hardware',
+          title: 'Ledger',
+          hint: 'Over Bluetooth · coming soon',
+          onPress: () => {},
+          soon: true,
+        },
+        {
           icon: 'qr',
           title: 'Other QR wallets',
           hint: 'OneKey, NGRAVE, AirGap Vault',
@@ -161,24 +174,31 @@ function OptionRow({ option: o }: { option: Option }) {
   const styles = useStyles();
   const c = useTheme();
   return (
-    <SheetRow
-      title={o.title}
-      subtitle={o.hint}
-      leading={
-        <View style={styles.icon}>
-          <Icon name={o.icon} size={19} color={c.accentText} />
-        </View>
-      }
-      accessory="chevron"
-      onPress={() => {
-        tap();
-        o.onPress();
-      }}
-    />
+    <View style={o.soon ? styles.soon : null}>
+      <SheetRow
+        title={o.title}
+        subtitle={o.hint}
+        leading={
+          <View style={styles.icon}>
+            <Icon name={o.icon} size={19} color={c.accentText} />
+          </View>
+        }
+        accessory={o.soon ? undefined : 'chevron'}
+        onPress={
+          o.soon
+            ? undefined
+            : () => {
+                tap();
+                o.onPress();
+              }
+        }
+      />
+    </View>
   );
 }
 
 const useStyles = makeStyles((c) => ({
+  soon: { opacity: 0.45 },
   icon: {
     width: 44,
     height: 44,

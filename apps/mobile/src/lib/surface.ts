@@ -54,6 +54,7 @@ const PHONE_ONLY = [
   '/u/',
   '/claim-handle',
   '/compose',
+  '/share-thesis',
   '/post-buy',
   '/pnl',
   '/people',

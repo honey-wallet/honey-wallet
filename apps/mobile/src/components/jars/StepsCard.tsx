@@ -7,9 +7,6 @@ import { tap } from '@/lib/haptics';
 import { makeStyles, radius, useTheme } from '@/theme';
 import { DURATION } from '@/theme/motion';
 
-/** Ticks in the header's progress bar, the split bar's stripes in miniature. */
-const TICKS = 24;
-
 /**
  * A short checklist of steps with a header that sums it up: title, a striped bar that
  * fills as steps finish, and "3/6". Open while it runs; once done it folds to the
@@ -34,7 +31,6 @@ export function StepsCard({
   const [open, setOpen] = useState<boolean | null>(null);
   // Open while working, folded when finished, unless you've chosen.
   const expanded = open ?? !done;
-  const filled = Math.round((Math.min(at, steps.length) / steps.length) * TICKS);
   return (
     <Animated.View layout={LinearTransition.duration(DURATION.medium)} style={styles.card}>
       <PressableScale
@@ -52,14 +48,13 @@ export function StepsCard({
         <Text style={styles.title} numberOfLines={1}>
           {done ? doneTitle : title}
         </Text>
-        <View style={styles.ticks}>
-          {Array.from({ length: TICKS }, (_, i) => (
-            <View
-              // biome-ignore lint/suspicious/noArrayIndexKey: ticks are positions
-              key={i}
-              style={[styles.tick, { backgroundColor: i < filled ? c.success : c.divider }]}
-            />
-          ))}
+        <View style={styles.track}>
+          <View
+            style={[
+              styles.fill,
+              { width: `${(Math.min(at, steps.length) / steps.length) * 100}%` },
+            ]}
+          />
         </View>
         <Text style={styles.count}>
           {Math.min(at, steps.length)}/{steps.length}
@@ -114,8 +109,8 @@ const useStyles = makeStyles((c) => ({
   card: { ...radius(20), backgroundColor: c.card, overflow: 'hidden' },
   head: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 16, height: 48 },
   title: { flex: 1, color: c.text, fontSize: 15, fontWeight: '600' },
-  ticks: { flexDirection: 'row', gap: 2, height: 12, alignItems: 'center' },
-  tick: { width: 2, height: 12, borderRadius: 1 },
+  track: { width: 64, height: 6, borderRadius: 3, backgroundColor: c.divider, overflow: 'hidden' },
+  fill: { height: 6, borderRadius: 3, backgroundColor: c.success },
   count: {
     color: c.textSecondary,
     fontSize: 13,

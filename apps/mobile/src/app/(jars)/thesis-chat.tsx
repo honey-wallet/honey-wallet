@@ -1,5 +1,5 @@
-import { router, useLocalSearchParams } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -38,6 +38,7 @@ import {
 import {
   type ChatMessage,
   type ChatPart,
+  chatAsk,
   chatDraft,
   money,
   newMessage,
@@ -97,6 +98,17 @@ export default function ThesisChatScreen() {
       setBusy(false);
     }
   };
+
+  // Back from How much? with a change of risk: ask it here, in the conversation.
+  useFocusEffect(
+    // biome-ignore lint/correctness/useExhaustiveDependencies: reads the latest send
+    useCallback(() => {
+      const ask = chatAsk.get();
+      if (!ask) return;
+      chatAsk.set(null);
+      void send(ask);
+    }, [busy]),
+  );
 
   // An idea passed in (from the Jars field) starts the chat straight away.
   // biome-ignore lint/correctness/useExhaustiveDependencies: once, on open
@@ -475,11 +487,12 @@ function AnswerCard({ proposal, latest }: { proposal: Proposal; latest: boolean 
     >
       {latest ? (
         <CopyStepper
-          label="Buy"
+          verb="Create jar"
+          label="Create jar"
           onCopy={(amount) => {
             tap();
             chatDraft.set(withAmount(proposal, amount));
-            router.push({ pathname: '/thesis-new', params: { step: 'proposal' } });
+            router.push({ pathname: '/thesis-new', params: { step: 'proposal', from: 'chat' } });
           }}
         />
       ) : (

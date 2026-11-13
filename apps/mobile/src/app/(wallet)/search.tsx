@@ -4,6 +4,7 @@ import { AppState, ScrollView, Text, View } from 'react-native';
 import Animated, { Keyframe } from 'react-native-reanimated';
 import { Icon } from '@/components/Icon';
 import { JarList } from '@/components/jars/JarParts';
+import { ActionMenu } from '@/components/motion/ActionMenu';
 import { ContentSwap } from '@/components/motion/ContentSwap';
 import { Swap } from '@/components/motion/IconSwap';
 import { MenuDropdown, type MenuOption } from '@/components/motion/MenuDropdown';
@@ -36,7 +37,7 @@ import {
 } from '@/lib/mock-wallet';
 import { isWeb } from '@/lib/platform';
 import { reorderSavedTokens, toggleSavedToken, useSavedTokens } from '@/lib/saved';
-import { type SearchSort, useSectionPrefs } from '@/lib/section-prefs';
+import { type SearchSort, updateSectionPrefs, useSectionPrefs } from '@/lib/section-prefs';
 import {
   type FollowSuggestion,
   loadLeaderboard,
@@ -680,17 +681,35 @@ function PeopleToFollow() {
     <>
       <View style={[styles.header, styles.section]}>
         <Text style={styles.heading}>People to follow</Text>
-        <PressableScale
-          accessibilityRole="button"
-          hitSlop={10}
-          scaleTo={0.97}
-          onPress={() => {
-            tap();
-            router.push('/find-people');
-          }}
-        >
-          <Text style={styles.seeAll}>See all</Text>
-        </PressableScale>
+        <View style={styles.headerEnd}>
+          <PressableScale
+            accessibilityRole="button"
+            hitSlop={10}
+            scaleTo={0.97}
+            onPress={() => {
+              tap();
+              router.push('/find-people');
+            }}
+          >
+            <Text style={styles.seeAll}>See all</Text>
+          </PressableScale>
+          {/* The same ••• as Favorite tokens: this section's options. */}
+          <ActionMenu
+            bare
+            actions={[
+              {
+                label: 'Find people',
+                icon: 'search',
+                onPress: () => router.push('/find-people'),
+              },
+              {
+                label: 'Hide this section',
+                icon: 'eyeSlash',
+                onPress: () => updateSectionPrefs({ searchShowPeople: false }),
+              },
+            ]}
+          />
+        </View>
       </View>
       <ScrollView
         horizontal

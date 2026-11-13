@@ -36,7 +36,6 @@ import { PillButton } from '@/components/onboarding/PillButton';
 import { Description } from '@/components/sheets/Description';
 import { DetailGroup, StatusPill } from '@/components/sheets/Details';
 import { SheetRow, StatRow } from '@/components/sheets/Sheet';
-import { openCompose } from '@/components/social/FeedSections';
 import {
   CopyOff,
   CopyStepper,
@@ -316,7 +315,7 @@ function JarPage({ jar, id }: { jar: ThesisJar | undefined; id: string }) {
           // Your own jar: what you do after looking at a position is sell (some of) it.
           <View style={styles.footer}>
             <PillButton
-              label="Sell"
+              label={`Sell ${formatUsd(jarValue(jar))}`}
               variant="secondary"
               style={styles.flex}
               onPress={() => {
@@ -696,18 +695,15 @@ function JarBody({
         <View style={styles.gutter}>
           <PressableRow
             accessibilityRole="button"
-            accessibilityLabel="Share a thesis about this jar"
-            onPress={() =>
-              openCompose({
-                jar: serverId,
-                symbol: jar.picks[0]?.symbol,
-                chain: jar.picks[0]?.chain,
-              })
-            }
+            accessibilityLabel="Post this jar to the Feed"
+            onPress={() => {
+              tap();
+              router.push({ pathname: '/jar-post', params: { id: jar.id } });
+            }}
             style={styles.shareThesis}
           >
             <Icon name="chat" size={16} color={c.accentText} />
-            <Text style={[styles.shareThesisText, styles.flex]}>Share a thesis about it</Text>
+            <Text style={[styles.shareThesisText, styles.flex]}>Post this jar</Text>
             <Icon name="chevronRight" size={13} color={c.textSecondary} />
           </PressableRow>
         </View>

@@ -553,7 +553,10 @@ export function CopyStepper({
   label,
   onCopy,
   primary,
+  verb = 'Copy',
 }: {
+  /** The word before the amount: Copy for someone's jar, Create jar for your own idea. */
+  verb?: string;
   label: string;
   onCopy: (amount: number) => void;
   /** The page's main action (a jar's footer): Copy in honey at full size, − and + grey. */
@@ -614,10 +617,10 @@ export function CopyStepper({
           onPress={() => onCopy(amount)}
         >
           <Animated.View layout={glide}>
-            <Icon name="copy" size={16} color={ink} />
+            <Icon name={verb === 'Copy' ? 'copy' : 'plus'} size={16} color={ink} />
           </Animated.View>
           <Animated.View layout={glide} style={styles.copyWords}>
-            <Text style={copyText}>Copy </Text>
+            <Text style={copyText}>{verb} </Text>
             <TextSwap text={String(amount)} direction={direction} style={copyText} />
             <Text style={copyText}> </Text>
             <TokenIcon symbol="USDC" size={20} />

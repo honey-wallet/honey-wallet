@@ -36,7 +36,7 @@ import { formatUsd } from '@/lib/mock-wallet';
 import { memberName, propose, useActiveMultisig } from '@/lib/multisig';
 import { SHEET_EXIT } from '@/lib/navigation';
 import { useProfile } from '@/lib/profile';
-import { JAR_VISIBILITY, settings, shownVisibility, useSettings } from '@/lib/settings';
+import { JAR_VISIBILITY, settings, useSettings } from '@/lib/settings';
 import { TEST_MODE } from '@/lib/test-mode';
 import {
   copyProposal,
@@ -59,7 +59,7 @@ import {
   withoutPick,
   withProxy,
 } from '@/lib/thesis';
-import { chatDraft } from '@/lib/thesis-chat';
+import { chatAsk, chatDraft } from '@/lib/thesis-chat';
 import { showErrorToast, showToast } from '@/lib/toast';
 import { requireSignIn } from '@/lib/wallet-gate';
 import { useActiveWallet } from '@/lib/wallets';
@@ -92,6 +92,7 @@ export default function NewThesisSheet() {
     copy,
     manual,
     name: named,
+    from,
   } = useLocalSearchParams<{
     idea?: string;
     step?: 'proposal' | 'jar';
@@ -101,6 +102,8 @@ export default function NewThesisSheet() {
     copy?: string;
     /** Built by hand (jar-build, a post's tokens): chatDraft holds the tokens picked. */
     manual?: string;
+    /** Opened from the chat's answer: a change of risk goes back and asks there. */
+    from?: string;
   }>();
   // Picks that came from a person, not the agent: changing the risk mustn't re-run it.
   const fixedPicks = !!copy || !!manual;
@@ -161,9 +164,7 @@ export default function NewThesisSheet() {
     setText(next.thesis);
     setStep(openAt);
   }, [copied, proposal, openAt]);
-  const [visibility, setVisibility] = useState<Visibility>(() =>
-    shownVisibility(settings.get().jarVisibility),
-  );
+  const [visibility, setVisibility] = useState<Visibility>(() => settings.get().jarVisibility);
   // Friends picked in the "Add friends" tray; a fresh launch starts with just you.
   const friends = friendPicks.useValue();
   useEffect(() => {
@@ -511,7 +512,20 @@ export default function NewThesisSheet() {
                   options={[...RISKS]}
                   labels={{ Low: 'Low risk', Medium: 'Medium', High: 'High risk' }}
                   value={risk}
-                  onChange={(next) => void switchRisk(next)}
+                  onChange={(next) => {
+                    // From the chat: back to it, asking for this risk in the conversation.
+                    if (from === 'chat') {
+                      tap();
+                      chatAsk.set(
+                        next === 'Medium'
+                          ? 'Make it medium risk'
+                          : `Make it ${next.toLowerCase()} risk`,
+                      );
+                      router.back();
+                      return;
+                    }
+                    void switchRisk(next);
+                  }}
                   fill
                 />
               )}

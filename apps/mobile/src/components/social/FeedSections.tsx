@@ -503,8 +503,10 @@ export function openCompose(params: { symbol?: string; chain?: string; jar?: str
     router.push('/wallet-sign-in');
     return;
   }
-  // The composer itself asks for a handle when there isn't one yet.
-  router.push({ pathname: '/compose', params });
+  // A thesis is a jar now: make one, or post one you have (2026-11-13). The old
+  // free-text composer (/compose) is no longer opened.
+  void params;
+  router.push('/share-thesis');
 }
 
 const useStyles = makeStyles((c) => ({

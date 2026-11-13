@@ -243,6 +243,7 @@ export default function RootLayout() {
               <Stack.Screen name="(social)/claim-handle" options={tray()} />
               <Stack.Screen name="(social)/people" options={tray()} />
               <Stack.Screen name="(social)/collaborators" options={tray()} />
+              <Stack.Screen name="(social)/share-thesis" options={tray()} />
               <Stack.Screen name="(social)/find-people" />
               <Stack.Screen name="(social)/compose" options={sheet([1])} />
               <Stack.Screen name="(social)/post-buy" options={sheet([1])} />

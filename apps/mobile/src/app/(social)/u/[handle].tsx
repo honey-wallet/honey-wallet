@@ -683,7 +683,7 @@ const useStyles = makeStyles((c) => ({
     marginBottom: (AVATAR_OUTER / 2 - ACTION) / 2,
   },
   // Room to breathe as X spaces it: avatar → name, name → handle, handle → numbers → tabs.
-  info: { marginTop: 12, marginBottom: 20, paddingHorizontal: SIDE },
+  info: { marginTop: 18, marginBottom: 4, paddingHorizontal: SIDE },
   name: { color: c.text, fontSize: 24, fontWeight: '800', letterSpacing: -0.4 },
   nameRow: {
     flexDirection: 'row',

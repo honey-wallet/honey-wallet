@@ -122,12 +122,12 @@ export default function WalletsSheet() {
   const { height: screen } = useWindowDimensions();
   // Honey is social now (2026-11-13): signed in, your own wallet's button is your profile
   // (name, photo, handle); app settings stay on every header's gear.
-  const { signedIn } = useSocialMe();
+  const { signedIn, me } = useSocialMe();
   const isShared = !!shared.multisigs[active.id];
   const settingsLabel = isShared
     ? 'Shared wallet settings'
     : signedIn
-      ? 'Profile settings'
+      ? 'Your profile'
       : 'Wallet settings';
   const openSettings = () => {
     tap();
@@ -135,7 +135,11 @@ export default function WalletsSheet() {
     if (isShared) {
       leaveSheetTo({ pathname: '/multisig/[id]', params: { id: active.id } });
     } else if (signedIn) {
-      leaveSheetTo('/profile-edit');
+      // Your profile page, as others see it; Edit profile is on it (2026-11-13). No
+      // handle yet: claim one first.
+      leaveSheetTo(
+        me ? { pathname: '/u/[handle]', params: { handle: me.handle } } : '/claim-handle',
+      );
     } else {
       leaveSheetTo('/settings');
     }
@@ -303,7 +307,12 @@ export default function WalletsSheet() {
               </View>
             }
             title="Connect a hardware wallet"
-            onPress={() => open('/hardware-wallet')}
+            // The list of devices first (Keystone, Ledger, other QR wallets), not
+            // straight into Keystone's steps.
+            onPress={() => {
+              tap();
+              router.push({ pathname: '/add-wallet', params: { page: 'hardware' } });
+            }}
           />
         </>
       )}
