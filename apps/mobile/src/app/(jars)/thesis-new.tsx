@@ -30,6 +30,7 @@ import { blockedRoutes, describeRoute, useRoutes } from '@/lib/jar-routes';
 import { useTokenChart } from '@/lib/market';
 import { formatUsd } from '@/lib/mock-wallet';
 import { memberName, propose, useActiveMultisig } from '@/lib/multisig';
+import { SHEET_EXIT } from '@/lib/navigation';
 import { JAR_FEES, JAR_SLIPPAGES, JAR_VISIBILITY, settings } from '@/lib/settings';
 import { TEST_MODE } from '@/lib/test-mode';
 import {
@@ -312,7 +313,8 @@ export default function NewThesisSheet() {
     // With friends: a group jar. Nothing is bought yet: the group is created and friends
     // are invited; money moves once they've joined (the group's page takes it from here).
     if (friends.length) {
-      if (!requireSignIn('invite friends')) return;
+      // Test mode makes a sample group, signed out.
+      if (!TEST_MODE && !requireSignIn('invite friends')) return;
       setBuying(true);
       try {
         const group = await startGroup(proposal, {
@@ -322,8 +324,13 @@ export default function NewThesisSheet() {
           copyFee: copied || visibility !== 'public' ? 0 : copyFee,
         });
         showToast(`Invited ${friends.length} ${friends.length === 1 ? 'friend' : 'friends'}`);
+        // Off the sheets first, then the group page as a full page: pushed while a sheet
+        // is still closing, it opened inside the sheet with a doubled top inset.
         if (router.canDismiss()) router.dismissAll();
-        router.push({ pathname: '/group/[id]', params: { id: group.id } });
+        setTimeout(
+          () => router.push({ pathname: '/group/[id]', params: { id: group.id } }),
+          SHEET_EXIT,
+        );
       } catch (error) {
         showErrorToast(groupError(error));
       } finally {
@@ -458,10 +465,15 @@ export default function NewThesisSheet() {
                   name={copied?.name ?? proposal.thesis}
                   meta={
                     copied
-                      ? `by ${copied.creator} · ${copied.copiers} copied`
+                      ? `by ${copied.creator}${copied.copiers > 0 ? ` · ${copied.copiers} copied` : ''}`
                       : manual
                         ? 'Your jar'
                         : 'Honey’s pick'
+                  }
+                  fee={
+                    copied && !copied.mine && copied.copyFee > 0
+                      ? `${copied.copyFee}% fee`
+                      : undefined
                   }
                   onStep={
                     canEdit
@@ -520,11 +532,6 @@ export default function NewThesisSheet() {
           }
           initial={spend}
           onChange={setSpend}
-          note={
-            copied && !copied.mine && copied.copyFee > 0
-              ? `${copied.creator} gets ${copied.copyFee}% of your profit, never of a loss`
-              : undefined
-          }
           hold={
             checking
               ? 'Checking routes…'

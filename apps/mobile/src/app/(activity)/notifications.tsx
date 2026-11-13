@@ -36,8 +36,10 @@ import {
 } from '@/lib/multisig';
 import { useWalletNotifications, type WalletNotification } from '@/lib/notification-feed';
 import { markNotificationsRead } from '@/lib/notifications';
+import { SHARED_WALLETS } from '@/lib/surface';
 import { TEST_MODE } from '@/lib/test-mode';
 import { showToast } from '@/lib/toast';
+import { useActiveWallet } from '@/lib/wallets';
 import { makeStyles, useTheme } from '@/theme';
 import { LAYOUT_MOVE } from '@/theme/motion';
 
@@ -63,9 +65,17 @@ export default function NotificationsScreen() {
   // Opening the screen clears Home's unread badge.
   useEffect(markNotificationsRead, []);
   const mounted = useHasMounted();
-  const waiting = useNeedsMyApproval();
-  const events = useMultisigEvents();
   const { multisigs, proposals } = useMultisigState();
+  // Shared wallets are off for now (2026-11-13): group jars replace them. Only a group
+  // jar's own wallet (`dao`) or the shared wallet in use still asks for approvals here.
+  const active = useActiveWallet();
+  const shown = (walletId: string) =>
+    SHARED_WALLETS || !!multisigs[walletId]?.dao || walletId === active.id;
+  const waiting = useNeedsMyApproval().filter((p) => shown(p.walletId));
+  const events = useMultisigEvents().filter((e) => {
+    const p = proposals.find((x) => x.id === e.proposalId);
+    return !!p && shown(p.walletId);
+  });
   const firstLoad = useFirstLoad(LOADS.notifications);
   const wallet = useWalletNotifications();
   const loading = TEST_MODE ? firstLoad : wallet.loading;

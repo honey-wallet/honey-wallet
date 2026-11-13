@@ -3,7 +3,6 @@ import { useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { Text, View } from 'react-native';
 import { Icon } from '@/components/Icon';
-import { People } from '@/components/jars/JarParts';
 import { PillButton } from '@/components/onboarding/PillButton';
 import { SheetRow, StatRow } from '@/components/sheets/Sheet';
 import { dollars, membersIn } from '@/lib/group-jar-core';
@@ -123,70 +122,133 @@ export function GroupJarFooter({ state }: { state: GroupJarState }) {
 }
 
 /**
- * Who's in, your slice (1/N of what the jar holds), open votes, then Leave (your whole
- * slice) and Cash out together. A vote already under way hides both.
+ * A group jar's own part of the jar page, the way a bank shows a shared pot: your
+ * position first (your slice and share), then open votes, and quiet
+ * Manage rows at the end. Leave and Cash out each ask once, inline, before proposing:
+ * they're votes that end your stake, so they never sit as big buttons.
  */
 export function GroupJarSection({ state }: { state: GroupJarState }) {
   const styles = useStyles();
   const c = useTheme();
   const { g, n, slice, votes } = state;
-  const people = membersIn(g);
   const live = g.status === 'active' && g.myState === 'accepted';
+  const [confirm, setConfirm] = useState<'leave' | 'cashout' | null>(null);
+  const pct = Math.round(100 / n);
+  const pie = <Icon name="pieOutline" size={15} color={c.textSecondary} />;
   return (
-    <View>
-      <Text style={styles.heading}>Who's in</Text>
-      <View style={styles.who}>
-        <People
-          names={people.map((m) => ({
-            id: m.isMe ? 'me' : m.avatarSeed || m.handle,
-            name: m.displayName,
-          }))}
-          size={28}
-          ring={c.canvas}
-        />
-        <Text style={styles.names} numberOfLines={1}>
-          {people.map((m) => (m.isMe ? 'You' : m.displayName.split(' ')[0])).join(', ')}
-        </Text>
-      </View>
-      {live ? (
-        <StatRow
-          icon={<Icon name="pieOutline" size={15} color={c.textSecondary} />}
-          label="Your slice"
-          value={`${dollars(slice)} · 1/${n}`}
-        />
-      ) : (
-        <StatRow
-          icon={<Icon name="pieOutline" size={15} color={c.textSecondary} />}
-          label="Group"
-          value={g.status === 'closed' ? 'Cashed out' : 'You left'}
-        />
-      )}
-      {votes.map(({ vote, approvals }) => (
-        <SheetRow
-          key={vote.proposalId}
-          icon="clock"
-          title={
-            vote.kind === 'leave' ? `${vote.proposer.displayName} is leaving` : KIND[vote.kind]
-          }
-          subtitle={`${approvals} of ${g.threshold} approved`}
-        />
-      ))}
-      {live && !state.payoutOpen ? (
-        <View style={styles.buttons}>
-          <PillButton
-            label={`Leave with ${dollars(slice)}`}
-            variant="secondary"
-            disabled={!!state.busy}
-            onPress={() => void state.leave()}
-          />
-          {n > 1 ? (
-            <PillButton
-              label="Cash out together"
-              variant="secondary"
-              disabled={!!state.busy}
-              onPress={() => void state.cashOut()}
+    <View style={styles.root}>
+      <View>
+        <Text style={styles.heading}>Your position</Text>
+        {live ? (
+          <>
+            <StatRow icon={pie} label="Your slice" value={dollars(slice)} />
+            <StatRow
+              icon={<Icon name="personOutline" size={15} color={c.textSecondary} />}
+              label="Your share"
+              value={`1 of ${n} · ${pct}%`}
             />
-          ) : null}
+            <StatRow
+              icon={<Icon name="checkCircle" size={15} color={c.textSecondary} />}
+              label="Changes need"
+              value={`${g.threshold} of ${n}`}
+            />
+          </>
+        ) : (
+          <StatRow
+            icon={pie}
+            label="Group"
+            value={g.status === 'closed' ? 'Cashed out' : 'You left'}
+          />
+        )}
+      </View>
+
+      {votes.length ? (
+        <View>
+          <Text style={styles.heading}>Open votes</Text>
+          {votes.map(({ vote, approvals }) => (
+            <SheetRow
+              key={vote.proposalId}
+              icon="clock"
+              title={
+                vote.kind === 'leave' ? `${vote.proposer.displayName} is leaving` : KIND[vote.kind]
+              }
+              subtitle={`${approvals} of ${g.threshold} approved`}
+            />
+          ))}
+        </View>
+      ) : null}
+
+      {live && !state.payoutOpen ? (
+        <View>
+          <Text style={styles.heading}>Manage</Text>
+          {confirm ? (
+            <View style={styles.confirm}>
+              <Text style={styles.confirmTitle}>
+                {confirm === 'leave' ? `Leave with ${dollars(slice)}?` : 'Cash out together?'}
+              </Text>
+              <Text style={styles.confirmHint}>
+                {confirm === 'leave'
+                  ? `You get your 1/${n} of each token once ${g.threshold} of ${n} approve.`
+                  : `Everyone gets their part and the jar closes once ${g.threshold} of ${n} approve.`}
+              </Text>
+              <View style={styles.confirmButtons}>
+                <PillButton
+                  label="Cancel"
+                  variant="secondary"
+                  size="compact"
+                  style={styles.flex}
+                  disabled={!!state.busy}
+                  onPress={() => {
+                    tap();
+                    setConfirm(null);
+                  }}
+                />
+                <PillButton
+                  label={
+                    state.busy
+                      ? 'Proposing…'
+                      : confirm === 'leave'
+                        ? 'Propose leaving'
+                        : 'Propose cash out'
+                  }
+                  variant="secondary"
+                  size="compact"
+                  style={styles.flex}
+                  disabled={!!state.busy}
+                  onPress={() =>
+                    void (confirm === 'leave' ? state.leave() : state.cashOut()).then(() =>
+                      setConfirm(null),
+                    )
+                  }
+                />
+              </View>
+            </View>
+          ) : (
+            <>
+              {n > 1 ? (
+                <SheetRow
+                  icon="arrowDown"
+                  title="Cash out together"
+                  subtitle="Close the jar and split it"
+                  accessory="chevron"
+                  onPress={() => {
+                    tap();
+                    setConfirm('cashout');
+                  }}
+                />
+              ) : null}
+              <SheetRow
+                icon="minusCircle"
+                title="Leave group"
+                subtitle={`Take your ${dollars(slice)} out`}
+                destructive
+                onPress={() => {
+                  tap();
+                  setConfirm('leave');
+                }}
+              />
+            </>
+          )}
         </View>
       ) : null}
     </View>
@@ -194,8 +256,11 @@ export function GroupJarSection({ state }: { state: GroupJarState }) {
 }
 
 const useStyles = makeStyles((c) => ({
-  heading: { marginBottom: 10, color: c.textSecondary, fontSize: 15 },
-  who: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 8 },
-  names: { flex: 1, color: c.text, fontSize: 15 },
-  buttons: { marginTop: 16, gap: 10 },
+  root: { gap: 28 },
+  flex: { flex: 1 },
+  heading: { marginBottom: 6, color: c.textSecondary, fontSize: 15 },
+  confirm: { gap: 6, paddingVertical: 8 },
+  confirmTitle: { color: c.text, fontSize: 17, fontWeight: '600' },
+  confirmHint: { color: c.textSecondary, fontSize: 14, lineHeight: 20 },
+  confirmButtons: { flexDirection: 'row', gap: 10, marginTop: 10 },
 }));

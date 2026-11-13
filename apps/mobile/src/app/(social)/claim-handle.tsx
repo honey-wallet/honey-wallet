@@ -1,67 +1,26 @@
 import { router } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { Text, TextInput, View } from 'react-native';
 import { Avatar } from '@/components/Avatar';
 import { Icon } from '@/components/Icon';
 import { Toggle } from '@/components/motion/Toggle';
 import { PillButton } from '@/components/onboarding/PillButton';
 import { SheetScreen, SheetText } from '@/components/sheets/Sheet';
+import { cleanHandle, handleLine, suggestHandle, useHandleCheck } from '@/lib/handle-check';
 import { success, tap } from '@/lib/haptics';
 import { useProfile } from '@/lib/profile';
-import { handleStatus, saveSocialProfile, socialError } from '@/lib/social';
+import { saveSocialProfile, socialError } from '@/lib/social';
 import { showErrorToast, showToast } from '@/lib/toast';
 import { makeStyles, radius, useTheme } from '@/theme';
 
-type Check = 'idle' | 'checking' | 'available' | 'taken' | 'invalid' | 'offline';
-
-/** A first guess from the profile name: "Swayam K" → "swayamk". */
-const suggest = (name: string) =>
-  name
-    .toLowerCase()
-    .replace(/[^a-z0-9_]/g, '')
-    .slice(0, 20);
-
-/**
- * Claiming an @handle makes you followable. Your name, bio and avatar come from your
- * profile; trades stay private unless you turn sharing on (here or in Settings).
- */
 export default function ClaimHandleSheet() {
   const styles = useStyles();
   const c = useTheme();
   const profile = useProfile();
-  const [handle, setHandle] = useState(() => {
-    const guess = suggest(profile.name);
-    return guess.length >= 3 && guess !== 'honey' ? guess : '';
-  });
-  const [check, setCheck] = useState<Check>('idle');
+  const [handle, setHandle] = useState(() => suggestHandle(profile.name));
+  const check = useHandleCheck(handle);
   const [shareTrades, setShareTrades] = useState(false);
   const [saving, setSaving] = useState(false);
-  const latest = useRef(0);
-
-  // Checks availability 300ms after typing stops; only the latest answer counts.
-  useEffect(() => {
-    const value = handle.trim();
-    if (!value) {
-      setCheck('idle');
-      return;
-    }
-    if (!/^[a-z0-9_]{3,20}$/.test(value)) {
-      setCheck('invalid');
-      return;
-    }
-    setCheck('checking');
-    const id = ++latest.current;
-    const timer = setTimeout(() => {
-      handleStatus(value)
-        .then((s) => {
-          if (id === latest.current) setCheck(s.available ? 'available' : 'taken');
-        })
-        .catch(() => {
-          if (id === latest.current) setCheck('offline');
-        });
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [handle]);
 
   const claim = async () => {
     tap();
@@ -77,15 +36,7 @@ export default function ClaimHandleSheet() {
     }
   };
 
-  const status: Record<Check, { text: string; tone: 'muted' | 'good' | 'bad' }> = {
-    idle: { text: '3 to 20 letters, numbers or _', tone: 'muted' },
-    checking: { text: 'Checking…', tone: 'muted' },
-    available: { text: `@${handle} is yours to claim`, tone: 'good' },
-    taken: { text: `@${handle} is taken`, tone: 'bad' },
-    invalid: { text: 'Use 3 to 20 lowercase letters, numbers or _', tone: 'bad' },
-    offline: { text: 'Couldn’t check. Try again in a moment.', tone: 'bad' },
-  };
-  const line = status[check];
+  const line = handleLine(check, handle);
 
   return (
     <SheetScreen
@@ -110,7 +61,7 @@ export default function ClaimHandleSheet() {
             <Text style={styles.at}>@</Text>
             <TextInput
               value={handle}
-              onChangeText={(t) => setHandle(t.toLowerCase().replace(/[^a-z0-9_]/g, ''))}
+              onChangeText={(t) => setHandle(cleanHandle(t))}
               placeholder="yourname"
               placeholderTextColor={c.textSecondary}
               autoCapitalize="none"

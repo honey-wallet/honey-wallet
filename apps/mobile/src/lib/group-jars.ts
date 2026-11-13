@@ -20,6 +20,15 @@ import { daoAccountId, USDC_INTENTS } from '@honey-wallet/keyring';
 import { api } from '@/lib/api';
 import { backendSessionToken } from '@/lib/backend-session';
 import {
+  advanceDemo,
+  type DemoAction,
+  demoGroups,
+  demoHistory,
+  demoStartGroup,
+  isDemoGroup,
+  withMe,
+} from '@/lib/group-demo';
+import {
   checkShareQuote,
   fitLegs,
   groupDaoName,
@@ -39,19 +48,42 @@ import {
   trackGroupDao,
 } from '@/lib/jar-dao';
 import type { Route } from '@/lib/jar-routes';
-import { socialPicks } from '@/lib/social';
+import { social, socialPicks } from '@/lib/social';
 import { createStore } from '@/lib/store';
+import { TEST_MODE } from '@/lib/test-mode';
 import { type Pick as JarPick, ME, type Proposal, type ThesisJar, thesisJars } from '@/lib/thesis';
 import { tokenColor } from '@/lib/token-colors';
 import { wallets } from '@/lib/wallets';
 
-/** Every group this phone has read, by id. */
-export const groups = createStore<Record<string, SocialGroup>>({});
+/** Every group this phone has read, by id (test mode starts with its sample groups). */
+export const groups = createStore<Record<string, SocialGroup>>(TEST_MODE ? demoGroups() : {});
 export const useGroup = (id: string): SocialGroup | undefined => groups.useValue()[id];
 const put = (g: SocialGroup) => {
   groups.set((all) => ({ ...all, [g.id]: g }));
   return g;
 };
+
+// Test mode: once your handle arrives, the sample groups show you by it.
+if (TEST_MODE) {
+  let handle = social.get().me?.handle;
+  social.subscribe(() => {
+    const next = social.get().me?.handle;
+    if (next === handle) return;
+    handle = next;
+    groups.set((all) =>
+      Object.fromEntries(
+        Object.entries(all).map(([id, g]) => [id, isDemoGroup(id) ? withMe(g) : g]),
+      ),
+    );
+  });
+}
+
+/** Test mode: a sample group's next state, here only (no server, no chain). */
+async function demo(id: string, action?: DemoAction) {
+  const g = groups.get()[id] ?? demoGroups()[id];
+  if (!g) throw new Error('This group isn’t available');
+  return put(withMe(action ? advanceDemo(g, action) : g));
+}
 
 /** Friends picked on Launch's "Who's in" (the picker tray writes, Launch reads). */
 export const friendPicks = createStore<SocialProfileCard[]>([]);
@@ -88,11 +120,13 @@ export function groupError(error: unknown) {
 // Reading
 
 export async function loadGroup(id: string) {
+  if (isDemoGroup(id)) return demo(id);
   return put(await api.socialGroup(token(), id));
 }
 
 /** Re-reads the group, and its votes on NEAR once it has a DAO you're in. */
 export async function syncGroup(id: string) {
+  if (isDemoGroup(id)) return demo(id);
   const known = groups.get()[id];
   const onChain =
     known?.myState === 'accepted' &&
@@ -108,7 +142,7 @@ export async function syncGroup(id: string) {
 
 /** The group's DAO as a quiet shared wallet on this phone, once there is one. */
 export function groupWallet(g: SocialGroup) {
-  if (!g.dao) return null;
+  if (!g.dao || isDemoGroup(g.id)) return null;
   return trackGroupDao({
     dao: g.dao,
     label: g.name,
@@ -149,6 +183,16 @@ export async function startGroup(
     copyFee: number;
   },
 ) {
+  if (TEST_MODE)
+    return put(
+      demoStartGroup({
+        name: options.name.slice(0, 60),
+        thesis: proposal.thesis.slice(0, 280),
+        picks: socialPicks(proposal.picks),
+        shareUsd: Math.round(proposal.amount * 100) / 100,
+        friends: options.friends,
+      }),
+    );
   let nearAccount: string | undefined;
   try {
     nearAccount = myNearAccount();
@@ -186,17 +230,20 @@ async function sponsor(groupId: string, account: string) {
 
 /** Join = your NEAR account, its fees paid by Honey where it can, then accept. */
 export async function joinGroup(id: string) {
+  if (isDemoGroup(id)) return demo(id, 'join');
   const account = myNearAccount();
   await sponsor(id, account);
   return put(await api.socialAcceptGroup(token(), id, account));
 }
 
 export async function declineGroup(id: string) {
+  if (isDemoGroup(id)) return demo(id, 'decline');
   return put(await api.socialDeclineGroup(token(), id));
 }
 
 /** Creator: go ahead with whoever joined, or invest alone (`solo`). */
 export async function goAhead(id: string, solo: boolean) {
+  if (isDemoGroup(id)) return demo(id, solo ? 'solo' : 'goAhead');
   return put(await api.socialGroupGoAhead(token(), id, { solo }));
 }
 
@@ -206,6 +253,7 @@ export async function goAhead(id: string, solo: boolean) {
  * created on an earlier try is reused, so a failed report can simply be tried again.
  */
 export async function createGroupOnChain(g: SocialGroup) {
+  if (isDemoGroup(g.id)) return demo(g.id, 'create');
   const me = myNearAccount();
   const members = membersIn(g).map((m) => (m.isMe ? me : m.nearAccount));
   if (members.some((a) => !a)) throw new Error('Someone joined without a NEAR account');
@@ -294,6 +342,7 @@ const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * that delivers into the same account. The server counts it once it checks it on chain.
  */
 export async function payShare(g: SocialGroup, nearUsdc: number | null) {
+  if (isDemoGroup(g.id)) return demo(g.id, 'pay');
   const dao = g.dao;
   if (!dao) throw new Error('The group isn’t on NEAR yet');
   if (nearUsdc !== null && nearUsdc >= g.shareUsd) {
@@ -360,6 +409,7 @@ function walletOf(g: SocialGroup) {
  * buy path, checked with 1Click), sized to what the jar holds.
  */
 export async function proposeBuy(g: SocialGroup, routes: Route[], usdcAtomic: bigint) {
+  if (isDemoGroup(g.id)) return demo(g.id, 'buy');
   const { walletId, dao } = walletOf(g);
   const legs = fitLegs(
     routes.flatMap((r) =>
@@ -376,6 +426,7 @@ export async function proposeBuy(g: SocialGroup, routes: Route[], usdcAtomic: bi
 
 /** Approves an open vote (checked first: a buy with 1Click, a payout against the split). */
 export async function approveVote(g: SocialGroup, proposalId: number) {
+  if (isDemoGroup(g.id)) return demo(g.id, 'approve');
   const { walletId, dao } = walletOf(g);
   await approveGroupProposal(walletId, dao, proposalId, accountsIn(g));
   return syncGroup(g.id);
@@ -383,6 +434,7 @@ export async function approveVote(g: SocialGroup, proposalId: number) {
 
 /** Leave with your whole slice: all or nothing (see group-jar-core `payoutLegs`). */
 export async function leaveGroup(g: SocialGroup) {
+  if (isDemoGroup(g.id)) return demo(g.id, 'leave');
   const { walletId, dao } = walletOf(g);
   const id = await proposeGroupPayout(walletId, dao, {
     kind: 'leave',
@@ -395,6 +447,7 @@ export async function leaveGroup(g: SocialGroup) {
 
 /** Cash out together: every member still in gets their equal part. */
 export async function cashOutGroup(g: SocialGroup) {
+  if (isDemoGroup(g.id)) return demo(g.id, 'cashout');
   const { walletId, dao } = walletOf(g);
   const to = accountsIn(g);
   const id = await proposeGroupPayout(walletId, dao, {
@@ -424,11 +477,15 @@ export function upsertGroupJar(g: SocialGroup, navUsd?: number | null) {
   thesisJars.set((list) => {
     const was = list.find((j) => j.id === id);
     const value = navUsd ?? was?.history.at(-1) ?? total;
-    const history = was
-      ? value === was.history.at(-1)
-        ? was.history
-        : [...was.history, value]
-      : [total, value];
+    // Test mode's sample jar starts with a few days behind it.
+    const history =
+      isDemoGroup(g.id) && (was?.history.length ?? 0) < 3
+        ? demoHistory(total)
+        : was
+          ? value === was.history.at(-1)
+            ? was.history
+            : [...was.history, value]
+          : [total, value];
     const jar: ThesisJar = {
       id,
       name: g.name,

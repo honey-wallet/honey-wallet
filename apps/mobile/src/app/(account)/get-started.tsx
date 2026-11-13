@@ -10,6 +10,7 @@ import { PressableScale } from '@/components/motion/PressableScale';
 import { KeyGlyph, PhraseGlyph } from '@/components/onboarding/icons';
 import { SheetScreen, SheetText } from '@/components/sheets/Sheet';
 import { LabeledRule } from '@/components/wallet/parts';
+import { offerHandle } from '@/lib/handle-offer';
 import { failure, tap } from '@/lib/haptics';
 import { IDENTITY_ENABLED } from '@/lib/identity';
 import {
@@ -209,8 +210,10 @@ function IdentityWays({
   // The account is identity only: make or find the wallet on this device.
   const proceed = async (method: IdentityMethod, who: { email?: string; name?: string }) => {
     try {
-      if ((await continueAfterSignIn(method, { restore, identity: who })) === 'needs-keys')
-        setBusy(null);
+      const opened = await continueAfterSignIn(method, { restore, identity: who });
+      if (opened === 'needs-keys') setBusy(null);
+      // Onboarding's last step: an @handle, if this account has none yet.
+      else void offerHandle();
     } catch (cause) {
       console.warn('Couldn’t set up the wallet after sign-in', cause);
       fail(restore ? 'Couldn’t open your wallet. Try again.' : 'Couldn’t create your wallet.');

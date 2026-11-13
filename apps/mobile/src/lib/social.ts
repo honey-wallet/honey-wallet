@@ -15,8 +15,10 @@ import { useEffect, useState } from 'react';
 import { Share } from 'react-native';
 import { api } from '@/lib/api';
 import { backendSession, backendSessionToken } from '@/lib/backend-session';
+import { DEMO_FRIENDS, demoCollabPost, setDemoHandle } from '@/lib/group-demo';
 import { getProfile } from '@/lib/profile';
 import { createStore } from '@/lib/store';
+import { TEST_MODE } from '@/lib/test-mode';
 import { type Pick, type ThesisJar, thesisJars } from '@/lib/thesis';
 import { tokenColor } from '@/lib/token-colors';
 
@@ -78,6 +80,9 @@ export const social = createStore<SocialState>({
 });
 
 export const useSocial = social.useValue;
+
+// Test mode's sample groups show you by your handle.
+setDemoHandle(() => social.get().me?.handle);
 
 /** True when the server will accept writes from this phone right now. */
 export const socialSignedIn = () => backendSessionToken() != null;
@@ -250,7 +255,10 @@ export async function loadFeed(scope: SocialFeedScope, more = false) {
   setFeed(scope, { loading: true, error: null });
   try {
     const page = await api.socialFeed(scope, token, more ? current.nextCursor : null);
-    const items = more ? [...current.items, ...page.items] : page.items;
+    // Test mode: a sample group jar's launch on top of Everyone.
+    const fresh =
+      TEST_MODE && scope === 'everyone' ? [demoCollabPost(), ...page.items] : page.items;
+    const items = more ? [...current.items, ...page.items] : fresh;
     setFeed(scope, { items, nextCursor: page.nextCursor, loading: false, loaded: true });
     if (!more)
       retryIfPending(
@@ -726,6 +734,7 @@ export function knownPeople(state: SocialState, query: string, limit = 5): Socia
     if (p && !seen.has(p.handle)) seen.set(p.handle, p);
   };
   for (const p of Object.values(state.profiles)) add(p);
+  if (TEST_MODE) for (const p of DEMO_FRIENDS) add(p);
   for (const j of state.leaderboard ?? []) add(j.owner);
   for (const feed of Object.values(state.feeds))
     for (const item of feed.items ?? []) add(item.actor);

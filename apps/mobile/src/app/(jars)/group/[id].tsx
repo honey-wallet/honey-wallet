@@ -9,6 +9,7 @@ import { SheetRow, StatRow } from '@/components/sheets/Sheet';
 import { SocialAvatar } from '@/components/social/parts';
 import { PushedScreen, SCREEN } from '@/components/wallet/parts';
 import { backendSession } from '@/lib/backend-session';
+import { isDemoGroup } from '@/lib/group-demo';
 import {
   dollars,
   type GroupStep,
@@ -59,7 +60,9 @@ export default function GroupScreen() {
   const styles = useStyles();
   const c = useTheme();
   const group = useGroup(id);
-  const signedInAs = backendSession.useValue().profile?.wallet.id ?? null;
+  // Test mode's sample groups open signed out.
+  const signedInAs =
+    backendSession.useValue().profile?.wallet.id ?? (isDemoGroup(id) ? 'demo' : null);
   const [failed, setFailed] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
@@ -214,7 +217,8 @@ function GroupPage({ group: g, ring }: { group: SocialGroup; ring: string }) {
     ),
   });
 
-  const approvals = chainBuy?.approvals.length ?? 0;
+  // Whoever opened the vote approved it.
+  const approvals = chainBuy?.approvals.length ?? (buyVote ? 1 : 0);
   const status = statusLine(step, g, { joined, approvals });
 
   return (

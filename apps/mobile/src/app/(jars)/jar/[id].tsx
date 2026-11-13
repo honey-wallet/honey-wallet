@@ -10,7 +10,7 @@ import {
   type GroupJarState,
   useGroupJar,
 } from '@/components/jars/GroupJar';
-import { JarHoldingRow, JarIcon, layersOf, Mix, Owners } from '@/components/jars/JarParts';
+import { JarHoldingRow, JarIcon, layersOf, Mix, Owners, People } from '@/components/jars/JarParts';
 import { ActionMenu } from '@/components/motion/ActionMenu';
 import { NumberPopIn } from '@/components/motion/NumberPopIn';
 import { PressableRow } from '@/components/motion/PressableRow';
@@ -33,11 +33,13 @@ import {
   CopyOff,
   CopyStepper,
   copyNow,
+  openCollaborators,
   openProfile,
   ReturnText,
   useBlendedSince,
 } from '@/components/social/parts';
 import { Change, HEADER_BUTTON, PushedScreen, SCREEN } from '@/components/wallet/parts';
+import { membersIn } from '@/lib/group-jar-core';
 import { tap } from '@/lib/haptics';
 import { refreshJarBuy } from '@/lib/jar-buy';
 import {
@@ -227,9 +229,10 @@ function JarPage({ jar, id }: { jar: ThesisJar | undefined; id: string }) {
   const personLoading = !!ownerHandle && !owner && !ownerFailed;
   // A group jar: its group, votes, Leave and Cash out.
   const group = useGroupJar(jar?.groupId);
+  const { width: screenWidth } = useWindowDimensions();
+  const theme = useTheme();
   // The header centres its title between equal sides: keep it clear of the widest side
   // (Save and •••) on both, so a long name ends in "…" and stays centred.
-  const { width: screenWidth } = useWindowDimensions();
   const titleWidth = screenWidth - 2 * (HEADER_SIDE_PAD + 2 * HEADER_BUTTON);
 
   return (
@@ -237,7 +240,29 @@ function JarPage({ jar, id }: { jar: ThesisJar | undefined; id: string }) {
       // The coin page's header, with whose jar it is in place of the coin's logo: their
       // face and the jar's name, both opening their profile.
       title={
-        jar && person ? (
+        // A group jar: everyone's faces and its name, opening who's in (Instagram's
+        // collaborators). Otherwise its owner's face, opening their profile.
+        jar && group && membersIn(group.g).length > 1 ? (
+          <PressableScale
+            accessibilityRole="button"
+            accessibilityLabel={`${jar.name}, show who's in`}
+            scaleTo={0.97}
+            onPress={() => openCollaborators(membersIn(group.g))}
+            style={[styles.headerTitle, { maxWidth: titleWidth }]}
+          >
+            <People
+              names={membersIn(group.g).map((m) => ({
+                id: m.isMe ? 'me' : m.avatarSeed || m.handle,
+                name: m.displayName,
+              }))}
+              size={24}
+              ring={theme.canvas}
+            />
+            <Text style={styles.headerName} numberOfLines={1}>
+              {jar.name}
+            </Text>
+          </PressableScale>
+        ) : jar && person ? (
           <PressableScale
             accessibilityRole="button"
             accessibilityLabel={`${jar.name}, by ${person.name}. Open profile`}
@@ -586,9 +611,12 @@ function JarBody({
               <PriceChart data={data} width={width} height={CHART_HEIGHT} onScrub={setScrub} />
             </SkeletonReveal>
           </View>
-          <View style={styles.ranges}>
-            <SegmentedTabs<JarRange> bare options={ranges} value={active} onChange={setRange} />
-          </View>
+          {/* A young jar has only All: one tab is no choice, so no tabs. */}
+          {ranges.length > 1 ? (
+            <View style={styles.ranges}>
+              <SegmentedTabs<JarRange> bare options={ranges} value={active} onChange={setRange} />
+            </View>
+          ) : null}
         </>
       )}
 

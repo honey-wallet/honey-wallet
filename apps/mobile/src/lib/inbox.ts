@@ -4,7 +4,9 @@ import { useCallback, useEffect } from 'react';
 import { AppState } from 'react-native';
 import { api } from '@/lib/api';
 import { backendSession, backendSessionToken } from '@/lib/backend-session';
+import { demoInbox } from '@/lib/group-demo';
 import { createStore } from '@/lib/store';
+import { TEST_MODE } from '@/lib/test-mode';
 
 /**
  * Your Honey inbox (the bell): group invites, "add your share", votes and updates, read
@@ -22,6 +24,11 @@ const POLL_MS = 30_000;
 let inFlight: Promise<void> | null = null;
 
 export function loadInbox(): Promise<void> {
+  // Test mode: the sample groups' news, once (read marks then stay).
+  if (TEST_MODE) {
+    if (!inbox.get().loaded) inbox.set({ items: demoInbox(), loaded: true });
+    return Promise.resolve();
+  }
   const token = backendSessionToken();
   if (!token) {
     inbox.set({ items: [], loaded: true });

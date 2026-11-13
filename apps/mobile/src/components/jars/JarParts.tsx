@@ -941,11 +941,14 @@ export function StrategyCard({
   nameSlot,
   split,
   children,
+  fee,
 }: {
   jar?: ThesisJar;
   picks: Pick[];
   name: string;
   meta?: string;
+  /** At the end of the token row, as on a Feed post: e.g. "10% fee". */
+  fee?: string;
   /** In place of the name, e.g. a field to rename the jar as you launch it. */
   nameSlot?: ReactNode;
   /** Show the striped split even for one token, as a Feed post's well does. */
@@ -1060,6 +1063,13 @@ export function StrategyCard({
             weight: p.weight,
             color: tokenColor(p.symbol, i),
           }))}
+          trailing={
+            fee ? (
+              <Text style={styles.meta} numberOfLines={1}>
+                {fee}
+              </Text>
+            ) : undefined
+          }
         />
       ) : null}
       {children}

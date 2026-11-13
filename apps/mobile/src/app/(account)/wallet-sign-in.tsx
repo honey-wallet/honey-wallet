@@ -22,6 +22,7 @@ import {
   resumeBackendSession,
   walletLinks,
 } from '@/lib/backend-session';
+import { offerHandle } from '@/lib/handle-offer';
 import { tap } from '@/lib/haptics';
 import { useProfile } from '@/lib/profile';
 import { loadAccounts, type VaultAccount } from '@/lib/vault';
@@ -238,6 +239,7 @@ function Done() {
         onDone={() => {
           tap();
           closeSheet();
+          void offerHandle();
         }}
       />
     </SheetScreen>

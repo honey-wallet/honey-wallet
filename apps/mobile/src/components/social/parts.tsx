@@ -82,6 +82,19 @@ export const openProfile = (handle: string) => {
   router.push({ pathname: '/u/[handle]', params: { handle } });
 };
 
+/** A group jar's people, one row each (the collaborators sheet). */
+export const openCollaborators = (people: SocialProfileCard[]) => {
+  tap();
+  router.push({
+    pathname: '/collaborators',
+    params: {
+      people: JSON.stringify(
+        people.map(({ handle, displayName, avatarSeed }) => ({ handle, displayName, avatarSeed })),
+      ),
+    },
+  });
+};
+
 const openJar = (jar: SocialJar) => {
   tap();
   router.push({ pathname: '/jar/[id]', params: { id: openSocialJar(jar) } });
@@ -975,9 +988,15 @@ export function FeedCard({
       <View style={styles.postHead}>
         <PressableScale
           accessibilityRole="button"
-          accessibilityLabel={`${item.actor.displayName}, open profile`}
+          accessibilityLabel={
+            collab
+              ? `${collab.name}, show collaborators`
+              : `${item.actor.displayName}, open profile`
+          }
           scaleTo={0.94}
-          onPress={() => openProfile(item.actor.handle)}
+          onPress={() =>
+            collab ? openCollaborators(collab.people) : openProfile(item.actor.handle)
+          }
         >
           {collab ? (
             <CollabFaces people={collab.people} size={40} />
@@ -990,7 +1009,9 @@ export function FeedCard({
             <Text
               style={styles.rowName}
               numberOfLines={1}
-              onPress={() => openProfile(item.actor.handle)}
+              onPress={() =>
+                collab ? openCollaborators(collab.people) : openProfile(item.actor.handle)
+              }
               suppressHighlighting
             >
               {collab ? collab.name : item.actor.displayName}
@@ -1142,9 +1163,9 @@ export function JarAttachment({
       {collab ? (
         <PressableScale
           accessibilityRole="button"
-          accessibilityLabel={`${collab.name}, open profile`}
+          accessibilityLabel={`${collab.name}, show collaborators`}
           scaleTo={0.98}
-          onPress={() => collab.people[0] && openProfile(collab.people[0].handle)}
+          onPress={() => openCollaborators(collab.people)}
           style={styles.moveRow}
         >
           <CollabFaces people={collab.people} size={28} />

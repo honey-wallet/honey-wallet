@@ -49,7 +49,7 @@ import {
   useSocial,
   useSocialMe,
 } from '@/lib/social';
-import { requireWallet, useHasWallet } from '@/lib/wallet-gate';
+import { requireWallet } from '@/lib/wallet-gate';
 import { makeStyles, radius, useTheme } from '@/theme';
 import { DURATION, EASE, lazy } from '@/theme/motion';
 
@@ -88,22 +88,11 @@ export function useFeedScope() {
 export const refreshSocial = (scope: SocialFeedScope) =>
   Promise.all([loadFeed(scope), loadLeaderboard(), loadMe()]);
 
-/** Claim a handle once signed in without one; nothing otherwise (signing in is the tab bar's button). */
+/**
+ * Nothing on the Feed: picking an @handle is onboarding's last step right after sign-in
+ * (app/(onboarding)/handle.tsx, 2026-11-13), and Settings has "Claim handle" for later.
+ */
 export function SocialPrompt() {
-  const { me, loaded: meLoaded, signedIn } = useSocialMe();
-  const walletHere = useHasWallet();
-  // Signing in (or getting started) is the tab bar's honey button on the Feed now.
-  if (!walletHere || !signedIn) return null;
-  if (meLoaded && !me)
-    return (
-      <Invite
-        icon="person"
-        title="Claim your @handle"
-        hint="Pick a name people can follow."
-        label="Claim handle"
-        onPress={() => router.push('/claim-handle')}
-      />
-    );
   return null;
 }
 
