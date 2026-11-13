@@ -119,9 +119,13 @@ const ICONS = {
   thumbsDown: { ios: 'hand.thumbsdown', android: 'thumb_down', web: 'thumb_down' },
   verified: { ios: 'checkmark.seal.fill', android: 'verified', web: 'verified' },
   phone: { ios: 'iphone', android: 'smartphone', web: 'smartphone' },
+  // The token picker, after Uniswap's: Paste, "Your tokens" (coins) and "Recent searches".
+  paste: { ios: 'clipboard.fill', android: 'content_paste', web: 'content_paste' },
+  coins: { ios: 'cylinder.split.1x2.fill', android: 'database', web: 'database' },
+  clockFill: { ios: 'clock.fill', android: 'schedule', web: 'schedule' },
 } satisfies Record<string, SymbolViewProps['name']>;
 
-export type IconName = keyof typeof ICONS | 'piggyBank' | 'jar';
+export type IconName = keyof typeof ICONS | 'piggyBank' | 'jar' | 'trending';
 
 type Props = {
   name: IconName;
@@ -139,6 +143,7 @@ export function Icon({ name, size = 22, color }: Props) {
     return <FilledIcon d={FILLED[name as keyof typeof FILLED]} size={size} color={color} />;
   }
   if (name === 'trade') return <TradeIcon size={size} color={color} />;
+  if (name === 'trending') return <TrendingIcon size={size} color={color} />;
   if (name === 'wallet') return <WalletIcon size={size} color={color} />;
   return <SymbolView name={ICONS[name]} size={size} tintColor={color} />;
 }
@@ -156,6 +161,21 @@ function FilledIcon({ d, size, color }: { d: string; size: number; color: string
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24">
       <Path d={d} fill={color} fillRule="evenodd" />
+    </Svg>
+  );
+}
+
+/** Trending: a zigzag rising to an arrowhead, as on Uniswap's token list header. */
+function TrendingIcon({ size, color }: { size: number; color: string }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path
+        d="M2.5 17.5 9 11l4 4 8.5-8.5M15 6.5h6.5V13"
+        stroke={color}
+        strokeWidth={2}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </Svg>
   );
 }

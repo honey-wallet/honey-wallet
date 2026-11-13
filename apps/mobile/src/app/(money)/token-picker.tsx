@@ -1,46 +1,50 @@
+import * as Clipboard from 'expo-clipboard';
 import { router, useLocalSearchParams } from 'expo-router';
 import { type ReactNode, useEffect, useState } from 'react';
-import { ScrollView, Text } from 'react-native';
+import { ScrollView, Text, View } from 'react-native';
 import { TokenList } from '@/components/home/TokenList';
-import { Icon } from '@/components/Icon';
+import { Icon, type IconName } from '@/components/Icon';
+import { PressableRow } from '@/components/motion/PressableRow';
 import { PressableScale } from '@/components/motion/PressableScale';
 import {
   closeSheet,
+  SHEET,
   SheetHeader,
   SheetRow,
   SheetRowSkeletons,
   SheetScreen,
-  SheetSection,
 } from '@/components/sheets/Sheet';
 import { Chip } from '@/components/wallet/Chip';
 import { EmptyState, NetworkGrid, TokenIcon } from '@/components/wallet/parts';
 import { SearchField } from '@/components/wallet/SearchField';
 import { dexTokenList, loadDexTokens } from '@/lib/dex';
 import { dexPickerEntries } from '@/lib/dex-tokens';
+import { useMoney } from '@/lib/fx';
 import { tap } from '@/lib/haptics';
 import {
-  BLOCKCHAINS,
   canSell,
   chainName,
   FALLBACK_SWAP_TOKENS,
   loadSwapTokens,
-  needsRecipient,
   type OneClickToken,
   sameToken,
   swapTokenList,
   tokenRef,
 } from '@/lib/intents-swap';
 import { PAY_CHAINS } from '@/lib/jar-buy';
-import {
-  CHAINS,
-  chainSymbol,
-  formatBalance,
-  formatPrice,
-  formatUsd,
-  tokenName,
-} from '@/lib/mock-wallet';
+import { CHAINS, chainSymbol, formatBalance, HOLDINGS, tokenName } from '@/lib/mock-wallet';
 import { isUsdc, jarPayWith } from '@/lib/pay-with';
 import { pickToken, type TokenRef, useSwap } from '@/lib/swap';
+import { TEST_MODE } from '@/lib/test-mode';
+import {
+  clearRecentPicks,
+  pickerLists,
+  quickPicks,
+  recentPicks,
+  rememberPick,
+  shortAddress,
+  tokenCategory,
+} from '@/lib/token-picker';
 import { useWalletView } from '@/lib/wallet-view';
 import { makeStyles, useTheme } from '@/theme';
 
@@ -106,25 +110,19 @@ export default function TokenPickerSheet() {
   );
 }
 
-/** Rows shown per network before "More on …", when nothing is searched or filtered. */
+/* Uniswap's flat list replaced the per-network groups (14 Nov), so these went with them.
 const PER_CHAIN = 6;
-/** Rows per page once searched or filtered to one network. */
+*/
+/** Rows per page of the token list and of search results. */
 const PAGE = 40;
-/** Listed first within a network, in this order; the rest alphabetically. */
-const FIRST = ['ETH', 'SOL', 'wNEAR', 'BTC', 'USDC', 'USDT', 'WETH', 'WBTC', 'cbBTC'];
-const rank = (symbol: string) => {
-  const i = FIRST.indexOf(symbol);
-  return i === -1 ? FIRST.length : i;
-};
-const chainOrder = (blockchain: string) => {
-  const i = Object.keys(BLOCKCHAINS).indexOf(blockchain);
-  return i === -1 ? 999 : i;
-};
+/** Logo size in the rows, as Uniswap's. */
+const ICON = 36;
 
 /**
- * Every token NEAR Intents trades, from its live list: grouped by network with a search
- * and a network filter. Selling lists only what this wallet can pay (its four networks);
- * buying lists everything, on networks without a key here to an address you enter.
+ * Every token NEAR Intents trades (plus Honey's DEX tokens), laid out like Uniswap's iOS
+ * token selector: search with Paste and a network selector, quick-pick chips, "Your
+ * tokens", "Recent searches", then every token as one list. Selling lists only what this
+ * wallet can pay; buying lists everything. A jar's "Pay with" lists only what you hold.
  */
 function LiveTokens({
   side,
@@ -138,11 +136,20 @@ function LiveTokens({
 }) {
   const styles = useStyles();
   const c = useTheme();
+  const money = useMoney();
   const view = useWalletView();
-  const holdings = 'holdings' in view ? (view.holdings ?? []) : [];
+  // Test mode's sample wallets hold the sample portfolio here too, so the lists fill in.
+  const holdings: {
+    symbol: string;
+    chain: string;
+    amount: number;
+    usd: number;
+    assetId?: string;
+  }[] = 'holdings' in view ? (view.holdings ?? []) : TEST_MODE && view.wallet.demo ? HOLDINGS : [];
   const swapPick = useSwap()[side];
   const jarPick = jarPayWith.useValue();
   const picked: TokenRef | null = jar ? jarPick : swapPick;
+  const recent = recentPicks.useValue();
   // A jar's USDC is paid from whichever networks hold it (lib/jar-buy), so it's one row.
   const usdcHeld = holdings
     .filter((h) => h.symbol === 'USDC' && (PAY_CHAINS as readonly string[]).includes(h.chain))
@@ -153,6 +160,8 @@ function LiveTokens({
   const tokens = oneClick ? [...oneClick, ...dexPickerEntries(dex ?? [], oneClick)] : null;
   const [query, setQuery] = useState('');
   const [chain, setChain] = useState<string | null>(null);
+  // The network selector's list of networks, shown in place of the tokens.
+  const [choosingNetwork, setChoosingNetwork] = useState(false);
   useEffect(loadSwapTokens, []);
   useEffect(loadDexTokens, []);
 
@@ -164,132 +173,165 @@ function LiveTokens({
         ? h.assetId === t.assetId
         : h.symbol === t.symbol && h.chain === chainName(t.blockchain),
     );
+  const nameOf = (t: OneClickToken) => t.name ?? tokenName(t.symbol);
   const listed = (tokens ?? [])
     .filter((t) => side === 'buy' || canSell(t))
-    .filter((t) => !jar || (t.symbol !== 'USDC' && (heldOf(t)?.amount ?? 0) > 0))
-    .sort(
-      (a, b) =>
-        chainOrder(a.blockchain) - chainOrder(b.blockchain) ||
-        rank(a.symbol) - rank(b.symbol) ||
-        a.symbol.localeCompare(b.symbol),
-    );
-  const chains = [...new Set(listed.map((t) => t.blockchain))];
+    .filter((t) => !jar || (t.symbol !== 'USDC' && (heldOf(t)?.amount ?? 0) > 0));
   const q = query.trim().toLowerCase();
-  const matched = listed.filter(
-    (t) =>
-      (!chain || t.blockchain === chain) &&
-      (!q ||
-        t.symbol.toLowerCase().includes(q) ||
-        chainName(t.blockchain).toLowerCase().includes(q) ||
-        tokenName(t.symbol).toLowerCase().includes(q) ||
-        t.contractAddress?.toLowerCase() === q),
-  );
-  // Searching: the token itself before copies of it. "btc" puts Bitcoin's own BTC first,
-  // then exact symbols, then natives (no contract), then the rest in network order.
-  const relevance = (t: OneClickToken) =>
-    (t.symbol.toLowerCase() === q ? 0 : 2) +
-    (t.contractAddress ? 1 : 0) +
-    (t.symbol.toLowerCase().startsWith(q) ? 0 : 4);
-  const shown = q ? [...matched].sort((a, b) => relevance(a) - relevance(b)) : matched;
-  const yours = side === 'sell' ? shown.filter((t) => (heldOf(t)?.amount ?? 0) > 0) : [];
-  const grouped = new Map<string, OneClickToken[]>();
-  for (const t of shown) {
-    if (yours.includes(t)) continue;
-    grouped.set(t.blockchain, [...(grouped.get(t.blockchain) ?? []), t]);
-  }
-  const capped = !q && !chain;
-  // Searched or filtered lists can run to hundreds of rows: show them in pages.
+  const {
+    chains,
+    yours,
+    recent: recents,
+    rest,
+    results,
+  } = pickerLists(listed, {
+    query,
+    chain,
+    heldUsd: (t) => {
+      const h = heldOf(t);
+      return h && h.amount > 0 ? h.usd : null;
+    },
+    nameOf,
+    networkOf: chainName,
+    // A jar pays with what it holds; recent swap picks don't belong there.
+    recent: jar ? [] : recent,
+  });
+  const picks = jar || q ? [] : quickPicks(listed, chain);
+  // Long lists show in pages, with "Show more" at the end.
   const [limit, setLimit] = useState(PAGE);
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset whenever the search or network changes.
   useEffect(() => setLimit(PAGE), [q, chain]);
-  const flat = q ? shown.filter((t) => !yours.includes(t)) : [];
 
-  // "Your tokens" rows show the balance; every other row shows the price, as labelled.
-  const row = (t: OneClickToken) => tokenRow(t, false);
-  const ownRow = (t: OneClickToken) => tokenRow(t, true);
-  const tokenRow = (t: OneClickToken, own: boolean) => {
+  const pick = (ref: TokenRef) => {
+    if (!jar) rememberPick(ref);
+    onChoose(ref);
+  };
+
+  /**
+   * One token, as Uniswap's row: logo with its network's badge, the full name over the
+   * symbol and a short contract; on the right what you hold, or (`tag`) its kind.
+   */
+  const row = (t: OneClickToken, key: string, right: 'value' | 'tag' | 'none') => {
     const ref = tokenRef(t);
     const held = heldOf(t);
-    const name = chainName(t.blockchain);
+    const own = !!held && held.amount > 0;
+    const category = tokenCategory(t.symbol);
     return (
-      <SheetRow
-        key={t.assetId}
-        leading={<TokenIcon symbol={t.symbol} chain={name} size={36} ring={c.sheet} />}
-        title={t.symbol}
-        subtitle={
-          side === 'buy' && needsRecipient(t.blockchain)
-            ? `${name} · to an address you enter`
-            : [tokenName(t.symbol), name]
-                .filter((x, i, all) => x !== t.symbol && all.indexOf(x) === i)
-                .join(' · ')
+      <TokenRow
+        key={`${key}-${t.assetId}`}
+        icon={
+          <TokenIcon symbol={t.symbol} chain={chainName(t.blockchain)} size={ICON} ring={c.sheet} />
         }
-        value={
-          own && held && held.amount > 0
-            ? `${formatBalance(held.amount)} ${t.symbol}`
-            : t.price
-              ? formatPrice(t.price)
-              : undefined
-        }
-        accessory="check"
+        title={nameOf(t)}
+        symbol={t.symbol}
+        detail={shortAddress(t.contractAddress)}
+        value={right !== 'none' && own ? money.format(held.usd) : undefined}
+        amount={right !== 'none' && own ? formatBalance(held.amount) : undefined}
+        tag={right === 'tag' && !own && category ? category : undefined}
         selected={!!picked && sameToken(picked, ref)}
-        onPress={() => onChoose(ref)}
+        onPress={() => pick(ref)}
       />
     );
   };
+  /* The chain is shown only by the logo's badge now (14 Nov, Uniswap's rows), so the
+  subtitles naming it ("Tether USD · Ethereum", "… · to an address you enter") went.
+  subtitle={
+    side === 'buy' && needsRecipient(t.blockchain)
+      ? `${name} · to an address you enter`
+      : [tokenName(t.symbol), name]
+          .filter((x, i, all) => x !== t.symbol && all.indexOf(x) === i)
+          .join(' · ')
+  }
+  */
   const usdcRow =
     jar && usdcHeld > 0 && !chain && (!q || 'usdc'.includes(q) || 'usd coin'.includes(q)) ? (
-      <SheetRow
+      <TokenRow
         key="usdc"
-        leading={<TokenIcon symbol="USDC" size={36} ring={c.sheet} />}
-        title="USDC"
-        subtitle="Any network"
-        value={formatUsd(usdcHeld)}
-        accessory="check"
+        icon={<TokenIcon symbol="USDC" size={ICON} ring={c.sheet} />}
+        title="USD Coin"
+        symbol="USDC"
+        detail="Any network"
+        value={money.format(usdcHeld)}
         selected={!picked}
         onPress={() => onChoose({ symbol: 'USDC', chain: 'Base' })}
       />
     ) : null;
 
+  const networkSelector = (
+    <PressableScale
+      accessibilityRole="button"
+      accessibilityLabel={`Network: ${chain ? chainName(chain) : 'All networks'}`}
+      accessibilityState={{ expanded: choosingNetwork }}
+      hitSlop={8}
+      scaleTo={0.97}
+      onPress={() => {
+        tap();
+        setChoosingNetwork((open) => !open);
+      }}
+      style={styles.networkButton}
+    >
+      {chain ? (
+        <TokenIcon symbol={chainSymbol(chainName(chain))} size={20} />
+      ) : (
+        <NetworkGrid size={20} />
+      )}
+      <Icon name="chevronDown" size={12} color={c.textSecondary} />
+    </PressableScale>
+  );
   const sticky = (
-    <>
-      <SearchField
-        value={query}
-        onChangeText={setQuery}
-        placeholder="Search tokens or networks"
-        style={styles.search}
-      />
-      {chains.length > 1 && (
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          style={styles.chipScroll}
-          contentContainerStyle={styles.chips}
-        >
-          <Chip
-            label="All"
-            leading={<NetworkGrid size={18} />}
-            selected={chain === null}
-            onPress={() => {
-              tap();
-              setChain(null);
-            }}
-          />
-          {chains.map((code) => (
-            <Chip
-              key={code}
-              label={chainName(code)}
-              leading={<TokenIcon symbol={chainSymbol(chainName(code))} size={18} />}
-              selected={chain === code}
+    <SearchField
+      value={query}
+      onChangeText={setQuery}
+      placeholder="Search tokens"
+      style={styles.searchField}
+      trailing={
+        <View style={styles.trailing}>
+          {query ? (
+            <PressableScale
+              accessibilityRole="button"
+              accessibilityLabel="Clear search"
+              hitSlop={13}
+              scaleTo={0.9}
               onPress={() => {
                 tap();
-                setChain(chain === code ? null : code);
+                setQuery('');
               }}
-            />
-          ))}
+              style={styles.clear}
+            >
+              <Icon name="close" size={10} color={c.sheet} />
+            </PressableScale>
+          ) : (
+            <PressableScale
+              accessibilityRole="button"
+              accessibilityLabel="Paste a token address"
+              hitSlop={8}
+              scaleTo={0.97}
+              onPress={() => {
+                tap();
+                void Clipboard.getStringAsync().then((text) => {
+                  if (text.trim()) setQuery(text.trim());
+                });
+              }}
+              style={styles.paste}
+            >
+              <Icon name="paste" size={14} color={c.textSecondary} />
+              <Text style={styles.pasteLabel}>Paste</Text>
+            </PressableScale>
+          )}
+          {chains.length > 1 ? networkSelector : null}
+        </View>
+      }
+    />
+  );
+  /* Uniswap keeps the networks in the search field's selector (14 Nov, the user's call),
+  so the row of network chips under the search went.
+      {chains.length > 1 && (
+        <ScrollView horizontal …>
+          <Chip label="All" leading={<NetworkGrid size={18} />} … />
+          {chains.map((code) => <Chip key={code} label={chainName(code)} … />)}
         </ScrollView>
       )}
-    </>
-  );
+  */
 
   if (!tokens)
     return (
@@ -310,7 +352,7 @@ function LiveTokens({
                 subtitle={tokenName(t.symbol)}
                 accessory="check"
                 selected={!!picked && sameToken(picked, t)}
-                onPress={() => onChoose(t)}
+                onPress={() => pick(t)}
               />
             ))}
           </>
@@ -319,6 +361,45 @@ function LiveTokens({
         )}
       </SheetScreen>
     );
+
+  if (choosingNetwork)
+    return (
+      <SheetScreen scroll sticky={sticky}>
+        {jar ? <SheetHeader title="Pay with" /> : null}
+        {[null, ...chains].map((code) => (
+          <SheetRow
+            key={code ?? 'all'}
+            leading={
+              code ? (
+                <TokenIcon symbol={chainSymbol(chainName(code))} size={28} />
+              ) : (
+                <NetworkGrid size={28} />
+              )
+            }
+            title={code ? chainName(code) : 'All networks'}
+            accessory="check"
+            selected={chain === code}
+            onPress={() => {
+              tap();
+              setChain(code);
+              setChoosingNetwork(false);
+            }}
+          />
+        ))}
+      </SheetScreen>
+    );
+
+  const more = (total: number) =>
+    total > limit ? (
+      <SheetRow
+        icon="chevronDown"
+        title={`Show ${Math.min(PAGE, total - limit)} more`}
+        onPress={() => {
+          tap();
+          setLimit((n) => n + PAGE);
+        }}
+      />
+    ) : null;
 
   return (
     <SheetScreen scroll sticky={sticky}>
@@ -332,49 +413,55 @@ function LiveTokens({
       )}
       */}
       {jar ? <SheetHeader title="Pay with" /> : null}
-      {(yours.length > 0 || usdcRow) && <SheetSection title="Your tokens · balance" />}
-      {usdcRow}
-      {yours.map(ownRow)}
-      {q ? (
-        <>
-          {flat.length > 0 && <SheetSection title="Results · price" />}
-          {flat.slice(0, limit).map(row)}
-          {flat.length > limit && (
-            <SheetRow
-              icon="chevronDown"
-              title={`Show ${Math.min(PAGE, flat.length - limit)} more`}
-              onPress={() => {
-                tap();
-                setLimit((n) => n + PAGE);
-              }}
-            />
-          )}
-        </>
-      ) : null}
-      {(q ? [] : [...grouped.entries()]).map(([code, list]) => (
-        <ChainGroup
-          key={code}
-          name={chainName(code)}
-          count={list.length}
-          capped={capped && list.length > PER_CHAIN}
-          onMore={() => {
-            tap();
-            setChain(code);
-          }}
+      {picks.length > 0 && (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+          style={styles.chipScroll}
+          contentContainerStyle={styles.chips}
         >
-          {(capped ? list.slice(0, PER_CHAIN) : list.slice(0, limit)).map(row)}
-          {!capped && list.length > limit && (
-            <SheetRow
-              icon="chevronDown"
-              title={`Show ${Math.min(PAGE, list.length - limit)} more`}
-              onPress={() => {
-                tap();
-                setLimit((n) => n + PAGE);
-              }}
+          {picks.map((t) => (
+            <Chip
+              key={t.assetId}
+              label={t.symbol}
+              leading={
+                <TokenIcon
+                  symbol={t.symbol}
+                  chain={chainName(t.blockchain)}
+                  size={24}
+                  ring={c.sheet}
+                />
+              }
+              onPress={() => pick(tokenRef(t))}
             />
-          )}
-        </ChainGroup>
-      ))}
+          ))}
+        </ScrollView>
+      )}
+      {(yours.length > 0 || usdcRow) && <PickerSection icon="coins" title="Your tokens" />}
+      {usdcRow}
+      {(jar ? yours.slice(0, limit) : yours).map((t) => row(t, 'yours', 'value'))}
+      {jar ? more(yours.length) : null}
+      {recents.length > 0 && (
+        <PickerSection
+          icon="clockFill"
+          title="Recent searches"
+          action={{
+            label: 'Clear',
+            onPress: () => {
+              tap();
+              clearRecentPicks();
+            },
+          }}
+        />
+      )}
+      {recents.map((t) => row(t, 'recent', 'none'))}
+      {/* Uniswap's "Tokens by 24H volume": we have no volume, so it's just "Tokens". */}
+      {!jar && rest.length > 0 && <PickerSection icon="trending" title="Tokens" />}
+      {!jar && rest.slice(0, limit).map((t) => row(t, 'all', 'tag'))}
+      {!jar && more(rest.length)}
+      {results.slice(0, limit).map((t) => row(t, 'result', 'tag'))}
+      {more(results.length)}
       {jar && !usdcRow && yours.length === 0 && !q && (
         <EmptyState
           icon="wallet"
@@ -382,11 +469,11 @@ function LiveTokens({
           hint="Add money to this wallet first."
         />
       )}
-      {shown.length === 0 && (jar ? !!q && !usdcRow : true) && (
+      {(q ? results.length === 0 : rest.length === 0) && (jar ? !!q && !usdcRow : true) && (
         <EmptyState
           icon="search"
           title="No tokens found"
-          hint="Try another name or network."
+          hint="Try another name, symbol or address."
           action={{
             label: 'Clear search',
             onPress: () => {
@@ -400,23 +487,11 @@ function LiveTokens({
   );
 }
 
-/** One network's tokens, with "More on …" when the list is cut short. */
-function ChainGroup({
-  name,
-  count,
-  capped,
-  onMore,
-  children,
-}: {
-  name: string;
-  count: number;
-  capped: boolean;
-  onMore: () => void;
-  children: ReactNode;
-}) {
+/* One network's tokens with "More on …": Uniswap's flat list replaced the per-network
+groups (14 Nov).
+function ChainGroup({ name, count, capped, onMore, children }) {
   return (
     <>
-      {/* The right column is each token's price; balances are under "Your tokens". */}
       <SheetSection title={`${name} · price`} />
       {children}
       {capped && (
@@ -430,18 +505,145 @@ function ChainGroup({
     </>
   );
 }
+*/
+
+/** A section's label with its small icon, as Uniswap's ("Your tokens", "Recent searches"). */
+function PickerSection({
+  icon,
+  title,
+  action,
+}: {
+  icon: IconName;
+  title: string;
+  action?: { label: string; onPress: () => void };
+}) {
+  const styles = useStyles();
+  const c = useTheme();
+  return (
+    <View style={styles.section}>
+      <Icon name={icon} size={14} color={c.textSecondary} />
+      <Text style={styles.sectionLabel} accessibilityRole="header">
+        {title}
+      </Text>
+      {action ? (
+        <PressableScale
+          accessibilityRole="button"
+          accessibilityLabel={`${action.label} ${title.toLowerCase()}`}
+          hitSlop={10}
+          scaleTo={0.97}
+          onPress={action.onPress}
+        >
+          <Text style={styles.sectionAction}>{action.label}</Text>
+        </PressableScale>
+      ) : null}
+    </View>
+  );
+}
+
+/**
+ * A token row, as Uniswap's: logo, full name over "SYMBOL 0xA0b8…eB48", then what you hold
+ * (value over amount) or an outlined tag on the right, and a check on the current pick.
+ */
+function TokenRow({
+  icon,
+  title,
+  symbol,
+  detail,
+  value,
+  amount,
+  tag,
+  selected,
+  onPress,
+}: {
+  icon: ReactNode;
+  title: string;
+  symbol: string;
+  /** Muted, after the symbol: the short contract (none for a chain's own coin). */
+  detail?: string;
+  value?: string;
+  amount?: string;
+  tag?: string;
+  selected: boolean;
+  onPress: () => void;
+}) {
+  const styles = useStyles();
+  const c = useTheme();
+  return (
+    <PressableRow
+      accessibilityRole="radio"
+      accessibilityState={{ selected }}
+      accessibilityLabel={[title, symbol, value, amount && `${amount} ${symbol}`]
+        .filter(Boolean)
+        .join(', ')}
+      onPress={onPress}
+      style={styles.row}
+    >
+      {icon}
+      <View style={styles.rowText}>
+        <Text style={styles.rowTitle} numberOfLines={1}>
+          {title}
+        </Text>
+        <Text style={styles.rowSubtitle} numberOfLines={1}>
+          {symbol}
+          {detail ? <Text style={styles.rowAddress}>{`  ${detail}`}</Text> : null}
+        </Text>
+      </View>
+      {value ? (
+        <View style={styles.rowEnd}>
+          <Text style={styles.rowValue}>{value}</Text>
+          {amount ? <Text style={styles.rowAmount}>{amount}</Text> : null}
+        </View>
+      ) : tag ? (
+        <View style={styles.tag}>
+          <Text style={styles.tagLabel}>{tag}</Text>
+        </View>
+      ) : null}
+      {selected ? <Icon name="check" size={18} color={c.accentText} /> : null}
+    </PressableRow>
+  );
+}
 
 const useStyles = makeStyles((c) => ({
   search: {
     marginBottom: 12,
   },
-  chipScroll: {
-    marginHorizontal: -20,
+  // Uniswap's field: a little shorter than Honey's pill, with softer corners.
+  searchField: {
+    height: 44,
+    borderRadius: 16,
     marginBottom: 8,
+  },
+  trailing: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+  },
+  paste: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  pasteLabel: {
+    color: c.textSecondary,
+    fontSize: 15,
+    fontWeight: '500',
+  },
+  clear: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: c.placeholder,
+  },
+  chipScroll: {
+    marginHorizontal: -SHEET.gutter,
+    marginTop: 4,
+    marginBottom: 4,
   },
   chips: {
     gap: 8,
-    paddingHorizontal: 20,
+    paddingHorizontal: SHEET.gutter,
   },
   note: {
     marginBottom: 8,
@@ -453,5 +655,75 @@ const useStyles = makeStyles((c) => ({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
+  },
+  section: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 14,
+    marginBottom: 2,
+  },
+  sectionLabel: {
+    flex: 1,
+    color: c.textSecondary,
+    fontSize: 15,
+  },
+  sectionAction: {
+    color: c.textSecondary,
+    fontSize: 15,
+    fontWeight: '500',
+  },
+  row: {
+    minHeight: 53,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 7,
+    // Bleed past the gutter so the press highlight runs edge to edge.
+    marginHorizontal: -SHEET.gutter,
+    paddingHorizontal: SHEET.gutter,
+  },
+  rowText: {
+    flex: 1,
+  },
+  rowTitle: {
+    color: c.text,
+    fontSize: 17,
+    fontWeight: '500',
+  },
+  rowSubtitle: {
+    marginTop: 2,
+    color: c.textSecondary,
+    fontSize: 14,
+  },
+  rowAddress: {
+    color: c.placeholder,
+  },
+  rowEnd: {
+    alignItems: 'flex-end',
+    gap: 2,
+  },
+  rowValue: {
+    color: c.text,
+    fontSize: 17,
+    fontWeight: '600',
+  },
+  rowAmount: {
+    color: c.textSecondary,
+    fontSize: 14,
+  },
+  // Uniswap's category tag: an outlined pill, as Honey's unselected chips.
+  tag: {
+    height: 24,
+    justifyContent: 'center',
+    paddingHorizontal: 9,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: c.divider,
+  },
+  tagLabel: {
+    color: c.textSecondary,
+    fontSize: 13,
+    fontWeight: '500',
   },
 }));

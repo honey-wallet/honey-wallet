@@ -320,6 +320,7 @@ export function dexPickerEntries(
       decimals: t.decimals,
       contractAddress: t.address,
       price: t.priceUsd,
+      name: t.name,
     }));
 }
 
