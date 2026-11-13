@@ -654,11 +654,13 @@ function usePeopleToFollow(): FollowSuggestion[] | null {
   const handle = me?.handle;
   // Who you follow; null until loaded, so nobody you already follow flashes by.
   const [following, setFollowing] = useState<Set<string> | null>(null);
-  useEffect(() => {
-    if (!social.get().leaderboard) void loadLeaderboard();
-  }, []);
+  // Read on each visit, not only once: a failed read is tried again when you come back.
+  // useEffect(() => {
+  //   if (!social.get().leaderboard) void loadLeaderboard();
+  // }, []);
   useFocusEffect(
     useCallback(() => {
+      if (!social.get().leaderboard) void loadLeaderboard();
       if (!handle) {
         setFollowing(new Set());
         return;
@@ -694,7 +696,11 @@ function PeopleToFollow() {
   const styles = useStyles();
   const c = useTheme();
   const people = usePeopleToFollow();
-  const { profiles, pendingFollow } = useSocial();
+  // const { profiles, pendingFollow } = useSocial();
+  const { profiles, pendingFollow, leaderboard, leaderboardError } = useSocial();
+  // The suggestions couldn't be read: no row, rather than placeholders that spin forever
+  // (2026-11-14). Coming back to Search tries again.
+  if (leaderboardError && !leaderboard) return null;
   // Loading: the same heading and two card-shaped placeholders, so the page doesn't jump.
   if (people === null)
     return (
