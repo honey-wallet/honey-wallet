@@ -77,6 +77,7 @@ import {
 } from '@/lib/intents-swap';
 import { keepFresh } from '@/lib/keep-fresh';
 import { formatBalance } from '@/lib/mock-wallet';
+import { usdToUnits } from '@/lib/pay-with';
 import { refreshAfterChange } from '@/lib/portfolio';
 import type { SendPlan } from '@/lib/send';
 import { serverNow } from '@/lib/server-clock';
@@ -264,6 +265,14 @@ function IntentsSwapForm() {
     setEntry({ key: sellKey, amount: stored.presetAmount });
     updateSwap({ presetAmount: null });
   }, [stored.presetAmount, sell.symbol, sellKey]);
+  // Dollars to sell of whatever pays (a copy, a post's Buy): its units at 1Click's price.
+  const presetPrice = sellDex?.priceUsd ?? sellAsset?.price ?? undefined;
+  useEffect(() => {
+    const units = usdToUnits(stored.presetUsd, presetPrice, maxDecimals);
+    if (!units) return;
+    setEntry({ key: sellKey, amount: units });
+    updateSwap({ presetUsd: null });
+  }, [stored.presetUsd, presetPrice, maxDecimals, sellKey]);
 
   // 1Click's own prices, for the dollar line before a quote.
   const sellPrice = sellDex?.priceUsd ?? sellAsset?.price ?? undefined;

@@ -317,9 +317,12 @@ export async function executeJarSell(
     const done = await sellDex(jar, sale, deps);
     if (done) sent.push(done);
   }
-  if (q.frac >= 1 && sent.length === q.swaps.length + q.dex.filter((x) => x.payout).length)
+  if (q.frac >= 1 && sent.length === q.swaps.length + q.dex.filter((x) => x.payout).length) {
     thesisJars.set((list) => list.filter((j) => j.id !== jar.id));
-  else void refreshJarValues();
+    // Sold in full: off the feed too (best effort; loaded lazily, it pulls in the API).
+    if (jar.mine && !jar.copiedFrom)
+      void import('@/lib/social').then((social) => social.unpublishJar(jar.id)).catch(() => {});
+  } else void refreshJarValues();
   return sent;
 }
 

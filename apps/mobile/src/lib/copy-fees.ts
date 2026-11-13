@@ -47,3 +47,18 @@ export function copyFeePayoutText(account: string | null | undefined) {
     return 'You have no NEAR account Honey can pay, so no fee is collected on copies.';
   return `Paid to your NEAR Intents account ${short(account)} when a copier sells at a profit. NEAR Intents keeps half of each fee.`;
 }
+
+/** Where copy fees land and how to get them out, in one plain line. */
+export function withdrawLine(account: string | null | undefined) {
+  if (!account) return '';
+  return `Fees land in your NEAR Intents account ${short(account)}. Withdraw them in a NEAR Intents app with this wallet.`;
+}
+
+/** One jar's copies and earnings from the server's list; zeros when it isn't there. */
+export function jarEarnings(
+  earnings: { jars: { id: string; earnedUsd: number; copies: number }[] } | undefined,
+  serverId: string | null | undefined,
+) {
+  const jar = serverId ? earnings?.jars.find((j) => j.id === serverId) : undefined;
+  return { earnedUsd: jar?.earnedUsd ?? 0, copies: jar?.copies ?? 0, known: !!jar };
+}

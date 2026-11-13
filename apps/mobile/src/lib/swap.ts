@@ -21,6 +21,12 @@ type SwapState = {
    */
   presetAmount?: string | null;
   /**
+   * Dollars to sell, whatever is sold (2026-11-14: a copy or a post's Buy is an amount in
+   * $, paid with what you hold): the form turns it into the token's units at 1Click's
+   * price once, then clears it.
+   */
+  presetUsd?: number | null;
+  /**
    * Whether a token to buy was chosen. Swap starts like Uniswap's, with Buy empty
    * ("Select token" and suggestions) until one is picked; `buy` is only a placeholder.
    */

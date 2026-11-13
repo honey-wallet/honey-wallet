@@ -1162,7 +1162,9 @@ export function createThesisJar(
       mine: true,
     },
     // A copy counts one more copier on the jar it copied.
-    ...list.map((j) => (j.id === options.copiedFrom?.jarId ? { ...j, copiers: j.copiers + 1 } : j)),
+    // ...list.map((j) => (j.id === options.copiedFrom?.jarId ? { ...j, copiers: j.copiers + 1 } : j)),
+    // Copies are the server's count (lib/social `recordCopy`), never a guess made here.
+    ...list,
   ]);
   if (!TEST_MODE) {
     // Real jars reach the social layer: a public jar is published to the feed, and a copy
@@ -1171,7 +1173,11 @@ export function createThesisJar(
     const created = thesisJars.get().find((j) => j.id === id);
     void import('@/lib/social').then((social) => {
       // Only Everyone's jars go to the Feed (2026-11-13); Returns only stays on the phone.
-      if (created && created.visibility === 'public') void social.publishJar(created);
+      // Since 2026-11-14 "Returns only" goes too, with its holdings hidden.
+      // if (created && created.visibility === 'public') void social.publishJar(created);
+      // "Returns only" is published too, its holdings hidden (lib/social `publishJar`).
+      if (created && social.publishedVisibility(created.visibility))
+        void social.publishJar(created);
       const copied = options.copiedFrom?.jarId;
       if (copied?.startsWith(social.SOCIAL_PREFIX))
         void social.recordCopy(copied.slice(social.SOCIAL_PREFIX.length));

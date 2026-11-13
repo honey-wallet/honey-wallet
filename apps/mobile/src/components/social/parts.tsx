@@ -25,12 +25,15 @@ import { SkeletonBar } from '@/components/motion/Skeleton';
 import { TextSwap } from '@/components/motion/TextSwap';
 import { PILL_HEIGHT, PillButton, usePillLabel } from '@/components/onboarding/PillButton';
 import { HEADER_BUTTON, HeaderIconButton, Sparkline, TokenIcon } from '@/components/wallet/parts';
+import { swapForDollars } from '@/lib/buy';
 import { equalWeights } from '@/lib/compose';
+import { useMoney } from '@/lib/fx';
 import { othersLabel } from '@/lib/group-jar-core';
 import { limit, success, tap } from '@/lib/haptics';
 import { livePrices, useLivePrices, useTokenChart } from '@/lib/market';
 import type { Chain } from '@/lib/mock-wallet';
 import { pnlOf } from '@/lib/pnl';
+import { heldNow } from '@/lib/portfolio';
 import {
   isStrategySaved,
   jarKey,
@@ -58,11 +61,12 @@ import {
   timeAgo,
 } from '@/lib/social';
 import { COPY_FEES } from '@/lib/surface';
-import { updateSwap } from '@/lib/swap';
 import { copyProposal, manualProposal, thesisJars } from '@/lib/thesis';
 import { chatDraft } from '@/lib/thesis-chat';
 import { tokenColor } from '@/lib/token-colors';
 import { requireSignIn, requireWallet } from '@/lib/wallet-gate';
+// import { updateSwap } from '@/lib/swap';
+import { wallets } from '@/lib/wallets';
 import { makeStyles, type Palette, radius, useTheme } from '@/theme';
 import { DURATION, EASE, SPRING } from '@/theme/motion';
 
@@ -490,11 +494,19 @@ export function copyNow(target: BuyTarget, amount: number, action: string, resum
     router.push({ pathname: '/thesis-new', params: { step: 'proposal', manual: '1', ...from } });
     return;
   }
-  updateSwap({
-    sell: { symbol: 'USDC', chain: 'Base' },
-    buy: { symbol: target.symbol, chain: target.chain as Chain },
-    presetAmount: String(amount),
-  });
+  // updateSwap({
+  //   sell: { symbol: 'USDC', chain: 'Base' },
+  //   buy: { symbol: target.symbol, chain: target.chain as Chain },
+  //   presetAmount: String(amount),
+  // });
+  // Dollars, paid with what the wallet holds (lib/buy `swapForDollars`).
+  const state = wallets.get();
+  const wallet = state.added.find((w) => w.id === state.activeId);
+  swapForDollars(
+    { symbol: target.symbol, chain: target.chain as Chain },
+    amount,
+    wallet ? heldNow(wallet) : [],
+  );
   router.navigate('/trade');
 }
 
@@ -577,6 +589,9 @@ export function CopyStepper({
   const size = primary ? 'regular' : 'compact';
   const ink = primary ? c.onPrimary : c.text;
   const copyText = [usePillLabel(variant, size), styles.copyText];
+  // "Copy $5" in the person's currency, whole units (lib/fx).
+  const money = useMoney();
+  const dollars = (usd: number) => money.format(usd).replace(/\.0+$/, '');
   const round = primary ? PILL_HEIGHT.regular : PILL_HEIGHT.compact;
   const reduced = useReducedMotion();
   // Starts at the amount chosen in Settings › Default copy amount (5 USDC unless changed).
@@ -624,7 +639,8 @@ export function CopyStepper({
           variant={variant}
           size={size}
           label={label}
-          accessibilityLabel={`${label}, ${amount} USDC`}
+          // accessibilityLabel={`${label}, ${amount} USDC`}
+          accessibilityLabel={`${label}, ${dollars(amount)}`}
           onPress={() => onCopy(amount)}
         >
           {/* Copy keeps its icon; "Create jar" reads fine on its own. */}
@@ -635,9 +651,11 @@ export function CopyStepper({
           ) : null}
           <Animated.View layout={glide} style={styles.copyWords}>
             <Text style={copyText}>{verb} </Text>
-            <TextSwap text={String(amount)} direction={direction} style={copyText} />
+            {/* Dollars, not USDC: what pays is picked from what the wallet holds. */}
+            {/* <TextSwap text={String(amount)} direction={direction} style={copyText} />
             <Text style={copyText}> </Text>
-            <TokenIcon symbol="USDC" size={20} />
+            <TokenIcon symbol="USDC" size={20} /> */}
+            <TextSwap text={dollars(amount)} direction={direction} style={copyText} />
           </Animated.View>
         </PillButton>
       </Animated.View>
@@ -779,6 +797,8 @@ export function useBlendedSince(
  * range so the line and the % agree. Falls back to the daily marks' line (pnlOf) until
  * any chart loads. `change` is the range's return; null when nothing is public.
  */
+export { noPnlText, pnlJars } from '@/lib/pnl-jars';
+
 export function usePnlLine(jars: SocialJar[] | undefined, range: '1W' | '1M') {
   const pnl = useMemo(() => (jars ? pnlOf(jars) : null), [jars]);
   const days = range === '1W' ? 7 : 30;

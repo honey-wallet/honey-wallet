@@ -1,5 +1,5 @@
 import { router, useLocalSearchParams } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Text, View } from 'react-native';
 import {
   PerformanceShareCard,
@@ -9,7 +9,7 @@ import {
 import { SkeletonReveal } from '@/components/motion/Skeleton';
 import { PillButton } from '@/components/onboarding/PillButton';
 import { SheetScreen } from '@/components/sheets/Sheet';
-import { usePnlLine } from '@/components/social/parts';
+import { noPnlText, pnlJars, usePnlLine } from '@/components/social/parts';
 import { tap } from '@/lib/haptics';
 import { isNotFound, loadProfile, useSocial } from '@/lib/social';
 import { makeStyles } from '@/theme';
@@ -31,7 +31,10 @@ export default function PnlSheet() {
   // profile's "P&L 30D", so a month unless a link asks for a week.
   const { range: asked } = useLocalSearchParams<{ range?: Range }>();
   const range: Range = asked === '1W' ? '1W' : '1M';
-  const { pnl, change, line: data } = usePnlLine(profile?.jars, range);
+  // const { pnl, change, line: data } = usePnlLine(profile?.jars, range);
+  // Only the jars they own make their P&L (not group jars they're in).
+  const ownJars = useMemo(() => pnlJars(profile), [profile]);
+  const { pnl, change, line: data } = usePnlLine(ownJars, range);
   const [sharing, setSharing] = useState(false);
   const [failed, setFailed] = useState<'missing' | 'error' | null>(null);
   const [attempt, setAttempt] = useState(0);
@@ -100,7 +103,8 @@ export default function PnlSheet() {
             period={period}
             pct={pct}
             data={data}
-            locked={pnl ? undefined : 'P&L is private'}
+            // locked={pnl ? undefined : 'P&L is private'}
+            locked={pnl ? undefined : noPnlText(ownJars)}
             wide
           />
         ) : null}

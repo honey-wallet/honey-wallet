@@ -33,7 +33,7 @@ import {
 import { PAY_CHAINS } from '@/lib/jar-buy';
 import { useMarketList } from '@/lib/market';
 import { CHAINS, chainSymbol, formatBalance, HOLDINGS, tokenName } from '@/lib/mock-wallet';
-import { isUsdc, jarPayWith } from '@/lib/pay-with';
+import { isUsdc, jarPayWith, jarPayWithChosen } from '@/lib/pay-with';
 import { pickToken, type TokenRef, useSwap } from '@/lib/swap';
 import { TEST_MODE } from '@/lib/test-mode';
 import {
@@ -65,8 +65,11 @@ export default function TokenPickerSheet() {
 
   const choose = (token: TokenRef) => {
     tap();
-    if (jar) jarPayWith.set(isUsdc(token) ? null : token);
-    else pickToken(side, token);
+    if (jar) {
+      jarPayWith.set(isUsdc(token) ? null : token);
+      // Picked by hand: it stays, whatever the wallet holds (lib/pay-with).
+      jarPayWithChosen.set(true);
+    } else pickToken(side, token);
     closeSheet();
   };
 

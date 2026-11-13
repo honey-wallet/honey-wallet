@@ -49,7 +49,7 @@ import { useBasketChart, useTokenChart } from '@/lib/market';
 import { formatUsd } from '@/lib/mock-wallet';
 import { memberName, propose, useActiveMultisig } from '@/lib/multisig';
 import { SHEET_EXIT } from '@/lib/navigation';
-import { jarPayWith } from '@/lib/pay-with';
+import { jarPayWith, jarPayWithChosen } from '@/lib/pay-with';
 import { refreshAfterChange } from '@/lib/portfolio';
 import { useProfile } from '@/lib/profile';
 import { JAR_VISIBILITY, settings, useSettings } from '@/lib/settings';
@@ -155,7 +155,12 @@ export default function NewThesisSheet() {
   });
   const [step, setStep] = useState<Step>(fromChat && openAt ? openAt : 'idea');
   // Every new jar starts paying with USDC; "Pay with" on How much? changes it.
-  useEffect(() => jarPayWith.set(null), []);
+  // useEffect(() => jarPayWith.set(null), []);
+  // It then follows what the wallet holds until picked by hand (lib/pay-with).
+  useEffect(() => {
+    jarPayWith.set(null);
+    jarPayWithChosen.set(false);
+  }, []);
   const [text, setText] = useState(idea ?? fromChat?.thesis ?? '');
   // Ideas are written in the chat: opened bare (no strategy to review), go there instead;
   // your own jar without its picks (a reload lost them) goes back to picking.
@@ -174,7 +179,11 @@ export default function NewThesisSheet() {
   );
   // Every jar is named by you on Launch (2026-11-13): the field starts empty under its
   // "Name your jar" placeholder, and the card's title stays blank until you type one.
-  const [name, setName] = useState(named ?? '');
+  // const [name, setName] = useState(named ?? '');
+  // A copy starts with the copied jar's name (changeable), so Copy isn't held up on it.
+  const [name, setName] = useState(named ?? (copied && !copied.mine ? copied.name : ''));
+  // Amounts in the person's currency (lib/fx): a jar's money is dollars, not "USDC".
+  const usdText = useMoney();
   // A copy whose jar loaded after this opened (a cold start from a link): start on it now.
   useEffect(() => {
     if (!copied || proposal || !openAt) return;
@@ -728,7 +737,10 @@ export default function NewThesisSheet() {
                           ? 'Checking routes…'
                           : tooSmall
                             ? tooSmall.label
-                            : `Buy ${formatUsd(proposal.amount)} and launch`
+                            : // `Buy ${formatUsd(proposal.amount)} and launch`
+                              copied && !copied.mine
+                              ? `Copy for ${usdText.format(proposal.amount)}`
+                              : `Buy ${usdText.format(proposal.amount)} and launch`
               }
               // disabled={!name.trim() || buying || blocked.length > 0}
               disabled={

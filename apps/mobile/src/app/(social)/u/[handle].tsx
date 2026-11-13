@@ -25,7 +25,9 @@ import {
   FeedCard,
   FollowButton,
   MascotEmpty,
+  noPnlText,
   openProfile,
+  pnlJars,
   SocialAvatar,
   TokenStack,
   usePnlLine,
@@ -221,7 +223,10 @@ function ProfileBody({
     ),
   ].sort((a, b) => b.at - a.at);
   // Their P&L over 30 days as a dense line: their jars' tokens' prices, ending on the P&L.
-  const { pnl, line: pnlLine } = usePnlLine(profile.jars, '1M');
+  // const { pnl, line: pnlLine } = usePnlLine(profile.jars, '1M');
+  // Only the jars they own (not group jars they're in) make their P&L.
+  const ownJars = useMemo(() => pnlJars(profile), [profile]);
+  const { pnl, line: pnlLine } = usePnlLine(ownJars, '1M');
   // Your own P&L setting: Private, Returns only or Public (the ••• menu and the lock).
   const level = pnlLevelOf(profile);
   const tokens = useMemo(() => holdingsOf(profile).map((t) => t.symbol), [profile]);
@@ -243,6 +248,8 @@ function ProfileBody({
         onOpen={() => router.push({ pathname: '/pnl', params: { handle } })}
         // Your own private P&L: tap the lock to choose who sees it, right here.
         level={profile.isMe ? level : undefined}
+        empty={noPnlText(ownJars)}
+        allowCopy={!!privacyOf(profile)?.allowCopy}
       />
       {/* As on X: the avatar over the banner's edge, the actions across from its lower half. */}
       <View style={styles.avatarRow}>
@@ -286,7 +293,8 @@ function ProfileBody({
                 ? PNL_LEVELS.map((l) => ({
                     label: `P&L: ${l.label}`,
                     icon: (l.value === level ? 'check' : l.icon) as 'check',
-                    onPress: () => void setPnlLevel(l.value),
+                    // onPress: () => void setPnlLevel(l.value),
+                    onPress: () => void setPnlLevel(l.value, !!privacyOf(profile)?.allowCopy),
                   }))
                 : []),
               ...(pnl
@@ -521,16 +529,19 @@ function pnlLevelOf(profile: SocialProfile): PnlLevel {
   if (!p?.showReturns) return 'private';
   return p.showHoldings ? 'public' : 'returns';
 }
-async function setPnlLevel(level: PnlLevel) {
+// async function setPnlLevel(level: PnlLevel) {
+async function setPnlLevel(level: PnlLevel, allowCopy = false) {
   tap();
   try {
     await setPrivacy({ showReturns: level !== 'private', showHoldings: level === 'public' });
+    // A copy buys what a jar holds: hiding holdings turns copying off, so say it.
+    const copyOff = allowCopy && level !== 'public' ? '. Copying is off until holdings show' : '';
     showToast(
-      level === 'private'
+      (level === 'private'
         ? 'Only you see your P&L'
         : level === 'returns'
           ? 'Others see your returns, not what you hold'
-          : 'Others see your returns and what you hold',
+          : 'Others see your returns and what you hold') + copyOff,
     );
   } catch (error) {
     showErrorToast(socialError(error));
@@ -543,6 +554,8 @@ function Banner({
   scrollY,
   onOpen,
   level,
+  empty = 'P&L is private',
+  allowCopy = false,
 }: {
   pnl: Pnl | null;
   line: number[];
@@ -551,6 +564,10 @@ function Banner({
   onOpen: () => void;
   /** Your own profile: who sees your P&L, so the lock can change it. */
   level?: PnlLevel;
+  /** What a visitor sees with no P&L: hidden, or none yet (lib `noPnlText`). */
+  empty?: string;
+  /** Your copying setting, so the menu can say when a level turns it off. */
+  allowCopy?: boolean;
 }) {
   const styles = useStyles();
   const c = useTheme();
@@ -622,7 +639,8 @@ function Banner({
                   leading: <Icon name={l.icon} size={16} color={c.textSecondary} />,
                 }))}
                 value={level}
-                onChange={(next) => void setPnlLevel(next)}
+                // onChange={(next) => void setPnlLevel(next)}
+                onChange={(next) => void setPnlLevel(next, allowCopy)}
                 // The pill says the setting itself: with no jars yet there's no P&L to
                 // show, which used to read "private" even when it was public (14 Nov).
                 trigger={() => (
@@ -646,7 +664,9 @@ function Banner({
             ) : (
               <View style={styles.lockedPill}>
                 <Icon name="lock" size={14} color={c.textSecondary} />
-                <Text style={styles.lockedText}>P&L is private</Text>
+                {/* <Text style={styles.lockedText}>P&L is private</Text> */}
+                {/* A public profile with no jars has no P&L yet; it isn't private. */}
+                <Text style={styles.lockedText}>{empty}</Text>
               </View>
             )}
           </View>
