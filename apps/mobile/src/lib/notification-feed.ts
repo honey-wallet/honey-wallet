@@ -108,20 +108,34 @@ export function toOperations(src: {
         },
       });
     }
-    const sells = jar.sells ?? [];
-    if (sells.length) {
-      const at = Math.min(...sells.map((x) => x.at));
+    // One notification per sale (a jar can be sold more than once), each with its own
+    // window for its USDC coming back (audit 14 Nov).
+    for (const sale of jar.sells ?? []) {
       ops.push({
-        id: `jar-sell:${jar.id}`,
+        id: `jar-sell:${jar.id}:${sale.depositAddress}`,
         kind: 'sold',
         title: `Sold ${jar.name}`,
-        detail: `${sells.length} ${sells.length === 1 ? 'token' : 'tokens'} → USDC`,
+        detail: 'To USDC',
         symbol: 'USDC',
-        paid: new Set(sells.map((x) => low(x.depositAddress))),
+        paid: new Set([low(sale.depositAddress)]),
         payouts: new Set(),
-        expect: { symbols: new Set(['USDC']), from: at, to: at + 2 * HOUR, left: sells.length },
+        expect: { symbols: new Set(['USDC']), from: sale.at, to: sale.at + 2 * HOUR, left: 1 },
       });
     }
+    //     const sells = jar.sells ?? [];
+    //     if (sells.length) {
+    //       const at = Math.min(...sells.map((x) => x.at));
+    //       ops.push({
+    //         id: `jar-sell:${jar.id}`,
+    //         kind: 'sold',
+    //         title: `Sold ${jar.name}`,
+    //         detail: `${sells.length} ${sells.length === 1 ? 'token' : 'tokens'} → USDC`,
+    //         symbol: 'USDC',
+    //         paid: new Set(sells.map((x) => low(x.depositAddress))),
+    //         payouts: new Set(),
+    //         expect: { symbols: new Set(['USDC']), from: at, to: at + 2 * HOUR, left: sells.length },
+    //       });
+    //     }
   }
   return ops;
 }
@@ -178,7 +192,10 @@ export function toNotifications(
             o.expect.symbols.has(item.symbol),
         );
       if (op) {
-        if (!op.payouts.has(hash)) left.set(op.id, (left.get(op.id) ?? 1) - 1);
+        // A payout known by hash settles it: later arrivals of the same token are real
+        // money in, not this swap's (audit 14 Nov).
+        // if (!op.payouts.has(hash)) left.set(op.id, (left.get(op.id) ?? 1) - 1);
+        left.set(op.id, op.payouts.has(hash) ? 0 : (left.get(op.id) ?? 1) - 1);
         continue;
       }
     }

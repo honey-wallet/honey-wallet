@@ -106,3 +106,51 @@ it('tells a jar buy once, and not each token arriving', () => {
     ['bought', 'Bought AI is bubble', '$0.98 · 2 tokens'],
   ]);
 });
+
+it('a payout known by hash leaves later arrivals of the same token as real money in', () => {
+  const swap = {
+    walletId: 'w',
+    sell: { symbol: 'USDC', chain: 'Base' },
+    buy: { symbol: 'USDC', chain: 'Base' },
+    sellDecimals: 6,
+    buyDecimals: 6,
+    amountIn: '1000000',
+    amountOut: '1000000',
+    depositAddress: '0xD0',
+    txHash: '0xp',
+    destinationTxHashes: ['0xout'],
+    status: 'SUCCESS',
+    sentAt: 1_000_000,
+  } as never;
+  const out = toNotifications(
+    [
+      item({ hash: '0xp', direction: 'sent', timestamp: 1_000, counterparty: '0xD0' }),
+      item({ hash: '0xout', direction: 'received', timestamp: 1_050 }),
+      item({ hash: '0xfriend', direction: 'received', timestamp: 1_100 }),
+    ],
+    toOperations({ swaps: [swap] }),
+  );
+  expect(out.map((n) => n.kind)).toEqual(['received', 'swapped']);
+});
+
+it('tells each sale of a jar on its own', () => {
+  const jar = {
+    id: 'j',
+    name: 'Gold',
+    createdAt: 0,
+    mine: true,
+    sells: [
+      { depositAddress: '0xS1', asset: 'a', units: '1', status: 'SUCCESS', at: 1_000_000 },
+      { depositAddress: '0xS2', asset: 'a', units: '1', status: 'SUCCESS', at: 90_000_000 },
+    ],
+  } as never;
+  const out = toNotifications(
+    [
+      item({ hash: '0x1', direction: 'sent', timestamp: 1_000, counterparty: '0xS1' }),
+      item({ hash: '0x2', direction: 'sent', timestamp: 90_000, counterparty: '0xS2' }),
+      item({ hash: '0x3', direction: 'received', timestamp: 90_100 }),
+    ],
+    toOperations({ jars: [jar] }),
+  );
+  expect(out.map((n) => n.kind)).toEqual(['sold', 'sold']);
+});

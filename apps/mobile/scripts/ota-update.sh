@@ -23,7 +23,7 @@ eas() { npx -y eas-cli@latest "$@"; }
 for platform in ios android; do
   local_rt=$(pnpm exec expo-updates fingerprint:generate --platform "$platform" 2>/dev/null |
     python3 -c 'import sys, json; print(json.load(sys.stdin)["hash"])')
-  store_rt=$(eas build:list --platform "$platform" --status finished --limit 1 --non-interactive --json 2>/dev/null |
+  store_rt=$(eas build:list --platform "$platform" --status finished --build-profile production --limit 1 --non-interactive --json 2>/dev/null |
     python3 -c 'import sys, json; b = json.load(sys.stdin); print((b[0].get("runtime") or {}).get("version", "") if b else "")')
   echo "$platform: update targets $local_rt, latest store build runs $store_rt"
   if [ "$local_rt" != "$store_rt" ]; then
