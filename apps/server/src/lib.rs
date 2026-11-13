@@ -325,6 +325,7 @@ fn router(config: &Config, health: runtime::RuntimeHealth, services: RouterServi
                 dex.clone(),
                 identity.as_ref().map(|i| i.pool().clone()),
             )
+            .with_identity(identity.clone())
             .with_sponsors(
                 evm.as_ref().map(|e| e.chain_names()).unwrap_or_default(),
                 solana_relayer.is_some(),

@@ -5,7 +5,8 @@
 //! Each call can spend a 1Click dry quote and up to three DEX quotes, so it has its own
 //! admission budget: a small per-person allowance (a jar asks once per leg) inside a
 //! shared ceiling, and a smaller shared slice for wallets with no linked Apple or Google
-//! sign-in.
+//! sign-in. Each quote inside also spends the shared provider ceilings (the 1Click
+//! quote budget and the `dex_quote*` ones; `route_planner::Sources::admit_*`).
 
 use std::sync::Arc;
 

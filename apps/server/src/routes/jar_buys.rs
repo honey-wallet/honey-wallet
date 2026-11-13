@@ -89,6 +89,45 @@ pub(crate) async fn charge_quote(identity: &Identity, user: uuid::Uuid) -> Resul
     }
 }
 
+/// 1Click dry quotes one person's `POST /routes/best` calls may spend a minute: each
+/// call asks up to three, and a jar's legs are planned twice
+/// (`best_route::PER_PERSON` calls).
+pub(crate) const ROUTE_QUOTES_PER_PERSON: i32 = 2 * super::best_route::PER_PERSON;
+
+/// Charges one route-planner 1Click dry quote against the shared 1Click ceilings
+/// (`QUOTES`, and `UNVERIFIED_QUOTES` for wallets without a verified sign-in). The
+/// planner's per-person count is its own (`route:` subjects), so planning a jar can't
+/// use up the deposit quotes that follow it.
+pub(crate) async fn charge_route_quote(
+    identity: &Identity,
+    user: uuid::Uuid,
+) -> Result<(), AppError> {
+    let person: Option<String> =
+        sqlx::query_scalar("SELECT firebase_uid FROM user_verified_identities WHERE user_id = $1")
+            .bind(user)
+            .fetch_optional(identity.pool())
+            .await
+            .map_err(crate::identity::unavailable)?;
+    let charge = |quota: Quota, subject: String| async move {
+        identity
+            .rate_limit_shared(
+                quota.domain,
+                &subject,
+                quota.global,
+                ROUTE_QUOTES_PER_PERSON,
+            )
+            .await
+    };
+    match person {
+        Some(uid) => charge(QUOTES, format!("route:person:{uid}")).await,
+        None => {
+            let subject = format!("route:{user}");
+            charge(UNVERIFIED_QUOTES, subject.clone()).await?;
+            charge(QUOTES, subject).await
+        }
+    }
+}
+
 /// The signed-in user's id, after charging `quota`.
 async fn signed_in(
     state: &StateData,
