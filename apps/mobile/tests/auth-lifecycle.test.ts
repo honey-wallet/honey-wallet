@@ -76,3 +76,9 @@ it('fails closed for sensitive actions without device security, with explicit lo
   expect(await confirmOwner('Sign out', false)).toBe(true);
   expect(api.auth).not.toHaveBeenCalled();
 });
+it('asks Android for strong biometrics only', async () => {
+  expect(await confirmOwner('Approve')).toBe(true);
+  expect(api.auth).toHaveBeenCalledWith(
+    expect.objectContaining({ promptMessage: 'Approve', biometricsSecurityLevel: 'strong' }),
+  );
+});

@@ -38,9 +38,10 @@ import {
   shareAmountIn,
   toMicroUsd,
 } from '@/lib/group-jar-core';
-import { type BuyLeg, payerEvm, payJarBuy, USDC_BASE_ASSET } from '@/lib/jar-buy';
+import { type BuyLeg, MAX_BUY_USD, payerEvm, payJarBuy, USDC_BASE_ASSET } from '@/lib/jar-buy';
 import {
   approveGroupProposal,
+  checkGroupPin,
   createGroupDao,
   myNearAccount,
   payShareFromNear,
@@ -48,6 +49,7 @@ import {
   proposeGroupPayout,
   relayForGroup,
   trackGroupDao,
+  verifyGroupDao,
 } from '@/lib/jar-dao';
 import type { Route } from '@/lib/jar-routes';
 import { enableGroupPush } from '@/lib/push';
@@ -170,11 +172,9 @@ export function groupWallet(g: SocialGroup) {
   });
 }
 
-/** NEAR accounts of the members still in. */
-const accountsIn = (g: SocialGroup) =>
-  membersIn(g)
-    .map((m) => m.nearAccount)
-    .filter((a): a is string => !!a);
+/** NEAR accounts of everyone the group shows, whatever their state. */
+const knownAccounts = (g: SocialGroup) =>
+  g.members.map((m) => m.nearAccount).filter((a): a is string => !!a);
 
 // ---------------------------------------------------------------------------
 // Launch and answering an invite
@@ -250,12 +250,15 @@ async function sponsor(groupId: string, account: string) {
   }
 }
 
-/** Join = your NEAR account, its fees paid by Honey where it can, then accept. */
+/**
+ * Join = accept with your NEAR account, then Honey pays its fees where it can (Honey
+ * only tops up members who have accepted, and only the account they joined with).
+ */
 export async function joinGroup(id: string) {
   if (isDemoGroup(id)) return demo(id, 'join');
   const account = myNearAccount();
-  await sponsor(id, account);
   const joined = put(await api.socialAcceptGroup(token(), id, account));
+  await sponsor(id, account);
   // Votes and "add your share" come while you're away: the moment to ask.
   void enableGroupPush();
   return joined;
@@ -370,6 +373,11 @@ export async function payShare(g: SocialGroup, nearUsdc: number | null) {
   if (isDemoGroup(g.id)) return demo(g.id, 'pay');
   const dao = g.dao;
   if (!dao) throw new Error('The group isn’t on NEAR yet');
+  // The share is Honey's number: held to the same ceiling as a jar buy.
+  if (!(g.shareUsd > 0) || g.shareUsd > MAX_BUY_USD)
+    throw new Error(`Shares are capped at $${MAX_BUY_USD} for now.`);
+  // Where it goes is Honey's word too: check the DAO on NEAR (and its pin) first.
+  await verifyGroupDao(g.id, dao, knownAccounts(g));
   if (nearUsdc !== null && nearUsdc >= g.shareUsd) {
     relayForGroup(dao, g.id);
     const txHash = await payShareFromNear(dao, g.shareUsd);
@@ -425,6 +433,7 @@ async function record(g: SocialGroup, kind: SocialGroupProposalKind, proposalId:
 }
 
 function walletOf(g: SocialGroup) {
+  if (g.dao) checkGroupPin(g.id, g.dao);
   const walletId = groupWallet(g);
   if (!walletId || !g.dao) throw new Error('The group isn’t on NEAR yet');
   return { walletId, dao: g.dao };
@@ -454,7 +463,8 @@ export async function proposeBuy(g: SocialGroup, routes: Route[], usdcAtomic: bi
 export async function approveVote(g: SocialGroup, proposalId: number) {
   if (isDemoGroup(g.id)) return demo(g.id, 'approve');
   const { walletId, dao } = walletOf(g);
-  await approveGroupProposal(walletId, dao, proposalId, accountsIn(g));
+  // Who's still in comes from NEAR (lib/jar-dao), not from Honey's list.
+  await approveGroupProposal(walletId, dao, proposalId);
   return syncGroup(g.id);
 }
 
@@ -462,12 +472,7 @@ export async function approveVote(g: SocialGroup, proposalId: number) {
 export async function leaveGroup(g: SocialGroup) {
   if (isDemoGroup(g.id)) return demo(g.id, 'leave');
   const { walletId, dao } = walletOf(g);
-  const id = await proposeGroupPayout(walletId, dao, {
-    kind: 'leave',
-    to: [myNearAccount()],
-    remaining: accountsIn(g).length,
-    name: g.name,
-  });
+  const id = await proposeGroupPayout(walletId, dao, { kind: 'leave', name: g.name });
   return record(g, 'leave', id);
 }
 
@@ -475,13 +480,7 @@ export async function leaveGroup(g: SocialGroup) {
 export async function cashOutGroup(g: SocialGroup) {
   if (isDemoGroup(g.id)) return demo(g.id, 'cashout');
   const { walletId, dao } = walletOf(g);
-  const to = accountsIn(g);
-  const id = await proposeGroupPayout(walletId, dao, {
-    kind: 'cashout',
-    to,
-    remaining: to.length,
-    name: g.name,
-  });
+  const id = await proposeGroupPayout(walletId, dao, { kind: 'cashout', name: g.name });
   return record(g, 'cashout', id);
 }
 

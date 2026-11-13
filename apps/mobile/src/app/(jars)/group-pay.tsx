@@ -71,6 +71,7 @@ export default function GroupPayTray() {
                 </View>
               }
             />
+            {g.dao ? <StatRow label="To" value={shortDao(g.dao)} /> : null}
             <StatRow label="Network" value={fromNear ? 'NEAR' : 'Base'} />
             <StatRow label="Your share" value={`1 of ${g.people}`} />
             <StatRow label="Arrives" value={fromNear ? 'In seconds' : 'In about a minute'} />
@@ -102,6 +103,14 @@ export default function GroupPayTray() {
       )}
     </ContentSwap>
   );
+}
+
+/** The jar's DAO account, its name cut in the middle when long: "japan-tr…ab12cd.sputnik-dao.near". */
+function shortDao(dao: string) {
+  const cut = (s: string) => (s.length > 16 ? `${s.slice(0, 8)}…${s.slice(-6)}` : s);
+  const suffix = '.sputnik-dao.near';
+  // Anything else is shown as it is (cut), never dressed up as a jar; paying it is refused.
+  return dao.endsWith(suffix) ? `${cut(dao.slice(0, -suffix.length))}${suffix}` : cut(dao);
 }
 
 const useStyles = makeStyles((c) => ({

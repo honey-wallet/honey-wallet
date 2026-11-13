@@ -12,7 +12,7 @@ import { ActivityIndicator, Text, View } from 'react-native';
 import { Icon, type IconName } from '@/components/Icon';
 import { TextsReveal } from '@/components/motion/TextsReveal';
 import { PillButton } from '@/components/onboarding/PillButton';
-import { ArrivedWallets } from '@/components/pairing/ArrivedWallets';
+import { ArrivedWallets, PairedWallets } from '@/components/pairing/ArrivedWallets';
 import { CodeEntry } from '@/components/pairing/CodeEntry';
 import { SheetScreen } from '@/components/sheets/Sheet';
 import { SuccessPage } from '@/components/sheets/SuccessPage';
@@ -27,7 +27,12 @@ import {
   takeScannedOffer,
 } from '@/lib/pair-offer';
 import { showToast } from '@/lib/toast';
-import { importPairedWallet, readPrimaryWallet } from '@/lib/vault';
+import {
+  hasPrimaryMnemonic,
+  importPairedWallet,
+  readPrimaryAccounts,
+  readPrimaryWallet,
+} from '@/lib/vault';
 import { addVaultWallet, setActiveWallet } from '@/lib/wallets';
 import { makeStyles, radius, useTheme } from '@/theme';
 
@@ -36,7 +41,12 @@ type State =
   | { step: 'intro'; uri: string }
   | { step: 'connecting' }
   | { step: 'compare'; session: PairSession; pair: PairChannel }
-  | { step: 'confirm'; session: PairSession; pair: PairChannel; payload: PairPayload }
+  | {
+      step: 'confirm';
+      session: PairSession;
+      pair: PairChannel;
+      wallets: { index: number; label: string; address?: string }[];
+    }
   | { step: 'sending' }
   | { step: 'receiving'; code: string }
   | { step: 'review'; payload: PairPayload }
@@ -84,7 +94,7 @@ export default function PairExtensionSheet() {
     setState({ step: 'connecting' });
     let session: PairSession | undefined;
     try {
-      if (!toPhone && !(await readPrimaryWallet())) {
+      if (!toPhone && !(await hasPrimaryMnemonic())) {
         throw new Error('Create or import a wallet first.');
       }
       const result = await phoneHandshake(uri, abort.current.signal);
@@ -139,13 +149,16 @@ export default function PairExtensionSheet() {
     }
   };
 
-  /** The code matched: say what leaves and that Face ID comes next, before the system asks. */
+  /**
+   * The code matched: say what leaves and that Face ID comes next, before the system asks.
+   * The phrase itself stays in secure storage until Face ID passes (`send`).
+   */
   const matched = async (session: PairSession, pair: PairChannel) => {
     try {
-      const wallet = await readPrimaryWallet();
-      if (!wallet) throw new Error('Create or import a wallet first.');
+      const wallets = await readPrimaryAccounts();
+      if (!wallets) throw new Error('Create or import a wallet first.');
       success();
-      setState({ step: 'confirm', session, pair, payload: { v: 1, ...wallet } });
+      setState({ step: 'confirm', session, pair, wallets });
     } catch (error) {
       clearPairSession(session);
       sessions.current.delete(session);
@@ -154,7 +167,7 @@ export default function PairExtensionSheet() {
   };
 
   // Cancelling Face ID (or the passcode) leaves you on the confirm step to try again.
-  const send = async (session: PairSession, pair: PairChannel, payload: PairPayload) => {
+  const send = async (session: PairSession, pair: PairChannel) => {
     tap();
     try {
       if (!(await confirmOwner('Send your wallet to this browser'))) {
@@ -162,7 +175,10 @@ export default function PairExtensionSheet() {
         return;
       }
       setState({ step: 'sending' });
-      const data = sealPayload(session.key, payload, getRandomBytes);
+      // Read only now, after Face ID, and sealed straight away: never kept in screen state.
+      const wallet = await readPrimaryWallet();
+      if (!wallet) throw new Error('Create or import a wallet first.');
+      const data = sealPayload(session.key, { v: 1, ...wallet }, getRandomBytes);
       await api.pairSend(pair, 'payload', { data });
       completeStep('browser');
       success();
@@ -251,7 +267,7 @@ export default function PairExtensionSheet() {
             />
             <PillButton
               label="Send"
-              onPress={() => send(state.session, state.pair, state.payload)}
+              onPress={() => send(state.session, state.pair)}
               style={styles.flex}
             />
           </View>
@@ -275,7 +291,7 @@ export default function PairExtensionSheet() {
             }
           />
         </View>
-        <ArrivedWallets payload={state.payload} />
+        <PairedWallets wallets={state.wallets} />
       </SheetScreen>
     );
   }

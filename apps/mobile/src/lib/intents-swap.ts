@@ -33,6 +33,7 @@ import {
   checkOneClickRecord,
   checkOneClickTerms,
   MAX_SLIPPAGE_BPS,
+  MIN_VALUE_KEPT,
   minWithinSlippage,
   quoteChanged,
   sameAddress,
@@ -187,8 +188,6 @@ function swapCeiling(raw: string | undefined) {
   const n = Number(raw);
   return raw?.trim() && Number.isFinite(n) && n > 0 && n <= 1_000 ? n : 1_000;
 }
-/** A quote that keeps less than this share of the value is refused outright. */
-const MIN_VALUE_KEPT = 0.5;
 
 /** Same token: by NEAR Intents asset when both sides name one, else by symbol and chain. */
 export const sameToken = (a: TokenRef, b: TokenRef) =>

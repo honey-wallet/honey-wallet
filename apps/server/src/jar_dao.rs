@@ -10,7 +10,11 @@ use crate::{
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::Serialize;
 use serde_json::{Value, json};
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
+use tokio::sync::Mutex;
 
 pub const FACTORY_SUFFIX: &str = ".sputnik-dao.near";
 pub const INTENTS: &str = "intents.near";
@@ -57,7 +61,14 @@ pub struct JarDao {
     rpc: String,
     relayer_enabled: bool,
     market: Option<Arc<MarketData>>,
+    /// The factory's default (official Sputnik v2) code hash and when it was read.
+    factory_code: Mutex<Option<(String, Instant)>>,
 }
+
+/// How long the factory's default code hash is trusted before it is read again.
+const FACTORY_CODE_TTL: Duration = Duration::from_secs(10 * 60);
+/// The Sputnik DAO factory every jar DAO is created by.
+pub const FACTORY: &str = "sputnik-dao.near";
 
 pub fn is_account(s: &str) -> bool {
     (2..=64).contains(&s.len())
@@ -99,6 +110,7 @@ impl JarDao {
             rpc,
             relayer_enabled,
             market: None,
+            factory_code: Mutex::new(None),
         })
     }
 
@@ -177,6 +189,62 @@ impl JarDao {
             nav_micro_usd,
             relayer: self.relayer_enabled,
         })
+    }
+
+    /// The code hash (base58) deployed on `account`.
+    pub async fn code_hash(&self, account: &str) -> Result<String, AppError> {
+        let view = self
+            .rpc(
+                "query",
+                json!({ "request_type": "view_account", "finality": "final", "account_id": account }),
+            )
+            .await?;
+        view["code_hash"]
+            .as_str()
+            .filter(|h| !h.is_empty() && h.len() <= 64)
+            .map(String::from)
+            .ok_or(AppError::Busy)
+    }
+
+    /// The code hash sputnik-dao.near deploys for new DAOs (`get_default_code_hash`),
+    /// read from the chain and cached; never a value written into Honey.
+    pub async fn factory_code_hash(&self) -> Result<String, AppError> {
+        let mut cached = self.factory_code.lock().await;
+        if let Some((hash, at)) = cached.as_ref()
+            && at.elapsed() < FACTORY_CODE_TTL
+        {
+            return Ok(hash.clone());
+        }
+        let hash = self
+            .view(FACTORY, "get_default_code_hash", json!({}))
+            .await?
+            .as_str()
+            .filter(|h| !h.is_empty() && h.len() <= 64)
+            .map(String::from)
+            .ok_or(AppError::Busy)?;
+        *cached = Some((hash.clone(), Instant::now()));
+        Ok(hash)
+    }
+
+    /// `dao`'s code hash when it is the factory's official Sputnik v2 code (what Honey
+    /// records when a group's DAO is created); refused otherwise.
+    pub async fn sputnik_code(&self, dao: &str) -> Result<String, AppError> {
+        if !is_jar_dao(dao) {
+            return Err(AppError::BadRequest("not a sputnik-dao.near jar".into()));
+        }
+        let (code, official) =
+            futures_util::try_join!(self.code_hash(dao), self.factory_code_hash())?;
+        if code != official {
+            return Err(AppError::BadRequest(
+                "that DAO doesn't run Sputnik's standard contract".into(),
+            ));
+        }
+        Ok(code)
+    }
+
+    /// One proposal of `dao` as stored on chain (`get_proposal`).
+    pub async fn proposal(&self, dao: &str, id: u64) -> Result<Value, AppError> {
+        self.view(dao, "get_proposal", json!({ "id": id })).await
     }
 
     /// Checks a unit record's deposit: a successful `ft_transfer_call` of NEAR USDC by
@@ -283,6 +351,10 @@ fn read_balances(tokens: &[String], balances: &Value) -> Result<Vec<TokenBalance
         .collect()
 }
 
+/// A direct deposit: the member's own transaction to USDC with exactly one action, an
+/// `ft_transfer_call` of one yoctoNEAR to intents.near naming `dao`. The amount is what
+/// intents.near credited the DAO (`kept_amount`), never the transaction's final value
+/// (which another action, or another contract, could have set).
 pub fn check_deposit(
     result: &Value,
     tx_hash: &str,
@@ -293,17 +365,23 @@ pub fn check_deposit(
     if tx["hash"] != tx_hash || tx["signer_id"] != member || tx["receiver_id"] != USDC_NEAR {
         return Err(not_a_deposit());
     }
-    // ft_transfer_call's final value is ft_resolve_transfer's: the amount intents.near
-    // actually kept (base64 JSON string). A refunded deposit resolves to "0".
-    let used = resolved_amount(&result["status"]).ok_or_else(not_a_deposit)?;
-    let sent = deposit_call(&tx["actions"][0], dao).ok_or_else(not_a_deposit)?;
+    let [action] = tx["actions"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+    else {
+        return Err(not_a_deposit());
+    };
+    if failed(result) {
+        return Err(not_a_deposit());
+    }
+    let sent = deposit_call(action, dao).ok_or_else(not_a_deposit)?;
+    let used = kept_amount(result, dao).ok_or_else(not_a_deposit)?;
     deposit_check(tx_hash, member, dao, used, sent)
 }
 
 /// `check_deposit` for a relayed deposit: the relayer's transaction to `member`,
-/// whose one `Delegate` action is the member's `ft_transfer_call` on USDC. The amount
-/// kept is ft_resolve_transfer's value, read from USDC's receipt (the delegate's
-/// inner call runs after the transaction's own receipt).
+/// whose one `Delegate` action is the member's one `ft_transfer_call` on USDC.
 pub fn check_relayed_deposit(
     result: &Value,
     tx_hash: &str,
@@ -325,21 +403,73 @@ pub fn check_relayed_deposit(
     {
         return Err(not_a_deposit());
     }
-    if result["status"].get("Failure").is_some() {
+    if failed(result) {
         return Err(not_a_deposit());
     }
     let sent = deposit_call(&delegate["actions"][0], dao).ok_or_else(not_a_deposit)?;
-    let used = result["receipts_outcome"]
-        .as_array()
-        .and_then(|receipts| {
-            receipts
-                .iter()
-                .filter(|r| r["outcome"]["executor_id"] == USDC_NEAR)
-                .filter_map(|r| resolved_amount(&r["outcome"]["status"]))
-                .next_back()
-        })
-        .ok_or_else(not_a_deposit)?;
+    let used = kept_amount(result, dao).ok_or_else(not_a_deposit)?;
     deposit_check(tx_hash, member, dao, used, sent)
+}
+
+/// A failure in the transaction's status or in any receipt.
+fn failed(result: &Value) -> bool {
+    result["status"].get("Failure").is_some()
+        || result["receipts_outcome"]
+            .as_array()
+            .is_some_and(|receipts| {
+                receipts
+                    .iter()
+                    .any(|r| r["outcome"]["status"].get("Failure").is_some())
+            })
+}
+
+/// What intents.near kept for `dao`: USDC's `ft_resolve_transfer` value (the last
+/// USDC receipt returning an amount: sent minus any refund), capped by the NEP-245
+/// `mt_mint` events intents.near logged crediting `dao` with NEAR USDC. Both must be
+/// there; a deposit credited to anyone else mints nothing for `dao`.
+fn kept_amount(result: &Value, dao: &str) -> Option<u128> {
+    let receipts = result["receipts_outcome"].as_array()?;
+    let resolved = receipts
+        .iter()
+        .filter(|r| r["outcome"]["executor_id"] == USDC_NEAR)
+        .filter_map(|r| resolved_amount(&r["outcome"]["status"]))
+        .next_back()?;
+    let token = format!("nep141:{USDC_NEAR}");
+    let mut minted: u128 = 0;
+    for receipt in receipts
+        .iter()
+        .filter(|r| r["outcome"]["executor_id"] == INTENTS)
+    {
+        for log in receipt["outcome"]["logs"].as_array().into_iter().flatten() {
+            let Some(event) = log
+                .as_str()
+                .and_then(|l| l.strip_prefix("EVENT_JSON:"))
+                .and_then(|l| serde_json::from_str::<Value>(l).ok())
+            else {
+                continue;
+            };
+            if event["standard"] != "nep245" || event["event"] != "mt_mint" {
+                continue;
+            }
+            for mint in event["data"].as_array().into_iter().flatten() {
+                if mint["owner_id"] != dao {
+                    continue;
+                }
+                let ids = mint["token_ids"].as_array()?;
+                let amounts = mint["amounts"].as_array()?;
+                if ids.len() != amounts.len() {
+                    return None;
+                }
+                for (id, amount) in ids.iter().zip(amounts) {
+                    if id == token.as_str() {
+                        let amount: u128 = amount.as_str()?.parse().ok()?;
+                        minted = minted.checked_add(amount)?;
+                    }
+                }
+            }
+        }
+    }
+    Some(resolved.min(minted))
 }
 
 fn not_a_deposit() -> AppError {
@@ -358,7 +488,7 @@ fn resolved_amount(status: &Value) -> Option<u128> {
 /// The amount of an `ft_transfer_call` action to intents.near crediting `dao`.
 fn deposit_call(action: &Value, dao: &str) -> Option<u128> {
     let call = &action["FunctionCall"];
-    if call["method_name"] != "ft_transfer_call" {
+    if call["method_name"] != "ft_transfer_call" || !one_yocto(&call["deposit"]) {
         return None;
     }
     let args: Value = call["args"]
@@ -372,6 +502,11 @@ fn deposit_call(action: &Value, dao: &str) -> Option<u128> {
         .as_str()
         .filter(|a| !a.is_empty() && a.len() <= 38 && a.bytes().all(|b| b.is_ascii_digit()))
         .and_then(|a| a.parse().ok())
+}
+
+/// An action deposit of exactly one yoctoNEAR (RPC JSON writes it as a string).
+fn one_yocto(deposit: &Value) -> bool {
+    deposit == "1" || deposit == 1
 }
 
 fn deposit_check(
@@ -468,17 +603,51 @@ mod tests {
         deposit_tx_used(msg, "5000000")
     }
 
-    fn deposit_tx_used(msg: &str, used: &str) -> Value {
+    fn transfer_call(msg: &str, deposit: Value) -> Value {
         let args = STANDARD.encode(
             json!({ "receiver_id": INTENTS, "amount": "5000000", "msg": msg, "memo": "m" })
                 .to_string(),
         );
+        json!({ "FunctionCall": { "method_name": "ft_transfer_call", "args": args,
+                                  "gas": 100_000_000_000_000u64, "deposit": deposit } })
+    }
+
+    /// intents.near's NEP-245 log for a deposit (shape copied from a mainnet deposit).
+    fn mint_log(owner: &str, amount: &str) -> Value {
+        json!(format!(
+            "EVENT_JSON:{}",
+            json!({ "standard": "nep245", "version": "1.0.0", "event": "mt_mint",
+                    "data": [{ "owner_id": owner, "token_ids": [format!("nep141:{USDC_NEAR}")],
+                               "amounts": [amount], "memo": "deposit" }] })
+        ))
+    }
+
+    /// The receipts of a kept deposit: USDC's transfer, intents.near minting to
+    /// `owner`, then USDC's ft_resolve_transfer returning `used`.
+    fn receipts(owner: &str, minted: &str, used: &str) -> Value {
+        let logs = if minted == "0" {
+            json!([])
+        } else {
+            json!([mint_log(owner, minted)])
+        };
+        json!([
+            { "outcome": { "executor_id": USDC_NEAR, "logs": [],
+                           "status": { "SuccessReceiptId": "s" } } },
+            { "outcome": { "executor_id": INTENTS, "logs": logs,
+                           "status": { "SuccessValue": STANDARD.encode("\"0\"") } } },
+            { "outcome": { "executor_id": USDC_NEAR, "logs": [],
+                           "status": { "SuccessValue": STANDARD.encode(json!(used).to_string()) } } }
+        ])
+    }
+
+    fn deposit_tx_used(msg: &str, used: &str) -> Value {
         json!({
             "status": { "SuccessValue": STANDARD.encode(json!(used).to_string()) },
             "transaction": {
                 "hash": "h", "signer_id": MEMBER, "receiver_id": USDC_NEAR,
-                "actions": [{ "FunctionCall": { "method_name": "ft_transfer_call", "args": args } }]
-            }
+                "actions": [transfer_call(msg, json!("1"))]
+            },
+            "receipts_outcome": receipts(msg, used, used)
         })
     }
 
@@ -501,9 +670,63 @@ mod tests {
         assert!(check_deposit(&failed, "h", MEMBER, DAO).is_err());
     }
 
+    /// The fake-deposit exploit: the transaction's final value is attacker-chosen
+    /// (a second action, or a refunded transfer followed by a call returning a big
+    /// number). Only intents.near's own mint to the DAO and USDC's resolve count.
+    #[test]
+    fn a_deposit_is_never_read_from_the_final_value() {
+        // Two actions: a real share plus anything else.
+        let mut two = deposit_tx(DAO);
+        let call = two["transaction"]["actions"][0].clone();
+        two["transaction"]["actions"] = json!([call.clone(), call]);
+        assert!(
+            check_deposit(&two, "h", MEMBER, DAO).is_err(),
+            "one action only"
+        );
+        // A final value claiming 5 USDC while intents.near minted nothing for the DAO.
+        let mut nothing_minted = deposit_tx(DAO);
+        nothing_minted["receipts_outcome"] = receipts(DAO, "0", "5000000");
+        assert!(check_deposit(&nothing_minted, "h", MEMBER, DAO).is_err());
+        // Minted to someone else (msg named the DAO, the credit went elsewhere).
+        let mut elsewhere = deposit_tx(DAO);
+        elsewhere["receipts_outcome"] = receipts("attacker.near", "5000000", "5000000");
+        assert!(check_deposit(&elsewhere, "h", MEMBER, DAO).is_err());
+        // No receipts at all: only a final value.
+        let mut bare = deposit_tx(DAO);
+        bare["receipts_outcome"] = json!([]);
+        assert!(check_deposit(&bare, "h", MEMBER, DAO).is_err());
+        // Not exactly one yoctoNEAR attached.
+        for deposit in [json!("0"), json!("2"), json!(null)] {
+            let mut odd = deposit_tx(DAO);
+            odd["transaction"]["actions"] = json!([transfer_call(DAO, deposit)]);
+            assert!(check_deposit(&odd, "h", MEMBER, DAO).is_err());
+        }
+        // A failed receipt anywhere.
+        let mut failed_receipt = deposit_tx(DAO);
+        failed_receipt["receipts_outcome"][1]["outcome"]["status"] = json!({ "Failure": {} });
+        assert!(check_deposit(&failed_receipt, "h", MEMBER, DAO).is_err());
+        // The amount is the smaller of the mint and the resolve.
+        let mut partly = deposit_tx(DAO);
+        partly["receipts_outcome"] = receipts(DAO, "3000000", "5000000");
+        assert_eq!(
+            check_deposit(&partly, "h", MEMBER, DAO).unwrap().amount,
+            "3000000"
+        );
+    }
+
     fn relayed_deposit(msg: &str, used: &str) -> Value {
         let direct = deposit_tx_used(msg, "5000000");
         let call = direct["transaction"]["actions"][0].clone();
+        let mut outcome = vec![
+            json!({ "outcome": { "executor_id": MEMBER, "logs": [], "status": { "SuccessReceiptId": "r" } } }),
+        ];
+        outcome.extend(
+            receipts(msg, used, used)
+                .as_array()
+                .unwrap()
+                .iter()
+                .cloned(),
+        );
         json!({
             "status": { "SuccessValue": "" },
             "transaction": {
@@ -513,14 +736,7 @@ mod tests {
                     "nonce": 5, "max_block_height": 9, "public_key": "ed25519:x"
                 }, "signature": "ed25519:y" } }]
             },
-            "receipts_outcome": [
-                { "outcome": { "executor_id": MEMBER, "status": { "SuccessReceiptId": "r" } } },
-                { "outcome": { "executor_id": USDC_NEAR, "status": { "SuccessReceiptId": "s" } } },
-                { "outcome": { "executor_id": INTENTS,
-                               "status": { "SuccessValue": STANDARD.encode("\"0\"") } } },
-                { "outcome": { "executor_id": USDC_NEAR,
-                               "status": { "SuccessValue": STANDARD.encode(json!(used).to_string()) } } }
-            ]
+            "receipts_outcome": outcome
         })
     }
 
@@ -539,5 +755,9 @@ mod tests {
         // A direct check never accepts the relayer's transaction, nor the reverse.
         assert!(check_deposit(&relayed, "h", MEMBER, DAO).is_err());
         assert!(check_relayed_deposit(&deposit_tx(DAO), "h", MEMBER, DAO, "relayer.near").is_err());
+        // Relayed too: nothing minted for the DAO means no deposit.
+        let mut unminted = relayed_deposit(DAO, "5000000");
+        unminted["receipts_outcome"][2]["outcome"]["logs"] = json!([]);
+        assert!(check_relayed_deposit(&unminted, "h", MEMBER, DAO, "relayer.near").is_err());
     }
 }

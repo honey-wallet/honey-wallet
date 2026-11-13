@@ -9,14 +9,12 @@ const accountsOf = (payload: PairPayload) =>
   payload.accounts.length ? payload.accounts : [{ index: 0, label: 'Wallet' }];
 
 /**
- * A pairing's wallets by name and address: what arrived, before it's added, or what's
- * about to leave (the sending phone's confirm step). The
+ * A pairing's wallets by name and address: what arrived, before it's added. The
  * receiving device never adds a wallet on its own. Someone who saw the QR could answer
  * before your own device does, so you check these are yours (your other device just
  * took the code) and tap to add them.
  */
 export function ArrivedWallets({ payload }: { payload: PairPayload }) {
-  const styles = useStyles();
   const [addresses, setAddresses] = useState<Record<number, string>>({});
   const accounts = accountsOf(payload);
 
@@ -35,13 +33,29 @@ export function ArrivedWallets({ payload }: { payload: PairPayload }) {
   }, [payload]);
 
   return (
+    <PairedWallets
+      wallets={accounts.map(({ index, label }) => ({ index, label, address: addresses[index] }))}
+    />
+  );
+}
+
+/**
+ * The same rows from names and addresses already known: what's about to leave, on the
+ * sending phone's confirm step (read from the wallet list, so the phrase stays put
+ * until Face ID).
+ */
+export function PairedWallets({
+  wallets,
+}: {
+  wallets: { index: number; label: string; address?: string }[];
+}) {
+  const styles = useStyles();
+  return (
     <View style={styles.card}>
-      {accounts.map(({ index, label }) => (
+      {wallets.map(({ index, label, address }) => (
         <View key={index} style={styles.row}>
           <Text style={styles.label}>{label}</Text>
-          <Text style={styles.address}>
-            {addresses[index] ? shortAddress(addresses[index], 6, 4) : '…'}
-          </Text>
+          <Text style={styles.address}>{address ? shortAddress(address, 6, 4) : '…'}</Text>
         </View>
       ))}
     </View>

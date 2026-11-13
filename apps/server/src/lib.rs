@@ -262,7 +262,7 @@ fn router(config: &Config, health: runtime::RuntimeHealth, services: RouterServi
     // their route-specific wallet quotas remain in the handlers that need them.
     let private_api = Router::new()
         .merge(routes::account_identity::router_with_store(
-            firebase_auth,
+            firebase_auth.clone(),
             identity.as_ref().map(|i| i.pool().clone()),
         ))
         .merge(routes::operations::router(identity.clone(), work))
@@ -279,6 +279,7 @@ fn router(config: &Config, health: runtime::RuntimeHealth, services: RouterServi
             market.clone(),
             redis.clone(),
             jar_dao.clone(),
+            firebase_auth,
         ))
         .merge(routes::aave::router(identity.clone(), aave))
         .merge(routes::morpho::router(identity.clone(), morpho))
@@ -376,6 +377,7 @@ fn jar_buys_router(
     market: Option<std::sync::Arc<market_data::MarketData>>,
     redis: Option<redis_store::RedisStore>,
     jar_dao: Option<std::sync::Arc<jar_dao::JarDao>>,
+    firebase_auth: Option<firebase_auth::FirebaseVerifier>,
 ) -> Router {
     let buys = market
         .clone()
@@ -398,7 +400,14 @@ fn jar_buys_router(
         .flatten()
         .map(std::sync::Arc::new);
     match jar_dao {
-        Some(dao) => router.merge(routes::jar_dao::router(identity, dao, buys, relayer)),
+        Some(dao) => router.merge(routes::jar_dao::router_with(
+            identity,
+            dao,
+            buys,
+            relayer,
+            routes::jar_dao::FeeLimits::from_env(),
+            firebase_auth,
+        )),
         None => router,
     }
 }

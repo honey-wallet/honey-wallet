@@ -1050,6 +1050,9 @@ async fn created(
             majority(people)
         )));
     }
+    // The factory's official Sputnik code, recorded: Honey's relayer only pays for calls
+    // on a DAO still running it.
+    let code = self::chain(&state)?.sputnik_code(&dao).await?;
 
     let mut tx = pool.begin().await.map_err(unavailable)?;
     let g = lock(&mut tx, id).await?;
@@ -1078,11 +1081,13 @@ async fn created(
         }
     }
     let result = sqlx::query(
-        "UPDATE social_groups SET dao = $2, status = 'funding', updated_at = clock_timestamp()
+        "UPDATE social_groups SET dao = $2, dao_code_hash = $3, status = 'funding',
+                updated_at = clock_timestamp()
          WHERE id = $1",
     )
     .bind(id)
     .bind(&dao)
+    .bind(&code)
     .execute(&mut *tx)
     .await;
     if let Err(error) = result {

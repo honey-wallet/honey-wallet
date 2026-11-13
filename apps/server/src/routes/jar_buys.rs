@@ -52,12 +52,40 @@ pub(crate) struct Quota {
     pub per_user: i32,
 }
 
+/// The slice of `QUOTES`' global budget wallets with no linked Apple or Google sign-in
+/// can use between them: fresh keys are free to make, so a swarm of them can't take
+/// every quote from people who verified.
+const UNVERIFIED_QUOTES: Quota = Quota {
+    domain: "jar-buy-quote-unverified",
+    global: 120,
+    per_user: 6,
+};
+
 impl Quota {
     /// Charges both counters as one admission decision (Redis when configured).
     pub(crate) async fn charge(self, identity: &Identity, user: &str) -> Result<(), AppError> {
         identity
             .rate_limit_shared(self.domain, user, self.global, self.per_user)
             .await
+    }
+}
+
+/// Charges a 1Click quote: per verified person (their linked Apple or Google sign-in)
+/// where there is one; otherwise per wallet and inside the unverified slice too.
+pub(crate) async fn charge_quote(identity: &Identity, user: uuid::Uuid) -> Result<(), AppError> {
+    let person: Option<String> =
+        sqlx::query_scalar("SELECT firebase_uid FROM user_verified_identities WHERE user_id = $1")
+            .bind(user)
+            .fetch_optional(identity.pool())
+            .await
+            .map_err(crate::identity::unavailable)?;
+    match person {
+        Some(uid) => QUOTES.charge(identity, &format!("person:{uid}")).await,
+        None => {
+            let user = user.to_string();
+            UNVERIFIED_QUOTES.charge(identity, &user).await?;
+            QUOTES.charge(identity, &user).await
+        }
     }
 }
 
@@ -72,7 +100,11 @@ async fn signed_in(
         .authenticate(super::identity::bearer(headers)?)
         .await?;
     let user = profile.user_id.to_string();
-    quota.charge(identity, &user).await?;
+    if quota.domain == QUOTES.domain {
+        charge_quote(identity, profile.user_id).await?;
+    } else {
+        quota.charge(identity, &user).await?;
+    }
     Ok(user)
 }
 

@@ -18,9 +18,11 @@ vi.mock('expo-crypto', () => ({
 import {
   createAccount,
   eraseVault,
+  importMnemonic,
   importPairedWallet,
   importPrivateKey,
   loadAccounts,
+  PrimaryExistsError,
   privateKeyOf,
   readPrimaryMnemonic,
   startWithMnemonic,
@@ -97,4 +99,14 @@ it('creates a burner with recoverable keys on a distinct derivation index', asyn
   expect(burner.addresses.evm).not.toBe(main.addresses.evm);
   expect((await privateKeyOf(burner.id, 'evm')).length).toBe(32);
   expect((await loadAccounts()).find((a) => a.id === burner.id)?.burner).toBe(true);
+});
+
+it('never replaces an existing primary phrase when starting over', async () => {
+  const other = 'legal winner thank year wave sausage worth useful legal winner thank yellow';
+  await startWithMnemonic(phrase, 'Primary');
+  await expect(startWithMnemonic(other, 'Again')).rejects.toBeInstanceOf(PrimaryExistsError);
+  expect(await readPrimaryMnemonic()).toBe(phrase);
+  // Added beside it instead, the primary stays.
+  await importMnemonic(other, 'Second');
+  expect(await readPrimaryMnemonic()).toBe(phrase);
 });

@@ -14,6 +14,7 @@ import {
   prepareDelegate,
   type Rpc,
   sendViaRelayer,
+  settleDelegate,
   voteTx,
 } from '@/lib/jar-dao-core';
 
@@ -78,8 +79,8 @@ describe('Honey pays a group member’s gas (NEP-366)', () => {
       signDelegateAction(KEY, d),
     );
     const relay = vi.fn(async (_signed: string) => ({ txHash: 'relayed' }));
-    const hash = await sendViaRelayer({ rpc, signerId: ME, sign, relay }, DAO, [...vote.actions]);
-    expect(hash).toBe('relayed');
+    const out = await sendViaRelayer({ rpc, signerId: ME, sign, relay }, DAO, [...vote.actions]);
+    expect(out).toEqual({ kind: 'relayed', txHash: 'relayed' });
     const delegate = sign.mock.calls[0]?.[0];
     if (!delegate) throw new Error('not signed');
     // What the server decodes: the borsh DelegateAction, a 0 (ed25519) and the 64-byte
@@ -95,21 +96,97 @@ describe('Honey pays a group member’s gas (NEP-366)', () => {
     expect(delegate.nonce).toBe(42n);
   });
 
-  it('pays its own gas when it can, or when Honey isn’t paying', async () => {
+  it('pays its own gas when it can, signing nothing for the relayer', async () => {
     const sign = vi.fn(async () => 'signed');
     const rich = await sendViaRelayer(
       { rpc: chain({ amount: NEAR }), signerId: ME, sign, relay: async () => ({ txHash: 'x' }) },
       DAO,
       [...vote.actions],
     );
-    expect(rich).toBeNull();
+    expect(rich).toEqual({ kind: 'self' });
     expect(sign).not.toHaveBeenCalled();
-    const off = await sendViaRelayer(
-      { rpc: chain({ amount: 0n }), signerId: ME, sign, relay: async () => null },
-      DAO,
-      [...vote.actions],
-    );
-    expect(off).toBeNull();
+  });
+
+  it('never falls back silently once a delegate has left the device', async () => {
+    const sign = vi.fn(async () => 'signed');
+    for (const relay of [
+      async () => null, // Honey: not paying (503)
+      async () => {
+        throw new Error('network');
+      },
+    ]) {
+      const out = await sendViaRelayer(
+        { rpc: chain({ amount: 0n }), signerId: ME, sign, relay },
+        DAO,
+        [...vote.actions],
+      );
+      // The signed delegate is handed back, so the caller can wait it out.
+      expect(out).toMatchObject({
+        kind: 'unsent',
+        delegate: { senderId: ME, nonce: 42n, maxBlockHeight: 1_000n + DELEGATE_TTL_BLOCKS },
+      });
+    }
+    // Cancelling Face ID stops before anything is relayed.
+    const relay = vi.fn(async () => ({ txHash: 'x' }));
+    await expect(
+      sendViaRelayer(
+        {
+          rpc: chain({ amount: 0n }),
+          signerId: ME,
+          sign: async () => {
+            throw new Error('Cancelled');
+          },
+          relay,
+        },
+        DAO,
+        [...vote.actions],
+      ),
+    ).rejects.toThrow('Cancelled');
+    expect(relay).not.toHaveBeenCalled();
+  });
+
+  describe('waiting out a delegate the relayer didn’t confirm', () => {
+    const delegate = {
+      senderId: ME,
+      receiverId: DAO,
+      actions: [...vote.actions],
+      nonce: 42n,
+      maxBlockHeight: 1_120n,
+    };
+    /** The key's nonce and the final block height, one reading per call. */
+    const readings = (...r: [nonce: number, height: number][]) => {
+      let i = 0;
+      return vi.fn<Rpc>(async () => {
+        const [nonce, height] = r[Math.min(i++, r.length - 1)] as [number, number];
+        return { nonce, block_height: height, permission: 'FullAccess' };
+      });
+    };
+    const wait = vi.fn(async () => {});
+
+    it('says it may have landed once the key’s nonce reached it', async () => {
+      expect(await settleDelegate(readings([41, 1_010], [42, 1_020]), delegate, { wait })).toBe(
+        'used',
+      );
+    });
+
+    it('says it can’t land only after a final block past its expiry, nonce unused', async () => {
+      const rpc = readings([41, 1_010], [41, 1_120], [41, 1_121]);
+      expect(await settleDelegate(rpc, delegate, { wait })).toBe('expired');
+      expect(rpc).toHaveBeenCalledTimes(3); // the expiry block itself isn't enough
+    });
+
+    it('gives up rather than guess', async () => {
+      let t = 0;
+      await expect(
+        settleDelegate(readings([41, 1_000]), delegate, {
+          wait: async (ms) => {
+            t += ms;
+          },
+          now: () => t,
+          timeoutMs: 30_000,
+        }),
+      ).rejects.toThrow('Check the jar before trying again');
+    });
   });
 
   it('only sends calls the relayer accepts (apps/server check_relay)', () => {

@@ -7,8 +7,9 @@
 //! action: a `Transfer`, or a `Delegate` carrying the member's signed delegate action
 //! unchanged. Ed25519 is ring's (no extra crates). Byte layouts are pinned against
 //! near-api-js 7.3.1 output (`packages/keyring/src/fixtures/near.json` and
-//! `near-delegate.json`). The key is never logged or serialized; sends are serialized
-//! behind a lock so two requests never race for the same access-key nonce.
+//! `near-delegate.json`). The key is never logged or serialized. Nonces are reserved
+//! under a lock (two requests never race for one), and the lock is released before
+//! waiting for a transaction to execute.
 
 use anyhow::{Context, anyhow, bail, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD};
@@ -343,6 +344,49 @@ pub struct Relayed {
     pub hash: String,
     /// False when a receipt failed (gas was spent, the member's call did nothing).
     pub succeeded: bool,
+    /// yoctoNEAR the relayer burnt on it (every outcome's `tokens_burnt`).
+    pub burnt: u128,
+}
+
+/// How a send ended when it didn't simply run: `Refused` means NEAR rejected the
+/// transaction before running anything (nothing was spent); `Unknown` means it may
+/// still land, so whatever was claimed for it must stay claimed.
+pub type SendError = Result<AppError, AppError>;
+
+/// `INVALID_TRANSACTION` kinds that mean NEAR refused the transaction outright: it
+/// never entered a chunk, so nothing ran and nothing was spent.
+const REFUSED_KINDS: &[&str] = &[
+    "InvalidNonce",
+    "NonceTooLarge",
+    "InvalidSignature",
+    "NotEnoughBalance",
+    "LackBalanceForState",
+    "Expired",
+    "InvalidAccessKeyError",
+    "SignerDoesNotExist",
+    "InvalidSignerId",
+    "InvalidReceiverId",
+    "CostOverflow",
+    "InvalidChain",
+    "ActionsValidation",
+    "TransactionSizeExceeded",
+    "ShardCongested",
+    "ShardStuck",
+];
+
+/// Whether a `send_tx` error is one of the specific refusals above. Anything else (a
+/// timeout, an internal error, an unknown shape, a transport failure) is unknown.
+pub fn refused(error: &RpcError) -> bool {
+    let RpcError::Rpc(value) = error else {
+        return false;
+    };
+    if error.cause() != Some("INVALID_TRANSACTION") {
+        return false;
+    }
+    let text = value.to_string();
+    REFUSED_KINDS
+        .iter()
+        .any(|kind| text.contains(&format!("\"{kind}\"")))
 }
 
 /// Sends small NEAR transfers from the relayer account.
@@ -350,7 +394,12 @@ pub struct Relayer {
     key: RelayerKey,
     rpc: String,
     client: reqwest::Client,
-    sending: Mutex<()>,
+    /// The last access-key nonce this process used. Held only while a transaction is
+    /// signed and handed to the node (`send_tx` with `wait_until: NONE`), never while
+    /// waiting for it to execute, so one slow transaction doesn't stall the rest.
+    sending: Mutex<u64>,
+    /// Pause between outcome lookups (tests shorten it).
+    poll: Duration,
 }
 
 impl Relayer {
@@ -377,8 +426,15 @@ impl Relayer {
                 .user_agent("HoneyWallet/0.1 relayer")
                 .build()
                 .context("relayer http client")?,
-            sending: Mutex::new(()),
+            sending: Mutex::new(0),
+            poll: Duration::from_secs(2),
         })
+    }
+
+    /// Shortens the pause between outcome lookups (tests against a local double).
+    pub fn with_poll(mut self, poll: Duration) -> Self {
+        self.poll = poll;
+        self
     }
 
     async fn rpc(&self, method: &str, params: Value) -> Result<Value, RpcError> {
@@ -412,15 +468,13 @@ impl Relayer {
     /// Signs and sends `amount` yoctoNEAR to `receiver`; the transaction hash once it
     /// executed. `Err(Ok(..))` when NEAR rejected it (nothing was sent), `Err(Err(..))`
     /// when the outcome is unknown (it may still land).
-    pub async fn transfer(
-        &self,
-        receiver: &str,
-        amount: u128,
-    ) -> Result<String, Result<AppError, AppError>> {
-        let _one_at_a_time = self.sending.lock().await;
-        let (nonce, block_hash, _) = self.next_nonce().await?;
-        let (signed, hash) = self.key.sign_transfer(nonce, receiver, &block_hash, amount);
-        let outcome = self.send(&signed, "EXECUTED_OPTIMISTIC").await?;
+    pub async fn transfer(&self, receiver: &str, amount: u128) -> Result<String, SendError> {
+        let hash = self
+            .submit(|nonce, block_hash, _| {
+                Ok(self.key.sign_transfer(nonce, receiver, block_hash, amount))
+            })
+            .await?;
+        let outcome = self.outcome(&hash, "EXECUTED_OPTIMISTIC").await?;
         if outcome["status"].get("Failure").is_some() {
             return Err(Ok(AppError::Busy));
         }
@@ -430,29 +484,95 @@ impl Relayer {
     /// Wraps a member's signed delegate action in a relayer-paid transaction, sends
     /// it and waits for finality. Refuses one that is already expired or expires too
     /// far ahead. Errors as in `transfer`.
-    pub async fn relay(
-        &self,
-        delegate: &SignedDelegate,
-    ) -> Result<Relayed, Result<AppError, AppError>> {
-        let _one_at_a_time = self.sending.lock().await;
-        let (nonce, block_hash, height) = self.next_nonce().await?;
-        if delegate.max_block_height <= height
-            || delegate.max_block_height > height.saturating_add(MAX_DELEGATE_TTL_BLOCKS)
-        {
-            return Err(Ok(AppError::BadRequest(
-                "this request expired; sign it again".into(),
-            )));
-        }
-        let (signed, hash) = self.key.sign_delegate(nonce, &block_hash, delegate);
-        let outcome = self.send(&signed, "FINAL").await?;
+    pub async fn relay(&self, delegate: &SignedDelegate) -> Result<Relayed, SendError> {
+        let hash = self
+            .submit(|nonce, block_hash, height| {
+                if delegate.max_block_height <= height
+                    || delegate.max_block_height > height.saturating_add(MAX_DELEGATE_TTL_BLOCKS)
+                {
+                    return Err(AppError::BadRequest(
+                        "this request expired; sign it again".into(),
+                    ));
+                }
+                Ok(self.key.sign_delegate(nonce, block_hash, delegate))
+            })
+            .await?;
+        let outcome = self.outcome(&hash, "FINAL").await?;
         Ok(Relayed {
-            hash,
             succeeded: executed_ok(&outcome),
+            burnt: tokens_burnt(&outcome),
+            hash,
         })
     }
 
-    /// The relayer key's next nonce, a recent block hash and that block's height.
-    async fn next_nonce(&self) -> Result<(u64, [u8; 32], u64), Result<AppError, AppError>> {
+    /// Reserves the next nonce, signs (`sign` gets nonce, block hash and height) and
+    /// hands the transaction to the node, all under the lock; returns its hash. The
+    /// lock is released before anyone waits for the outcome.
+    async fn submit(
+        &self,
+        sign: impl FnOnce(u64, &[u8; 32], u64) -> Result<(String, String), AppError>,
+    ) -> Result<String, SendError> {
+        let mut last = self.sending.lock().await;
+        let (chain_nonce, block_hash, height) = self.access_key().await?;
+        // Ahead of the chain when earlier sends haven't landed yet.
+        let nonce = chain_nonce
+            .max(*last)
+            .checked_add(1)
+            .ok_or(Ok(AppError::Busy))?;
+        let (signed, hash) = sign(nonce, &block_hash, height).map_err(Ok)?;
+        match self
+            .rpc(
+                "send_tx",
+                json!({ "signed_tx_base64": signed, "wait_until": "NONE" }),
+            )
+            .await
+        {
+            Ok(_) => {
+                *last = nonce;
+                Ok(hash)
+            }
+            Err(error) if refused(&error) => {
+                // Start again from the chain's nonce next time.
+                *last = 0;
+                Err(Ok(AppError::Busy))
+            }
+            Err(_) => {
+                // It may have reached the node: never reuse this nonce.
+                *last = nonce;
+                drop(last);
+                // Unknown: look it up by hash before giving up on it.
+                self.outcome(&hash, "INCLUDED").await.map(|_| hash)
+            }
+        }
+    }
+
+    /// Waits for `hash`'s outcome (`tx` at `wait_until`), asking a few times while the
+    /// node doesn't know it yet or stops waiting. Never `Err(Ok)`: a transaction that
+    /// was handed over can't be known not to land.
+    async fn outcome(&self, hash: &str, wait_until: &str) -> Result<Value, SendError> {
+        for attempt in 0..4 {
+            if attempt > 0 {
+                tokio::time::sleep(self.poll).await;
+            }
+            match self
+                .rpc(
+                    "tx",
+                    json!({ "tx_hash": hash, "sender_account_id": self.key.account(),
+                            "wait_until": wait_until }),
+                )
+                .await
+            {
+                Ok(outcome) if outcome.get("status").is_some() || wait_until == "INCLUDED" => {
+                    return Ok(outcome);
+                }
+                _ => {}
+            }
+        }
+        Err(Err(AppError::Busy))
+    }
+
+    /// The relayer key's chain nonce, a recent block hash and that block's height.
+    async fn access_key(&self) -> Result<(u64, [u8; 32], u64), SendError> {
         let access = self
             .rpc(
                 "query",
@@ -463,10 +583,7 @@ impl Relayer {
             )
             .await
             .map_err(|_| Ok(AppError::Busy))?;
-        let nonce = access["nonce"]
-            .as_u64()
-            .and_then(|n| n.checked_add(1))
-            .ok_or(Ok(AppError::Busy))?;
+        let nonce = access["nonce"].as_u64().ok_or(Ok(AppError::Busy))?;
         let block_hash: [u8; 32] = access["block_hash"]
             .as_str()
             .and_then(|h| bs58::decode(h).into_vec().ok())
@@ -475,26 +592,22 @@ impl Relayer {
         let height = access["block_height"].as_u64().unwrap_or(0);
         Ok((nonce, block_hash, height))
     }
+}
 
-    /// `send_tx`: an RPC error means NEAR refused it (nothing ran); a transport error
-    /// leaves the outcome unknown.
-    async fn send(
-        &self,
-        signed: &str,
-        wait_until: &str,
-    ) -> Result<Value, Result<AppError, AppError>> {
-        self.rpc(
-            "send_tx",
-            json!({ "signed_tx_base64": signed, "wait_until": wait_until }),
-        )
-        .await
-        .map_err(|error| match error {
-            // A timeout means the node stopped waiting, not that NEAR refused it.
-            RpcError::Rpc(e) if e.to_string().contains("TIMEOUT") => Err(AppError::Busy),
-            RpcError::Rpc(_) => Ok(AppError::Busy),
-            RpcError::Transport(_) => Err(AppError::Busy),
-        })
-    }
+/// yoctoNEAR burnt by a transaction: its own outcome plus every receipt's.
+pub fn tokens_burnt(outcome: &Value) -> u128 {
+    let burnt = |o: &Value| -> u128 {
+        match &o["outcome"]["tokens_burnt"] {
+            Value::String(s) => s.parse().unwrap_or(0),
+            Value::Number(n) => n.as_u64().map(u128::from).unwrap_or(0),
+            _ => 0,
+        }
+    };
+    let receipts = outcome["receipts_outcome"]
+        .as_array()
+        .map(|r| r.iter().map(burnt).fold(0u128, u128::saturating_add))
+        .unwrap_or(0);
+    burnt(&outcome["transaction_outcome"]).saturating_add(receipts)
 }
 
 /// A transaction outcome with no failure anywhere: not in its status, nor in any
@@ -646,6 +759,47 @@ mod tests {
         assert!(!executed_ok(&json!({ "status": { "SuccessValue": "" },
             "receipts_outcome": [{ "outcome": { "status": { "Failure": {} } } }] })));
         assert!(!executed_ok(&json!({ "status": { "Failure": {} } })));
+    }
+
+    #[test]
+    fn only_specific_invalid_transactions_count_as_refused() {
+        let invalid = |kind: &str| {
+            RpcError::Rpc(json!({
+                "name": "HANDLER_ERROR",
+                "cause": { "name": "INVALID_TRANSACTION", "info": {} },
+                "data": { "TxExecutionError": { "InvalidTxError": { kind: {} } } }
+            }))
+        };
+        assert!(refused(&invalid("InvalidNonce")));
+        assert!(refused(&invalid("NotEnoughBalance")));
+        assert!(refused(&invalid("Expired")));
+        // An unknown kind, a timeout, an internal error, a transport failure: unknown.
+        assert!(!refused(&invalid("SomethingNew")));
+        assert!(!refused(&RpcError::Rpc(json!({
+            "name": "HANDLER_ERROR", "cause": { "name": "TIMEOUT_ERROR" }
+        }))));
+        assert!(!refused(&RpcError::Rpc(json!({
+            "name": "INTERNAL_ERROR", "cause": { "name": "INTERNAL_ERROR" },
+            "data": "InvalidNonce"
+        }))));
+        assert!(!refused(&RpcError::Transport("connection reset".into())));
+    }
+
+    #[test]
+    fn sums_the_tokens_a_transaction_burnt() {
+        // A relayed USDC deposit on mainnet (numbers from its RPC outcome).
+        let outcome = json!({
+            "transaction_outcome": { "outcome": { "tokens_burnt": "51573657811500000000" } },
+            "receipts_outcome": [
+                { "outcome": { "tokens_burnt": "51573657811500000000" } },
+                { "outcome": { "tokens_burnt": "315861269426800000000" } },
+                { "outcome": { "tokens_burnt": "378787800741800000000" } },
+                { "outcome": { "tokens_burnt": "0" } },
+                { "outcome": { "tokens_burnt": "183803615254400000000" } }
+            ]
+        });
+        assert_eq!(tokens_burnt(&outcome), 981_600_001_046_000_000_000);
+        assert_eq!(tokens_burnt(&json!({})), 0);
     }
 
     #[test]

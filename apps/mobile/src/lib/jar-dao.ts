@@ -22,25 +22,30 @@ import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import { confirmOwner } from '@/lib/auth';
 import { backendSessionToken } from '@/lib/backend-session';
-import { type Balance, payoutLegs } from '@/lib/group-jar-core';
+import { type Balance, majority, payoutLegs } from '@/lib/group-jar-core';
 import {
   buyExpired,
   buyProposalTx,
   checkApproval,
+  checkGroupDao,
   configProposalTx,
   createJarTx,
   depositTx,
   fromChain,
   isFinalVote,
+  membersStillIn,
   mintNavCheck,
   parseProposalId,
   prepare,
   proposalId,
   type QuotedLeg,
+  readJarFromChain,
   sendViaRelayer,
+  settleDelegate,
   unitRecordTx,
   verifyBuyWith1Click,
   viewFtBalance,
+  viewPolicy,
   voteTx,
   withdrawProposalTx,
 } from '@/lib/jar-dao-core';
@@ -55,6 +60,7 @@ import {
   YOU,
 } from '@/lib/multisig';
 import { signAndSendNearCall, signNearDelegate } from '@/lib/near-call';
+import { persistence } from '@/lib/persistence';
 import { createStore } from '@/lib/store';
 import { TEST_MODE } from '@/lib/test-mode';
 import { addWallet, wallets } from '@/lib/wallets';
@@ -95,7 +101,9 @@ export function relayForGroup(dao: string, groupId: string) {
 /**
  * Prepares, confirms, signs on device and sends one transaction. Returns its hash. A
  * group jar's call (to its DAO, or `dao` named for a share into it) goes through
- * Honey's gas relayer when this account can't pay and the relayer is on.
+ * Honey's gas relayer when this account can't pay and the relayer is on. The relayer is
+ * skipped up front only when Honey already said it's off; once a delegate has left the
+ * device, paying directly waits until that delegate provably can't land, and asks again.
  */
 async function send(
   reason: string,
@@ -105,19 +113,18 @@ async function send(
 ) {
   const me = member();
   const groupId = groupOfDao.get(dao);
-  let confirmed = false;
   if (groupId && !relayerOff.get() && daoStates.get()[dao]?.relayer !== false) {
-    const hash = await sendViaRelayer(
+    const session = token();
+    const out = await sendViaRelayer(
       {
         rpc,
         signerId: me.account,
         sign: async (delegate) => {
           if (!(await confirmOwner(reason, true))) throw new Error('Cancelled');
-          confirmed = true;
           return signNearDelegate(me.walletId, delegate);
         },
         relay: async (signedDelegate) => {
-          const result = await api.jarDaoRelay(token(), { groupId, signedDelegate });
+          const result = await api.jarDaoRelay(session, { groupId, signedDelegate });
           if (result === null) relayerOff.set(true);
           return result;
         },
@@ -125,10 +132,32 @@ async function send(
       receiverId,
       actions,
     );
-    if (hash) return hash;
+    if (out.kind === 'relayed') return out.txHash;
+    if (out.kind === 'unsent') {
+      // Signed and handed over without a confirmed send: it could still land until it
+      // expires, so never pay twice. Wait it out; if it (or that nonce) went through, stop.
+      if ((await settleDelegate(rpc, out.delegate)) === 'used')
+        throw new Error('This may already have gone through. Refresh before trying again.');
+      return sendDirect(
+        me,
+        `${reason} (Honey couldn’t pay the fee; you pay it)`,
+        receiverId,
+        actions,
+      );
+    }
   }
+  return sendDirect(me, reason, receiverId, actions);
+}
+
+/** This account signs and pays its own gas, after the owner confirms. */
+async function sendDirect(
+  me: ReturnType<typeof member>,
+  reason: string,
+  receiverId: string,
+  actions: FunctionCall[],
+) {
   const tx = await prepare(rpc, me.account, receiverId, actions);
-  if (!confirmed && !(await confirmOwner(reason, true))) throw new Error('Cancelled');
+  if (!(await confirmOwner(reason, true))) throw new Error('Cancelled');
   return signAndSendNearCall(rpc, me.walletId, tx);
 }
 
@@ -182,12 +211,31 @@ function heldAssets(descriptions: string[]) {
   return [...set].slice(0, 16);
 }
 
-/** Reads the jar from the chain (via the server's view calls) into the app store. */
+/**
+ * Reads the jar into the app store. Members, k, proposals and balances come from NEAR
+ * itself (lib/jar-dao-core `readJarFromChain`), once per refresh, and every approval
+ * check runs on that read; Honey's server adds only its price reference (nav) and
+ * whether its gas relayer is on.
+ */
 export async function refreshJar(walletId: string, dao: string, jarName: string) {
   const t = token();
-  const first = await api.jarDaoState(t, dao, [USDC_INTENTS]);
-  const assets = heldAssets(first.proposals.map((p) => p.description));
-  const state = assets.length > 1 ? await api.jarDaoState(t, dao, assets) : first;
+  const chain = await readJarFromChain(rpc, dao, (proposals) =>
+    heldAssets(proposals.map((p) => p.description)),
+  );
+  const server = await api.jarDaoState(
+    t,
+    dao,
+    chain.balances.map((b) => b.tokenId),
+  );
+  const state: JarDaoState = {
+    dao,
+    members: chain.members,
+    threshold: chain.threshold,
+    proposals: chain.proposals,
+    balances: chain.balances,
+    navMicroUsd: server.navMicroUsd,
+    relayer: server.relayer,
+  };
   const me = member().account;
   // Verify each unit record's deposit on chain once; unverified mints don't count.
   await Promise.all(
@@ -444,8 +492,17 @@ async function voteOnChain(m: Multisig, p: Proposal, kind: 'approve' | 'reject')
   await voteById(m, p.id, kind);
 }
 
-/** Votes on a DAO proposal (`<dao>#<n>`) after the approve gate checks what it does. */
-async function voteById(m: Multisig, id: string, kind: 'approve' | 'reject', remaining?: string[]) {
+/**
+ * Votes on a DAO proposal (`<dao>#<n>`) after the approve gate checks what it does,
+ * against one fresh chain read. A group jar's payout (`group`) is checked against its
+ * members still in on chain, not the server's list.
+ */
+async function voteById(
+  m: Pick<Multisig, 'walletId'>,
+  id: string,
+  kind: 'approve' | 'reject',
+  group = false,
+) {
   const ref = parseProposalId(id);
   if (!ref) throw new Error('Unknown jar proposal');
   const view = await refreshJar(m.walletId, ref.dao, walletName(m.walletId));
@@ -463,7 +520,12 @@ async function voteById(m: Multisig, id: string, kind: 'approve' | 'reject', rem
       unitsOf: (m) => view.ledger.units.get(m) ?? 0n,
       fetcher: fetch,
       memberAccounts: view.raw.members,
-      payout: remaining && { remaining, balances: view.raw.balances as Balance[] },
+      payout: group
+        ? {
+            remaining: membersStillIn(view.raw.members, view.raw.proposals),
+            balances: view.raw.balances as Balance[],
+          }
+        : undefined,
     });
   const action = kind === 'approve' ? 'VoteApprove' : 'VoteReject';
   const tx = voteTx(ref.dao, ref.id, action, raw.kind as never);
@@ -525,8 +587,45 @@ export async function createGroupDao(input: {
   return { walletId, dao };
 }
 
+/** Each group's DAO, pinned the first time this phone checked it (`verifyGroupDao`). */
+const groupDaoPins = createStore<Record<string, string>>({}, { persist: 'group-jars.dao-pins' });
+/** DAOs checked on chain this session, the only ones a share may be paid into. */
+const verifiedShareDaos = new Set<string>();
+
+/** Throws when Honey now names a different DAO for a group than the one pinned here. */
+export function checkGroupPin(groupId: string, dao: string) {
+  const pinned = groupDaoPins.get()[groupId];
+  if (pinned && pinned !== dao)
+    throw new Error(
+      'This group’s jar changed since you last checked it. Don’t pay into it; contact Honey.',
+    );
+}
+
+/**
+ * Before any money goes into a group's DAO: checks it on NEAR (lib/jar-dao-core
+ * `checkGroupDao`: Honey's policy, you in it, only the group's people, a majority rule)
+ * and against the DAO pinned for this group, pinning it the first time.
+ */
+export async function verifyGroupDao(groupId: string, dao: string, known: string[]) {
+  await persistence.ready;
+  const me = member().account;
+  checkGroupPin(groupId, dao);
+  const pinned = groupDaoPins.get()[groupId];
+  checkGroupDao(await viewPolicy(rpc, dao), {
+    dao,
+    me,
+    known: [...known, me],
+    pinned,
+    majority,
+  });
+  if (!pinned) groupDaoPins.set((all) => ({ ...all, [groupId]: dao }));
+  verifiedShareDaos.add(dao);
+}
+
 /** Your share in one transaction from USDC on NEAR: ft_transfer_call to intents.near, msg = dao. */
 export async function payShareFromNear(dao: string, usd: number) {
+  if (!verifiedShareDaos.has(dao)) throw new Error('Honey couldn’t check this group’s jar yet.');
+  if (!(usd > 0) || !Number.isFinite(usd)) throw new Error('Nothing to pay');
   const me = member();
   const amount = toAtomic(usd);
   if (amount > (await viewFtBalance(rpc, USDC_NEAR, me.account)))
@@ -567,10 +666,13 @@ export async function proposeGroupBuy(
 export async function proposeGroupPayout(
   walletId: string,
   dao: string,
-  input: { kind: 'leave' | 'cashout'; to: string[]; remaining: number; name: string },
+  input: { kind: 'leave' | 'cashout'; name: string },
 ) {
   const view = await refreshJar(walletId, dao, walletName(walletId));
-  const legs = payoutLegs(input.kind, view.raw.balances, input.to, input.remaining);
+  // Who's still in, from the chain: the same list every approver checks it against.
+  const stillIn = membersStillIn(view.raw.members, view.raw.proposals);
+  const to = input.kind === 'leave' ? [member().account] : stillIn;
+  const legs = payoutLegs(input.kind, view.raw.balances, to, stillIn.length);
   const kind = buyKind(
     legs.map((l) => ({ depositAddress: l.receiver, tokenId: l.tokenId, amount: l.amount })),
   );
@@ -585,16 +687,10 @@ export async function proposeGroupPayout(
 
 /**
  * Approves one of the group's votes: a buy is checked with 1Click, a leave or cash-out
- * against the members still in (`remaining`) and what the jar holds now.
+ * against the members still in and what the jar holds now, both read from NEAR.
  */
-export async function approveGroupProposal(
-  walletId: string,
-  dao: string,
-  proposal: number,
-  remaining: string[],
-) {
-  const view = await refreshJar(walletId, dao, walletName(walletId));
-  await voteById(view.multisig, proposalId(dao, proposal), 'approve', remaining);
+export async function approveGroupProposal(walletId: string, dao: string, proposal: number) {
+  await voteById({ walletId }, proposalId(dao, proposal), 'approve', true);
 }
 
 setDaoBackend({ propose: proposeOnChain, vote: voteOnChain });

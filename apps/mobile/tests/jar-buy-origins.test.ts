@@ -22,6 +22,7 @@ vi.mock('@/lib/wallets', () => ({
 
 const {
   checkQuote,
+  checkValueKept,
   payJarBuy,
   planOrigins,
   quoteJarBuy,
@@ -122,11 +123,15 @@ describe('quoteJarBuy from another network', () => {
           },
         }),
       )) as unknown as typeof fetch;
+    // 1Click's own price for wNEAR: 0.99 at $5 keeps $4.95 of the $5 paid.
+    const tokens = vi.fn(async () => [{ assetId: 'nep141:wrap.near', decimals: 6, price: 5 }]);
     const out = await quoteJarBuy([route('wNEAR', 'NEAR', 5, 'nep141:wrap.near')], 0.01, {
       balances: async () => ({ Base: M(1), Solana: M(40) }),
       quote: quote as never,
       fetcher,
+      tokens,
     });
+    expect(tokens).toHaveBeenCalledWith(fetcher);
     expect(quote).toHaveBeenCalledWith(
       'session',
       expect.objectContaining({ originAsset: USDC_ORIGINS.Solana, refundTo: MY_SOL }),
@@ -137,6 +142,39 @@ describe('quoteJarBuy from another network', () => {
       quotedOut: '1000000',
       status: 'NOT_SENT',
     });
+    // The same quote at $1 a wNEAR keeps $0.99 of $5: below Swap's floor, never signed.
+    await expect(
+      quoteJarBuy([route('wNEAR', 'NEAR', 5, 'nep141:wrap.near')], 0.01, {
+        balances: async () => ({ Base: M(1), Solana: M(40) }),
+        quote: quote as never,
+        fetcher,
+        tokens: async () => [{ assetId: 'nep141:wrap.near', decimals: 6, price: 1 }],
+      }),
+    ).rejects.toThrow('Fees would take more than half of the wNEAR swap');
+    // No price from 1Click, or no list at all: refused too.
+    for (const list of [async () => [], async () => Promise.reject(new Error('down'))])
+      await expect(
+        quoteJarBuy([route('wNEAR', 'NEAR', 5, 'nep141:wrap.near')], 0.01, {
+          balances: async () => ({ Base: M(1), Solana: M(40) }),
+          quote: quote as never,
+          fetcher,
+          tokens: list,
+        }),
+      ).rejects.toThrow('Nothing was paid');
+  });
+
+  it('keeps every leg above Swap’s value floor', () => {
+    const leg = {
+      symbol: 'PEPE',
+      destinationAsset: 'nep141:pepe',
+      amountIn: '10000000', // $10 of USDC
+      minAmountOut: '6000000',
+    };
+    const priced = (price: number | null) => [{ assetId: 'nep141:pepe', decimals: 6, price }];
+    expect(() => checkValueKept([leg], priced(1))).not.toThrow(); // keeps $6
+    expect(() => checkValueKept([leg], priced(0.8))).toThrow('Fees would take'); // $4.80
+    expect(() => checkValueKept([leg], priced(null))).toThrow('Couldn’t price PEPE');
+    expect(() => checkValueKept([leg], [])).toThrow('Couldn’t price PEPE');
   });
 
   it('stops when the balances can’t be read', async () => {

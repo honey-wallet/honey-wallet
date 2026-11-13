@@ -224,6 +224,9 @@ export function createApiClient({ baseUrl, fetch: fetchImpl = fetch }: ApiClient
   function maybeAuthorized(token: string | null | undefined, init?: RequestInit): RequestInit {
     return token ? authorized(token, init) : { ...init, credentials: 'omit' };
   }
+  /** A Firebase ID token beside the wallet session, linking an Apple or Google sign-in. */
+  const accountTokenHeader = (accountToken?: string): HeadersInit | undefined =>
+    accountToken ? { 'X-Firebase-Token': accountToken } : undefined;
   const groupPath = (id: string) => `/api/v1/social/groups/${encodeURIComponent(id)}`;
   const handlePath = (handle: string) =>
     `/api/v1/social/profiles/${encodeURIComponent(handle.replace(/^@/, '').toLowerCase())}`;
@@ -345,15 +348,21 @@ export function createApiClient({ baseUrl, fetch: fetchImpl = fetch }: ApiClient
     jarDaoBuyQuote: (token: string, input: JarDaoBuyRequest, init?: RequestInit) =>
       request<JarBuyQuote>('/api/v1/jar-dao/buy-quote', authorizedJson(token, input, init)),
     /**
-     * Asks Honey to pay a group member's NEAR network fees (a small top-up to their
-     * implicit account, once per person and group). Null while Honey isn't paying fees
-     * (503): the member pays their own. 409 when already paid for this group.
+     * Asks Honey to pay a group member's NEAR network fees (a small top-up to the NEAR
+     * account they joined the group with, once per account; members who accepted only).
+     * Null while Honey isn't paying fees (503: off, past its budgets, or the server wants
+     * an Apple or Google sign-in): the member pays their own. 409 when already paid.
      */
     jarDaoSponsor: async (token: string, input: JarDaoSponsorRequest, init?: RequestInit) => {
       try {
         return await request<JarDaoSponsorResult>(
           '/api/v1/jar-dao/sponsor',
-          authorizedJson(token, { account: input.account, groupId: input.groupId }, init),
+          authorizedJson(
+            token,
+            { account: input.account, groupId: input.groupId },
+            init,
+            accountTokenHeader(input.accountToken),
+          ),
         );
       } catch (error) {
         if (error instanceof ApiError && error.status === 503) return null;
@@ -373,6 +382,7 @@ export function createApiClient({ baseUrl, fetch: fetchImpl = fetch }: ApiClient
             token,
             { groupId: input.groupId, signedDelegate: input.signedDelegate },
             init,
+            accountTokenHeader(input.accountToken),
           ),
         );
       } catch (error) {

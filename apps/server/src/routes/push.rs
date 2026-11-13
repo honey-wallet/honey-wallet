@@ -1,6 +1,9 @@
 //! `POST /push/tokens` registers this phone's Expo push token for the signed-in person;
-//! `POST /push/tokens/remove` forgets it (signing out). A token belongs to whoever
-//! registered it last; a person keeps at most 10 devices.
+//! `POST /push/tokens/remove` forgets it (signing out). A token stays with whoever
+//! registered it: another account can take it over only once its owner removed it, or
+//! after it went 30 days without being registered again (409 until then), so nobody
+//! can redirect someone else's notifications by registering their token. A person keeps
+//! at most 10 devices.
 
 use axum::{
     Json, Router,
@@ -17,6 +20,8 @@ use crate::{
 };
 
 const MAX_DEVICES: i64 = 10;
+/// Days after which a token its owner stopped registering can move to someone else.
+const STALE_DAYS: i32 = 30;
 
 #[derive(Clone)]
 struct PushState {
@@ -80,18 +85,27 @@ async fn register(
         return Err(AppError::BadRequest("platform is ios or android".into()));
     }
     let pool = identity.pool();
-    sqlx::query(
+    let registered: Option<uuid::Uuid> = sqlx::query_scalar(
         "INSERT INTO push_tokens (token, user_id, platform) VALUES ($1, $2, $3)
          ON CONFLICT (token) DO UPDATE
            SET user_id = EXCLUDED.user_id, platform = EXCLUDED.platform,
-               updated_at = clock_timestamp()",
+               updated_at = clock_timestamp()
+         WHERE push_tokens.user_id = EXCLUDED.user_id
+            OR push_tokens.updated_at < clock_timestamp() - make_interval(days => $4)
+         RETURNING user_id",
     )
     .bind(token)
     .bind(user)
     .bind(&input.platform)
-    .execute(pool)
+    .bind(STALE_DAYS)
+    .fetch_optional(pool)
     .await
     .map_err(unavailable)?;
+    if registered.is_none() {
+        return Err(AppError::Conflict(
+            "this device's notifications belong to another account; sign out there first".into(),
+        ));
+    }
     sqlx::query(
         "DELETE FROM push_tokens WHERE user_id = $1 AND token NOT IN (
              SELECT token FROM push_tokens WHERE user_id = $1

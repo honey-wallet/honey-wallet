@@ -21,7 +21,12 @@ export async function confirmOwner(reason: string, requireDeviceLock = true): Pr
     const level = await LocalAuthentication.getEnrolledLevelAsync();
     if (cancelled) return false;
     if (level === LocalAuthentication.SecurityLevel.NONE) return !requireDeviceLock;
-    const result = await LocalAuthentication.authenticateAsync({ promptMessage: reason });
+    // Android: only Class 3 (strong) biometrics, never a camera face unlock; the device
+    // PIN or pattern stays as the fallback. iOS ignores the option (no weak biometrics).
+    const result = await LocalAuthentication.authenticateAsync({
+      promptMessage: reason,
+      biometricsSecurityLevel: 'strong',
+    });
     return result.success && !cancelled;
   } finally {
     prompts--;

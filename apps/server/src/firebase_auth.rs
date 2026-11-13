@@ -134,6 +134,16 @@ pub struct FirebaseSession {
     /// The sign-in email, only when the provider verified it (used to find the
     /// account's waitlist entry on deletion; never stored).
     pub verified_email: Option<String>,
+    /// `firebase.sign_in_provider`: `apple.com`, `google.com`, `password`, ...
+    pub provider: Option<String>,
+}
+
+impl FirebaseSession {
+    /// Signed in with Apple or Google: an identity that costs something to make, unlike
+    /// a fresh wallet key or a throwaway email.
+    pub fn apple_or_google(&self) -> bool {
+        matches!(self.provider.as_deref(), Some("apple.com" | "google.com"))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -581,6 +591,7 @@ impl<'a> ParsedToken<'a> {
             user_id: claims.sub,
             session_id: None,
             verified_email,
+            provider: claims.firebase.sign_in_provider,
         })
     }
 }
@@ -753,6 +764,7 @@ mod tests {
             user_id: USER_ID.into(),
             session_id: None,
             verified_email: Some("maya@example.com".into()),
+            provider: Some("google.com".into()),
         };
         let now = unix_now();
         assert_eq!(

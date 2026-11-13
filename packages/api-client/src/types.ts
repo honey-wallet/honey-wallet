@@ -849,15 +849,21 @@ export interface JarBuyRequest {
 
 /** `POST /api/v1/jar-dao/sponsor`: Honey pays a group member's NEAR network fees. */
 export interface JarDaoSponsorRequest {
-  /** The member's NEAR implicit account (64 hex characters). */
+  /** The NEAR implicit account (64 hex characters) the member joined the group with. */
   account: string;
   groupId: string;
+  /**
+   * Optional Firebase ID token (Sign in with Apple or Google), sent as the
+   * `X-Firebase-Token` header: links that sign-in to this wallet (one each way). Needed
+   * once when the server sets `SPONSOR_REQUIRE_VERIFIED_IDENTITY`.
+   */
+  accountToken?: string;
 }
 
 export interface JarDaoSponsorResult {
   /** `not_needed`: the account already holds enough NEAR (nothing sent). */
   status: 'sent' | 'not_needed';
-  /** yoctoNEAR sent: 0.03 NEAR, or 0.12 NEAR to the creator before the DAO exists. */
+  /** yoctoNEAR sent: 0.03 NEAR, or 0.12 NEAR to the creator as the DAO is about to be created. */
   amount: string;
   txHash: string | null;
 }
@@ -871,6 +877,8 @@ export interface JarDaoRelayRequest {
   groupId: string;
   /** Borsh `SignedDelegateAction`, base64. */
   signedDelegate: string;
+  /** As in `JarDaoSponsorRequest`. */
+  accountToken?: string;
 }
 
 export interface JarDaoRelayResult {

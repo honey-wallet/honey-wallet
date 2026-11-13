@@ -27,7 +27,7 @@ import { isWeb } from '@/lib/platform';
 import { getProfile } from '@/lib/profile';
 import { usePreventScreenCapture } from '@/lib/screen-capture';
 import { showErrorToast } from '@/lib/toast';
-import { startWithMnemonic } from '@/lib/vault';
+import { PrimaryExistsError, startWithMnemonic } from '@/lib/vault';
 import { addVaultWallet } from '@/lib/wallets';
 import { Gate, warningOn } from '@/lib/warnings';
 import { makeStyles, radius, useTheme } from '@/theme';
@@ -112,8 +112,14 @@ export default function RecoveryPhraseScreen() {
       addVaultWallet(await startWithMnemonic(phrase, getProfile().name));
       finishOnboarding('phrase');
     } catch (error) {
-      console.warn('Couldn’t save the recovery phrase', error);
       setCreating(false);
+      // A phone that already has a phrase keeps it: never replaced from here.
+      if (error instanceof PrimaryExistsError) {
+        showErrorToast(error.message);
+        goBackOr('/settings');
+        return;
+      }
+      console.warn('Couldn’t save the recovery phrase', error);
       showErrorToast('Couldn’t create wallet');
     }
   };

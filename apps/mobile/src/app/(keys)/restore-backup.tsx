@@ -16,7 +16,7 @@ import { finishOnboarding } from '@/lib/onboarding';
 import { getProfile } from '@/lib/profile';
 import { updateSettings } from '@/lib/settings';
 import { showErrorToast, showToast } from '@/lib/toast';
-import { importMnemonic, startWithMnemonic } from '@/lib/vault';
+import { hasPrimaryMnemonic, importMnemonic, startWithMnemonic } from '@/lib/vault';
 import { addVaultWallet } from '@/lib/wallets';
 import { makeStyles, radius, useTheme } from '@/theme';
 import { DURATION } from '@/theme/motion';
@@ -55,13 +55,15 @@ export default function RestoreBackupSheet() {
     setWrong(false);
     try {
       const phrase = await decryptBackup(backup, password);
-      const account = onboarding
+      // An existing primary phrase is never replaced: the backup comes in beside it.
+      const primary = onboarding && !(await hasPrimaryMnemonic());
+      const account = primary
         ? await startWithMnemonic(phrase, getProfile().name)
         : await importMnemonic(phrase, 'Restored wallet');
       addVaultWallet(account);
-      // The phrase came from a backup, so it's backed up already.
       if (onboarding) {
-        updateSettings({ backedUp: true });
+        // The phrase came from a backup, so it's backed up already.
+        if (primary) updateSettings({ backedUp: true });
         finishOnboarding('import');
         return;
       }

@@ -150,14 +150,23 @@ async function deriveAccount(seedId: string, index: number, label: string, burne
   });
 }
 
+/** Starting over can't replace the phrase this phone's wallets already come from. */
+export class PrimaryExistsError extends Error {
+  constructor() {
+    super('This phone already has a recovery phrase. Add another wallet from Settings instead.');
+    this.name = 'PrimaryExistsError';
+  }
+}
+
 /**
  * Makes `phrase` (one the user just wrote down) the primary phrase and returns its
- * first wallet.
+ * first wallet. Only on a phone with no primary phrase yet: an existing one is never
+ * replaced (throws `PrimaryExistsError`; add the phrase with `importMnemonic` instead).
  */
-export const startWithMnemonic = serial(
-  async (phrase: string, label: string): Promise<VaultAccount> =>
-    deriveAccount(await saveSeed(phrase, { primary: true }), 0, label),
-);
+export const startWithMnemonic = serial(async (phrase: string, label: string) => {
+  if (await read(KEY.primary)) throw new PrimaryExistsError();
+  return deriveAccount(await saveSeed(phrase, { primary: true }), 0, label);
+});
 
 /**
  * Creates the next wallet under the primary phrase, starting a new random phrase when
@@ -272,6 +281,22 @@ export async function readPrimaryWallet(): Promise<{
       : [],
   );
   return { mnemonic, accounts };
+}
+
+/**
+ * The primary phrase's wallets by name and EVM address, without reading the phrase: what
+ * pairing shows before Face ID. Null when there's no primary phrase.
+ */
+export async function readPrimaryAccounts(): Promise<
+  { index: number; label: string; address?: string }[] | null
+> {
+  const seedId = await read(KEY.primary);
+  if (!seedId) return null;
+  return (await loadAccounts()).flatMap((a) =>
+    a.source.kind === 'phrase' && a.source.seedId === seedId
+      ? [{ index: a.source.index, label: a.label, address: a.addresses.evm }]
+      : [],
+  );
 }
 
 /**

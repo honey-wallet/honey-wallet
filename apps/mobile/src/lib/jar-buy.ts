@@ -46,6 +46,7 @@ import {
   checkOneClickRecord,
   checkOneClickTerms,
   MAX_SLIPPAGE_BPS,
+  MIN_VALUE_KEPT,
   minWithinSlippage,
   recipientOn,
   sameAddress,
@@ -207,7 +208,12 @@ export type JarBuyDeps = {
   fetcher: typeof fetch;
   prepare: typeof prepareSend;
   confirm: (reason: string) => Promise<boolean>;
+  /** NEAR Intents' token list with its prices, read from 1Click itself (not Honey). */
+  tokens: (fetcher: typeof fetch) => Promise<PricedToken[]>;
 };
+
+/** A 1Click token's id, decimals and USD price (null when 1Click has none). */
+export type PricedToken = { assetId: string; decimals: number; price: number | null };
 
 const defaults: JarBuyDeps = {
   balances: async (wallet) => {
@@ -224,6 +230,8 @@ const defaults: JarBuyDeps = {
   // Loaded on demand, like the balances: sending pulls in the signing stack.
   prepare: async (...args) => (await import('@/lib/send')).prepareSend(...args),
   confirm: (reason) => confirmOwner(reason, true),
+  // Loaded on demand, like the rest: Swap's module keeps the cached list.
+  tokens: async (fetcher) => (await import('@/lib/intents-swap')).fetchSwapTokens(fetcher),
 };
 
 /** Routes with money on them that can't be paid in full: any one stops the whole buy. */
@@ -329,7 +337,35 @@ export async function quoteJarBuy(
   const capUsd = Math.min(MAX_BUY_USD, ...quotes.map((q) => q.capUsd));
   if (!(capUsd > 0) || total > toMicro(capUsd))
     throw new Error(`Buys are capped at $${capUsd > 0 ? capUsd.toFixed(0) : 0} for now.`);
+  // The buy is signed without showing each quote, so a leg that would lose most of its
+  // value to fees or a thin market stops it here, as a swap would be.
+  const tokens = await d.tokens(d.fetcher).catch(() => null);
+  if (!tokens) throw new Error('Couldn’t price this buy right now. Try again. Nothing was paid.');
+  checkValueKept(out, tokens);
   return { quote: quotes[0] as JarBuyQuote, quotes, legs: out };
+}
+
+/**
+ * Swap's floor (lib/intents-quote `MIN_VALUE_KEPT`) for every leg of a jar buy: what the
+ * leg is guaranteed to deliver, at 1Click's own price, must be worth at least half the
+ * USDC it pays. A leg 1Click can't price is refused too: nothing would check it otherwise.
+ */
+export function checkValueKept(
+  legs: Pick<BuyLeg, 'symbol' | 'destinationAsset' | 'amountIn' | 'minAmountOut'>[],
+  tokens: PricedToken[],
+) {
+  for (const l of legs) {
+    const token = tokens.find((t) => t.assetId === l.destinationAsset);
+    const paid = atomic(l.amountIn);
+    const min = atomic(l.minAmountOut);
+    if (!token?.price || paid === null || min === null)
+      throw new Error(`Couldn’t price ${l.symbol} right now. Try again. Nothing was paid.`);
+    const kept = (Number(min) / 10 ** token.decimals) * token.price;
+    if (kept < fromMicro(paid) * MIN_VALUE_KEPT)
+      throw new Error(
+        `Fees would take more than half of the ${l.symbol} swap. Buy more or pick another token. Nothing was paid.`,
+      );
+  }
 }
 
 /**

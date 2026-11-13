@@ -7,6 +7,8 @@ import type { OneClickStatus } from '@honey-wallet/api-client';
 
 /** Highest slippage the app ever asks for or accepts, matching the server. */
 export const MAX_SLIPPAGE_BPS = 300;
+/** A swap or jar-buy leg whose guaranteed minimum keeps less than this share of the value is refused. */
+export const MIN_VALUE_KEPT = 0.5;
 /** A quote must leave at least this long to sign and land the deposit. */
 const DEADLINE_MARGIN_MS = 60_000;
 /** The server asks for 15-minute quotes; anything far longer was not ours. */

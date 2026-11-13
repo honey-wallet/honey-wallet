@@ -26,7 +26,9 @@ import {
   encodeRecord,
   type FunctionCall,
   INTENTS_CONTRACT,
+  isNearAccountId,
   JAR_ROLE,
+  jarPolicy,
   NAV_TOLERANCE_BPS,
   type NearCallTx,
   navDeviationBps,
@@ -141,10 +143,22 @@ export async function lacksGas(rpc: Rpc, account: string, actions: FunctionCall[
 }
 
 /**
+ * What became of a call offered to Honey's relayer: `self` when nothing was signed (the
+ * account pays its own gas), `relayed` with the relayer's transaction, or `unsent` when
+ * a delegate was signed and handed over but the relayer didn't confirm sending it. An
+ * unsent delegate may still land until it expires, so it's never followed by a direct
+ * transaction until `settleDelegate` says it can't.
+ */
+export type RelayOutcome =
+  | { kind: 'self' }
+  | { kind: 'relayed'; txHash: string }
+  | { kind: 'unsent'; delegate: DelegateAction };
+
+/**
  * Sends a group jar's call with Honey paying the gas when the member can't: builds
  * the delegate, has the device sign it (`sign`, which asks the owner first) and hands
- * it to the relayer (`relay`). The transaction hash, or null to pay your own gas
- * (the account holds enough, or Honey isn't paying right now).
+ * it to the relayer (`relay`). A relayer that answers "not paying" (null) or fails
+ * after the delegate left the device gives `unsent`, never a silent fallback.
  */
 export async function sendViaRelayer(
   deps: {
@@ -155,11 +169,52 @@ export async function sendViaRelayer(
   },
   receiverId: string,
   actions: FunctionCall[],
-): Promise<string | null> {
-  if (!(await lacksGas(deps.rpc, deps.signerId, actions))) return null;
+): Promise<RelayOutcome> {
+  if (!(await lacksGas(deps.rpc, deps.signerId, actions))) return { kind: 'self' };
   const delegate = await prepareDelegate(deps.rpc, deps.signerId, receiverId, actions);
-  const result = await deps.relay(await deps.sign(delegate));
-  return result?.txHash ?? null;
+  const signed = await deps.sign(delegate);
+  const result = await deps.relay(signed).catch(() => null);
+  return result?.txHash ? { kind: 'relayed', txHash: result.txHash } : { kind: 'unsent', delegate };
+}
+
+/** How long `settleDelegate` waits for a delegate to expire before giving up. */
+const SETTLE_TIMEOUT_MS = 6 * 60_000;
+
+/**
+ * Waits until a signed delegate can no longer land, reading this key's nonce and the
+ * final block from the chain: `used` once the nonce reached the delegate's (it, or
+ * something else with that nonce, went through: don't send again), `expired` once a
+ * final block passed its `maxBlockHeight` with the nonce still short of it (NEAR now
+ * refuses it for good). Throws when neither is known in time.
+ */
+export async function settleDelegate(
+  rpc: Rpc,
+  delegate: DelegateAction,
+  opts: { wait?: (ms: number) => Promise<void>; timeoutMs?: number; now?: () => number } = {},
+): Promise<'used' | 'expired'> {
+  const wait = opts.wait ?? ((ms) => new Promise<void>((r) => setTimeout(r, ms)));
+  const now = opts.now ?? Date.now;
+  const until = now() + (opts.timeoutMs ?? SETTLE_TIMEOUT_MS);
+  for (;;) {
+    const access = (await rpc('query', {
+      request_type: 'view_access_key',
+      account_id: delegate.senderId,
+      public_key: nearPublicKey(delegate.senderId),
+      finality: 'final',
+    })) as { nonce?: number | string; block_height?: number | string };
+    if (access.nonce === undefined || access.block_height === undefined)
+      throw new Error('Invalid NEAR access key response');
+    if (BigInt(access.nonce) >= delegate.nonce) return 'used';
+    const height = BigInt(access.block_height);
+    if (height > delegate.maxBlockHeight) return 'expired';
+    if (now() >= until)
+      throw new Error(
+        'Couldn’t tell whether this went through. Check the jar before trying again.',
+      );
+    // About a block a second; look again as it nears expiry, at most every 10s.
+    const blocksLeft = Number(delegate.maxBlockHeight - height) + 1;
+    await wait(Math.min(Math.max(blocksLeft, 1) * 1000, 10_000));
+  }
 }
 
 // ---------- Calls the app makes ----------
@@ -574,6 +629,178 @@ export async function viewFtBalance(rpc: Rpc, token: string, account: string) {
   if (typeof value !== 'string' || !/^\d{1,38}$/.test(value)) throw new Error('Invalid balance');
   return BigInt(value);
 }
+
+// ---------- The jar's DAO, read from NEAR itself ----------
+
+/** A jar DAO: one Sputnik account straight under the factory (`<name>.sputnik-dao.near`). */
+export const isJarDao = (dao: unknown): dao is string =>
+  typeof dao === 'string' &&
+  dao.length <= 64 &&
+  /^[a-z0-9]+([-_][a-z0-9]+)*\.sputnik-dao\.near$/.test(dao);
+
+/** Proposals read per refresh, newest first (the server reads the same page). */
+const PROPOSAL_PAGE = 100;
+
+/** Every permission Honey's jar role may hold (keyring `jarPolicy`). */
+const JAR_PERMISSIONS = new Set(jarPolicy(['a'.repeat(64)], 1).roles[0]?.permissions ?? []);
+
+/**
+ * The DAO's live policy must be the one Honey creates: a single `members` group role
+ * holding only the permissions Honey grants (no extra roles, no per-kind vote rules, no
+ * Transfer, ChangePolicy or upgrades), the role-weight default rule with quorum 0, and a
+ * proposal bond of 0. Returns its members and k (capped at n, as Sputnik does), with k at
+ * least 2 once there are 2 members. Throws on anything else.
+ */
+export function checkJarPolicy(policy: unknown): { members: string[]; threshold: number } {
+  const fail = () =>
+    new Error('This jar’s rules on NEAR aren’t the ones Honey sets. Don’t use it.');
+  const p = policy as {
+    roles?: unknown;
+    default_vote_policy?: { weight_kind?: unknown; quorum?: unknown; threshold?: unknown };
+    proposal_bond?: unknown;
+  } | null;
+  if (!p || !Array.isArray(p.roles) || p.roles.length !== 1) throw fail();
+  const role = p.roles[0] as {
+    name?: unknown;
+    kind?: { Group?: unknown };
+    permissions?: unknown;
+    vote_policy?: unknown;
+  };
+  const group = role?.kind?.Group;
+  if (role?.name !== JAR_ROLE || !Array.isArray(group) || !group.length) throw fail();
+  const members = group as unknown[];
+  if (!members.every((m) => typeof m === 'string' && isNearAccountId(m))) throw fail();
+  if (new Set(members).size !== members.length) throw fail();
+  const permissions = role.permissions;
+  if (
+    !Array.isArray(permissions) ||
+    !permissions.every((x) => typeof x === 'string' && JAR_PERMISSIONS.has(x))
+  )
+    throw fail();
+  const perKind = role.vote_policy;
+  if (perKind !== undefined && (typeof perKind !== 'object' || perKind === null)) throw fail();
+  if (perKind && Object.keys(perKind).length) throw fail();
+  const vp = p.default_vote_policy;
+  if (
+    vp?.weight_kind !== 'RoleWeight' ||
+    vp.quorum !== '0' ||
+    typeof vp.threshold !== 'string' ||
+    !/^\d{1,3}$/.test(vp.threshold)
+  )
+    throw fail();
+  if (p.proposal_bond !== undefined && p.proposal_bond !== '0') throw fail();
+  const n = members.length;
+  const threshold = Math.min(Number(vp.threshold), n);
+  if (threshold < 1 || (n >= 2 && threshold < 2)) throw fail();
+  return { members: members as string[], threshold };
+}
+
+const isProposal = (p: unknown): p is JarDaoProposal => {
+  const x = p as Record<string, unknown> | null;
+  return (
+    !!x &&
+    typeof x.id === 'number' &&
+    Number.isInteger(x.id) &&
+    typeof x.proposer === 'string' &&
+    typeof x.description === 'string' &&
+    x.kind !== undefined &&
+    typeof x.status === 'string' &&
+    typeof x.votes === 'object' &&
+    x.votes !== null &&
+    typeof x.submission_time === 'string' &&
+    /^\d{1,30}$/.test(x.submission_time)
+  );
+};
+
+/**
+ * A jar's state read from NEAR directly, never through Honey's server: members and k
+ * from `get_policy` (checked against Honey's shape), the newest proposals from
+ * `get_proposals`, and the DAO's Intents balances from `mt_batch_balance_of` on
+ * intents.near for the assets `assetsOf` names (from those proposals). One read of each
+ * per call.
+ */
+export async function readJarFromChain(
+  rpc: Rpc,
+  dao: string,
+  assetsOf: (proposals: JarDaoProposal[]) => string[],
+) {
+  if (!isJarDao(dao)) throw new Error('This isn’t a Honey jar on NEAR.');
+  const [policy, last] = await Promise.all([
+    viewFt(rpc, dao, 'get_policy', {}),
+    viewFt(rpc, dao, 'get_last_proposal_id', {}),
+  ]);
+  const { members, threshold } = checkJarPolicy(policy);
+  if (typeof last !== 'number' || !Number.isInteger(last) || last < 0)
+    throw new Error('Invalid NEAR view response');
+  const raw = last
+    ? await viewFt(rpc, dao, 'get_proposals', {
+        from_index: Math.max(0, last - PROPOSAL_PAGE),
+        limit: PROPOSAL_PAGE,
+      })
+    : [];
+  if (!Array.isArray(raw) || !raw.every(isProposal)) throw new Error('Invalid NEAR view response');
+  const proposals = raw as JarDaoProposal[];
+  const tokens = assetsOf(proposals);
+  const amounts = await viewFt(rpc, INTENTS_CONTRACT, 'mt_batch_balance_of', {
+    account_id: dao,
+    token_ids: tokens,
+  });
+  if (
+    !Array.isArray(amounts) ||
+    amounts.length !== tokens.length ||
+    !amounts.every((a) => typeof a === 'string' && /^\d{1,38}$/.test(a))
+  )
+    throw new Error('Invalid NEAR view response');
+  const balances = tokens.map((tokenId, i) => ({ tokenId, amount: amounts[i] as string }));
+  return { members, threshold, proposals, balances };
+}
+
+/**
+ * A group jar's members still in, from the chain: the DAO's members less everyone whose
+ * leave executed (an Approved `honey-group:leave` that paid only its proposer).
+ */
+export function membersStillIn(members: string[], proposals: JarDaoProposal[]) {
+  const left = new Set<string>();
+  for (const p of proposals) {
+    if (p.status !== 'Approved' || !p.description.startsWith('honey-group:leave')) continue;
+    const legs = buyLegsOf(p.kind);
+    if (legs?.length && legs.every((l) => l.receiver === p.proposer)) left.add(p.proposer);
+  }
+  return members.filter((m) => !left.has(m));
+}
+
+/**
+ * A group's DAO before any money goes into it: a jar DAO whose live policy is Honey's,
+ * with you in it, only people the group shows as its members, and a majority rule. The
+ * first DAO verified for a group is pinned (`pinned`); a different one later is refused.
+ */
+export function checkGroupDao(
+  policy: unknown,
+  input: {
+    dao: string;
+    me: string;
+    /** NEAR accounts the group's page shows (any state) plus yours. */
+    known: string[];
+    pinned: string | undefined;
+    majority: (people: number) => number;
+  },
+) {
+  if (!isJarDao(input.dao)) throw new Error('This group’s jar isn’t a Honey jar on NEAR.');
+  if (input.pinned && input.pinned !== input.dao)
+    throw new Error(
+      'This group’s jar changed since you last checked it. Don’t pay into it; contact Honey.',
+    );
+  const { members, threshold } = checkJarPolicy(policy);
+  if (!members.includes(input.me)) throw new Error('You aren’t a member of this group’s jar.');
+  if (members.some((m) => !input.known.includes(m)))
+    throw new Error('This group’s jar has members the group doesn’t show. Don’t pay into it.');
+  if (threshold < input.majority(members.length))
+    throw new Error('This group’s jar needs fewer approvals than a majority. Don’t pay into it.');
+  return { members, threshold };
+}
+
+/** The DAO's policy as a view call. */
+export const viewPolicy = (rpc: Rpc, dao: string) => viewFt(rpc, dao, 'get_policy', {});
 
 /** What a Sputnik proposal means to the app, or null for records and unknown kinds. */
 export function actionOf(p: JarDaoProposal, jarName: string, usdc: (atomic: string) => number) {
