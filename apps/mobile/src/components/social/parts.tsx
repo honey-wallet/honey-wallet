@@ -616,9 +616,12 @@ export function CopyStepper({
           accessibilityLabel={`${label}, ${amount} USDC`}
           onPress={() => onCopy(amount)}
         >
-          <Animated.View layout={glide}>
-            <Icon name={verb === 'Copy' ? 'copy' : 'plus'} size={16} color={ink} />
-          </Animated.View>
+          {/* Copy keeps its icon; "Create jar" reads fine on its own. */}
+          {verb === 'Copy' ? (
+            <Animated.View layout={glide}>
+              <Icon name="copy" size={16} color={ink} />
+            </Animated.View>
+          ) : null}
           <Animated.View layout={glide} style={styles.copyWords}>
             <Text style={copyText}>{verb} </Text>
             <TextSwap text={String(amount)} direction={direction} style={copyText} />

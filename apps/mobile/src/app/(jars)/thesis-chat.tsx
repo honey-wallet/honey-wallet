@@ -487,6 +487,7 @@ function AnswerCard({ proposal, latest }: { proposal: Proposal; latest: boolean 
     >
       {latest ? (
         <CopyStepper
+          primary
           verb="Create jar"
           label="Create jar"
           onCopy={(amount) => {
