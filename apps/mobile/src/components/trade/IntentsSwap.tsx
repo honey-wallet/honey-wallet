@@ -1302,6 +1302,8 @@ function ProgressStep({ swap, error, onDone }: { swap: Swap; error?: string; onD
           </View>
         ))}
       </View>
+      {/* Removed 14 Nov: "Deposit" (the payment's hash) and "Deposit address" (1Click's
+          one-time address) read as the same thing; the first step's link opens the payment.
       <View style={styles.rows}>
         {swap.txHash ? (
           <Row
@@ -1314,6 +1316,7 @@ function ProgressStep({ swap, error, onDone }: { swap: Swap; error?: string; onD
           value={<Copyable value={swap.depositAddress} toast="Deposit address copied" />}
         />
       </View>
+      */}
       {stage === 'sending' ? null : (
         <PillButton
           label="Done"
