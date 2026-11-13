@@ -2144,16 +2144,7 @@ async fn group_jars_invite_create_pay_buy_publish_leave_and_cash_out() {
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT, "once per person and group");
-    // The creator gets the DAO deposit too; an account already holding enough gets nothing.
-    let (_, sent) = call(
-        &on,
-        "POST",
-        "/jar-dao/sponsor",
-        Some(&alice),
-        Some(json!({ "account": a, "groupId": third_id })),
-    )
-    .await;
-    assert_eq!(sent["amount"], "120000000000000000000000");
+    // An account already holding enough gets nothing.
     chain
         .lock()
         .unwrap()
@@ -2168,6 +2159,63 @@ async fn group_jars_invite_create_pay_buy_publish_leave_and_cash_out() {
     )
     .await;
     assert_eq!(sent["status"], "not_needed");
+    // The creator gets nothing while only inviting (no farming top-ups with empty groups)...
+    let (status, _) = call(
+        &on,
+        "POST",
+        "/jar-dao/sponsor",
+        Some(&alice),
+        Some(json!({ "account": a, "groupId": third_id })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "creator waits for a friend");
+    // ...and the DAO deposit once a friend has joined.
+    let (status, body) = call(
+        &app,
+        "POST",
+        &format!("/social/groups/{third_id}/accept"),
+        Some(&bob),
+        Some(json!({ "nearAccount": b })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = call(
+        &app,
+        "POST",
+        &format!("/social/groups/{third_id}/go-ahead"),
+        Some(&alice),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (_, sent) = call(
+        &on,
+        "POST",
+        "/jar-dao/sponsor",
+        Some(&alice),
+        Some(json!({ "account": a, "groupId": third_id })),
+    )
+    .await;
+    assert_eq!(sent["amount"], "120000000000000000000000");
+    // An account is topped up once ever, whoever asks and from whichever group.
+    let (_, fourth) = call(
+        &app,
+        "POST",
+        "/social/groups",
+        Some(&alice),
+        Some(group(json!(["carol"]))),
+    )
+    .await;
+    let fourth_id = fourth["id"].as_str().unwrap();
+    let (status, _) = call(
+        &on,
+        "POST",
+        "/jar-dao/sponsor",
+        Some(&carol),
+        Some(json!({ "account": b, "groupId": fourth_id })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "once per account");
     assert_eq!(chain.lock().unwrap().sent.len(), 2);
     // Closed groups get nothing.
     let (status, _) = call(

@@ -26,6 +26,8 @@ use uuid::Uuid;
 
 /// Fee top-ups Honey pays across everyone in a day; past it, people pay their own.
 const SPONSOR_DAILY_CAP: i64 = 300;
+/// Fee top-ups one person can get in 30 days, across all their groups.
+const SPONSOR_USER_CAP: i64 = 3;
 
 #[derive(Clone)]
 struct StateData {
@@ -263,6 +265,34 @@ async fn sponsor(
         return Err(AppError::BadRequest(
             "that isn't your account in this group".into(),
         ));
+    }
+    // The creator needs fees only to create the DAO, which happens once a friend has
+    // joined (`creating`); sponsoring them while still inviting would let anyone farm
+    // top-ups by opening groups that never go anywhere.
+    if creator == user && status == "inviting" {
+        return Err(AppError::Conflict(
+            "Honey pays the creator's fees once a friend joins".into(),
+        ));
+    }
+    // Per person and per account, across all groups: an account is topped up at most
+    // once ever, and a person at most SPONSOR_USER_CAP times in 30 days.
+    let (account_used, user_recent): (bool, i64) = sqlx::query_as(
+        "SELECT EXISTS (SELECT 1 FROM social_group_sponsorships WHERE account = $2),
+                (SELECT count(*) FROM social_group_sponsorships
+                  WHERE user_id = $1 AND created_at > clock_timestamp() - interval '30 days')",
+    )
+    .bind(user)
+    .bind(account)
+    .fetch_one(pool)
+    .await
+    .map_err(unavailable)?;
+    if account_used {
+        return Err(AppError::Conflict(
+            "Honey already paid this account's fees".into(),
+        ));
+    }
+    if user_recent >= SPONSOR_USER_CAP {
+        return Ok(sponsor_off());
     }
     let amount = if creator == user && dao.is_none() {
         CREATOR_TOP_UP
