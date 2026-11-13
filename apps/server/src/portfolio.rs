@@ -15,16 +15,21 @@
 //! Read-only and public: addresses are public data and nothing here needs a key. Keys
 //! that are set ride in URLs (Alchemy's path, Etherscan's query), so no URL is logged.
 
+use crate::bounded_lru::BoundedLru;
 use crate::market_data::{CoinMarket, MarketData, OneClickToken, normalize_symbol};
 use futures_util::future::join_all;
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::{
     collections::HashMap,
-    sync::Arc,
+    future::Future,
+    pin::Pin,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
-use tokio::sync::RwLock;
+use tokio::sync::{OnceCell, Semaphore};
+// Replaced (audit #3): the caches are bounded LRUs behind a plain mutex now.
+// use tokio::sync::RwLock;
 
 const BALANCES_TTL: Duration = Duration::from_secs(20);
 const ACTIVITY_TTL: Duration = Duration::from_secs(60);
@@ -36,6 +41,10 @@ const FAILED_TTL: Duration = Duration::from_secs(20);
 /// except NEAR history: NearBlocks' keyless tier can't take a read every few seconds.
 const NEAR_FRESH_TTL: Duration = Duration::from_secs(30);
 const MAX_ENTRIES: usize = 5_000;
+/// Requests to nodes and explorers in flight at once, across every caller, and how long
+/// one waits for a turn before its chain is reported unavailable.
+const UPSTREAM_CONCURRENCY: usize = 64;
+const UPSTREAM_WAIT: Duration = Duration::from_secs(5);
 const ACTIVITY_LIMIT: usize = 50;
 /// Token contracts read per EVM chain in one Multicall3 batch.
 const MAX_EVM_TOKENS: usize = 200;
@@ -338,9 +347,52 @@ pub struct PortfolioService {
     endpoints: Endpoints,
     keys: ExplorerKeys,
     market: Option<Arc<MarketData>>,
-    cache: RwLock<HashMap<String, (Instant, Cached)>>,
-    /// Decoded Solana transactions by signature (final, so kept until the map fills).
-    solana_txs: RwLock<HashMap<String, Option<Movement>>>,
+    // Replaced (audit #3): maps that were cleared wholesale once full.
+    // cache: RwLock<HashMap<String, (Instant, Cached)>>,
+    // solana_txs: RwLock<HashMap<String, Option<Movement>>>,
+    cache: Mutex<BoundedLru<String, (Instant, Cached)>>,
+    /// Decoded Solana transactions by signature (final, so kept until pushed out).
+    solana_txs: Mutex<BoundedLru<String, Option<Movement>>>,
+    /// Shared by every read, so a burst of uncached addresses queues instead of fanning
+    /// out without bound to the public nodes.
+    upstream: Semaphore,
+}
+
+/// Asked once per request the first time it would read past the cache; `false` means
+/// answer from whatever is cached. Built by the route from the caller's address quota.
+#[derive(Clone)]
+pub struct MissGate(Arc<dyn Fn() -> Pin<Box<dyn Future<Output = bool> + Send>> + Send + Sync>);
+
+impl MissGate {
+    pub fn new<F, Fut>(admit: F) -> Self
+    where
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = bool> + Send + 'static,
+    {
+        Self(Arc::new(move || Box::pin(admit())))
+    }
+}
+
+/// One request's use of a [`MissGate`]: charged at most once, however many chains miss.
+struct Misses<'a> {
+    gate: Option<&'a MissGate>,
+    admitted: OnceCell<bool>,
+}
+
+impl<'a> Misses<'a> {
+    fn new(gate: Option<&'a MissGate>) -> Self {
+        Self {
+            gate,
+            admitted: OnceCell::new(),
+        }
+    }
+
+    async fn admit(&self) -> bool {
+        match self.gate {
+            None => true,
+            Some(gate) => *self.admitted.get_or_init(|| (gate.0)()).await,
+        }
+    }
 }
 
 impl PortfolioService {
@@ -367,8 +419,12 @@ impl PortfolioService {
             endpoints,
             keys: ExplorerKeys::default(),
             market,
-            cache: RwLock::new(HashMap::new()),
-            solana_txs: RwLock::new(HashMap::new()),
+            // Replaced (audit #3): see the field note.
+            // cache: RwLock::new(HashMap::new()),
+            // solana_txs: RwLock::new(HashMap::new()),
+            cache: Mutex::new(BoundedLru::new(MAX_ENTRIES)),
+            solana_txs: Mutex::new(BoundedLru::new(MAX_ENTRIES)),
+            upstream: Semaphore::new(UPSTREAM_CONCURRENCY),
         }
     }
 
@@ -377,43 +433,92 @@ impl PortfolioService {
         self
     }
 
-    async fn cached(&self, key: &str, ttl: Duration) -> Option<Cached> {
-        let cache = self.cache.read().await;
+    // Replaced (audit #3): read and write through the LRU (a read marks the entry used).
+    // async fn cached(&self, key: &str, ttl: Duration) -> Option<Cached> {
+    //     let cache = self.cache.read().await;
+    //     cache
+    //         .get(key)
+    //         .filter(|(at, _)| at.elapsed() < ttl)
+    //         .map(|(_, v)| v.clone())
+    // }
+    //
+    // async fn store(&self, key: String, value: Cached) {
+    //     let mut cache = self.cache.write().await;
+    //     if cache.len() >= MAX_ENTRIES {
+    //         cache.retain(|_, (at, _)| at.elapsed() < NEAR_ACTIVITY_TTL);
+    //         if cache.len() >= MAX_ENTRIES {
+    //             cache.clear();
+    //         }
+    //     }
+    //     cache.insert(key, (Instant::now(), value));
+    // }
+    /// The cached answer and its age, however old.
+    fn cached_any_age(&self, key: &str) -> Option<(Duration, Cached)> {
+        let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
         cache
-            .get(key)
-            .filter(|(at, _)| at.elapsed() < ttl)
-            .map(|(_, v)| v.clone())
+            .get(&key.to_string())
+            .map(|(at, v)| (at.elapsed(), v.clone()))
     }
 
     async fn store(&self, key: String, value: Cached) {
-        let mut cache = self.cache.write().await;
-        if cache.len() >= MAX_ENTRIES {
-            cache.retain(|_, (at, _)| at.elapsed() < NEAR_ACTIVITY_TTL);
-            if cache.len() >= MAX_ENTRIES {
-                cache.clear();
+        let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+        cache.insert(key, (Instant::now(), value));
+    }
+
+    /// A turn to call a node or explorer, or `None` when none came up in `UPSTREAM_WAIT`.
+    async fn upstream_turn(&self) -> Option<tokio::sync::SemaphorePermit<'_>> {
+        match tokio::time::timeout(UPSTREAM_WAIT, self.upstream.acquire()).await {
+            Ok(Ok(permit)) => Some(permit),
+            _ => {
+                tracing::warn!("portfolio upstream reads saturated");
+                None
             }
         }
-        cache.insert(key, (Instant::now(), value));
     }
 
     /// One chain's history through the cache: kept `ttl` once read, `FAILED_TTL` when the
     /// chain didn't answer (so a rate-limited explorer isn't asked again straight away).
-    async fn rows_cached<F>(&self, key: String, ttl: Duration, read: F) -> Option<Vec<ActivityItem>>
+    async fn rows_cached<F>(
+        &self,
+        key: String,
+        ttl: Duration,
+        read: F,
+        misses: &Misses<'_>,
+    ) -> Option<Vec<ActivityItem>>
     where
         F: std::future::Future<Output = Option<Vec<ActivityItem>>>,
     {
-        {
-            let cache = self.cache.read().await;
-            if let Some((at, Cached::Rows(rows))) = cache.get(&key) {
+        // Replaced (audit #3): the same check through the LRU, keeping any stale rows.
+        // {
+        //     let cache = self.cache.read().await;
+        //     if let Some((at, Cached::Rows(rows))) = cache.get(&key) {
+        //         let max_age = if rows.is_some() {
+        //             ttl
+        //         } else {
+        //             FAILED_TTL.min(ttl)
+        //         };
+        //         if at.elapsed() < max_age {
+        //             return rows.clone();
+        //         }
+        //     }
+        // }
+        let stale = match self.cached_any_age(&key) {
+            Some((age, Cached::Rows(rows))) => {
                 let max_age = if rows.is_some() {
                     ttl
                 } else {
                     FAILED_TTL.min(ttl)
                 };
-                if at.elapsed() < max_age {
-                    return rows.clone();
+                if age < max_age {
+                    return rows;
                 }
+                rows
             }
+            _ => None,
+        };
+        // Over the caller's uncached-read quota: older rows if there are any.
+        if !misses.admit().await {
+            return stale;
         }
         let rows = read.await;
         self.store(key, Cached::Rows(rows.clone())).await;
@@ -421,6 +526,7 @@ impl PortfolioService {
     }
 
     async fn rpc(&self, url: &str, method: &str, params: Value) -> Option<Value> {
+        let _turn = self.upstream_turn().await?;
         crate::json_rpc::call(&self.client, url, method, params)
             .await
             .map_err(|error| tracing::warn!(%error, method, "portfolio rpc failed"))
@@ -432,6 +538,7 @@ impl PortfolioService {
     }
 
     async fn get_with(&self, url: &str, bearer: Option<&str>) -> Option<Value> {
+        let _turn = self.upstream_turn().await?;
         let mut request = self.client.get(url).header("Accept", "application/json");
         if let Some(key) = bearer {
             request = request.bearer_auth(key);
@@ -474,10 +581,32 @@ impl PortfolioService {
     /// Balances on every chain for these addresses, priced in USD. `fresh` skips the
     /// cached answer (the new one is still kept for everyone else).
     pub async fn balances(&self, addresses: &Addresses, fresh: bool) -> Portfolio {
+        self.balances_admitted(addresses, fresh, None)
+            .await
+            .expect("an ungated read is always admitted")
+    }
+
+    /// [`Self::balances`], asking `gate` before reading past the cache. Refused: the
+    /// last answer however old, or `None` when there is none.
+    pub async fn balances_admitted(
+        &self,
+        addresses: &Addresses,
+        fresh: bool,
+        gate: Option<&MissGate>,
+    ) -> Option<Portfolio> {
         let key = format!("balances:{}", addresses.key());
         let ttl = if fresh { Duration::ZERO } else { BALANCES_TTL };
-        if let Some(Cached::Portfolio(p)) = self.cached(&key, ttl).await {
-            return p;
+        // Replaced (audit #3): a miss now asks the gate and may fall back to an older answer.
+        // if let Some(Cached::Portfolio(p)) = self.cached(&key, ttl).await {
+        //     return p;
+        // }
+        let stale = match self.cached_any_age(&key) {
+            Some((age, Cached::Portfolio(p))) if age < ttl => return Some(p),
+            Some((_, Cached::Portfolio(p))) => Some(p),
+            _ => None,
+        };
+        if !Misses::new(gate).admit().await {
+            return stale;
         }
         let tokens = match &self.market {
             Some(m) => m.tokens().await.ok(),
@@ -531,7 +660,7 @@ impl PortfolioService {
         if portfolio.unavailable.is_empty() {
             self.store(key, Cached::Portfolio(portfolio.clone())).await;
         }
-        portfolio
+        Some(portfolio)
     }
 
     /// The chain's coin (ETH, or POL on Polygon) plus every ERC-20 1Click lists on it. The
@@ -777,6 +906,9 @@ impl PortfolioService {
     }
 
     async fn near_account_missing(&self, account: &str) -> bool {
+        let Some(_turn) = self.upstream_turn().await else {
+            return false;
+        };
         crate::json_rpc::call(
             &self.client,
             &self.endpoints.near_rpc,
@@ -794,6 +926,19 @@ impl PortfolioService {
     /// cached on its own, so one slow explorer doesn't make the others re-read. `fresh`
     /// skips the cached rows (NEAR's only after `NEAR_FRESH_TTL`).
     pub async fn activity(&self, addresses: &Addresses, fresh: bool) -> Activity {
+        self.activity_admitted(addresses, fresh, None).await
+    }
+
+    /// [`Self::activity`], asking `gate` once before any chain reads past the cache.
+    /// Refused: a chain's older rows, or the chain listed as unavailable.
+    pub async fn activity_admitted(
+        &self,
+        addresses: &Addresses,
+        fresh: bool,
+        gate: Option<&MissGate>,
+    ) -> Activity {
+        let misses = Misses::new(gate);
+        let misses = &misses;
         let (ttl, near_ttl) = if fresh {
             (Duration::ZERO, NEAR_FRESH_TTL)
         } else {
@@ -816,7 +961,10 @@ impl PortfolioService {
                 reads.push(Box::pin(async move {
                     let key = format!("rows:{}:{evm}", network.chain);
                     let read = self.evm_activity(network, evm, listed);
-                    (network.chain, self.rows_cached(key, ttl, read).await)
+                    (
+                        network.chain,
+                        self.rows_cached(key, ttl, read, misses).await,
+                    )
                 }));
             }
         }
@@ -824,14 +972,14 @@ impl PortfolioService {
             reads.push(Box::pin(async move {
                 let key = format!("rows:Solana:{sol}");
                 let read = self.solana_activity(sol, listed);
-                ("Solana", self.rows_cached(key, ttl, read).await)
+                ("Solana", self.rows_cached(key, ttl, read, misses).await)
             }));
         }
         if let Some(near) = &addresses.near {
             reads.push(Box::pin(async move {
                 let key = format!("rows:NEAR:{near}");
                 let read = self.near_activity(near);
-                ("NEAR", self.rows_cached(key, near_ttl, read).await)
+                ("NEAR", self.rows_cached(key, near_ttl, read, misses).await)
             }));
         }
         let mut items = Vec::new();
@@ -947,6 +1095,7 @@ impl PortfolioService {
             "method": "alchemy_getAssetTransfers",
             "params": params,
         });
+        let _turn = self.upstream_turn().await.ok_or(false)?;
         let response = self
             .client
             .post(url)
@@ -1029,7 +1178,9 @@ impl PortfolioService {
             .map(|i| i.hash.clone())
             .collect();
         let known: HashMap<String, Option<Movement>> = {
-            let cache = self.solana_txs.read().await;
+            // Replaced (audit #3): the LRU marks a read entry used, so it takes the lock.
+            // let cache = self.solana_txs.read().await;
+            let mut cache = self.solana_txs.lock().unwrap_or_else(|e| e.into_inner());
             wanted
                 .iter()
                 .filter_map(|s| cache.get(s).map(|m| (s.clone(), m.clone())))
@@ -1056,11 +1207,16 @@ impl PortfolioService {
             .collect()
             .await;
         if !fetched.is_empty() {
-            let mut cache = self.solana_txs.write().await;
-            if cache.len() + fetched.len() > MAX_ENTRIES {
-                cache.clear();
+            // Replaced (audit #3): the LRU drops the oldest instead of clearing.
+            // let mut cache = self.solana_txs.write().await;
+            // if cache.len() + fetched.len() > MAX_ENTRIES {
+            //     cache.clear();
+            // }
+            // cache.extend(fetched.iter().cloned());
+            let mut cache = self.solana_txs.lock().unwrap_or_else(|e| e.into_inner());
+            for (signature, movement) in fetched.iter().cloned() {
+                cache.insert(signature, movement);
             }
-            cache.extend(fetched.iter().cloned());
         }
         let moves: HashMap<String, Option<Movement>> = known.into_iter().chain(fetched).collect();
         for item in &mut items {

@@ -5,10 +5,12 @@
 //! `fresh=1` skips that cache: the app asks for it right after a transaction it made, so
 //! the new balance shows. Each client gets a few a minute (see
 //! `identity::limit_fresh_portfolio_reads_by_ip`); past that it's answered from the cache.
+//! Every read that misses the cache (fresh or not) also spends a per-client uncached
+//! quota; past it the last cached answer is served, or 429 when there is none.
 
 use crate::{
     error::AppError,
-    portfolio::{Activity, Addresses, Portfolio, PortfolioService},
+    portfolio::{Activity, Addresses, MissGate, Portfolio, PortfolioService},
 };
 use axum::{
     Extension, Json, Router,
@@ -50,20 +52,50 @@ impl AddressQuery {
     }
 }
 
+// Replaced (audit #3): reads that miss the cache now ask the caller's uncached quota.
+// async fn balances(
+//     State(service): State<Arc<PortfolioService>>,
+//     denied: Option<Extension<FreshDenied>>,
+//     Query(q): Query<AddressQuery>,
+// ) -> Result<Json<Portfolio>, AppError> {
+//     Ok(Json(service.balances(&q.parse()?, q.fresh(denied)).await))
+// }
+//
+// async fn activity(
+//     State(service): State<Arc<PortfolioService>>,
+//     denied: Option<Extension<FreshDenied>>,
+//     Query(q): Query<AddressQuery>,
+// ) -> Result<Json<Activity>, AppError> {
+//     Ok(Json(service.activity(&q.parse()?, q.fresh(denied)).await))
+// }
+/// `gate` is set by the uncached-read limiter (`identity::limit_fresh_portfolio_reads_by_ip`);
+/// without it (no Redis, a loopback dev server) reads are unlimited.
 async fn balances(
     State(service): State<Arc<PortfolioService>>,
     denied: Option<Extension<FreshDenied>>,
+    gate: Option<Extension<MissGate>>,
     Query(q): Query<AddressQuery>,
 ) -> Result<Json<Portfolio>, AppError> {
-    Ok(Json(service.balances(&q.parse()?, q.fresh(denied)).await))
+    let gate = gate.map(|Extension(g)| g);
+    service
+        .balances_admitted(&q.parse()?, q.fresh(denied), gate.as_ref())
+        .await
+        .map(Json)
+        .ok_or(AppError::TooManyRequests)
 }
 
 async fn activity(
     State(service): State<Arc<PortfolioService>>,
     denied: Option<Extension<FreshDenied>>,
+    gate: Option<Extension<MissGate>>,
     Query(q): Query<AddressQuery>,
 ) -> Result<Json<Activity>, AppError> {
-    Ok(Json(service.activity(&q.parse()?, q.fresh(denied)).await))
+    let gate = gate.map(|Extension(g)| g);
+    Ok(Json(
+        service
+            .activity_admitted(&q.parse()?, q.fresh(denied), gate.as_ref())
+            .await,
+    ))
 }
 
 fn is_fresh(value: Option<&str>) -> bool {
@@ -330,6 +362,45 @@ mod tests {
         let fresh = rows("&fresh=1").await;
         assert_ne!(fresh, first);
         assert_eq!(rows("").await, fresh);
+    }
+
+    #[tokio::test]
+    async fn uncached_reads_are_limited_and_fall_back_to_older_answers() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        // The real gate is Redis (identity::limit_fresh_portfolio_reads_by_ip); this one
+        // admits two uncached reads in total.
+        let left = Arc::new(AtomicUsize::new(2));
+        let gate = {
+            let left = left.clone();
+            MissGate::new(move || {
+                let left = left.clone();
+                async move {
+                    left.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+                        .is_ok()
+                }
+            })
+        };
+        let app = moving_chain().await.layer(Extension(gate));
+        let first = eth(&app, "").await;
+        assert_eq!(left.load(Ordering::SeqCst), 1, "a miss is charged");
+        assert_eq!(eth(&app, "").await, first, "a cache hit is free");
+        assert_eq!(left.load(Ordering::SeqCst), 1);
+        let fresh = eth(&app, "&fresh=1").await;
+        assert!(fresh > first);
+        assert_eq!(left.load(Ordering::SeqCst), 0);
+        // Out of quota: an uncached read gets the last answer instead of the chain's.
+        assert_eq!(eth(&app, "&fresh=1").await, fresh);
+        // A new address with nothing cached is refused rather than read upstream.
+        let (status, _) = call(
+            app.clone(),
+            "/portfolio/balances?evm=0x2222222222222222222222222222222222222222",
+        )
+        .await;
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+        // Activity without quota: the chain shows as unavailable, not read.
+        let (status, body) = call(app, &format!("/portfolio/activity?solana={SOL}")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["unavailable"], json!(["Solana"]));
     }
 
     #[tokio::test]
