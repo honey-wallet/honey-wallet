@@ -213,9 +213,7 @@ async fn main() -> anyhow::Result<()> {
                     honey_server::dex::DexService::from_env()
                         .ok()
                         .filter(|d| d.enabled())
-                        .map(|d| {
-                            std::sync::Arc::new(d.with_redis(infrastructure.redis().cloned()))
-                        }),
+                        .map(|d| d.with_redis(infrastructure.redis().cloned()).shared()),
                 )),
                 Err(error) => tracing::error!(%error, "social jar marker disabled"),
             }

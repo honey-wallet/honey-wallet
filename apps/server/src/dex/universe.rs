@@ -25,7 +25,7 @@
 
 use std::collections::HashMap;
 
-use serde::Serialize;
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
 use super::chains::{DexChain, USDC_SOLANA, WRAPPED_SOL};
@@ -58,6 +58,7 @@ pub const MAX_TOKENS: usize = 3_000;
 /// One token of the universe, before safety. `route` is always `dex`; the thesis
 /// registry can merge on `(chain, address)` and prefer 1Click where it lists the same
 /// contract.
+/// Serialized as is to Redis after a build (15 Nov), so a restart serves the last list.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DexToken {
@@ -85,6 +86,64 @@ pub struct DexToken {
     pub metadata: &'static str,
     /// Floor and authority flags found while building the list (safety adds GoPlus's).
     pub flags: Vec<String>,
+}
+
+/// Every `metadata` value a token can carry.
+pub const METADATA: &[&str] = &[
+    "uniswap",
+    "coingecko",
+    "jupiter",
+    "chain",
+    "geckoterminal",
+    "intents",
+];
+
+/// A stored token (Redis's copy of a list): `metadata` comes back as one of
+/// [`METADATA`]; anything else reads as `geckoterminal` (unconfirmed).
+impl<'de> Deserialize<'de> for DexToken {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Stored {
+            chain: DexChain,
+            address: String,
+            symbol: String,
+            name: String,
+            decimals: u8,
+            logo_url: Option<String>,
+            price_usd: f64,
+            liquidity_usd: Option<f64>,
+            volume24h_usd: Option<f64>,
+            coingecko_id: Option<String>,
+            market_cap_usd: Option<f64>,
+            change24h_pct: Option<f64>,
+            first_pool_at: Option<i64>,
+            metadata: String,
+            flags: Vec<String>,
+        }
+        let s = Stored::deserialize(d)?;
+        Ok(DexToken {
+            chain: s.chain,
+            address: s.address,
+            symbol: s.symbol,
+            name: s.name,
+            decimals: s.decimals,
+            logo_url: s.logo_url,
+            price_usd: s.price_usd,
+            liquidity_usd: s.liquidity_usd,
+            volume24h_usd: s.volume24h_usd,
+            coingecko_id: s.coingecko_id,
+            market_cap_usd: s.market_cap_usd,
+            change24h_pct: s.change24h_pct,
+            first_pool_at: s.first_pool_at,
+            metadata: METADATA
+                .iter()
+                .find(|m| **m == s.metadata)
+                .copied()
+                .unwrap_or("geckoterminal"),
+            flags: s.flags,
+        })
+    }
 }
 
 pub fn num(v: &Value) -> Option<f64> {

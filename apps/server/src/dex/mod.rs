@@ -30,7 +30,7 @@ pub mod universe;
 
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex, OnceLock},
+    sync::{Arc, Mutex, OnceLock, Weak},
     time::{Duration, Instant},
 };
 
@@ -67,6 +67,10 @@ pub const SOLANA_QUOTE_SECS: u64 = 60;
 /// Kyber's router deadline (the batch itself expires sooner).
 const ROUTER_DEADLINE_SECS: u64 = 20 * 60;
 const UNIVERSE_TTL: Duration = Duration::from_secs(6 * 60 * 60);
+/// A built list is copied to Redis (`{dex-universe}:<chain>`) and kept this long, so a
+/// restart serves it (as stale past `UNIVERSE_TTL`) instead of waiting minutes for a
+/// build (15 Nov).
+const UNIVERSE_KEEP: Duration = Duration::from_secs(24 * 60 * 60);
 /// How often the background refresher looks at every chain (it rebuilds only what is
 /// older than `UNIVERSE_TTL`, and re-asks GoPlus for unchecked tokens).
 const REFRESH_EVERY: Duration = Duration::from_secs(20 * 60);
@@ -521,6 +525,15 @@ impl SponsorGate for PgGate {
 type Cached<T> = tokio::sync::RwLock<Option<(Instant, Arc<T>)>>;
 type TokenLists = Arc<Vec<HashMap<String, universe::ListEntry>>>;
 type Universe = tokio::sync::RwLock<HashMap<DexChain, (Instant, Arc<Vec<DexToken>>)>>;
+
+/// A built list as copied to Redis.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SavedUniverse {
+    /// Unix seconds.
+    built_at: u64,
+    tokens: Vec<DexToken>,
+}
 /// `GET /dex/token` answers: the token, or None for "no market".
 type Lookups = HashMap<(DexChain, String), (Instant, Option<DexToken>)>;
 
@@ -554,6 +567,11 @@ pub struct DexService {
     lookups: Mutex<Lookups>,
     /// Paces lookups that miss every cache (`LOOKUP_INTERVAL`).
     lookup: Pacer,
+    /// Where built lists are copied (`with_redis`).
+    redis: Option<crate::redis_store::RedisStore>,
+    /// This service, once shared ([`DexService::shared`]): request paths start builds in
+    /// the background with it instead of waiting on one.
+    me: Weak<DexService>,
     gate: Option<Arc<dyn SponsorGate>>,
     evm_sponsored: OnceLock<Vec<u64>>,
     solana_payer: Option<String>,
@@ -636,6 +654,8 @@ impl DexService {
             prices: Mutex::default(),
             decimals: Mutex::default(),
             lookups: Mutex::default(),
+            redis: None,
+            me: Weak::new(),
             lookup: Pacer::new(
                 "dex-lookup",
                 config.build_interval.unwrap_or(LOOKUP_INTERVAL),
@@ -670,9 +690,19 @@ impl DexService {
             ] {
                 pacer.share(redis.clone());
             }
+            self.redis = Some(redis.clone());
             self.store = QuoteStore::Redis(redis);
         }
         self
+    }
+
+    /// The service in an `Arc` that knows itself, so a request that finds no list starts
+    /// its build in the background and answers at once. Production always shares it.
+    pub fn shared(self) -> Arc<Self> {
+        Arc::new_cyclic(|me| Self {
+            me: me.clone(),
+            ..self
+        })
     }
 
     /// Who may have swaps sponsored ([`PgGate`] in production). Without a gate nobody is.
@@ -879,6 +909,8 @@ impl DexService {
     /// The chain's DEX universe (cached six hours; stale data is served if a refresh
     /// fails), before GoPlus's verdicts. One refresh at a time per chain; a failed one is
     /// remembered for a minute, during which callers get the stale list or `Busy` at once.
+    /// Waits for a build when the list is missing or old: the refresher and background
+    /// builds only; request paths use `universe_now` (15 Nov).
     pub async fn universe(&self, chain: DexChain) -> Result<Arc<Vec<DexToken>>, AppError> {
         if let Some(tokens) = self.fresh_universe(chain).await {
             return Ok(tokens);
@@ -892,6 +924,11 @@ impl DexService {
         }
         if let Some(stale) = self.failed_recently(chain).await? {
             return Ok(stale);
+        }
+        // After a restart: Redis's copy, when it is still fresh, instead of a build.
+        self.restore(chain).await;
+        if let Some(tokens) = self.fresh_universe(chain).await {
+            return Ok(tokens);
         }
         let built = if chain == DexChain::Solana {
             self.build_solana().await
@@ -914,6 +951,7 @@ impl DexService {
                     .write()
                     .await
                     .insert(chain, (Instant::now(), tokens.clone()));
+                self.save(chain, &tokens).await;
                 self.failed
                     .lock()
                     .unwrap_or_else(|p| p.into_inner())
@@ -933,6 +971,113 @@ impl DexService {
                     .map(|(_, t)| t.clone())
                     .ok_or(error)
             }
+        }
+    }
+
+    /// For request paths (15 Nov): the chain's list without ever waiting for a build.
+    /// The list in memory, else Redis's copy (a restart); a stale one is served while a
+    /// rebuild runs in the background. With neither, a build is started in the
+    /// background and the answer is `WarmingUp` (a 503 the app retries).
+    async fn universe_now(&self, chain: DexChain) -> Result<Arc<Vec<DexToken>>, AppError> {
+        let mut held = self.universe.read().await.get(&chain).cloned();
+        if held.is_none() {
+            self.restore(chain).await;
+            held = self.universe.read().await.get(&chain).cloned();
+        }
+        match held {
+            Some((at, tokens)) => {
+                if at.elapsed() >= UNIVERSE_TTL {
+                    self.build_in_background(chain);
+                }
+                Ok(tokens)
+            }
+            None => {
+                self.build_in_background(chain);
+                Err(AppError::WarmingUp("the DEX token list"))
+            }
+        }
+    }
+
+    /// Starts the chain's build on its own task, unless one is running (or this service
+    /// isn't shared: tests that build on purpose).
+    fn build_in_background(&self, chain: DexChain) {
+        let Some(me) = self.me.upgrade() else {
+            return;
+        };
+        if self.refreshing[&chain].try_lock().is_err() {
+            return;
+        }
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        runtime.spawn(async move {
+            match me.universe(chain).await {
+                Ok(tokens) => me.warm_unchecked(chain, &tokens),
+                Err(error) => {
+                    tracing::warn!(chain = chain.name(), %error, "dex universe background build")
+                }
+            }
+        });
+    }
+
+    /// Copies a built list to Redis (best effort).
+    async fn save(&self, chain: DexChain, tokens: &[DexToken]) {
+        let Some(redis) = &self.redis else {
+            return;
+        };
+        let body = match serde_json::to_string(&SavedUniverse {
+            built_at: unix_now(),
+            tokens: tokens.to_vec(),
+        }) {
+            Ok(body) => body,
+            Err(_) => return,
+        };
+        let key = redis.key("dex-universe", chain.name());
+        let saved: Result<(), AppError> = redis
+            .query(
+                redis::cmd("SET")
+                    .arg(key)
+                    .arg(body)
+                    .arg("EX")
+                    .arg(UNIVERSE_KEEP.as_secs()),
+            )
+            .await;
+        if saved.is_err() {
+            tracing::warn!(chain = chain.name(), "dex universe not copied to redis");
+        }
+    }
+
+    /// Puts Redis's copy of the chain's list in memory when it is newer than what is
+    /// there (none after a restart). Its age carries over, so a copy past
+    /// `UNIVERSE_TTL` is stale.
+    async fn restore(&self, chain: DexChain) {
+        let Some(redis) = &self.redis else {
+            return;
+        };
+        let key = redis.key("dex-universe", chain.name());
+        let Ok(Some(body)) = redis
+            .query::<Option<String>>(redis::cmd("GET").arg(key))
+            .await
+        else {
+            return;
+        };
+        let Ok(saved) = serde_json::from_str::<SavedUniverse>(&body) else {
+            tracing::warn!(chain = chain.name(), "dex universe copy unreadable");
+            return;
+        };
+        let age = Duration::from_secs(unix_now().saturating_sub(saved.built_at));
+        let Some(at) = Instant::now()
+            .checked_sub(age)
+            .filter(|_| age < UNIVERSE_KEEP)
+        else {
+            return;
+        };
+        if saved.tokens.iter().any(|t| t.chain != chain) {
+            return;
+        }
+        let mut lists = self.universe.write().await;
+        if lists.get(&chain).is_none_or(|(held, _)| *held < at) {
+            lists.insert(chain, (at, Arc::new(saved.tokens)));
         }
     }
 
@@ -1264,7 +1409,8 @@ impl DexService {
         if !self.enabled() {
             return Err(off());
         }
-        let tokens = self.universe(chain).await?;
+        // let tokens = self.universe(chain).await?;
+        let tokens = self.universe_now(chain).await?;
         self.warm_unchecked(chain, &tokens);
         Ok(tokens
             .iter()
@@ -1409,9 +1555,16 @@ impl DexService {
     /// A non-USDC side of a swap: on the universe, past the floors, and passed by GoPlus
     /// (asked again now if its verdict is over an hour old).
     async fn safe_token(&self, chain: DexChain, address: &str) -> Result<DexToken, AppError> {
-        let tokens = self.universe(chain).await?;
-        let token = match tokens.iter().find(|t| t.address == address) {
-            Some(t) => t.clone(),
+        // let tokens = self.universe(chain).await?;
+        // Never waits for a build (15 Nov): while the list warms up, the paths below
+        // still take curated, 1Click-listed and looked-up tokens.
+        let tokens = self.universe_now(chain).await;
+        let listed = tokens
+            .as_ref()
+            .ok()
+            .and_then(|t| t.iter().find(|t| t.address == address).cloned());
+        let token = match listed {
+            Some(t) => t,
             // A token looked up by contract (`GET /dex/token`, 15 Nov), with the same flags
             // a built list gives it.
             None => match self.registered(chain, address).flatten() {
@@ -1422,7 +1575,11 @@ impl DexService {
                 // any other.
                 None => match self.canonical_token(chain, address).await {
                     Ok(t) => t,
-                    Err(_) => self.listed_token(chain, address).await?,
+                    Err(_) => match self.listed_token(chain, address).await {
+                        Ok(t) => t,
+                        // Not found anywhere while the list warms up: try again shortly.
+                        Err(error) => return Err(tokens.err().unwrap_or(error)),
+                    },
                 },
             },
         };
@@ -1507,7 +1664,8 @@ impl DexService {
         {
             return Some((self.fresh_price(chain, address).await.ok()?, c.decimals));
         }
-        let tokens = self.universe(chain).await.ok()?;
+        // let tokens = self.universe(chain).await.ok()?;
+        let tokens = self.universe_now(chain).await.unwrap_or_default();
         tokens
             .iter()
             .find(|t| t.address == address)
@@ -1690,6 +1848,11 @@ impl DexService {
         }
         let prices = universe::pair_prices(&pairs);
         universe::second_price(&mut t, prices.get(&address.to_ascii_lowercase()).copied());
+        // The mint's own decimals over Jupiter's (a classic SPL mint; a Token-2022 one is
+        // blocked anyway). Unreadable keeps Jupiter's: a quote reads them again.
+        if let Ok(decimals) = self.onchain_decimals(chain, address).await {
+            t.decimals = decimals;
+        }
         Ok(Some(t))
     }
 

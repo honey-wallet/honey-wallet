@@ -25,9 +25,15 @@ const TRAP: &str = "0x3333333333333333333333333333333333333333";
 const THIN: &str = "0x4444444444444444444444444444444444444444";
 const BONK: &str = "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263";
 const FROZEN: &str = "7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr";
+/// A curated wrapped major (`dex::canonical`).
+const WETH_BASE: &str = "0x4200000000000000000000000000000000000006";
+/// A token NEAR Intents 1Click lists on Base (the mock's `/tokens`).
+const ONECLICK_BASE: &str = "0x5555555555555555555555555555555555555555";
 
 #[derive(Clone)]
 struct Mock {
+    /// Where the double listens.
+    base: String,
     router: Arc<Mutex<String>>,
     out_usd: Arc<Mutex<String>>,
     builds: Arc<Mutex<u32>>,
@@ -43,6 +49,8 @@ struct Mock {
     /// GeckoTerminal answers 500 (a universe build fails), and how often it was asked.
     gecko_down: Arc<Mutex<bool>>,
     gecko_calls: Arc<Mutex<u32>>,
+    /// GeckoTerminal takes this long to answer (a build that takes a while).
+    gecko_delay: Arc<Mutex<Duration>>,
     /// Jupiter: the rent a sponsored order names its payer for, and the orders asked
     /// (whether each named a payer).
     rent: Arc<Mutex<u64>>,
@@ -251,11 +259,16 @@ async fn pairs(State(m): State<Mock>) -> Json<Value> {
         pair(THIN.into(), 0.5),
         pair(BONK.into(), 0.0000201),
         pair(FROZEN.into(), 0.4),
+        pair(WETH_BASE.into(), 3_000.0),
+        pair(ONECLICK_BASE.into(), 5.0),
     ]))
 }
 
 async fn serve() -> (String, Mock) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
     let mock = Mock {
+        base: base.clone(),
         router: Arc::new(Mutex::new(
             "0x6131B5fae19EA4f9D964eAc0408E4408b66337b5".into(),
         )),
@@ -268,6 +281,7 @@ async fn serve() -> (String, Mock) {
         aero_proxy: Arc::default(),
         gecko_down: Arc::default(),
         gecko_calls: Arc::default(),
+        gecko_delay: Arc::default(),
         rent: Arc::default(),
         orders: Arc::default(),
     };
@@ -296,6 +310,8 @@ async fn serve() -> (String, Mock) {
             "/networks/base/tokens/multi/{addresses}",
             get(|State(m): State<Mock>| async move {
                 *m.gecko_calls.lock().unwrap() += 1;
+                let delay = *m.gecko_delay.lock().unwrap();
+                tokio::time::sleep(delay).await;
                 if *m.gecko_down.lock().unwrap() {
                     return Err(axum::http::StatusCode::INTERNAL_SERVER_ERROR);
                 }
@@ -370,11 +386,20 @@ async fn serve() -> (String, Mock) {
                 })
             }),
         )
+        // 1Click's token list: one token NEAR Intents lists on Base.
+        .route(
+            "/tokens",
+            get(|| async {
+                Json(json!([{
+                    "assetId": format!("nep141:base-{ONECLICK_BASE}.omft.near"),
+                    "blockchain": "base", "symbol": "ONE", "decimals": 18,
+                    "price": 5.0, "contractAddress": ONECLICK_BASE
+                }]))
+            }),
+        )
         .route("/swap/v2/order", get(order))
         .route("/rpc", post(rpc))
         .with_state(mock.clone());
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let base = format!("http://{}", listener.local_addr().unwrap());
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     (base, mock)
 }
@@ -383,7 +408,19 @@ async fn service() -> (DexService, Mock) {
     service_with(|_| {}).await
 }
 
+/// A service with Base's and Solana's lists built (when DEX routing is on): request paths
+/// never build one (15 Nov), the refresher does.
 async fn service_with(edit: impl FnOnce(&mut DexConfig)) -> (DexService, Mock) {
+    let (dex, mock) = service_cold(edit).await;
+    if dex.enabled() {
+        dex.universe(DexChain::Base).await.unwrap();
+        dex.universe(DexChain::Solana).await.unwrap();
+    }
+    (dex, mock)
+}
+
+/// A service as it starts: no list built.
+async fn service_cold(edit: impl FnOnce(&mut DexConfig)) -> (DexService, Mock) {
     let (base, mock) = serve().await;
     let mut config = DexConfig {
         enabled: true,
@@ -835,16 +872,18 @@ async fn price_now_reads_dexscreener_not_the_list() {
 async fn a_failed_universe_build_is_remembered_for_a_minute() {
     // Finding 3: while GeckoTerminal is down, the public token list doesn't rebuild the
     // universe (10–30 s of provider calls) on every request.
-    let (dex, mock) = service().await;
+    let (dex, mock) = service_cold(|_| {}).await;
     *mock.gecko_down.lock().unwrap() = true;
     for _ in 0..5 {
-        assert!(dex.tokens(DexChain::Base, true).await.is_err());
+        // assert!(dex.tokens(DexChain::Base, true).await.is_err());
+        // The build path (the refresher's); request paths never build (15 Nov).
+        assert!(dex.universe(DexChain::Base).await.is_err());
     }
     // assert_eq!(*mock.gecko_calls.lock().unwrap(), 1);
     // One build: its one page of tokens, asked twice (a retry a slot later).
     assert_eq!(*mock.gecko_calls.lock().unwrap(), 2);
     // Another chain is its own build (one lock per chain).
-    assert!(dex.tokens(DexChain::Solana, true).await.is_ok());
+    assert!(dex.universe(DexChain::Solana).await.is_ok());
 }
 
 #[tokio::test]
@@ -1051,7 +1090,8 @@ async fn a_looked_up_solana_mint_keeps_the_authority_checks_and_needs_two_prices
     let (dex, _) = service().await;
     let bonk = dex.lookup(DexChain::Solana, BONK).await.unwrap();
     assert!(bonk.safety.ok, "{:?}", bonk.safety);
-    assert_eq!((bonk.decimals, bonk.metadata), (5, "jupiter"));
+    // Jupiter says 5 decimals, the mint says 6: the chain's.
+    assert_eq!((bonk.decimals, bonk.metadata), (6, "jupiter"));
     dex.safe_token(DexChain::Solana, BONK).await.unwrap();
     // A freeze authority blocks it.
     let frozen = dex.lookup(DexChain::Solana, FROZEN).await.unwrap();
@@ -1078,6 +1118,195 @@ fn the_quote_time_limits_are_unchanged_for_the_long_tail() {
     assert_eq!(MAX_PRICE_IMPACT_PCT, 5.0);
     assert_eq!(DEFAULT_MAX_LEG_USD, 100.0);
     assert_eq!(DexConfig::default().max_leg_usd, 100.0);
+}
+
+// After a restart (15 Nov): request paths never wait for a build
+
+#[test]
+fn a_built_list_round_trips_as_json_with_its_metadata() {
+    let token = |metadata: &'static str| universe::DexToken {
+        chain: DexChain::Base,
+        address: LONG.into(),
+        symbol: "LONG".into(),
+        name: "Long".into(),
+        decimals: 18,
+        logo_url: None,
+        price_usd: 2.000_000_1,
+        liquidity_usd: Some(40_000.5),
+        volume24h_usd: None,
+        coingecko_id: Some("long".into()),
+        market_cap_usd: None,
+        change24h_pct: Some(-3.25),
+        first_pool_at: Some(1_700_000_000),
+        metadata,
+        flags: vec!["low_volume".into()],
+    };
+    let tokens: Vec<_> = universe::METADATA.iter().map(|m| token(m)).collect();
+    let body = serde_json::to_string(&SavedUniverse {
+        built_at: 1,
+        tokens: tokens.clone(),
+    })
+    .unwrap();
+    let back: SavedUniverse = serde_json::from_str(&body).unwrap();
+    assert_eq!(back.tokens, tokens);
+    // An unknown source reads as unconfirmed.
+    let odd = body.replacen("\"uniswap\"", "\"elsewhere\"", 1);
+    let back: SavedUniverse = serde_json::from_str(&odd).unwrap();
+    assert_eq!(back.tokens[0].metadata, "geckoterminal");
+}
+
+#[tokio::test]
+async fn a_cold_start_answers_warming_up_at_once_and_builds_in_the_background() {
+    let (dex, mock) = service_cold(|_| {}).await;
+    let dex = dex.shared();
+    // GeckoTerminal is slow: the build takes well over a second.
+    *mock.gecko_delay.lock().unwrap() = Duration::from_millis(1_500);
+    let quick = Duration::from_millis(500);
+    let r = tokio::time::timeout(quick, dex.tokens(DexChain::Base, true))
+        .await
+        .expect("answered without waiting for the build");
+    assert!(matches!(r, Err(AppError::WarmingUp(_))), "{r:?}");
+    // The app sees a 503 it retries like any busy answer.
+    let response = axum::response::IntoResponse::into_response(AppError::WarmingUp("x"));
+    assert_eq!(
+        response.status(),
+        axum::http::StatusCode::SERVICE_UNAVAILABLE
+    );
+    assert!(response.headers().contains_key("retry-after"));
+    // Quotes and prices don't wait either.
+    let q = tokio::time::timeout(
+        quick,
+        dex.quote(Uuid::new_v4(), request(&AERO.to_string(), "10000000")),
+    )
+    .await
+    .expect("a quote doesn't wait for the build");
+    assert!(matches!(q, Err(AppError::WarmingUp(_))), "{q:?}");
+    let price = tokio::time::timeout(quick, dex.token_price(DexChain::Base, &AERO.to_string()))
+        .await
+        .unwrap();
+    assert_eq!(price, None);
+    // The build that first request started finishes in the background.
+    for _ in 0..200 {
+        if let Ok(tokens) = dex.tokens(DexChain::Base, true).await {
+            assert!(tokens.iter().any(|t| t.symbol == "AERO"));
+            assert_eq!(
+                *mock.gecko_calls.lock().unwrap(),
+                1,
+                "one build, not one each"
+            );
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("the background build never finished");
+}
+
+#[tokio::test]
+async fn while_the_list_warms_up_curated_listed_and_looked_up_tokens_still_trade() {
+    let (dex, mock) = service_cold(|_| {}).await;
+    let market = Arc::new(crate::market_data::MarketData::with_bases(
+        reqwest::Client::new(),
+        mock.base.clone(),
+        mock.base.clone(),
+        mock.base.clone(),
+    ));
+    let dex = dex.with_intents(None, Some(market));
+    // A token only the list would have: try again shortly, not "isn't on Honey's list".
+    let r = dex.safe_token(DexChain::Base, SCAM).await;
+    assert!(matches!(r, Err(AppError::WarmingUp(_))), "{r:?}");
+    // Curated (WETH), 1Click-listed and looked-up tokens pass their checks as before.
+    assert_eq!(
+        dex.safe_token(DexChain::Base, WETH_BASE)
+            .await
+            .unwrap()
+            .symbol,
+        "WETH"
+    );
+    assert_eq!(
+        dex.safe_token(DexChain::Base, ONECLICK_BASE)
+            .await
+            .unwrap()
+            .metadata,
+        "intents"
+    );
+    assert!(matches!(
+        dex.safe_token(DexChain::Base, LONG).await,
+        Err(AppError::WarmingUp(_))
+    ));
+    dex.lookup(DexChain::Base, LONG).await.unwrap();
+    dex.safe_token(DexChain::Base, LONG).await.unwrap();
+    // Nothing was built on these paths.
+    assert!(dex.universe.read().await.get(&DexChain::Base).is_none());
+}
+
+fn test_redis(namespace: &str) -> crate::redis_store::RedisStore {
+    crate::redis_store::RedisStore::new(
+        redis::Client::open(std::env::var("TEST_REDIS_URL").expect("isolated TEST_REDIS_URL"))
+            .unwrap(),
+        namespace.into(),
+        Duration::from_secs(2),
+    )
+}
+
+#[tokio::test]
+#[ignore = "requires isolated TEST_REDIS_URL"]
+async fn a_built_list_survives_a_restart_through_redis() {
+    let namespace = format!("dex-universe-test:{}", Uuid::new_v4().simple());
+    let (first, _) = service_cold(|_| {}).await;
+    let first = first.with_redis(Some(test_redis(&namespace)));
+    let built = first.universe(DexChain::Base).await.unwrap();
+    assert!(!built.is_empty());
+    // A restart: nothing in memory. The request is answered from Redis's copy, and no
+    // build runs (the copy is fresh).
+    let (second, mock) = service_cold(|_| {}).await;
+    let second = second.with_redis(Some(test_redis(&namespace))).shared();
+    let listed = tokio::time::timeout(
+        Duration::from_millis(1_000),
+        second.tokens(DexChain::Base, true),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        listed.iter().map(|t| &t.address).collect::<Vec<_>>(),
+        built.iter().map(|t| &t.address).collect::<Vec<_>>()
+    );
+    assert_eq!(*second.universe(DexChain::Base).await.unwrap(), *built);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(*mock.gecko_calls.lock().unwrap(), 0, "no build");
+    // A copy seven hours old is served at once while a rebuild runs in the background.
+    let redis = test_redis(&namespace);
+    let old = serde_json::to_string(&SavedUniverse {
+        built_at: unix_now() - 7 * 60 * 60,
+        tokens: built.to_vec(),
+    })
+    .unwrap();
+    let _: () = redis
+        .query(
+            redis::cmd("SET")
+                .arg(redis.key("dex-universe", "base"))
+                .arg(old),
+        )
+        .await
+        .unwrap();
+    let (third, mock) = service_cold(|_| {}).await;
+    let third = third.with_redis(Some(test_redis(&namespace))).shared();
+    let served = tokio::time::timeout(
+        Duration::from_millis(1_000),
+        third.tokens(DexChain::Base, true),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(served.len(), built.len());
+    for _ in 0..200 {
+        if third.fresh_universe(DexChain::Base).await.is_some() {
+            assert!(*mock.gecko_calls.lock().unwrap() > 0);
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("the stale copy was never rebuilt");
 }
 
 /// Read-only quotes against the real providers (no signing, nothing sent):
