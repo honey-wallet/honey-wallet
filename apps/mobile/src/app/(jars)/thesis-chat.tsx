@@ -43,7 +43,7 @@ import {
   cashShare,
   hostOf,
   linksIn,
-  type Pick,
+  // type Pick, (only the commented-out USDC row used it)
   type Proposal,
   RISKS,
   type Risk,
@@ -80,21 +80,22 @@ import {
 //   visibleChats,
 // } from '@/lib/thesis-history';
 import { showToast } from '@/lib/toast';
-import { tokenColor } from '@/lib/token-colors';
+// import { tokenColor } from '@/lib/token-colors'; (only the commented-out USDC row used it)
 import { Gate } from '@/lib/warnings';
 import { makeStyles, radius, useTheme } from '@/theme';
 import { DURATION } from '@/theme/motion';
 
-/** The cash the risk rules keep aside, drawn as a USDC row. */
-const USDC: Pick = {
-  symbol: 'USDC',
-  name: 'USD Coin',
-  chain: 'Base',
-  weight: 0,
-  match: 'direct',
-  reason: '',
-  color: tokenColor('USDC'),
-};
+// Unused since the Kept in USDC row left the card (2026-11-14).
+// /** The cash the risk rules keep aside, drawn as a USDC row. */
+// const USDC: Pick = {
+//   symbol: 'USDC',
+//   name: 'USD Coin',
+//   chain: 'Base',
+//   weight: 0,
+//   match: 'direct',
+//   reason: '',
+//   color: tokenColor('USDC'),
+// };
 
 /** One line of the message box, and the size of its round buttons. */
 const ROW = 36;
@@ -903,69 +904,44 @@ function AnswerCard({
         ) : null}
       </View>
     );
+  // The card is the split, the risk switch and Create jar (2026-11-14, the user's call): the
+  // "Why these" rows repeated the bar's legend (XAUT 50%, USDC 50%), so the reasons, Left
+  // out and What could go wrong open below the card, behind Read more.
+  const hasDetails = hasMore || shown.picks.some((p) => p.reason);
   return (
-    // A Feed post's strategy well: coins, name, the striped split, then − Buy 5 [USDC] +.
-    <StrategyCard
-      picks={shown.picks}
-      name={shown.thesis}
-      // meta={`${shown.risk} risk · ${shown.picks.length} ${
-      //   shown.picks.length === 1 ? 'token' : 'tokens'
-      // }`}
-      meta={`${shown.risk} risk · ${shown.picks.length} ${
-        shown.picks.length === 1 ? 'token' : 'tokens'
-      }${cash ? ` + ${cash}% cash` : ''}`}
-      cashPct={cash}
-      split
-    >
-      {riskSwitch}
-      {/* Why each pick, as the app's rows: its logo, the token, the agent's reason (and
-          what would prove it wrong), its share; then what the risk rules kept in USDC.
-          A new risk level slides its rows in from the side it sits on. */}
-      {shown.picks.some((p) => p.reason) || cash ? (
-        <ContentSwap id={level} index={RISKS.indexOf(level)}>
-          <Text style={styles.sectionLabel}>Why these</Text>
-          {shown.picks.map((p) => (
-            <SheetRow
-              key={`${p.symbol}-${p.chain}`}
-              leading={<PickIcon pick={p} size={32} />}
-              title={p.symbol}
-              // subtitle={
-              //   p.wrongIf ? (
-              //     <View style={styles.flex}>
-              //       {p.reason ? <Text style={styles.rowReason}>{p.reason}</Text> : null}
-              //       <Text style={styles.footnote}>{wrongIfLine(p.wrongIf)}</Text>
-              //     </View>
-              //   ) : (
-              //     p.reason
-              //   )
-              // }
-              // One line of reason; its "Wrong if" only behind Read more.
-              subtitle={
-                <View style={styles.flex}>
-                  {p.reason ? (
-                    <Text style={styles.rowReason} numberOfLines={more ? undefined : 1}>
-                      {p.reason}
-                    </Text>
-                  ) : null}
-                  {more && p.wrongIf ? (
-                    <Text style={styles.footnote}>{wrongIfLine(p.wrongIf)}</Text>
-                  ) : null}
-                </View>
-              }
-              value={`${p.weight}%`}
-            />
-          ))}
-          {cash ? (
-            <SheetRow
-              leading={<PickIcon pick={USDC} size={32} />}
-              title="Kept in USDC"
-              value={`${cash}%`}
-            />
-          ) : null}
-        </ContentSwap>
-      ) : null}
-      {/* {leftOutBlock} and What could go wrong now open behind Read more. */}
-      {hasMore ? (
+    <View style={styles.answer}>
+      {/* A Feed post's strategy well: coins, name, the striped split, then − Buy 5 [USDC] +. */}
+      <StrategyCard
+        picks={shown.picks}
+        name={shown.thesis}
+        meta={`${shown.risk} risk · ${shown.picks.length} ${
+          shown.picks.length === 1 ? 'token' : 'tokens'
+        }${cash ? ` + ${cash}% cash` : ''}`}
+        cashPct={cash}
+        split
+      >
+        {riskSwitch}
+        {latest ? (
+          <CopyStepper
+            primary
+            verb="Create jar"
+            label="Create jar"
+            start={stake ?? undefined}
+            onAmount={(amount) => chatStake.set(amount)}
+            // "Create jar $5", in the user's currency, not "5 [USDC]" (2026-11-14).
+            format={shortMoney(fx.format)}
+            onCopy={(amount) => {
+              tap();
+              // The level on screen is the one bought.
+              chatDraft.set(withAmount(shown, amount));
+              router.push({ pathname: '/thesis-new', params: { step: 'proposal', from: 'chat' } });
+            }}
+          />
+        ) : (
+          <Text style={styles.muted}>Updated below.</Text>
+        )}
+      </StrategyCard>
+      {hasDetails ? (
         <PressableScale
           accessibilityRole="button"
           accessibilityState={{ expanded: more }}
@@ -980,6 +956,24 @@ function AnswerCard({
           <Text style={styles.readMoreText}>{more ? 'Show less' : 'Read more'}</Text>
         </PressableScale>
       ) : null}
+      {more && shown.picks.some((p) => p.reason) ? (
+        <ContentSwap id={level} index={RISKS.indexOf(level)}>
+          <Text style={styles.sectionLabel}>Why these</Text>
+          {shown.picks.map((p) => (
+            <SheetRow
+              key={`${p.symbol}-${p.chain}`}
+              leading={<PickIcon pick={p} size={32} />}
+              title={p.symbol}
+              subtitle={
+                <View style={styles.flex}>
+                  {p.reason ? <Text style={styles.rowReason}>{p.reason}</Text> : null}
+                  {p.wrongIf ? <Text style={styles.footnote}>{wrongIfLine(p.wrongIf)}</Text> : null}
+                </View>
+              }
+            />
+          ))}
+        </ContentSwap>
+      ) : null}
       {more ? leftOutBlock : null}
       {more && bear.length ? (
         <View style={styles.moreBlock}>
@@ -988,7 +982,6 @@ function AnswerCard({
             {bear.map((line) => (
               <View key={line} style={styles.listItem}>
                 <Text style={styles.listText}>•</Text>
-                {/* <Text style={[styles.listText, styles.shrink]}>{line}</Text> */}
                 <CitedText
                   text={line}
                   sources={shown.citations ?? proposal.citations}
@@ -999,40 +992,141 @@ function AnswerCard({
           </View>
         </View>
       ) : null}
-      {/* Removed from the card (2026-11-14, the user's call):
-      {latest ? (
-        <Text
-          style={styles.footnote}
-          numberOfLines={1}
-          adjustsFontSizeToFit
-          minimumFontScale={0.85}
-        >
-          Crypto is high risk. Only put in what you can afford to lose.
-        </Text>
-      ) : null}
-      */}
-      {latest ? (
-        <CopyStepper
-          primary
-          verb="Create jar"
-          label="Create jar"
-          start={stake ?? undefined}
-          onAmount={(amount) => chatStake.set(amount)}
-          // "Create jar $5", in the user's currency, not "5 [USDC]" (2026-11-14).
-          format={shortMoney(fx.format)}
-          onCopy={(amount) => {
-            tap();
-            // The level on screen is the one bought.
-            chatDraft.set(withAmount(shown, amount));
-            router.push({ pathname: '/thesis-new', params: { step: 'proposal', from: 'chat' } });
-          }}
-        />
-      ) : (
-        <Text style={styles.muted}>Updated below.</Text>
-      )}
-    </StrategyCard>
+    </View>
   );
 }
+
+// Was (until 2026-11-14): the Why these rows, Read more and its blocks inside the card.
+//   return (
+//     // A Feed post's strategy well: coins, name, the striped split, then − Buy 5 [USDC] +.
+//     <StrategyCard
+//       picks={shown.picks}
+//       name={shown.thesis}
+//       // meta={`${shown.risk} risk · ${shown.picks.length} ${
+//       //   shown.picks.length === 1 ? 'token' : 'tokens'
+//       // }`}
+//       meta={`${shown.risk} risk · ${shown.picks.length} ${
+//         shown.picks.length === 1 ? 'token' : 'tokens'
+//       }${cash ? ` + ${cash}% cash` : ''}`}
+//       cashPct={cash}
+//       split
+//     >
+//       {riskSwitch}
+//       {/* Why each pick, as the app's rows: its logo, the token, the agent's reason (and
+//           what would prove it wrong), its share; then what the risk rules kept in USDC.
+//           A new risk level slides its rows in from the side it sits on. */}
+//       {shown.picks.some((p) => p.reason) || cash ? (
+//         <ContentSwap id={level} index={RISKS.indexOf(level)}>
+//           <Text style={styles.sectionLabel}>Why these</Text>
+//           {shown.picks.map((p) => (
+//             <SheetRow
+//               key={`${p.symbol}-${p.chain}`}
+//               leading={<PickIcon pick={p} size={32} />}
+//               title={p.symbol}
+//               // subtitle={
+//               //   p.wrongIf ? (
+//               //     <View style={styles.flex}>
+//               //       {p.reason ? <Text style={styles.rowReason}>{p.reason}</Text> : null}
+//               //       <Text style={styles.footnote}>{wrongIfLine(p.wrongIf)}</Text>
+//               //     </View>
+//               //   ) : (
+//               //     p.reason
+//               //   )
+//               // }
+//               // One line of reason; its "Wrong if" only behind Read more.
+//               subtitle={
+//                 <View style={styles.flex}>
+//                   {p.reason ? (
+//                     <Text style={styles.rowReason} numberOfLines={more ? undefined : 1}>
+//                       {p.reason}
+//                     </Text>
+//                   ) : null}
+//                   {more && p.wrongIf ? (
+//                     <Text style={styles.footnote}>{wrongIfLine(p.wrongIf)}</Text>
+//                   ) : null}
+//                 </View>
+//               }
+//               value={`${p.weight}%`}
+//             />
+//           ))}
+//           {cash ? (
+//             <SheetRow
+//               leading={<PickIcon pick={USDC} size={32} />}
+//               title="Kept in USDC"
+//               value={`${cash}%`}
+//             />
+//           ) : null}
+//         </ContentSwap>
+//       ) : null}
+//       {/* {leftOutBlock} and What could go wrong now open behind Read more. */}
+//       {hasMore ? (
+//         <PressableScale
+//           accessibilityRole="button"
+//           accessibilityState={{ expanded: more }}
+//           hitSlop={8}
+//           scaleTo={0.97}
+//           onPress={() => {
+//             tap();
+//             setMore((m) => !m);
+//           }}
+//           style={styles.readMore}
+//         >
+//           <Text style={styles.readMoreText}>{more ? 'Show less' : 'Read more'}</Text>
+//         </PressableScale>
+//       ) : null}
+//       {more ? leftOutBlock : null}
+//       {more && bear.length ? (
+//         <View style={styles.moreBlock}>
+//           <Text style={styles.sectionLabel}>What could go wrong</Text>
+//           <View style={styles.list}>
+//             {bear.map((line) => (
+//               <View key={line} style={styles.listItem}>
+//                 <Text style={styles.listText}>•</Text>
+//                 {/* <Text style={[styles.listText, styles.shrink]}>{line}</Text> */}
+//                 <CitedText
+//                   text={line}
+//                   sources={shown.citations ?? proposal.citations}
+//                   style={[styles.listText, styles.shrink]}
+//                 />
+//               </View>
+//             ))}
+//           </View>
+//         </View>
+//       ) : null}
+//       {/* Removed from the card (2026-11-14, the user's call):
+//       {latest ? (
+//         <Text
+//           style={styles.footnote}
+//           numberOfLines={1}
+//           adjustsFontSizeToFit
+//           minimumFontScale={0.85}
+//         >
+//           Crypto is high risk. Only put in what you can afford to lose.
+//         </Text>
+//       ) : null}
+//       */}
+//       {latest ? (
+//         <CopyStepper
+//           primary
+//           verb="Create jar"
+//           label="Create jar"
+//           start={stake ?? undefined}
+//           onAmount={(amount) => chatStake.set(amount)}
+//           // "Create jar $5", in the user's currency, not "5 [USDC]" (2026-11-14).
+//           format={shortMoney(fx.format)}
+//           onCopy={(amount) => {
+//             tap();
+//             // The level on screen is the one bought.
+//             chatDraft.set(withAmount(shown, amount));
+//             router.push({ pathname: '/thesis-new', params: { step: 'proposal', from: 'chat' } });
+//           }}
+//         />
+//       ) : (
+//         <Text style={styles.muted}>Updated below.</Text>
+//       )}
+//     </StrategyCard>
+//   );
+// }
 
 /** Where this answer's numbers came from: prices and their time, and what was read. */
 // biome-ignore lint/correctness/noUnusedVariables: kept while Sources is switched off.

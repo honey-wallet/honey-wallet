@@ -4,7 +4,6 @@ import {
   backendSession,
   backendVisibility,
   backendWalletChanged,
-  clearBackendSession,
   forgetRemovedWalletSessions,
   refreshResumeAvailability,
   resumeBackendSession,
@@ -115,6 +114,10 @@ export function startBackendLifecycle() {
     removeWallet();
     removeLock();
     visibility.remove();
-    clearBackendSession();
+    // clearBackendSession();
+    // Unmounting (a JS reload, an update applying) is not a sign-out: clearBackendSession
+    // also deleted the wallet's saved session, so the next launch asked to sign in again
+    // (2026-11-14). Put the session away; the keychain keeps the refresh family.
+    suspendBackendSession();
   };
 }
