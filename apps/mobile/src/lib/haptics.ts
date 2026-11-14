@@ -30,32 +30,15 @@ function fire(android: Haptics.AndroidHaptics, ios: () => Promise<void>) {
  */
 const REPEAT_MS = 450;
 let lastOutcome: { kind: string; at: number } | null = null;
-/** How long a haptic waits for a system sheet (Face ID) to leave before it's dropped. */
-const WAIT_ACTIVE_MS = 1200;
 
 function play(android: Haptics.AndroidHaptics, ios: () => Promise<void>, outcome?: string) {
-  if (!getProfile().haptics || Platform.OS === 'web') return;
+  if (!getProfile().haptics || AppState.currentState !== 'active' || Platform.OS === 'web') return;
   if (outcome) {
     const now = Date.now();
     if (lastOutcome?.kind === outcome && now - lastOutcome.at < REPEAT_MS) return;
     lastOutcome = { kind: outcome, at: now };
   }
-  const state = AppState.currentState;
-  if (state === 'active') {
-    fire(android, ios);
-    return;
-  }
-  // Face ID's dialog leaves the app "inactive" until it's gone: an outcome that follows it
-  // (a failed scan, a send confirmed straight after) plays once the app is in front again
-  // instead of being lost. Selection ticks are about the moment, so they just drop.
-  if (!outcome || state !== 'inactive') return;
-  const timer = setTimeout(() => sub.remove(), WAIT_ACTIVE_MS);
-  const sub = AppState.addEventListener('change', (next) => {
-    if (next === 'inactive') return;
-    clearTimeout(timer);
-    sub.remove();
-    if (next === 'active') fire(android, ios);
-  });
+  fire(android, ios);
 }
 
 /** A discrete selection changed: tabs, chips, switches and picker stops. */

@@ -1,6 +1,5 @@
 import * as LocalAuthentication from 'expo-local-authentication';
 import { AppState } from 'react-native';
-import { failure } from '@/lib/haptics';
 
 let prompts = 0;
 
@@ -28,10 +27,14 @@ export async function confirmOwner(reason: string, requireDeviceLock = true): Pr
       promptMessage: reason,
       biometricsSecurityLevel: 'strong',
     });
-    // A face (or passcode) that didn't match is a failure, felt once the dialog is gone;
-    // cancelling isn't, so it stays quiet. A match is felt when the action completes.
+    // A face (or passcode) that didn't match is a failure, felt once the dialog is gone
+    // (haptics stay silent while the app is inactive); cancelling isn't, so it stays quiet.
+    // A match is felt when the action completes. Loaded lazily: this module stays free of
+    // native feedback for its tests.
     if (!result.success && (result.error === 'authentication_failed' || result.error === 'lockout'))
-      failure();
+      void untilActive(1200)
+        .then((front) => (front ? import('@/lib/haptics').then((h) => h.failure()) : undefined))
+        .catch(() => {});
     return result.success && !cancelled;
   } finally {
     prompts--;
