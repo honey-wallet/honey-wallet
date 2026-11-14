@@ -17,7 +17,9 @@ vi.mock('@/lib/thesis', () => ({
 }));
 vi.mock('@/lib/toast', () => ({ showToast: vi.fn(), showErrorToast: vi.fn() }));
 
-const { jarOutcome, legsMoving, swapMoving, swapOutcome } = await import('@/lib/in-flight');
+const { jarOutcome, legsMoving, swapMoving, swapOutcome, swapShownMoving } = await import(
+  '@/lib/in-flight'
+);
 
 const swap = (status: string) =>
   ({
@@ -33,6 +35,10 @@ it('counts a sent swap as moving, but not an unpaid quote or a settled one', () 
   expect(swapMoving(swap('PROCESSING'))).toBe(true);
   expect(swapMoving(swap('QUOTED'))).toBe(false);
   expect(swapMoving(swap('SUCCESS'))).toBe(false);
+  // Not sent: still checked in the background, but not "in progress" on screen.
+  expect(swapMoving(swap('NOT_SENT'))).toBe(true);
+  expect(swapShownMoving(swap('NOT_SENT'))).toBe(false);
+  expect(swapShownMoving(swap('PROCESSING'))).toBe(true);
 });
 
 it('says what happened when a swap settles', () => {

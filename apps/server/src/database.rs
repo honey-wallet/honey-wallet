@@ -15,7 +15,9 @@ use sqlx_core::migrate::{Migration, MigrationSource, MigrationType, Migrator};
 // Bumped for Honey's copy fee (copy_sale_fees.recipient).
 // pub const LATEST_SCHEMA_VERSION: i64 = 202611140005;
 // Bumped for Honey strategies (social_profiles.official).
-pub const LATEST_SCHEMA_VERSION: i64 = 202611140006;
+// pub const LATEST_SCHEMA_VERSION: i64 = 202611140006;
+// Bumped for Optimism gas (evm_sponsorships.chain_id allows 10).
+pub const LATEST_SCHEMA_VERSION: i64 = 202611140007;
 const AUTH_CLEANUP_LOCK: i64 = 0x484f_4e45_5941_5554;
 
 #[derive(Debug)]
@@ -227,9 +229,16 @@ impl MigrationSource<'static> for EmbeddedMigrations {
                     false,
                 ),
                 migration(
-                    LATEST_SCHEMA_VERSION,
+                    // LATEST_SCHEMA_VERSION,
+                    202611140006,
                     "honey strategies",
                     include_str!("../migrations/202611140006_honey_strategies.sql"),
+                    false,
+                ),
+                migration(
+                    LATEST_SCHEMA_VERSION,
+                    "evm sponsor optimism",
+                    include_str!("../migrations/202611140007_evm_sponsor_optimism.sql"),
                     false,
                 ),
             ])

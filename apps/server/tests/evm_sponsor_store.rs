@@ -298,3 +298,32 @@ async fn pg_backend_keeps_the_ledger_and_one_payment_per_account() {
 
     db.close().await;
 }
+
+/// Optimism (chain 10, 14 Nov): its sponsored transactions are recorded like Base's.
+/// The first one failed on the table's chain CHECK before the migration that adds it.
+#[tokio::test]
+#[ignore = "requires isolated TEST_DATABASE_URL"]
+async fn pg_backend_records_an_optimism_payment() {
+    let db = TestDatabase::new().await;
+    let user = user_with_wallet(&db, ACCOUNT).await;
+    let backend = PgBackend::new(db.pool.clone(), None, None);
+    let op = chain(10).unwrap();
+    let reference = B256::repeat_byte(55).to_string();
+    let charge = backend
+        .reserve(user, op, 4_000, &reference, ROOM)
+        .await
+        .unwrap();
+    assert_eq!(charge.chain, "optimism");
+    let mut first = row(user, charge, 0);
+    first.chain_id = 10;
+    backend.record(&first).await.unwrap();
+    assert_eq!(
+        backend.pending(10, ACCOUNT).await.unwrap().map(|r| r.id),
+        Some(first.id)
+    );
+    assert_eq!(
+        backend.last_relayer_nonce(10, RELAYER).await.unwrap(),
+        Some(0)
+    );
+    db.close().await;
+}

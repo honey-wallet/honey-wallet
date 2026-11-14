@@ -531,6 +531,11 @@ fn native_asset(chain: &str) -> Option<(IsNative, u32)> {
             |t| t.blockchain == "arb" && t.symbol.eq_ignore_ascii_case("ETH"),
             18,
         ),
+        // Optimism's gas is ETH, as on Base (14 Nov).
+        "optimism" => (
+            |t| t.blockchain == "op" && t.symbol.eq_ignore_ascii_case("ETH"),
+            18,
+        ),
         "polygon" => (
             |t| {
                 t.blockchain == "pol"

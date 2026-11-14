@@ -31,6 +31,12 @@ const LEG_FINAL = new Set(['SUCCESS', 'REFUNDED', 'FAILED', 'NOT_SENT', 'HOLDING
 
 /** Sent and not yet settled (a quote nobody paid isn't "in progress"). */
 export const swapMoving = (s: IntentsSwap) => !isFinal(s) && s.status !== 'QUOTED';
+/**
+ * Moving and shown as moving: a swap that failed before its deposit went out (NOT_SENT)
+ * is still checked in the background, in case it went out after all, but it isn't
+ * "in progress" on screen (14 Nov: its page said Not sent while the bar spun).
+ */
+export const swapShownMoving = (s: IntentsSwap) => swapMoving(s) && s.status !== 'NOT_SENT';
 export const legsMoving = (legs: BuyLeg[] | undefined) =>
   !!legs?.length && legs.some((l) => !LEG_FINAL.has(l.status));
 
@@ -71,7 +77,8 @@ export function jarOutcome(jar: Pick<ThesisJar, 'name' | 'buy'>) {
 /** Swaps and jar buys moving for this wallet (jars are the phone's own). */
 export function useInFlight(walletId: string) {
   const swaps = Object.values(useIntentsSwaps())
-    .filter((s) => s.walletId === walletId && swapMoving(s))
+    // .filter((s) => s.walletId === walletId && swapMoving(s))
+    .filter((s) => s.walletId === walletId && swapShownMoving(s))
     .sort((a, b) => (b.sentAt ?? 0) - (a.sentAt ?? 0));
   const jars = useThesisJars().filter((j) => j.mine && legsMoving(j.buy));
   return { swaps, jars, count: swaps.length + jars.length };

@@ -57,7 +57,8 @@ pub const MAX_STORAGE_DEPOSIT: u128 = 25 * 10u128.pow(20);
 pub const WRAP_NEAR: &str = "wrap.near";
 
 /// Every chain Honey's free gas can pay on, as the allowance lists them.
-const CHAINS: [&str; 5] = ["solana", "near", "base", "arbitrum", "polygon"];
+// const CHAINS: [&str; 5] = ["solana", "near", "base", "arbitrum", "polygon"];
+const CHAINS: [&str; 6] = ["solana", "near", "base", "arbitrum", "polygon", "optimism"];
 
 #[derive(Clone)]
 struct GasState {
@@ -174,6 +175,7 @@ async fn allowance(
         ("base", s.evm_chains.contains(&"base"), None),
         ("arbitrum", s.evm_chains.contains(&"arbitrum"), None),
         ("polygon", s.evm_chains.contains(&"polygon"), None),
+        ("optimism", s.evm_chains.contains(&"optimism"), None),
     ] {
         let price = gas_allowance::native_price(market, chain).await;
         let today = left.chains_today.get(chain).copied().unwrap_or(0);

@@ -85,8 +85,20 @@ export function honeyPaysOn(allowance: GasAllowance | null, chain: string, symbo
   const on = (name: string) => allowance.chains.some((c) => c.chain === name && c.on);
   if (chain === 'Solana') return on('solana');
   if (chain === 'NEAR') return symbol !== 'NEAR' && on('near');
-  return false;
+  // return false;
+  // EVM chains Honey pays on (Base, Arbitrum, Polygon, Optimism) by their ledger name:
+  // the jar sell said "Paid in ETH" there although Honey pays (14 Nov).
+  const evm = EVM_GAS_NAMES[chain];
+  return evm ? on(evm) : false;
 }
+
+/** An EVM chain's name in the gas ledger, for the ones Honey pays gas on. */
+const EVM_GAS_NAMES: Record<string, string> = {
+  Base: 'base',
+  Arbitrum: 'arbitrum',
+  Polygon: 'polygon',
+  Optimism: 'optimism',
+};
 
 /**
  * Whether Honey explicitly refused before its fee payer signed (an app error code it

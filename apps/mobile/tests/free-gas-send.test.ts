@@ -456,6 +456,23 @@ describe('free gas helpers', () => {
     expect(honeyPaysOn(allowance(), 'Solana', 'SOL')).toBe(true);
     expect(honeyPaysOn(allowance(), 'NEAR', 'USDC')).toBe(true);
     expect(honeyPaysOn(allowance(), 'NEAR', 'NEAR')).toBe(false);
+    // expect(honeyPaysOn(allowance(), 'Base', 'USDC')).toBe(false);
+    // EVM: only where the allowance lists the chain as on (14 Nov), never Ethereum.
     expect(honeyPaysOn(allowance(), 'Base', 'USDC')).toBe(false);
+    const evm = (chain: string, on: boolean) => ({
+      chain,
+      on,
+      remainingTodayUsdMicros: 500_000,
+      feePayer: null,
+      nativeUsd: 3000,
+      newAccountsLeft: 0,
+    });
+    const withEvm: GasAllowance = {
+      ...allowance(),
+      chains: [...allowance().chains, evm('optimism', true), evm('base', false)],
+    };
+    expect(honeyPaysOn(withEvm, 'Optimism', 'OP')).toBe(true);
+    expect(honeyPaysOn(withEvm, 'Base', 'USDC')).toBe(false);
+    expect(honeyPaysOn(withEvm, 'Ethereum', 'ETH')).toBe(false);
   });
 });

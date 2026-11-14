@@ -637,7 +637,11 @@ async fn solana_fee_payer_pays_only_for_checked_payments() {
         .iter()
         .map(|c| c["chain"].as_str().unwrap())
         .collect();
-    assert_eq!(names, ["solana", "near", "base", "arbitrum", "polygon"]);
+    // assert_eq!(names, ["solana", "near", "base", "arbitrum", "polygon"]);
+    assert_eq!(
+        names,
+        ["solana", "near", "base", "arbitrum", "polygon", "optimism"]
+    );
     assert_eq!(view["chains"][2]["on"], false);
     assert_eq!(view["chains"][4]["remainingTodayUsdMicros"], 500_000);
 
