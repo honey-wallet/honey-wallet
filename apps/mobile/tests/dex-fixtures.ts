@@ -9,7 +9,10 @@ import {
   CALIBUR,
   caliburSalt,
   EVM_USDC,
+  parseSolanaMint,
+  type SolanaMint,
   solanaAddressOfKey,
+  TOKEN_PROGRAM_ID,
 } from '@honey-wallet/keyring';
 import { base58, base64 } from '@scure/base';
 import {
@@ -174,20 +177,25 @@ export function jupiterIx(o: {
   platformFeeBps?: number;
   positiveSlippageBps?: number;
   destination?: string;
+  /** The mints' token programs (15 Nov): classic SPL unless given. */
+  sellProgram?: string;
+  buyProgram?: string;
 }): Ix {
+  const sellProgram = (o.sellProgram ?? PROGRAMS.token) as typeof TOKEN_PROGRAM_ID;
+  const buyProgram = (o.buyProgram ?? PROGRAMS.token) as typeof TOKEN_PROGRAM_ID;
   return {
     program: PROGRAMS.jupiter,
     accounts: [
       filler(40), // program authority
       o.taker, // user transfer authority
-      associatedTokenAddress(o.taker, o.sell), // source
+      associatedTokenAddress(o.taker, o.sell, sellProgram), // source
       filler(41), // program source
       filler(42), // program destination
-      o.destination ?? associatedTokenAddress(o.taker, o.buy), // destination
+      o.destination ?? associatedTokenAddress(o.taker, o.buy, buyProgram), // destination
       o.sell,
       o.buy,
-      PROGRAMS.token,
-      PROGRAMS.token,
+      sellProgram,
+      buyProgram,
       filler(43), // event authority
       PROGRAMS.jupiter,
     ],
@@ -364,9 +372,41 @@ export function deviceRpc(receipts: Record<string, '0x1' | '0x0' | null> = {}) {
   });
 }
 
+/** Two xStocks mints as mainnet holds them (keyring fixture, read 15 Nov). */
+const XSTOCKS = JSON.parse(
+  readFileSync(
+    fileURLToPath(
+      new URL('../../../packages/keyring/src/fixtures/xstocks-mints.json', import.meta.url),
+    ),
+    'utf8',
+  ),
+) as { mints: Record<'AAPLx' | 'SPYx', { mint: string; owner: string; data: string }> };
+export const AAPLX = XSTOCKS.mints.AAPLx.mint;
+export const SPYX = XSTOCKS.mints.SPYx.mint;
+/** When AAPLx's new multiplier took effect (Unix seconds, on chain). */
+export const AAPLX_CHANGE = 1794447000;
+
+/** Mints as the device reads them: the xStocks fixtures, `extra`, else a classic SPL mint. */
+export function fixtureMints(extra: Record<string, SolanaMint> = {}) {
+  return vi.fn(async (mint: string): Promise<SolanaMint> => {
+    if (extra[mint]) return extra[mint];
+    const x = Object.values(XSTOCKS.mints).find((m) => m.mint === mint);
+    if (x) return parseSolanaMint(base64.decode(x.data), x.owner);
+    return {
+      program: TOKEN_PROGRAM_ID,
+      decimals: 9,
+      supply: 0n,
+      mintAuthority: null,
+      freezeAuthority: null,
+      extensions: [],
+    };
+  });
+}
+
 /** DEX deps wired to the fake server and RPC, with the wallet's keys. */
 export function dexDeps(api: DexApi, rpc = deviceRpc()) {
   return {
+    solanaMint: fixtureMints(),
     api,
     token: async () => 'session',
     now: () => NOW,

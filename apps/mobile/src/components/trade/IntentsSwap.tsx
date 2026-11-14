@@ -1,4 +1,4 @@
-import { toBaseUnits } from '@honey-wallet/keyring';
+// import { toBaseUnits } from '@honey-wallet/keyring'; // 15 Nov: lib/solana-mint `rawUnits`
 import { router, useLocalSearchParams } from 'expo-router';
 import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { Text, TextInput, View } from 'react-native';
@@ -91,6 +91,7 @@ import { refreshAfterChange } from '@/lib/portfolio';
 import type { SendPlan } from '@/lib/send';
 import { serverNow } from '@/lib/server-clock';
 import { shareTrade } from '@/lib/social';
+import { rawUnits, shownUnits, uiScaleOf } from '@/lib/solana-mint';
 import { type TokenRef, updateSwap, useSwap } from '@/lib/swap';
 import { TEST_MODE } from '@/lib/test-mode';
 import { quickPicks } from '@/lib/token-picker';
@@ -177,6 +178,26 @@ const short = (units: string, decimals: number) =>
  */
 const atLeast = (units: string, decimals: number) =>
   floorSignificant(unitsText(units, decimals), 6);
+
+/**
+ * A DEX quote's raw amount of what's sold or bought, in the units people see (15 Nov):
+ * a tokenized stock's raw × multiplier (`DexQuoted.scale`); any other token as is.
+ */
+const shown = (quoted: DexQuoted, side: 'sell' | 'buy', units: string) =>
+  shownUnits(units, quoted.scale?.[side] ?? 1);
+
+/** Both tokens' multipliers on a DEX chain (1 off Solana), read on chain (15 Nov). */
+async function scalesOf(chain: string, sellToken: string, buyToken: string) {
+  try {
+    const [sell, buy] = await Promise.all([
+      uiScaleOf(chain, sellToken),
+      uiScaleOf(chain, buyToken),
+    ]);
+    return { sell, buy };
+  } catch {
+    throw new Error('Couldn’t get a quote. Try again in a moment.');
+  }
+}
 
 function arrivesIn(seconds: number | null) {
   if (!seconds) return 'A few minutes';
@@ -360,11 +381,18 @@ function IntentsSwapForm() {
         const taker = isDexChain(chain) ? takerOn(chain, wallet.addresses ?? {}) : undefined;
         if (!dexToken || !isDexChain(chain) || !taker || sellDecimals === undefined)
           throw new Error('Pick a wallet with keys on this device to swap.');
+        const sellToken = sellDex?.address ?? usdcOn(chain);
+        const buyToken = buyDex?.address ?? usdcOn(chain);
+        // A tokenized stock is typed as people see it; the swap sells raw units (15 Nov).
+        const scale = await scalesOf(chain, sellToken, buyToken);
         const ask = {
           chain,
-          sellToken: sellDex?.address ?? usdcOn(chain),
-          buyToken: buyDex?.address ?? usdcOn(chain),
-          sellAmount: toBaseUnits(amount, sellDecimals),
+          // sellToken: sellDex?.address ?? usdcOn(chain),
+          // buyToken: buyDex?.address ?? usdcOn(chain),
+          // sellAmount: toBaseUnits(amount, sellDecimals),
+          sellToken,
+          buyToken,
+          sellAmount: rawUnits(amount, sellDecimals, scale.sell),
           taker,
           slippageBps: SWAP_SLIPPAGE_BPS,
           walletId: wallet.id,
@@ -380,7 +408,8 @@ function IntentsSwapForm() {
           walletId: wallet.id,
         }).catch(() => null);
         // An older server without the planner: the DEX quote directly.
-        const quoted = planned?.dex ?? (await quoteDex(ask));
+        // const quoted = planned?.dex ?? (await quoteDex(ask));
+        const quoted = { ...(planned?.dex ?? (await quoteDex(ask))), scale };
         // Held to the swap floor at the app's own prices (lib/app-price), never the
         // server's: no price, no quote (15 Nov).
         await checkDexValue(
@@ -414,10 +443,12 @@ function IntentsSwapForm() {
         sellDecimals !== undefined &&
         !askAddress
       ) {
+        const scale = await scalesOf(chain, sellAsset.contractAddress, buyAsset.contractAddress);
         const planned = await planRoute({
           fromChain: chain,
           fromToken: sellAsset.contractAddress,
-          amount: toBaseUnits(amount, sellDecimals),
+          // amount: toBaseUnits(amount, sellDecimals),
+          amount: rawUnits(amount, sellDecimals, scale.sell),
           toChain: chain,
           toToken: buyAsset.contractAddress,
           taker,
@@ -437,7 +468,13 @@ function IntentsSwapForm() {
             SWAP_TOO_COSTLY,
           );
           if (id === flight.current)
-            setDexQuote({ key, quoted: planned.dex, why: planned.why, at: Date.now() });
+            // setDexQuote({ key, quoted: planned.dex, why: planned.why, at: Date.now() });
+            setDexQuote({
+              key,
+              quoted: { ...planned.dex, scale },
+              why: planned.why,
+              at: Date.now(),
+            });
           return;
         }
       }
@@ -698,7 +735,7 @@ function IntentsSwapForm() {
                   {current
                     ? `≥ ${atLeast(current.minAmountOut, current.buyDecimals)}`
                     : dexCurrent
-                      ? `≥ ${atLeast(dexCurrent.quote.minBuyAmount, buyDecimals)}`
+                      ? `≥ ${atLeast(shown(dexCurrent, 'buy', dexCurrent.quote.minBuyAmount), buyDecimals)}`
                       : estimate
                         ? `≈ ${formatBalance(estimate)}`
                         : '0'}
@@ -774,7 +811,7 @@ function IntentsSwapForm() {
             />
             <DetailRow
               label="You get at least"
-              value={`${atLeast(dexCurrent.quote.minBuyAmount, buyDecimals)} ${buy.symbol}`}
+              value={`${atLeast(shown(dexCurrent, 'buy', dexCurrent.quote.minBuyAmount), buyDecimals)} ${buy.symbol}`}
             />
             {priceImpactText(dexCurrent.quote) ? (
               <DetailRow label="Price impact" value={priceImpactText(dexCurrent.quote) ?? ''} />
@@ -865,7 +902,7 @@ function IntentsSwapForm() {
                     if (paying.current) return;
                     paying.current = true;
                     const quoted = tray.quoted;
-                    const pay = `${unitsText(quoted.quote.sellAmount, sellDecimals ?? 6)} ${sell.symbol}`;
+                    const pay = `${unitsText(shown(quoted, 'sell', quoted.quote.sellAmount), sellDecimals ?? 6)} ${sell.symbol}`;
                     void (async () => {
                       try {
                         // Test mode ends on its success page without signing (lib/test-mode).
@@ -882,12 +919,14 @@ function IntentsSwapForm() {
                           aggregator: sent.quote.aggregator,
                           sell: {
                             symbol: sell.symbol,
-                            amount: sent.quote.sellAmount,
+                            // amount: sent.quote.sellAmount,
+                            amount: shown(quoted, 'sell', sent.quote.sellAmount),
                             decimals: sellDecimals ?? 6,
                           },
                           buy: {
                             symbol: buy.symbol,
-                            amount: sent.quote.minBuyAmount,
+                            // amount: sent.quote.minBuyAmount,
+                            amount: shown(quoted, 'buy', sent.quote.minBuyAmount),
                             decimals: buyDecimals,
                           },
                           status: 'SENT',
@@ -927,7 +966,7 @@ function IntentsSwapForm() {
                   detail={`It lands in a few seconds. Activity shows it.`}
                   amount={{
                     symbol: buy.symbol,
-                    text: `≥ ${atLeast(tray.quoted.quote.minBuyAmount, buyDecimals)} ${buy.symbol}`,
+                    text: `≥ ${atLeast(shown(tray.quoted, 'buy', tray.quoted.quote.minBuyAmount), buyDecimals)} ${buy.symbol}`,
                   }}
                   rows={[
                     {
@@ -1304,8 +1343,10 @@ function DexReviewStep({
   const styles = useStyles();
   const c = useTheme();
   const q = quoted.quote;
-  const pay = `${unitsText(q.sellAmount, sellDecimals)} ${sell.symbol}`;
-  const get = `${atLeast(q.minBuyAmount, buyDecimals)} ${buy.symbol}`;
+  // const pay = `${unitsText(q.sellAmount, sellDecimals)} ${sell.symbol}`;
+  // const get = `${atLeast(q.minBuyAmount, buyDecimals)} ${buy.symbol}`;
+  const pay = `${unitsText(shown(quoted, 'sell', q.sellAmount), sellDecimals)} ${sell.symbol}`;
+  const get = `${atLeast(shown(quoted, 'buy', q.minBuyAmount), buyDecimals)} ${buy.symbol}`;
   const impact = priceImpactText(q);
   const gasNote = dexGasNote(q);
   // Dollar values read in Settings' Local currency (lib/fx).

@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { signSolanaMessage, solanaAddressOfKey } from '@honey-wallet/keyring';
 import { base58, base64 } from '@scure/base';
 import { decodeFunctionData, erc20Abi, parseTransaction } from 'viem';
@@ -371,4 +373,57 @@ it('refuses sample, watched and wrong-network sends', async () => {
   await expect(
     prepareSend(wallet, { chain: 'Solana', symbol: 'SOL', to: TO, amount: '1' }),
   ).rejects.toThrow('isn’t a Solana address');
+});
+
+it('sends a tokenized stock as shown (raw × multiplier) and pays raw units (15 Nov)', async () => {
+  const fx = JSON.parse(
+    readFileSync(
+      fileURLToPath(
+        new URL('../../../packages/keyring/src/fixtures/xstocks-mints.json', import.meta.url),
+      ),
+      'utf8',
+    ),
+  ) as { mints: { AAPLx: { mint: string; owner: string; data: string } } };
+  const aapl = fx.mints.AAPLx;
+  let wire = '';
+  const rpc = async (method: string, params: unknown) => {
+    if (method === 'getAccountInfo')
+      return (params as string[])[0] === aapl.mint
+        ? { value: { owner: aapl.owner, data: [aapl.data, 'base64'] } }
+        : { value: {} };
+    if (method === 'getLatestBlockhash')
+      return { value: { blockhash: base58.encode(new Uint8Array(32).fill(9)) } };
+    if (method === 'getBalance') return { value: 5_000_000_000 };
+    if (method === 'getTokenAccountBalance') return { value: { amount: '500000000' } };
+    if (method === 'getMinimumBalanceForRentExemption') return 2_136_720;
+    if (method === 'sendTransaction') {
+      wire = (params as string[])[0] as string;
+      return 'sig';
+    }
+    if (method === 'getSignatureStatuses')
+      return { value: [{ err: null, confirmationStatus: 'confirmed' }] };
+    throw new Error(method);
+  };
+  const to = solanaAddressOfKey(new Uint8Array(32).fill(4));
+  const plan = await prepareSend(
+    wallet,
+    {
+      chain: 'Solana',
+      symbol: 'AAPLx',
+      to,
+      amount: '2.0076046',
+      token: { contract: aapl.mint, decimals: 8 },
+    },
+    { rpcFor: () => rpc, keyOf: keyOf as never, confirm: async () => true },
+  );
+  // The review shows what was typed; the transfer moves the raw units behind it.
+  expect(plan.amount).toBe('2.0076046');
+  await plan.execute(() => true);
+  const message = base64.decode(wire).slice(65);
+  // TransferChecked (12), raw amount (u64 LE), decimals 8: 2.0076046 / 1.0038023… = 2.
+  const data = message.slice(-10);
+  expect(data[0]).toBe(12);
+  const raw = new DataView(data.buffer, data.byteOffset + 1, 8).getBigUint64(0, true);
+  expect(raw === 200_000_000n || raw === 199_999_999n).toBe(true);
+  expect(data[9]).toBe(8);
 });

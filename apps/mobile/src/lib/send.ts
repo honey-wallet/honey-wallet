@@ -13,6 +13,7 @@ import {
   prepareSolanaTransfer,
   prepareSponsoredTransfer,
   type Rpc,
+  readSolanaMint,
   SOLANA_MAINNET,
   SPONSORED_CHAIN_IDS,
   signEvmTransaction,
@@ -21,6 +22,8 @@ import {
   solanaAddressOfKey,
   toBaseUnits,
   USDC_NEAR,
+  uiAmountToRaw,
+  uiMultiplier,
   waitForEvmReceipt,
   waitForSolana,
 } from '@honey-wallet/keyring';
@@ -224,8 +227,27 @@ export async function prepareSend(
     throw new Error(`Sending ${symbol} isn’t supported yet`);
   const decimals = token ? token.decimals : DECIMALS[symbol];
   if (decimals === undefined) throw new Error(`Sending ${symbol} isn’t supported yet`);
-  const units = toBaseUnits(input.amount, decimals);
+  // const units = toBaseUnits(input.amount, decimals);
+  // const amount = format(units, decimals);
+  // 15 Nov: a Solana token with a ScaledUiAmount multiplier (a tokenized stock) is typed
+  // and shown as people see it (raw × multiplier); what's sent is raw, read from its mint
+  // on chain. Every other token: as before.
+  let units = toBaseUnits(input.amount, decimals);
   const amount = format(units, decimals);
+  if (chain === 'Solana' && token && isSolanaAddress(token.contract)) {
+    const scale = await readSolanaMint(d.rpcFor(chain), token.contract)
+      .then((mint) => uiMultiplier(mint, Math.floor(Date.now() / 1000)))
+      .catch((error: unknown) => {
+        // Not a mint the wallet reads: the transfer below refuses it in its own words.
+        if (
+          error instanceof Error &&
+          (error.message === 'Not a token mint' || error.message === 'Invalid mint account')
+        )
+          return 1;
+        throw error;
+      });
+    if (scale !== 1) units = uiAmountToRaw(input.amount, decimals, scale);
+  }
 
   const chainId = EVM_CHAIN_ID[chain];
   if (chainId) {

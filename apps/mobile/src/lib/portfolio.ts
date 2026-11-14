@@ -283,8 +283,10 @@ const BY_NAME: Partial<Record<Chain, string[]>> = {
 /**
  * Holdings as send choices: one per token per network, the shape of HOLDINGS. A token
  * beyond the network's coin and USDC (an ERC-20, SPL or NEP-141 token) carries its
- * contract and decimals, so Send can pay it; one without (a Token-2022 mint) is left
- * out, since nothing here can pay it. `assetId` lets Swap match its token exactly.
+ * contract and decimals, so Send can pay it; one without is left out, since nothing
+ * here can pay it. `assetId` lets Swap match its token exactly. (15 Nov: Token-2022
+ * mints such as tokenized stocks are paid too once the server sends their contract and
+ * decimals; their `amount` is the shown amount, raw × multiplier.)
  */
 export function toHoldings(holdings: PortfolioHolding[]): SendHolding[] {
   return holdings
