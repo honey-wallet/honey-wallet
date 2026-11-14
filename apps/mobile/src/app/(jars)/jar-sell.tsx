@@ -14,7 +14,7 @@ import { FlowTray, InlineTray } from '@/components/sheets/Tray';
 import { TokenIcon } from '@/components/wallet/parts';
 import { confirmOwner } from '@/lib/auth';
 // copiedJarId: unused while the fee row needs a charged fee (14 Nov).
-import { copyFeeText } from '@/lib/copy-fees';
+import { copiedJarId, copyFeeText } from '@/lib/copy-fees';
 import { dexGasNote, priceImpactText, routeLabel } from '@/lib/dex-tokens';
 import { SPONSORED_FEE } from '@/lib/evm-gas';
 import { useMoney } from '@/lib/fx';

@@ -1054,24 +1054,18 @@ export interface JarBuyRequest {
   copyOf?: string;
   /**
    * The phone's hint that this sells a copied jar's holdings. The server never reads it:
-   * every sell of copied units pays Honey's copy fee (`copyFees`), named or not.
+   * every sell of copied units pays the creators' fees (`copyFees`), named or not.
    */
   copySaleOf?: string;
 }
 
-// /** A creator's cut of a copier's sell, as the server asked 1Click for it (`copy_fees::CopyFee`). */
-/**
- * Honey's copy fee on a copier's sell, as the server asked 1Click for it
- * (`copy_fees::CopyFee`). Since 2026-11-14 Honey keeps it: creators are paid nothing.
- */
+/** A creator's cut of a copier's sell, as the server asked 1Click for it (`copy_fees::CopyFee`). */
 export interface CopyFeeQuote {
-  // /** The creator's NEAR Intents account. */
-  /** Honey's NEAR Intents account (`HONEY_COPY_FEE_ACCOUNT` on the server). */
+  /** The creator's NEAR Intents account. */
   recipient: string;
   /** Basis points of the sale (1Click `appFees`). */
   bps: number;
-  // /** The jar's fee, percent of profit. */
-  /** Honey's fee, percent of profit. */
+  /** The jar's fee, percent of profit. */
   pct: number;
   /** `bps` of the sale, in dollars. */
   usd: number;
@@ -1387,14 +1381,9 @@ export interface JarBuyLeg {
   signature: string | null;
   // /** The creator's cut taken from this swap (a copy sale only); absent from older servers. */
   // copyFee?: CopyFeeQuote | null;
-  // /**
-  //  * Creators' cuts taken from this swap: it sells units copied from their jars (oldest
-  //  * copy first). Empty, or absent from older servers, for every other swap.
-  //  */
   /**
-   * Honey's copy fee on this swap (it sells units copied from someone's jar): one entry,
-   * every copied lot's fee merged. Empty, or absent from older servers, for every other
-   * swap.
+   * Creators' cuts taken from this swap: it sells units copied from their jars (oldest
+   * copy first). Empty, or absent from older servers, for every other swap.
    */
   copyFees?: CopyFeeQuote[];
 }
@@ -1820,24 +1809,15 @@ export interface SocialProfileRequest {
   shareTrades?: boolean;
 }
 
-// /** `GET /api/v1/social/me/copy-fee-account`: where your copy fees are paid, or null (none are). */
-/**
- * `GET /api/v1/social/me/copy-fee-account`: where a creator's copy fees were paid. Always
- * null since Honey keeps the copy fee (2026-11-14); kept for older apps.
- */
+/** `GET /api/v1/social/me/copy-fee-account`: where your copy fees are paid, or null (none are). */
 export interface SocialCopyFeeAccount {
   nearAccount: string | null;
 }
 
-// /**
-//  * `GET /api/v1/social/me/copy-earnings`: what your published jars earned from copies,
-//  * from sells NEAR Intents settled (your share as 1Click paid it), and each jar's copies
-//  * (counted once a copy's buy settled).
-//  */
 /**
- * `GET /api/v1/social/me/copy-earnings`: each of your published jars' copies (counted once
- * a copy's buy settled). Since Honey keeps the copy fee (2026-11-14) creators earn nothing:
- * `nearAccount` is null and every `earnedUsd` 0, kept for older apps.
+ * `GET /api/v1/social/me/copy-earnings`: what your published jars earned from copies,
+ * from sells NEAR Intents settled (your share as 1Click paid it), and each jar's copies
+ * (counted once a copy's buy settled).
  */
 export interface SocialCopyEarnings {
   nearAccount: string | null;

@@ -1802,10 +1802,8 @@ fn privacy((public_profile, show_holdings, show_returns, allow_copy): PrivacyRow
     }
 }
 
-// /// Where your copy fees are paid (`copy_fees`): the NEAR Intents account of the first
-// /// wallet you signed in with, or null when there's none and no fee is collected.
-/// Where your copy fees are paid: always null since Honey keeps the copy fee
-/// (2026-11-14, `copy_fees`); creators are paid nothing. Kept for older apps.
+/// Where your copy fees are paid (`copy_fees`): the NEAR Intents account of the first
+/// wallet you signed in with, or null when there's none and no fee is collected.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CopyFeeAccount {
@@ -1816,21 +1814,15 @@ async fn my_copy_fee_account(
     State(state): State<SocialState>,
     headers: HeaderMap,
 ) -> Result<Json<CopyFeeAccount>, AppError> {
-    // let user = viewer(&state, &headers)
-    // Signed in only, as before; nobody has a payout account now.
-    viewer(&state, &headers)
+    let user = viewer(&state, &headers)
         .await?
         .ok_or(AppError::Unauthorized)?;
-    // let near_account = crate::copy_fees::payout_account(pool(&state)?, user).await?;
-    // Ok(Json(CopyFeeAccount { near_account }))
-    Ok(Json(CopyFeeAccount { near_account: None }))
+    let near_account = crate::copy_fees::payout_account(pool(&state)?, user).await?;
+    Ok(Json(CopyFeeAccount { near_account }))
 }
 
-// /// What your published jars earned from copies (`copy_fees`), from sells 1Click settled:
-// /// your share as 1Click paid it, in dollars at its price then, and each jar's copies.
-/// Your published jars' copies. Since Honey keeps the copy fee (2026-11-14, `copy_fees`)
-/// creators earn nothing from copies: `nearAccount` is null and every `earnedUsd` 0, kept
-/// for older apps.
+/// What your published jars earned from copies (`copy_fees`), from sells 1Click settled:
+/// your share as 1Click paid it, in dollars at its price then, and each jar's copies.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CopyEarnings {
@@ -1855,33 +1847,19 @@ async fn my_copy_earnings(
         .await?
         .ok_or(AppError::Unauthorized)?;
     let pool = pool(&state)?;
-    // let near_account = crate::copy_fees::payout_account(pool, user).await?;
-    // let jars: Vec<JarEarnings> = crate::copy_fees::earnings(pool, user)
-    //     .await?
-    //     .into_iter()
-    //     .map(|(id, micro, copies)| JarEarnings {
-    //         id,
-    //         earned_usd: micro as f64 / 1e6,
-    //         copies,
-    //     })
-    //     .collect();
-    // Ok(Json(CopyEarnings {
-    //     near_account,
-    //     earned_usd: jars.iter().map(|j| j.earned_usd).sum(),
-    //     jars,
-    // }))
-    let jars: Vec<JarEarnings> = crate::copy_fees::jar_copies(pool, user)
+    let near_account = crate::copy_fees::payout_account(pool, user).await?;
+    let jars: Vec<JarEarnings> = crate::copy_fees::earnings(pool, user)
         .await?
         .into_iter()
-        .map(|(id, copies)| JarEarnings {
+        .map(|(id, micro, copies)| JarEarnings {
             id,
-            earned_usd: 0.0,
+            earned_usd: micro as f64 / 1e6,
             copies,
         })
         .collect();
     Ok(Json(CopyEarnings {
-        near_account: None,
-        earned_usd: 0.0,
+        near_account,
+        earned_usd: jars.iter().map(|j| j.earned_usd).sum(),
         jars,
     }))
 }

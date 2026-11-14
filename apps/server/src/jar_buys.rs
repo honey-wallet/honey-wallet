@@ -4,7 +4,7 @@
 //! user's own address automatically.
 
 use crate::{
-    copy_fees::{self, CopyFee, HoneyFee},
+    copy_fees::{self, CopyFee},
     error::AppError,
     market_data::{MarketData, OneClickToken},
 };
@@ -87,10 +87,8 @@ pub struct LegQuote {
     // /// The creator's cut taken from this swap (a copy sale), as asked of and echoed by
     // /// 1Click; None for every other swap.
     // pub copy_fee: Option<CopyFee>,
-    // /// Creators' cuts taken from this swap (a sell of copied units), oldest copy first, as
-    // /// asked of and echoed by 1Click; empty for every other swap.
-    /// Honey's copy fee on this swap (a sell of copied units): at most one entry, as asked
-    /// of and echoed by 1Click; empty for every other swap.
+    /// Creators' cuts taken from this swap (a sell of copied units), oldest copy first, as
+    /// asked of and echoed by 1Click; empty for every other swap.
     pub copy_fees: Vec<CopyFee>,
     /// 1Click's own deadline for the deposit address (it can be days past `deadline`).
     #[serde(skip)]
@@ -201,9 +199,6 @@ pub struct JarBuys {
     cap_usd: f64,
     /// Copy fees' records (`copy_fees`); without a database no copy fee is charged.
     pool: Option<sqlx::PgPool>,
-    /// Honey's copy fee (`HONEY_COPY_FEE_ACCOUNT`, `HONEY_COPY_FEE_PCT`); without the
-    /// account no copy fee is charged.
-    copy_fee: HoneyFee,
     /// What an address holds of an asset on chain now (atomic units), to cap copied units
     /// at what's still there (audit H1). None: unchecked (development).
     held: Option<HeldFn>,
@@ -296,19 +291,12 @@ fn atomic(s: &str) -> Option<u128> {
 impl JarBuys {
     pub fn from_env(market: Arc<MarketData>) -> anyhow::Result<Self> {
         let var = |k: &str| std::env::var(k).ok().filter(|v| !v.trim().is_empty());
-        // Self::new(
-        //     ORIGIN.into(),
-        //     var("NEAR_INTENTS_API_KEY").map(Zeroizing::new),
-        //     market,
-        //     cap_usd_from_env()?,
-        // )
-        Ok(Self::new(
+        Self::new(
             ORIGIN.into(),
             var("NEAR_INTENTS_API_KEY").map(Zeroizing::new),
             market,
             cap_usd_from_env()?,
-        )?
-        .with_copy_fee(HoneyFee::from_env()?))
+        )
     }
 
     pub fn new(
@@ -330,16 +318,9 @@ impl JarBuys {
             market,
             cap_usd,
             pool: None,
-            copy_fee: HoneyFee::default(),
             held: None,
             statuses: Mutex::default(),
         })
-    }
-
-    /// Honey's copy fee: where it's paid and its rate (`copy_fees::HoneyFee`).
-    pub fn with_copy_fee(mut self, copy_fee: HoneyFee) -> Self {
-        self.copy_fee = copy_fee;
-        self
     }
 
     /// Reads on-chain balances, so copied units that left the wallet pay nothing.
@@ -534,28 +515,18 @@ impl JarBuys {
         if let (Some(sale), Some(copier), Some(tx)) = (&sale, copier, sale_tx.as_mut()) {
             for (leg, part) in legs.iter().zip(sale) {
                 if !part.parts.is_empty() {
-                    // // What each creator was paid (1Click's echo), split across their jars.
-                    // let paid = |creator: uuid::Uuid| {
-                    //     let account = part.creators.iter().find(|(_, c)| *c == creator);
-                    //     let bps = account.and_then(|(a, _)| {
-                    //         leg.copy_fees_received
-                    //             .iter()
-                    //             .find(|(r, _)| r.eq_ignore_ascii_case(a))
-                    //             .map(|(_, bps)| u128::from(*bps))
-                    //     });
-                    //     bps.map_or(0, |bps| part.sale_micro * bps / 10_000)
-                    // };
-                    // let fees = copy_fees::received_by_jar(&part.shares, paid);
-                    // What Honey was paid (1Click's echo), split across the jars copied.
-                    let account = self.copy_fee.account.as_deref();
-                    let paid = account
-                        .and_then(|a| {
+                    // What each creator was paid (1Click's echo), split across their jars.
+                    let paid = |creator: uuid::Uuid| {
+                        let account = part.creators.iter().find(|(_, c)| *c == creator);
+                        let bps = account.and_then(|(a, _)| {
                             leg.copy_fees_received
                                 .iter()
                                 .find(|(r, _)| r.eq_ignore_ascii_case(a))
-                        })
-                        .map_or(0, |(_, bps)| part.sale_micro * u128::from(*bps) / 10_000);
-                    let fees = copy_fees::split_received(&part.shares, paid);
+                                .map(|(_, bps)| u128::from(*bps))
+                        });
+                        bps.map_or(0, |bps| part.sale_micro * bps / 10_000)
+                    };
+                    let fees = copy_fees::received_by_jar(&part.shares, paid);
                     // copy_fees::record_sale(pool, copier, &input.origin_asset,
                     //     &leg.deposit_address, leg.one_click_deadline.as_deref(), &part.parts, &fees)
                     copy_fees::record_sale(
@@ -567,7 +538,6 @@ impl JarBuys {
                         lapse(&leg.deadline).as_deref(),
                         &part.parts,
                         &fees,
-                        account,
                     )
                     .await?;
                 }
@@ -950,14 +920,13 @@ impl JarBuys {
             allocations.push(copy_fees::allocate(&lots, skip, *units));
             skip = skip.saturating_add(*units);
         }
-        // Honey keeps the fee (2026-11-14): no creator's payout account is looked up.
-        // let mut recipients: HashMap<uuid::Uuid, Option<String>> = HashMap::new();
-        // for (i, _) in allocations.iter().flatten() {
-        //     let creator = lots[*i].creator;
-        //     if let std::collections::hash_map::Entry::Vacant(slot) = recipients.entry(creator) {
-        //         slot.insert(copy_fees::payout_account(pool, creator).await?);
-        //     }
-        // }
+        let mut recipients: HashMap<uuid::Uuid, Option<String>> = HashMap::new();
+        for (i, _) in allocations.iter().flatten() {
+            let creator = lots[*i].creator;
+            if let std::collections::hash_map::Entry::Vacant(slot) = recipients.entry(creator) {
+                slot.insert(copy_fees::payout_account(pool, creator).await?);
+            }
+        }
         let mut out = Vec::with_capacity(amounts.len());
         for ((leg, units), parts) in input.legs.iter().zip(&amounts).zip(allocations) {
             if parts.is_empty() {
@@ -979,22 +948,18 @@ impl JarBuys {
                 .ok_or(AppError::Busy)?;
             let sale_usd = index_usd.min(paid_usd);
             let sale_micro = (sale_usd * 1e6).floor() as u128;
-            // let fees = copy_fees::leg_fees(&lots, &parts, *units, sale_micro, |c| {
-            //     recipients.get(&c).cloned().flatten()
-            // });
-            // let shares = copy_fees::jar_shares(&lots, &parts, *units, sale_micro);
-            // One entry for Honey, every lot's fee merged; none without Honey's account.
-            let fees = copy_fees::leg_fees(&lots, &parts, *units, sale_micro, &self.copy_fee);
-            let shares =
-                copy_fees::jar_shares(&lots, &parts, *units, sale_micro, self.copy_fee.pct);
+            let fees = copy_fees::leg_fees(&lots, &parts, *units, sale_micro, |c| {
+                recipients.get(&c).cloned().flatten()
+            });
+            let shares = copy_fees::jar_shares(&lots, &parts, *units, sale_micro);
             out.push(LegSale {
                 fees,
                 sale_micro,
                 shares,
-                // creators: recipients
-                //     .iter()
-                //     .filter_map(|(c, a)| Some((a.clone()?, *c)))
-                //     .collect(),
+                creators: recipients
+                    .iter()
+                    .filter_map(|(c, a)| Some((a.clone()?, *c)))
+                    .collect(),
                 parts: parts
                     .into_iter()
                     .map(|(i, u)| (lots[i].deposit_address.clone(), u))
@@ -1020,12 +985,8 @@ impl JarBuys {
         };
         // let terms = match copy_fees::jar_terms(pool, jar).await {
         //     Ok(Some((creator, pct))) if creator != copier => pct,
-        // let (terms, picks) = match copy_fees::jar_copy_terms(pool, jar).await {
-        //     Ok(Some((creator, pct, picks))) if creator != copier => (pct, picks),
-        // Honey's rate now, whatever the jar's creator set (Honey keeps the fee, 2026-11-14).
-        let terms = i16::from(self.copy_fee.pct);
-        let picks = match copy_fees::jar_copy_terms(pool, jar).await {
-            Ok(Some((creator, _, picks))) if creator != copier => picks,
+        let (terms, picks) = match copy_fees::jar_copy_terms(pool, jar).await {
+            Ok(Some((creator, pct, picks))) if creator != copier => (pct, picks),
             Ok(_) => return,
             Err(error) => {
                 tracing::warn!(%error, "copy buy not recorded");
@@ -1154,11 +1115,10 @@ struct LegSale {
     parts: Vec<(String, u128)>,
     /// The sell's value, micro-USD at 1Click's price.
     sale_micro: u128,
-    // /// Each (creator, jar)'s share of the fees, to split what 1Click paid them.
-    /// Each (creator, jar)'s share of Honey's fee, to split what 1Click paid Honey.
+    /// Each (creator, jar)'s share of the fees, to split what 1Click paid them.
     shares: Vec<(uuid::Uuid, uuid::Uuid, u128)>,
-    // /// Creators by the account their fee is paid to.
-    // creators: Vec<(String, uuid::Uuid)>,
+    /// Creators by the account their fee is paid to.
+    creators: Vec<(String, uuid::Uuid)>,
 }
 
 /*

@@ -10,7 +10,7 @@ import { SearchField } from '@/components/wallet/SearchField';
 import { tap } from '@/lib/haptics';
 import { EVM_CHAINS, listNames } from '@/lib/mock-wallet';
 import { isWeb } from '@/lib/platform';
-// import { COPY_FEES } from '@/lib/surface'; (unused while copying is free, 14 Nov)
+import { COPY_FEES } from '@/lib/surface';
 import { warningOn } from '@/lib/warnings';
 import { makeStyles, useTheme } from '@/theme';
 
