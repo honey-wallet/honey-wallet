@@ -1,16 +1,26 @@
 import type { SocialGroup } from '@honey-wallet/api-client';
+import { router } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { Text, View } from 'react-native';
 import { Icon } from '@/components/Icon';
+import { People, PickIcon, SplitRing } from '@/components/jars/JarParts';
 import { PressableRow } from '@/components/motion/PressableRow';
 import { PillButton } from '@/components/onboarding/PillButton';
 import { SheetRow, StatRow } from '@/components/sheets/Sheet';
 import { useFocusPolling } from '@/lib/focus-polling';
-import { dollars, membersIn } from '@/lib/group-jar-core';
+import {
+  dollars,
+  groupStep,
+  membersIn,
+  pendingGroupLine,
+  pendingGroups,
+} from '@/lib/group-jar-core';
 import {
   approveVote,
   cashOutGroup,
   groupError,
+  groupPicks,
+  groups,
   groupWallet,
   leaveGroup,
   syncGroup,
@@ -268,6 +278,66 @@ export function GroupJarSection({ state }: { state: GroupJarState }) {
   );
 }
 
+/** The groups Home's Jars lists before they're bought (lib/group-jar-core `pendingGroups`). */
+export const usePendingGroups = () => pendingGroups(Object.values(groups.useValue()));
+
+/**
+ * Group jars not bought yet, on Home's Jars above the bought ones, as jar rows: the
+ * split, the name, where it stands ("1 of 2 joined", "Ana Lima invited you") and the
+ * faces of everyone invited or in. A tap opens the group where you left off; an open
+ * invite opens the invite, as the bell does.
+ */
+export function PendingGroupList({ list, gutter = 18 }: { list: SocialGroup[]; gutter?: number }) {
+  return (
+    <View>
+      {list.map((g) => (
+        <PendingGroupRow key={g.id} g={g} gutter={gutter} />
+      ))}
+    </View>
+  );
+}
+
+function PendingGroupRow({ g, gutter }: { g: SocialGroup; gutter: number }) {
+  const styles = useStyles();
+  const c = useTheme();
+  const picks = groupPicks(g);
+  const top = [...picks].sort((a, b) => b.weight - a.weight)[0];
+  const line = pendingGroupLine(g);
+  const invite = groupStep(g, { paying: false, votedOnBuy: false }) === 'join';
+  return (
+    <PressableRow
+      accessibilityRole="button"
+      accessibilityLabel={`${g.name}, ${line}`}
+      onPress={() => {
+        tap();
+        if (invite) router.push({ pathname: '/group-invite', params: { id: g.id } });
+        else router.push({ pathname: '/group/[id]', params: { id: g.id } });
+      }}
+      style={[styles.row, { marginHorizontal: -gutter, paddingHorizontal: gutter }]}
+    >
+      {/* The jar's face, as JarIcon draws it. */}
+      <SplitRing slices={picks} size={40} stroke={4} tight>
+        {top ? <PickIcon pick={top} size={27} /> : null}
+      </SplitRing>
+      <View style={styles.flex}>
+        <Text style={styles.name} numberOfLines={1}>
+          {g.name}
+        </Text>
+        <Text style={styles.meta} numberOfLines={1}>
+          {line}
+        </Text>
+      </View>
+      <People
+        names={g.members
+          .filter((m) => m.state === 'invited' || m.state === 'accepted')
+          .map((m) => ({ id: m.isMe ? 'me' : m.avatarSeed || m.handle, name: m.displayName }))}
+        size={24}
+        ring={c.canvas}
+      />
+    </PressableRow>
+  );
+}
+
 const useStyles = makeStyles((c) => ({
   root: { gap: 28 },
   flex: { flex: 1 },
@@ -279,4 +349,8 @@ const useStyles = makeStyles((c) => ({
   confirmTitle: { color: c.text, fontSize: 17, fontWeight: '600' },
   confirmHint: { color: c.textSecondary, fontSize: 14, lineHeight: 20 },
   confirmButtons: { flexDirection: 'row', gap: 10, marginTop: 10 },
+  // As JarRow's (components/jars/JarParts).
+  row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10 },
+  name: { color: c.text, fontSize: 16, fontWeight: '500' },
+  meta: { marginTop: 2, color: c.textSecondary, fontSize: 14 },
 }));
