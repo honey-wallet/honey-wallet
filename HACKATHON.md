@@ -49,6 +49,7 @@ custodian.
 | Cross-chain baskets | A jar's picks can sit on different chains; one approval pays every 1Click deposit. | [jar_buys.rs](apps/server/src/jar_buys.rs), [jar-buy.ts](apps/mobile/src/lib/jar-buy.ts) |
 | No custodian | Keys stay on the phone. Deposits go from the wallet to 1Click; unfilled swaps refund to the user's address. | [packages/keyring](packages/keyring), [intents-swap.ts](apps/mobile/src/lib/intents-swap.ts) |
 | Trading agent | The thesis agent on NEAR AI Cloud turns an idea into a jar and dry-quotes every pick on 1Click before proposing it. | [thesis/](apps/server/src/thesis), [EVAL.md](docs/thesis-agent/EVAL.md) |
+| The same coin on a cheaper chain | When 1Click would keep under 90% of a small leg (for example a payout on Ethereum), a jar leg can be bought as the same coin on Arbitrum, Base, Optimism or Polygon: 1Click carries the USDC there, then a DEX buys it. The coin must be the same CoinGecko coin, in a pool of at least $100k, priced within 2% of 1Click's price; the phone checks CoinGecko itself and values the leg at the lower price. | [route_planner.rs](apps/server/src/route_planner.rs), [same-coin.ts](apps/mobile/src/lib/same-coin.ts), [app-price.ts](apps/mobile/src/lib/app-price.ts) |
 
 Not used: Chain Signatures.
 
@@ -77,7 +78,7 @@ private jars exists but is off by default. Honey does not use TEE attestation.
 | 9 Nov | [`eb0350e`](https://github.com/honey-wallet/honey-wallet/commit/eb0350e) | Shared jars on NEAR as Sputnik DAOs |
 | 10 Nov | [`c5007d1`](https://github.com/honey-wallet/honey-wallet/commit/c5007d1) | Swaps through 1Click: quote, verify, pay, follow |
 | 13 Nov | [`675f97c`](https://github.com/honey-wallet/honey-wallet/commit/675f97c) | Group jars v1 and the NEP-366 relayer |
-| 13 Nov | [`b7ec79e`](https://github.com/honey-wallet/honey-wallet/commit/b7ec79e) | Free gas on Base, Arbitrum, Polygon, Solana and NEAR |
+| 13 Nov | [`b7ec79e`](https://github.com/honey-wallet/honey-wallet/commit/b7ec79e) | Gas sponsorship for Base, Arbitrum, Polygon, Solana and NEAR (EVM on in production) |
 | 13 Nov | [`a214349`](https://github.com/honey-wallet/honey-wallet/commit/a214349) | Social: one jar flow, profile privacy |
 | 14 Nov | [`50496b0`](https://github.com/honey-wallet/honey-wallet/commit/50496b0) | Route planner: NEAR Intents first, DEX fallback |
 | 14 Nov | [`a88e310`](https://github.com/honey-wallet/honey-wallet/commit/a88e310) | Creator copy fees through 1Click `appFees` |
@@ -104,9 +105,13 @@ which on screen: test-mode balances and receipts are samples.
 
 ### Technical depth
 
-- **Route planner.** Every candidate is quoted in parallel under a timeout; a DEX wins
-  only on one of four stated reasons, never on price alone
-  ([route_planner.rs](apps/server/src/route_planner.rs)).
+- **Route planner.** 1Click is quoted first. Only when it keeps under 90% (or fails, or
+  hasn't answered in 1.5 s) are the DEX candidates quoted, in parallel under a timeout, so a
+  normal trade costs one provider call. A DEX wins only on a stated reason, never on price
+  alone ([route_planner.rs](apps/server/src/route_planner.rs)).
+- **The phone's own checks.** Every DEX trade is valued at a price the phone reads itself
+  (1Click or DexScreener, decimals read on chain), never the server's
+  ([app-price.ts](apps/mobile/src/lib/app-price.ts)).
 - **NEAR relayer without a NEAR SDK.** Borsh transactions and NEP-366 delegate actions
   are built and signed in Rust; byte layouts are pinned against `near-api-js` 7.3.1 output
   ([near_relayer.rs](apps/server/src/near_relayer.rs),
