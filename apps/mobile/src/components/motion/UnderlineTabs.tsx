@@ -129,7 +129,9 @@ const useStyles = makeStyles((c) => ({
   },
   // Uniswap's Home tabs: 16pt between labels, each tab its label's width, no rule.
   fitRow: {
-    gap: 16,
+    // gap: 16,
+    // More air between Tokens, Jars and Activity (15 Nov, owner).
+    gap: 28,
     borderBottomWidth: 0,
   },
   fitTab: {

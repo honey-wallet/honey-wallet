@@ -103,37 +103,37 @@ Accounts Honey runs in production, with what each has done so far (checked 14 No
 | --- | --- | --- |
 | NEAR relayer (DAO creation, NEP-366 relays) | [`e86c4a09…094c`](https://nearblocks.io/address/e86c4a09d2498bbe573160b44c0c1002854f19d5439928ca766be8b135bc094c) | Created a group jar's DAO: [tx `3YPvsoiH…ZLv`](https://nearblocks.io/txns/3YPvsoiHBFuNd4vbZyuE51QMZYE8XzdQZxRkj8Gv1ZLv) (14 Nov) |
 | A group jar (Sputnik DAO v2) | [`privacy-is-normal-6c4a2d7b.sputnik-dao.near`](https://nearblocks.io/address/privacy-is-normal-6c4a2d7b.sputnik-dao.near) | Created by the relayer above; no proposals yet |
-| EVM gas relayer (Base, Arbitrum, Optimism, Polygon) | [`0xc5e286D4…8C8e92eBf`](https://basescan.org/address/0xc5e286D4F3eBf6F02A49dD706e99bdC8C8e92eBf) | Funded; no sponsored transactions yet |
+| EVM gas relayer (Base, Arbitrum, Optimism, Polygon) | [`0xc5e286D4…8C8e92eBf`](https://arbiscan.io/address/0xc5e286D4F3eBf6F02A49dD706e99bdC8C8e92eBf) | Sent 9 sponsored transactions for the wallet below on Arbitrum and Optimism, two of them EIP-7702 delegations |
 
 A team member's Honey wallet, used through the app on mainnet ([`0x1e832F20…8bcc9a`](https://arbiscan.io/address/0x1e832F20BC939C1eB38c2D48CDA40B5c558bcc9a)).
-Every transaction the app's activity list shows, oldest first, times in UTC:
+Every transaction the app's activity list shows, oldest first, times in UTC. Honey's relayer
+sent all 9 of the wallet's outgoing transactions, so Honey paid their gas (two spam
+look-alike "USDC" transfers to the wallet are left out):
 
-| When | Chain | What | Transaction |
-| --- | --- | --- | --- |
-| 13 Nov 16:55 | Arbitrum | Received 0.01 USDC from `0x6e19…cf4e` | [`0xd7ec31a6…`](https://arbiscan.io/tx/0xd7ec31a6792dcec0abaedd1c6fc589254af77f05fdc0c2308ac7c51e01ecc84f) |
-| 13 Nov 17:09 | Arbitrum | Received 0.01 ᑌ‌‍S​D​‌Ϲ from `0x6e19…cf4e` | [`0xd87795cd…`](https://arbiscan.io/tx/0xd87795cd1e9b171969cfe57cf4f5a135d3d94ee12f7efe576b7e6b680cdf8763) |
-| 13 Nov 17:14 | Arbitrum | Received 0.01 USDC from `0x6e19…cf4e` | [`0xbd1e48d6…`](https://arbiscan.io/tx/0xbd1e48d6887c4024943f74eb6b5f2d62003d3e351359b4a3f5945385084199dc) |
-| 13 Nov 18:35 | Arbitrum | Sent 0.010004 USDC to `0x6e19…cf4e` | [`0xa852ee8d…`](https://arbiscan.io/tx/0xa852ee8df983d18007ff74367cd4cfa2a2ce0c506b73a63b4ac76e7ee31db157) |
-| 13 Nov 18:36 | Arbitrum | Received 0.01 USDC from `0x6e19…cf4e` | [`0x34e647d0…`](https://arbiscan.io/tx/0x34e647d04339a19c53bfed3df55c11a3668c3378cdc09f8ac3e885e621a1bd4d) |
-| 13 Nov 18:38 | Arbitrum | Received 1 USDC from `0xacdf…4e93` | [`0x91161d69…`](https://arbiscan.io/tx/0x91161d694017bef123c53aba08088334fc3177a98c19405a7e36542df3a8641c) |
-| 13 Nov 18:41 | Arbitrum | Received 1 ᑌ‌‍S​D​‌Ϲ from `0xacdf…4e93` | [`0x919bcd0b…`](https://arbiscan.io/tx/0x919bcd0b025deee97079de42de05398c839cc0609189dfc7251bd8134c35c118) |
-| 13 Nov 18:53 | Arbitrum | Sent 1.02 USDC to `0x6e19…cf4e` | [`0x4d75422b…`](https://arbiscan.io/tx/0x4d75422b5cd3c0f46381f1e4cc7ec0ee66ed7321451a940404c01bf15f350d27) |
-| 13 Nov 20:16 | Arbitrum | Received 1 USDC from `0x6e19…cf4e` | [`0x7322e6ea…`](https://arbiscan.io/tx/0x7322e6eac22ded4d7da56aa2c4f405736321b62a9751f04ff60d1f04257c22c8) |
-| 13 Nov 20:30 | Arbitrum | Sent 1 USDC to `0xdbde…9824` | [`0x3c77be43…`](https://arbiscan.io/tx/0x3c77be437e60acb9a76af7f1028ff894be28c8aa1048afa36a54f9b137f27cdf) |
-| 13 Nov 20:31 | Arbitrum | Received 0.995013 USDT0 from `0x2cff…2680` | [`0x44183cdb…`](https://arbiscan.io/tx/0x44183cdb69e2415c084a2ea1544bbc2971d3975ecef97b8a2af7d82bc43394f4) |
-| 14 Nov 08:00 | Arbitrum | Sent 0.995013 USDT0 to `0x6459…863b` | [`0x51791983…`](https://arbiscan.io/tx/0x517919831c7d510514039a74c24c39362998918a304d2facade4f6749776cbae) |
-| 14 Nov 08:01 | Arbitrum | Received 0.988546 USDC from `0x2cff…2680` | [`0x6638057a…`](https://arbiscan.io/tx/0x6638057a73e36fbb6199cac912d92f2c18eed5be2fa3e785ad43e36f18a0b7ad) |
-| 14 Nov 08:08 | Arbitrum | Received 0.696085 USDC from `0xacdf…4e93` | [`0x09f1014e…`](https://arbiscan.io/tx/0x09f1014e124810079eac25d49f24b5e7d3e2f270cdd3a20a2c235cbb04208475) |
-| 14 Nov 08:44 | Arbitrum | Sent 0.6 USDC to `0x5691…d37f` | [`0x97e4248f…`](https://arbiscan.io/tx/0x97e4248fc5c9300777ca548b3649764f6c1cc8ae3ea326e9b26ad475f48f094e) |
-| 14 Nov 08:45 | Ethereum | Received 9.3e-05 XAUT from `0x2cff…2680` | [`0x690ce3f9…`](https://etherscan.io/tx/0x690ce3f9cda6c32f8486294c7325af7e08a0beddfe7957438e967e10cad45f0a) |
-| 14 Nov 11:55 | Arbitrum | Sent 0.27 USDC to `0x564b…0cb9` | [`0x1fad3f41…`](https://arbiscan.io/tx/0x1fad3f41ee6133f6c2b3765cfd4f818ea32ab8b959fd23ecbe34945341aa2645) |
-| 14 Nov 11:55 | Arbitrum | Sent 0.23 USDC to `0x2ae7…70a0` | [`0x57d295b8…`](https://arbiscan.io/tx/0x57d295b86173f8edd00bf25afff2045a6946552ae51f0ffc81affe044f95e275) |
-| 14 Nov 11:55 | Arbitrum | Received 1.89162 ARB from `0x2cff…2680` | [`0xdfd37995…`](https://arbiscan.io/tx/0xdfd37995ba7d6cdc2e43371aa9cb5415efe8c21a5af0784c9c7e7facad42196e) |
-| 14 Nov 11:55 | Optimism | Received 2.58207 OP from `0x233c…b4cd` | [`0xdabac33f…`](https://optimistic.etherscan.io/tx/0xdabac33f0f7afb40e4d968caa2099b0eefc1ce7ecea39c73e1b596eadd5c9a8a) |
-| 14 Nov 16:15 | Arbitrum | Sent 1.89162 ARB to `0x542b…49da` | [`0xaa4fb3a5…`](https://arbiscan.io/tx/0xaa4fb3a5a3b2a2fde090ea2139aad0fff43c7fa813f2d71d8aafb4e1e314ec39) |
-| 14 Nov 16:16 | Base | Received 0.251552 USDC from `0x2cff…2680` | [`0xc705de71…`](https://basescan.org/tx/0xc705de719b850e1258a44d40bc7edbe8903a36d13c642f7c621231b72b54a870) |
-| 14 Nov 17:16 | Optimism | Sent 2.58207 OP to `0x51c3…c51d` | [`0x301d4583…`](https://optimistic.etherscan.io/tx/0x301d458327a499b95be1d320c150a6ea1b0954e02f39215070ae78f9a574cb41) |
-| 14 Nov 17:17 | Base | Received 0.212621 USDC from `0x2cff…2680` | [`0xe31e38c3…`](https://basescan.org/tx/0xe31e38c31b4dea216b05019dcf170cfa55cf0126a60c0456c81734aa88bd9331) |
+| When | Chain | What | Gas paid by | Transaction |
+| --- | --- | --- | --- | --- |
+| 13 Nov 16:55 | Arbitrum | Received 0.01 USDC from `0x6e19…cf4e` | Sender | [`0xd7ec31a6…`](https://arbiscan.io/tx/0xd7ec31a6792dcec0abaedd1c6fc589254af77f05fdc0c2308ac7c51e01ecc84f) |
+| 13 Nov 17:14 | Arbitrum | Received 0.01 USDC from `0x6e19…cf4e` | Sender | [`0xbd1e48d6…`](https://arbiscan.io/tx/0xbd1e48d6887c4024943f74eb6b5f2d62003d3e351359b4a3f5945385084199dc) |
+| 13 Nov 18:35 | Arbitrum | Sent 0.010004 USDC to `0x6e19…cf4e` | Honey's relayer (EIP-7702 delegation) | [`0xa852ee8d…`](https://arbiscan.io/tx/0xa852ee8df983d18007ff74367cd4cfa2a2ce0c506b73a63b4ac76e7ee31db157) |
+| 13 Nov 18:36 | Arbitrum | Received 0.01 USDC from `0x6e19…cf4e` | Sender | [`0x34e647d0…`](https://arbiscan.io/tx/0x34e647d04339a19c53bfed3df55c11a3668c3378cdc09f8ac3e885e621a1bd4d) |
+| 13 Nov 18:38 | Arbitrum | Received 1 USDC from `0xacdf…4e93` | Sender | [`0x91161d69…`](https://arbiscan.io/tx/0x91161d694017bef123c53aba08088334fc3177a98c19405a7e36542df3a8641c) |
+| 13 Nov 18:53 | Arbitrum | Sent 1.02 USDC to `0x6e19…cf4e` | Honey's relayer | [`0x4d75422b…`](https://arbiscan.io/tx/0x4d75422b5cd3c0f46381f1e4cc7ec0ee66ed7321451a940404c01bf15f350d27) |
+| 13 Nov 20:16 | Arbitrum | Received 1 USDC from `0x6e19…cf4e` | Sender | [`0x7322e6ea…`](https://arbiscan.io/tx/0x7322e6eac22ded4d7da56aa2c4f405736321b62a9751f04ff60d1f04257c22c8) |
+| 13 Nov 20:30 | Arbitrum | Sent 1 USDC to `0xdbde…9824` | Honey's relayer | [`0x3c77be43…`](https://arbiscan.io/tx/0x3c77be437e60acb9a76af7f1028ff894be28c8aa1048afa36a54f9b137f27cdf) |
+| 13 Nov 20:31 | Arbitrum | Received 0.995013 USDT0 from `0x2cff…2680` | Sender | [`0x44183cdb…`](https://arbiscan.io/tx/0x44183cdb69e2415c084a2ea1544bbc2971d3975ecef97b8a2af7d82bc43394f4) |
+| 14 Nov 08:00 | Arbitrum | Sent 0.995013 USDT0 to `0x6459…863b` | Honey's relayer | [`0x51791983…`](https://arbiscan.io/tx/0x517919831c7d510514039a74c24c39362998918a304d2facade4f6749776cbae) |
+| 14 Nov 08:01 | Arbitrum | Received 0.988546 USDC from `0x2cff…2680` | Sender | [`0x6638057a…`](https://arbiscan.io/tx/0x6638057a73e36fbb6199cac912d92f2c18eed5be2fa3e785ad43e36f18a0b7ad) |
+| 14 Nov 08:08 | Arbitrum | Received 0.696085 USDC from `0xacdf…4e93` | Sender | [`0x09f1014e…`](https://arbiscan.io/tx/0x09f1014e124810079eac25d49f24b5e7d3e2f270cdd3a20a2c235cbb04208475) |
+| 14 Nov 08:44 | Arbitrum | Sent 0.6 USDC to `0x5691…d37f` | Honey's relayer | [`0x97e4248f…`](https://arbiscan.io/tx/0x97e4248fc5c9300777ca548b3649764f6c1cc8ae3ea326e9b26ad475f48f094e) |
+| 14 Nov 08:45 | Ethereum | Received 9.3e-05 XAUT from `0x2cff…2680` | Sender | [`0x690ce3f9…`](https://etherscan.io/tx/0x690ce3f9cda6c32f8486294c7325af7e08a0beddfe7957438e967e10cad45f0a) |
+| 14 Nov 11:55 | Arbitrum | Sent 0.27 USDC to `0x564b…0cb9` | Honey's relayer | [`0x1fad3f41…`](https://arbiscan.io/tx/0x1fad3f41ee6133f6c2b3765cfd4f818ea32ab8b959fd23ecbe34945341aa2645) |
+| 14 Nov 11:55 | Arbitrum | Sent 0.23 USDC to `0x2ae7…70a0` | Honey's relayer | [`0x57d295b8…`](https://arbiscan.io/tx/0x57d295b86173f8edd00bf25afff2045a6946552ae51f0ffc81affe044f95e275) |
+| 14 Nov 11:55 | Arbitrum | Received 1.89162 ARB from `0x2cff…2680` | Sender | [`0xdfd37995…`](https://arbiscan.io/tx/0xdfd37995ba7d6cdc2e43371aa9cb5415efe8c21a5af0784c9c7e7facad42196e) |
+| 14 Nov 11:55 | Optimism | Received 2.58207 OP from `0x233c…b4cd` | Sender | [`0xdabac33f…`](https://optimistic.etherscan.io/tx/0xdabac33f0f7afb40e4d968caa2099b0eefc1ce7ecea39c73e1b596eadd5c9a8a) |
+| 14 Nov 16:15 | Arbitrum | Sent 1.89162 ARB to `0x542b…49da` | Honey's relayer | [`0xaa4fb3a5…`](https://arbiscan.io/tx/0xaa4fb3a5a3b2a2fde090ea2139aad0fff43c7fa813f2d71d8aafb4e1e314ec39) |
+| 14 Nov 16:16 | Base | Received 0.251552 USDC from `0x2cff…2680` | Sender | [`0xc705de71…`](https://basescan.org/tx/0xc705de719b850e1258a44d40bc7edbe8903a36d13c642f7c621231b72b54a870) |
+| 14 Nov 17:16 | Optimism | Sent 2.58207 OP to `0x51c3…c51d` | Honey's relayer (EIP-7702 delegation) | [`0x301d4583…`](https://optimistic.etherscan.io/tx/0x301d458327a499b95be1d320c150a6ea1b0954e02f39215070ae78f9a574cb41) |
+| 14 Nov 17:17 | Base | Received 0.212621 USDC from `0x2cff…2680` | Sender | [`0xe31e38c3…`](https://basescan.org/tx/0xe31e38c31b4dea216b05019dcf170cfa55cf0126a60c0456c81734aa88bd9331) |
 
 ## Judging notes
 
