@@ -73,6 +73,13 @@ it('tells a swap made here once: "Swapped", not a send and a receive', () => {
     ['received', 'Received 3 USDC'],
   ]);
   expect(out[0].detail).toBe('Arbitrum');
+  // Its row is a swap row, and it opens the swap's own detail.
+  expect(out[0].swap).toEqual({
+    from: { symbol: 'USDC', amount: '1.00', chain: 'Arbitrum' },
+    to: { symbol: 'USDT0', amount: '0.995', chain: 'Arbitrum' },
+  });
+  expect(out[0].detailId).toBe('swap:0xDBDE000000000000000000000000000000009824');
+  expect(out[1].detailId).toBe(out[1].id);
 });
 
 it('tells a jar buy once, and not each token arriving', () => {

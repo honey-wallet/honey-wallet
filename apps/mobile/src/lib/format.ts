@@ -32,6 +32,17 @@ export function formatAmount(value: number, maxDecimals = 6) {
   return value.toLocaleString('en-US', { maximumFractionDigits: maxDecimals });
 }
 
+/**
+ * A swap row's amounts, as Uniswap's Activity writes them: "5.10" from one up, three
+ * decimals below ("0.310"), and "~<0.001" for dust.
+ */
+export function swapAmount(value: number) {
+  if (!Number.isFinite(value) || value <= 0) return '0';
+  if (value < 0.001) return '~<0.001';
+  if (value < 1) return value.toFixed(3);
+  return value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
 /** Balances on send/buy screens: 6 decimals under 1, else 4 (0.000123, 7.08). */
 export function formatBalance(value: number) {
   return formatAmount(value, value < 1 ? 6 : 4);

@@ -174,7 +174,7 @@ export function TokenIcon({
   // Any token given a network wears its badge, its own chain's coin included (ETH on
   // Ethereum), so every row and chip says where the token is.
   const network = chain ? chainSymbol(chain) : undefined;
-  if (!network) return logo;
+  if (!network || !chain) return logo;
   const badge = Math.round(size * 0.42);
   return (
     <View style={{ width: size, height: size }}>
@@ -189,13 +189,26 @@ export function TokenIcon({
           backgroundColor: ring ?? c.card,
         }}
       >
-        <SvgXml
+        <ChainLogo chain={chain} size={badge} />
+        {/* <SvgXml
           xml={TOKEN_LOGOS[network] ?? NETWORK_LOGOS[network] ?? TOKEN_LOGOS.GENERIC}
           width={badge}
           height={badge}
-        />
+        /> */}
       </View>
     </View>
+  );
+}
+
+/** A network's logo on its own (the badge `TokenIcon` wears), e.g. beside an amount. */
+export function ChainLogo({ chain, size }: { chain: string; size: number }) {
+  const network = chainSymbol(chain);
+  return (
+    <SvgXml
+      xml={TOKEN_LOGOS[network] ?? NETWORK_LOGOS[network] ?? TOKEN_LOGOS.GENERIC}
+      width={size}
+      height={size}
+    />
   );
 }
 

@@ -1,8 +1,10 @@
 import type { SocialInboxItem } from '@honey-wallet/api-client';
 import { router } from 'expo-router';
 import { type ReactNode, useEffect } from 'react';
-import { Linking, Text, View } from 'react-native';
+// import { Linking, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import Animated from 'react-native-reanimated';
+import { SwapRow } from '@/components/activity/SwapRow';
 import { Icon, type IconName } from '@/components/Icon';
 import { PickIcon, SplitRing } from '@/components/jars/JarParts';
 import { PressableRow } from '@/components/motion/PressableRow';
@@ -268,18 +270,38 @@ const WALLET_BADGE: Record<WalletNotification['kind'], IconName> = {
   sold: 'sell',
 };
 
-/** A payment in or out of this wallet (or one that failed); opens it on the explorer. */
+/**
+ * A payment in or out of this wallet (or one that failed); opens its Activity detail
+ * (2026-11-14; it opened the explorer, which the detail now links to). A swap reads as
+ * on Activity (SwapRow).
+ */
 function WalletRow({ item }: { item: WalletNotification }) {
   const styles = useStyles();
   const c = useTheme();
+  const open = () => {
+    tap();
+    router.push({ pathname: '/activity/[id]', params: { id: item.detailId } });
+  };
+  if (item.swap)
+    return (
+      <SwapRow
+        title="Swapped"
+        date={when(item.at)}
+        from={item.swap.from}
+        to={item.swap.to}
+        onPress={open}
+      />
+    );
   return (
     <PressableRow
-      accessibilityRole="link"
+      // accessibilityRole="link"
+      accessibilityRole="button"
       accessibilityLabel={`${item.title}, ${item.detail}`}
-      onPress={() => {
-        tap();
-        void Linking.openURL(item.url);
-      }}
+      // onPress={() => {
+      //   tap();
+      //   void Linking.openURL(item.url);
+      // }}
+      onPress={open}
       style={styles.row}
     >
       <Lead

@@ -6,6 +6,7 @@ import {
   formatPrice,
   formatUsd,
   signedPct,
+  swapAmount,
 } from '@/lib/format';
 
 // The helpers each screen used to keep its own copy of (14 Nov cleanup).
@@ -62,5 +63,15 @@ describe('floorSignificant (money audit 10)', () => {
     expect(floorSignificant('1234567.89')).toBe('1234567');
     expect(floorSignificant('0')).toBe('0');
     expect(floorSignificant('12')).toBe('12');
+  });
+});
+
+describe('swapAmount', () => {
+  it("writes a swap row's amounts as Uniswap's Activity does", () => {
+    expect(swapAmount(5.1)).toBe('5.10');
+    expect(swapAmount(1234.567)).toBe('1,234.57');
+    expect(swapAmount(0.31)).toBe('0.310');
+    expect(swapAmount(0.0004)).toBe('~<0.001');
+    expect(swapAmount(0)).toBe('0');
   });
 });
