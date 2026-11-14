@@ -28,6 +28,9 @@ import { evmRpc } from '@/lib/evm-gas';
 import { MIN_VALUE_KEPT } from '@/lib/intents-quote';
 import { TEST_MODE } from '@/lib/test-mode';
 
+/** How far a same coin's own price may be from its pick's NEAR Intents price. */
+export const SAME_COIN_GAP = 0.03;
+
 /** A token the app prices: where it is, and what the caller was told its decimals are. */
 export type PriceRef = {
   chain: DexChain;
@@ -221,6 +224,29 @@ export async function appPriceOf(
       ? list.find((t) => t.assetId === ref.priceAsset)?.price
       : familyPrice(list, held.family);
     return price && price > 0 ? { price, decimals: held.decimals } : null;
+  }
+  // The pick's same coin on another contract (LINK on Arbitrum for a LINK pick 1Click
+  // lists on Ethereum, 15 Nov): valued at the lower of the pick's NEAR Intents price and
+  // this contract's own DexScreener price, which must agree within SAME_COIN_GAP, with
+  // decimals read on chain. Either missing: refused.
+  if (ref.priceAsset) {
+    const picks = await d.oneClick().catch(() => null);
+    const pick = picks?.find((t) => t.assetId === ref.priceAsset);
+    const itself =
+      !!pick?.contractAddress &&
+      pick.blockchain === oneClickCodeOf(chain) &&
+      sameToken(chain, pick.contractAddress, address);
+    if (!itself) {
+      const [here, onChain] = await Promise.all([
+        dexScreenerPrice(chain, address, d),
+        d.decimals(chain, address).catch(() => null),
+      ]);
+      const there = pick?.price;
+      if (!(here && here > 0 && there && there > 0) || onChain === null || !agrees(onChain))
+        return null;
+      if (Math.abs(here - there) > there * SAME_COIN_GAP) return null;
+      return { price: Math.min(here, there), decimals: onChain };
+    }
   }
   // 1Click lists it here: 1Click's price and decimals.
   const list = await d.oneClick().catch(() => null);

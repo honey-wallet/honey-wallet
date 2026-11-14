@@ -33,6 +33,7 @@ import {
   sameToken,
 } from '@/lib/dex';
 import { dexChainOf } from '@/lib/dex-tokens';
+import type { SameCoinAsk } from '@/lib/same-coin';
 import { serverNow } from '@/lib/server-clock';
 import { createStore } from '@/lib/store';
 
@@ -167,6 +168,8 @@ export type RouteDeps = {
   token: () => Promise<string | null>;
   now: () => number;
   privateOnly: () => boolean;
+  /** The device's own check that a route's `sameCoin` contract is the pick's coin. */
+  sameCoin: (ask: SameCoinAsk) => Promise<boolean>;
 };
 
 const defaults: RouteDeps = {
@@ -182,6 +185,7 @@ const defaults: RouteDeps = {
   // Replaced 14 Nov (money audit 6): expiries are set on the server's clock (lib/server-clock).
   now: serverNow,
   privateOnly: () => privateRoutes.get().on,
+  sameCoin: async (ask) => (await import('@/lib/same-coin')).verifySameCoin(ask),
 };
 
 const KINDS: readonly RouteOption['kind'][] = [
@@ -308,7 +312,27 @@ export async function planRoute(
     // Replaced 14 Nov (money audit 12): a wrapped version must also be of the pick's own
     // family (WBTC for BTC, never WETH), not just any curated token.
     const family = wrapped ? canonicalOf(quote.chain, quote.buyToken)?.family : null;
-    if (wrapped ? !family || family !== familyOf(ask.toSymbol) : quote.chain !== ask.toChain)
+    // if (wrapped ? !family || family !== familyOf(ask.toSymbol) : quote.chain !== ask.toChain)
+    //   throw changed();
+    // Or the pick's same coin on another contract (15 Nov): only when CoinGecko, asked
+    // from this device, says so (lib/same-coin).
+    const sameCoin =
+      wrapped && !family && ask.wrapped && typeof best.sameCoin === 'string'
+        ? await d
+            .sameCoin({
+              id: best.sameCoin,
+              chain: quote.chain,
+              token: quote.buyToken,
+              decimals: best.buyDecimals,
+              pickAsset: ask.toToken,
+            })
+            .catch(() => false)
+        : false;
+    if (
+      wrapped
+        ? !sameCoin && (!family || family !== familyOf(ask.toSymbol))
+        : quote.chain !== ask.toChain
+    )
       throw changed();
     const dexAsk: DexAsk = {
       chain: quote.chain,
@@ -328,6 +352,29 @@ export async function planRoute(
   if (best.kind === 'intents_dex' && ask.wrapped) {
     const chain = dexChainOf(best.buyChain);
     const held = chain ? canonicalOf(chain, best.buyToken) : null;
+    // The pick's same coin on another chain (15 Nov): checked with CoinGecko from this
+    // device, its decimals read on chain; held as "LINK (on Arbitrum)".
+    if (chain && !held && chain !== ask.fromChain && typeof best.sameCoin === 'string') {
+      const ok = await d
+        .sameCoin({
+          id: best.sameCoin,
+          chain,
+          token: best.buyToken,
+          decimals: best.buyDecimals,
+          pickAsset: ask.toToken,
+        })
+        .catch(() => false);
+      if (!ok) throw changed();
+      return {
+        best,
+        why: route.fallbackText ?? `This uses ${best.label}. Swaps here are public on-chain.`,
+        fallback: route.fallback ?? null,
+        holdAs: `${ask.toSymbol ?? best.buySymbol ?? 'It'} (on ${chain})`,
+        dex: null,
+        elsewhere: { chain, token: best.buyToken.toLowerCase(), decimals: best.buyDecimals },
+        alternatives: route.alternatives,
+      };
+    }
     if (
       !chain ||
       chain === ask.fromChain ||
@@ -351,9 +398,15 @@ export async function planRoute(
     best,
     why: route.fallbackText ?? `This uses ${best.label}. Swaps here are public on-chain.`,
     fallback: route.fallback ?? null,
+    // holdAs:
+    //   best.kind === 'wrapped' && held && dex
+    //     ? `${held.family} (as ${held.symbol} on ${dex.ask.chain})`
+    //     : null,
     holdAs:
-      best.kind === 'wrapped' && held && dex
-        ? `${held.family} (as ${held.symbol} on ${dex.ask.chain})`
+      best.kind === 'wrapped' && dex
+        ? held
+          ? `${held.family} (as ${held.symbol} on ${dex.ask.chain})`
+          : `${ask.toSymbol ?? best.buySymbol ?? 'It'} (on ${dex.ask.chain})`
         : null,
     dex,
     alternatives: route.alternatives,

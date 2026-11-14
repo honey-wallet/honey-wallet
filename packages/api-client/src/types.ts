@@ -2214,6 +2214,11 @@ export interface RouteOption {
   seconds: number;
   /** The executable DEX quote of a one-swap route (`dex`, `wrapped`). */
   dexQuote?: DexQuote;
+  /**
+   * CoinGecko's id under which the bought contract is the pick's own coin (a jar leg
+   * bought on another contract, e.g. LINK on Arbitrum), for the app to check itself.
+   */
+  sameCoin?: string;
 }
 
 export interface BestRoute {

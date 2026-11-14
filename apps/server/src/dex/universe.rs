@@ -240,6 +240,19 @@ pub fn ids_by_address(list: &Value, chain: DexChain) -> HashMap<String, String> 
         .collect()
 }
 
+/// The CoinGecko id whose `chain` contract is `address` (normalized), if any: the coin
+/// a 1Click asset is, so its other chains' contracts can be found (15 Nov).
+pub fn id_of(list: &Value, chain: DexChain, address: &str) -> Option<String> {
+    let platform = chain.coingecko_platform();
+    list.as_array().into_iter().flatten().find_map(|c| {
+        let at = chain.normalize(c["platforms"][platform].as_str()?)?;
+        if at != address {
+            return None;
+        }
+        c["id"].as_str().map(String::from)
+    })
+}
+
 /// `/coins/markets` pages (by market cap, then by volume) joined with
 /// `/coins/list?include_platform=true`. USDC itself is left out (it is the other side of
 /// every swap).

@@ -17,6 +17,10 @@ const WBTC_ARB: &str = "0x2f2a2543b76a4166549f7aab2e75bef0aefc5b0f";
 const BTC: &str = "nep141:btc.omft.near";
 const TAKER: &str = "0x2c7536e3605d9c16a7a3d7b1898e529396a65c23";
 const BTC_ADDRESS: &str = "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh";
+const LINK_ETH: &str = "0x514910771af9ca656af840dff83e8264ecf986ca";
+const LINK_ARB: &str = "0xf97f4df75117a78c1a5a0dbb814af92458539fb4";
+const LINK_BASE: &str = "0x88fb150bdc53a65fe94dea0c9ba0a6daf8c6e196";
+const LINK_OP: &str = "0x350a791bfc2c21f9ed5d10980dad2e2638ffa7f6";
 
 fn token(
     id: &str,
@@ -64,7 +68,45 @@ fn listings() -> Vec<OneClickToken> {
             Some(USDC_BASE),
         ),
         token(BTC, "btc", "BTC", 8, 100_000.0, None),
+        token(
+            &format!("nep141:eth-{LINK_ETH}.omft.near"),
+            "eth",
+            "LINK",
+            18,
+            20.0,
+            Some(LINK_ETH),
+        ),
     ]
+}
+
+/// A safe DEX token that CoinGecko places under `id` (the same-coin candidates).
+fn same(
+    chain: DexChain,
+    address: &str,
+    price: f64,
+    liquidity: f64,
+    id: Option<&str>,
+) -> crate::dex::TokenView {
+    crate::dex::TokenView {
+        chain,
+        address: address.into(),
+        symbol: "LINK".into(),
+        name: "Chainlink".into(),
+        decimals: 18,
+        logo_url: None,
+        price_usd: price,
+        liquidity_usd: Some(liquidity),
+        volume24h_usd: Some(1_000_000.0),
+        market_cap_usd: None,
+        change24h_pct: None,
+        coingecko_id: id.map(String::from),
+        metadata: "coingecko",
+        route: "dex",
+        safety: crate::dex::SafetyView {
+            ok: true,
+            flags: Vec::new(),
+        },
+    }
 }
 
 /// What the double answers.
@@ -97,6 +139,9 @@ struct Fake {
     /// Budget charges, and whether the budgets are spent.
     admits: Mutex<Vec<&'static str>>,
     out_of_budget: bool,
+    /// What `same_coin` answers, and every 1Click ask (recipients checked).
+    same: Vec<crate::dex::TokenView>,
+    asks: Mutex<Vec<IntentsAsk>>,
 }
 
 impl Fake {
@@ -110,6 +155,8 @@ impl Fake {
             dex_calls: AtomicU32::new(0),
             admits: Mutex::new(Vec::new()),
             out_of_budget: false,
+            same: Vec::new(),
+            asks: Mutex::new(Vec::new()),
         }
     }
 }
@@ -133,8 +180,9 @@ impl Sources for Fake {
     async fn listings(&self) -> Result<Arc<Vec<OneClickToken>>, AppError> {
         Ok(Arc::new(listings()))
     }
-    async fn intents(&self, _: IntentsAsk) -> Result<DryQuote, AppError> {
+    async fn intents(&self, ask: IntentsAsk) -> Result<DryQuote, AppError> {
         self.intents_calls.fetch_add(1, AtomicOrdering::SeqCst);
+        self.asks.lock().unwrap().push(ask);
         let a = {
             let mut list = self.intents.lock().unwrap();
             if list.len() > 1 {
@@ -190,6 +238,13 @@ impl Sources for Fake {
             return Some((1.0, 6));
         }
         (token == AERO).then_some((0.5, 18))
+    }
+    async fn same_coin(&self, chain: DexChain, token: &str) -> Vec<crate::dex::TokenView> {
+        if chain == DexChain::Ethereum && token == LINK_ETH {
+            self.same.clone()
+        } else {
+            Vec::new()
+        }
     }
     async fn admit_intents(&self, _: Uuid) -> Result<(), AppError> {
         self.admits.lock().unwrap().push("intents");
@@ -272,10 +327,13 @@ async fn near_intents_is_chosen_even_when_the_dex_is_cheaper() {
     assert_eq!(r.best.label, "NEAR Intents");
     assert_eq!(r.fallback, None);
     assert_eq!(r.fallback_text, None);
-    // The cheaper DEX was still quoted and is reported, with its net value.
-    assert_eq!(r.alternatives.len(), 1);
-    assert_eq!(r.alternatives[0].kind, RouteKind::Dex);
-    assert!(r.alternatives[0].net_usd > r.best.net_usd);
+    // // The cheaper DEX was still quoted and is reported, with its net value.
+    // assert_eq!(r.alternatives.len(), 1);
+    // assert_eq!(r.alternatives[0].kind, RouteKind::Dex);
+    // assert!(r.alternatives[0].net_usd > r.best.net_usd);
+    // 1Click keeps over 90%, so the DEX isn't even asked (15 Nov: free-tier budgets).
+    assert!(r.alternatives.is_empty());
+    assert_eq!(p.sources().dex_calls.load(AtomicOrdering::SeqCst), 0);
     assert!((r.best.net_usd - (9.95 - 0.002)).abs() < 1e-9);
     assert_eq!(r.best.legs[0].kind, LegKind::Intents);
 }
@@ -459,8 +517,9 @@ async fn with_the_dex_off_only_near_intents_is_quoted() {
 #[tokio::test]
 async fn a_slow_candidate_drops_out() {
     // 1Click answers, the DEX is slow: NEAR Intents, and the DEX is reported timed out.
+    // (1Click keeps 80% here, under 90%, so the DEX is asked at all.)
     let p = planner(Fake::new(
-        vec![Answer::Out("9990000", "9950000")],
+        vec![Answer::Out("8100000", "8000000")],
         vec![(USDT_ARB, Answer::Slow)],
     ));
     let started = std::time::Instant::now();
@@ -548,6 +607,7 @@ fn option(
         net_usd: min_out_usd - gas_usd,
         seconds,
         dex_quote: None,
+        same_coin: None,
     }
 }
 
@@ -925,6 +985,19 @@ async fn every_quote_is_charged_before_its_provider_is_asked() {
         .unwrap();
     let mut admits = p.sources().admits.lock().unwrap().clone();
     admits.sort();
+    // assert_eq!(admits, vec!["arbitrum", "intents"]);
+    // 1Click keeps over 90%: only its quote is charged (the DEX is never asked).
+    assert_eq!(admits, vec!["intents"]);
+    // A costly 1Click quote: then the DEX is charged before it is asked too.
+    let p = planner(Fake::new(
+        vec![Answer::Out("8100000", "8000000")],
+        vec![(USDT_ARB, Answer::Out("10000000", "9990000"))],
+    ));
+    p.best(Uuid::new_v4(), stable_swap("10000000"))
+        .await
+        .unwrap();
+    let mut admits = p.sources().admits.lock().unwrap().clone();
+    admits.sort();
     assert_eq!(admits, vec!["arbitrum", "intents"]);
 
     // Budgets spent: no provider is asked, and the answer is 429, not "no route".
@@ -975,4 +1048,144 @@ fn a_costly_intents_route_gives_way_only_to_one_that_keeps_clearly_more() {
     let dex = option(RouteKind::Dex, 9.9, 0.0, 1, 10);
     let (best, why, _) = choose(Some(Ok(fine)), vec![dex], Some(10.0), false).unwrap();
     assert_eq!((best.kind, why), (RouteKind::Intents, None));
+}
+
+// Same coin on another contract (3c, 15 Nov)
+
+/// $0.50 of USDC on Base into LINK, which 1Click lists only on Ethereum: a jar leg.
+fn link_leg(private_only: bool) -> BestRouteRequest {
+    BestRouteRequest {
+        from_chain: "base".into(),
+        from_token: USDC_BASE.into(),
+        amount: "500000".into(),
+        to_chain: None,
+        to_token: format!("nep141:eth-{LINK_ETH}.omft.near"),
+        taker: TAKER.into(),
+        from_address: Some(TAKER.into()),
+        slippage_bps: Some(100),
+        private_only,
+        wrapped: true,
+    }
+}
+
+/// 1Click direct pays out on Ethereum: $0.50 keeps $0.26 (0.013 LINK at $20).
+fn link_fake(same_coin: Vec<crate::dex::TokenView>) -> Fake {
+    let mut f = Fake::new(
+        vec![
+            Answer::Out("13500000000000000", "13000000000000000"),
+            Answer::Out("498000", "496000"),
+        ],
+        vec![
+            // 0.0247 LINK on Base for $0.50 (one swap), 0.0246 on Arbitrum after the hop.
+            (
+                LINK_BASE,
+                Answer::Out("24800000000000000", "24700000000000000"),
+            ),
+            (
+                LINK_ARB,
+                Answer::Out("24700000000000000", "24600000000000000"),
+            ),
+            (
+                LINK_OP,
+                Answer::Out("24700000000000000", "24600000000000000"),
+            ),
+        ],
+    );
+    f.sponsored = true;
+    f.same = same_coin;
+    f
+}
+
+#[tokio::test]
+async fn a_costly_leg_buys_the_same_coin_where_its_pool_is_deep() {
+    let p = planner(link_fake(vec![
+        same(
+            DexChain::Base,
+            LINK_BASE,
+            20.1,
+            400_000.0,
+            Some("chainlink"),
+        ),
+        same(
+            DexChain::Arbitrum,
+            LINK_ARB,
+            19.9,
+            2_000_000.0,
+            Some("chainlink"),
+        ),
+    ]));
+    let r = p.best(Uuid::new_v4(), link_leg(false)).await.unwrap();
+    // On the paying chain: one swap, no bridge, valued at the lower price ($20).
+    assert_eq!(r.best.kind, RouteKind::Wrapped);
+    assert_eq!(r.best.buy_chain, "base");
+    assert_eq!(r.best.buy_token, LINK_BASE);
+    assert_eq!(r.best.hold_as.as_deref(), Some("LINK (on Base)"));
+    assert_eq!(r.best.same_coin.as_deref(), Some("chainlink"));
+    assert!((r.best.min_out_usd - 0.494).abs() < 1e-9);
+    // Arbitrum (1Click USDC, then the DEX) and 1Click direct are kept as alternatives.
+    let arb = r
+        .alternatives
+        .iter()
+        .find(|o| o.kind == RouteKind::IntentsDex)
+        .expect("the Arbitrum route");
+    assert_eq!(arb.buy_chain, "arbitrum");
+    assert_eq!(arb.hold_as.as_deref(), Some("LINK (on Arbitrum)"));
+    assert_eq!(arb.same_coin.as_deref(), Some("chainlink"));
+    assert!((arb.min_out_usd - 0.24_6 * 1.99).abs() < 1e-6);
+    assert!(r.alternatives.iter().any(|o| o.kind == RouteKind::Intents));
+    // The USDC hop goes to the wallet's own address, not the pick's recipient.
+    let asks = p.sources().asks.lock().unwrap();
+    assert!(asks.iter().skip(1).all(|a| a.recipient == TAKER));
+}
+
+#[tokio::test]
+async fn the_same_coin_needs_a_deep_pool_a_matching_price_and_a_coingecko_id() {
+    let p = planner(link_fake(vec![
+        // Too shallow, priced 5% off, and not on CoinGecko's map.
+        same(DexChain::Base, LINK_BASE, 20.0, 50_000.0, Some("chainlink")),
+        same(
+            DexChain::Arbitrum,
+            LINK_ARB,
+            21.0,
+            2_000_000.0,
+            Some("chainlink"),
+        ),
+        same(DexChain::Optimism, LINK_OP, 20.0, 2_000_000.0, None),
+    ]));
+    let r = p.best(Uuid::new_v4(), link_leg(false)).await.unwrap();
+    assert_eq!(r.best.kind, RouteKind::Intents);
+    assert!(
+        r.alternatives
+            .iter()
+            .all(|o| o.same_coin.is_none() && o.kind != RouteKind::Wrapped)
+    );
+    assert_eq!(p.sources().dex_calls.load(AtomicOrdering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn private_routes_only_never_buy_the_same_coin_elsewhere() {
+    let p = planner(link_fake(vec![same(
+        DexChain::Base,
+        LINK_BASE,
+        20.0,
+        400_000.0,
+        Some("chainlink"),
+    )]));
+    let r = p.best(Uuid::new_v4(), link_leg(true)).await.unwrap();
+    assert_eq!(r.best.kind, RouteKind::Intents);
+    assert_eq!(p.sources().dex_calls.load(AtomicOrdering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn a_btc_legs_usdc_hop_goes_to_the_wallet_not_the_bitcoin_address() {
+    let p = planner(Fake::new(
+        vec![too_low(), Answer::Out("169000", "168000")],
+        vec![(WBTC_ARB, Answer::Out("170", "168"))],
+    ));
+    let _ = p.best(Uuid::new_v4(), jar_leg()).await.unwrap();
+    let asks = p.sources().asks.lock().unwrap();
+    // 1Click direct pays the Bitcoin address; the cbBTC-on-Base hop pays the wallet.
+    assert_eq!(asks[0].recipient, BTC_ADDRESS);
+    assert!(asks.len() >= 2);
+    assert!(asks.iter().skip(1).all(|a| a.recipient == TAKER));
 }

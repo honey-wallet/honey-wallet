@@ -28,6 +28,11 @@
 //! 3. `wrapped` (jars, `wrapped: true`): one DEX swap on the paying chain into the
 //!    pick's canonical wrapped version there ([`crate::dex::canonical`]): "BTC (as WBTC
 //!    on Arbitrum)".
+//!    Same coin (jars, 15 Nov): the pick itself on another contract, by CoinGecko's map
+//!    of the coin's contracts ([`crate::dex::DexService::same_coin`]): one DEX swap on
+//!    the paying chain, or 1Click USDC to a chain where Honey pays gas, then the DEX
+//!    ("LINK (on Arbitrum)"). Only deep pools ([`SAME_COIN_MIN_LIQUIDITY`]) priced
+//!    within [`SAME_COIN_PRICE_GAP`] of 1Click's price; valued at the lower of the two.
 //! 4. `intents_dex`: 1Click to USDC on the target chain, then the DEX, for a token
 //!    1Click doesn't list.
 //! 5. `dex_intents`: the DEX into USDC on the paying chain, then 1Click, for selling a
@@ -74,6 +79,22 @@ const WRAPPED_ELSEWHERE: [DexChain; 4] = [
 ];
 /// At most this many other chains are quoted for a wrapped version, to bound latency.
 const WRAPPED_ELSEWHERE_MAX: usize = 2;
+/// Chains a jar leg's same coin may be bought on through 1Click USDC (Honey pays gas
+/// there; Solana only when it pays, as a 1Click hop needs a Solana recipient).
+const SAME_COIN_ELSEWHERE: [DexChain; 4] = [
+    DexChain::Arbitrum,
+    DexChain::Base,
+    DexChain::Optimism,
+    DexChain::Polygon,
+];
+/// At most this many other chains are quoted for one leg, deepest pools first.
+const SAME_COIN_MAX: usize = 2;
+/// The same coin is bought only from a pool at least this deep (the long-tail floor is
+/// $25k; a pick moved off its own chain should land in a deep market).
+pub const SAME_COIN_MIN_LIQUIDITY: f64 = 100_000.0;
+/// Its price must be within this of 1Click's price for the pick (a depegged bridged
+/// copy is not the same coin).
+pub const SAME_COIN_PRICE_GAP: f64 = 0.02;
 /// Fallback routes this close in net value (a hundredth of a percent, at least
 /// $0.0005) are a tie: fewer legs, then faster, wins.
 pub const TIE_BPS: f64 = 1.0;
@@ -211,6 +232,10 @@ pub struct RouteOption {
     /// The executable DEX quote of a one-swap route (`dex`, `wrapped`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dex_quote: Option<QuoteResponse>,
+    /// The CoinGecko id under which the bought contract is the pick's own coin (3c), so
+    /// the app can check it against CoinGecko itself.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub same_coin: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -278,6 +303,11 @@ pub trait Sources: Send + Sync {
     async fn dex(&self, user: Uuid, ask: QuoteRequest) -> Result<QuoteResponse, AppError>;
     /// A DEX token's USD price and decimals.
     async fn dex_price(&self, chain: DexChain, token: &str) -> Option<(f64, u8)>;
+    /// Safe DEX tokens that are the same coin as `(chain, token)` by CoinGecko's map,
+    /// from lists already built ([`DexService::same_coin`]).
+    async fn same_coin(&self, _chain: DexChain, _token: &str) -> Vec<crate::dex::TokenView> {
+        Vec::new()
+    }
     async fn gas(&self, user: Uuid, chain: DexChain, work: Work) -> GasCost;
     /// Warm a DEX token's caches in the background (dropped candidates are cold).
     fn warm(&self, _chain: DexChain, _token: &str) {}
@@ -819,6 +849,7 @@ impl<S: Sources> Planner<S> {
                                 .map(|s| s.min(u64::from(u32::MAX)) as u32)
                                 .unwrap_or(INTENTS_SECONDS),
                             dex_quote: None,
+                            same_coin: None,
                         })
                     }
                     .await;
@@ -911,6 +942,7 @@ impl<S: Sources> Planner<S> {
             && input.wrapped
             && let (Some(family), Some(fl)) = (family, &from.listing)
             && from.address.as_deref() == Some(from_chain.usdc())
+            && from_chain != DexChain::Solana
         {
             let targets = WRAPPED_ELSEWHERE
                 .iter()
@@ -921,15 +953,19 @@ impl<S: Sources> Planner<S> {
                 let Some(usdc) = usdc_listing(&tokens, c.chain) else {
                     continue;
                 };
+                // let ask = IntentsAsk { .., recipient: taker.clone(), .. };
+                // The wallet's own EVM address receives the USDC and the wrapped coin: the
+                // pick's recipient is a Bitcoin address for BTC (15 Nov).
                 let ask = IntentsAsk {
                     origin_asset: fl.asset_id.clone(),
                     destination_asset: usdc.asset_id.clone(),
                     amount: amount.clone(),
-                    recipient: taker.clone(),
+                    recipient: from_address.clone(),
                     refund_to: from_address.clone(),
                     slippage_bps: slippage.min(100),
                 };
-                let (taker, from_code) = (taker.clone(), from.code.clone());
+                // let (taker, from_code) = (taker.clone(), from.code.clone());
+                let (taker, from_code) = (from_address.clone(), from.code.clone());
                 let family_price = out_price.map(|(p, _)| p);
                 let native = native_in;
                 candidates.push(
@@ -995,6 +1031,7 @@ impl<S: Sources> Planner<S> {
                                     .unwrap_or(INTENTS_SECONDS)
                                     + dex_seconds(c.chain),
                                 dex_quote: None,
+                                same_coin: None,
                             })
                         }
                         .await;
@@ -1002,6 +1039,176 @@ impl<S: Sources> Planner<S> {
                     }
                     .boxed(),
                 );
+            }
+        }
+
+        // 3c. Jars: the pick's same coin on another contract, by CoinGecko's map of the
+        // coin's contracts (15 Nov). A deep pool priced like 1Click's pick only; valued
+        // at the lower of the two prices. Not for BTC, ETH and gold (3 and 3b have them).
+        if dex_on
+            && input.wrapped
+            && family.is_none()
+            && let (Some(pick_chain), Some(pick_address), Some(pick_price)) =
+                (to.chain, &to.address, out_price.map(|(p, _)| p))
+            && pick_price > 0.0
+            && from.address.as_deref() == Some(from_chain.usdc())
+        {
+            let mut found: Vec<crate::dex::TokenView> = self
+                .sources
+                .same_coin(pick_chain, pick_address)
+                .await
+                .into_iter()
+                .filter(|t| t.coingecko_id.is_some())
+                .filter(|t| t.liquidity_usd.unwrap_or(0.0) >= SAME_COIN_MIN_LIQUIDITY)
+                .filter(|t| {
+                    t.price_usd.is_finite()
+                        && (t.price_usd - pick_price).abs() <= pick_price * SAME_COIN_PRICE_GAP
+                })
+                .filter(|t| !(t.chain == pick_chain && t.address == *pick_address))
+                .collect();
+            found.sort_by(|a, b| {
+                b.liquidity_usd
+                    .unwrap_or(0.0)
+                    .partial_cmp(&a.liquidity_usd.unwrap_or(0.0))
+                    .unwrap_or(Ordering::Equal)
+            });
+            let pick_symbol = to.listing.as_ref().map(|l| l.symbol.clone());
+            let hold = move |t: &crate::dex::TokenView| {
+                let chain = chain_label(t.chain);
+                match &pick_symbol {
+                    Some(p) if !p.eq_ignore_ascii_case(&t.symbol) => {
+                        format!("{p} (as {} on {chain})", t.symbol)
+                    }
+                    _ => format!("{} (on {chain})", t.symbol),
+                }
+            };
+            // On the paying chain: one swap from its USDC, no bridge.
+            if let (Some(t), Some(sell)) = (
+                found.iter().find(|t| t.chain == from_chain).cloned(),
+                from.address.clone(),
+            ) {
+                let (amount, taker, hold_as) = (amount.clone(), from_address.clone(), hold(&t));
+                candidates.push(
+                    async move {
+                        let r = async {
+                            let q = self
+                                .dex_quote(
+                                    user, from_chain, &sell, &t.address, &amount, &taker, slippage,
+                                )
+                                .await?;
+                            let price = pick_price.min(t.price_usd);
+                            let mut o = self
+                                .one_swap(
+                                    user,
+                                    RouteKind::Wrapped,
+                                    q,
+                                    price,
+                                    t.decimals,
+                                    Some(t.symbol.clone()),
+                                    Some(hold_as),
+                                )
+                                .await;
+                            o.same_coin = t.coingecko_id.clone();
+                            Ok(o)
+                        }
+                        .await;
+                        (RouteKind::Wrapped, r)
+                    }
+                    .boxed(),
+                );
+            }
+            // Elsewhere: 1Click USDC to USDC there, then the DEX, deepest pools first. The
+            // USDC and the coin go to the wallet's own EVM address (the same on every EVM
+            // chain), never the pick's recipient (a Bitcoin or NEAR address for some picks).
+            if let Some(fl) = &from.listing
+                && from_chain != DexChain::Solana
+            {
+                let targets: Vec<crate::dex::TokenView> = found
+                    .iter()
+                    .filter(|t| t.chain != from_chain && SAME_COIN_ELSEWHERE.contains(&t.chain))
+                    .take(SAME_COIN_MAX)
+                    .cloned()
+                    .collect();
+                for t in targets {
+                    let Some(usdc) = usdc_listing(&tokens, t.chain) else {
+                        continue;
+                    };
+                    let ask = IntentsAsk {
+                        origin_asset: fl.asset_id.clone(),
+                        destination_asset: usdc.asset_id.clone(),
+                        amount: amount.clone(),
+                        recipient: from_address.clone(),
+                        refund_to: from_address.clone(),
+                        slippage_bps: slippage.min(100),
+                    };
+                    let (taker, from_code, hold_as) =
+                        (from_address.clone(), from.code.clone(), hold(&t));
+                    let native = native_in;
+                    candidates.push(
+                        async move {
+                            let r = async {
+                                let bridge = self.intents_quote(user, ask.clone()).await?;
+                                let q = self
+                                    .dex_quote(
+                                        user,
+                                        t.chain,
+                                        t.chain.usdc(),
+                                        &t.address,
+                                        &bridge.min_amount_out,
+                                        &taker,
+                                        slippage,
+                                    )
+                                    .await?;
+                                let price = pick_price.min(t.price_usd);
+                                let deposit = self
+                                    .sources
+                                    .gas(user, from_chain, Work::Deposit { native })
+                                    .await;
+                                let swap = self.swap_gas(user, t.chain, &q).await;
+                                let min_out_usd = units(&q.min_buy_amount, t.decimals, price);
+                                let gas = deposit.usd + swap.usd;
+                                Ok(RouteOption {
+                                    kind: RouteKind::IntentsDex,
+                                    label: format!(
+                                        "NEAR Intents, then {} on {}",
+                                        aggregator_name(q.aggregator),
+                                        chain_label(t.chain)
+                                    ),
+                                    legs: vec![
+                                        Self::intents_leg(
+                                            &ask,
+                                            &from_code,
+                                            t.chain.oneclick(),
+                                            &bridge,
+                                        ),
+                                        Self::dex_leg(&q),
+                                    ],
+                                    buy_token: t.address.clone(),
+                                    buy_chain: t.chain.name().into(),
+                                    buy_symbol: Some(t.symbol.clone()),
+                                    buy_decimals: t.decimals,
+                                    hold_as: Some(hold_as),
+                                    amount_out: q.buy_amount.clone(),
+                                    min_amount_out: q.min_buy_amount.clone(),
+                                    min_out_usd,
+                                    gas_usd: gas,
+                                    sponsored: deposit.sponsored && swap.sponsored,
+                                    net_usd: min_out_usd - gas,
+                                    seconds: bridge
+                                        .time_estimate
+                                        .map(|s| s.min(3_600) as u32)
+                                        .unwrap_or(INTENTS_SECONDS)
+                                        + dex_seconds(t.chain),
+                                    dex_quote: None,
+                                    same_coin: t.coingecko_id.clone(),
+                                })
+                            }
+                            .await;
+                            (RouteKind::IntentsDex, r)
+                        }
+                        .boxed(),
+                    );
+                }
             }
         }
 
@@ -1074,6 +1281,7 @@ impl<S: Sources> Planner<S> {
                                 .unwrap_or(INTENTS_SECONDS)
                                 + dex_seconds(tc),
                             dex_quote: None,
+                            same_coin: None,
                         })
                     }
                     .await;
@@ -1153,6 +1361,7 @@ impl<S: Sources> Planner<S> {
                                     .map(|s| s.min(3_600) as u32)
                                     .unwrap_or(INTENTS_SECONDS),
                             dex_quote: None,
+                            same_coin: None,
                         })
                     }
                     .await;
@@ -1162,7 +1371,25 @@ impl<S: Sources> Planner<S> {
             );
         }
 
-        let results = join_all(candidates).await;
+        // let results = join_all(candidates).await;
+        // NEAR Intents first (15 Nov, free-tier budgets): when it keeps SWITCH_BELOW or more,
+        // `choose` keeps it whatever the DEX says, so no DEX or hop is quoted at all. Only a
+        // costly, refused or failed 1Click quote asks the fallbacks (in parallel, as before).
+        let intents_first =
+            !candidates.is_empty() && from.listing.is_some() && to.listing.is_some();
+        let results = if intents_first {
+            let mut rest = candidates;
+            let first = rest.remove(0).await;
+            let settled = matches!(&first, (RouteKind::Intents, Ok(o))
+                if amount_in_usd.is_none_or(|usd| o.min_out_usd >= usd * SWITCH_BELOW));
+            let mut results = vec![first];
+            if !settled && !rest.is_empty() {
+                results.extend(join_all(rest).await);
+            }
+            results
+        } else {
+            join_all(candidates).await
+        };
         // Every candidate refused by a budget: say so (429), not "no route".
         let all_limited = !results.is_empty()
             && results
@@ -1273,6 +1500,7 @@ impl<S: Sources> Planner<S> {
             net_usd: min_out_usd - gas.usd,
             seconds: dex_seconds(q.chain),
             dex_quote: Some(q),
+            same_coin: None,
         }
     }
 }
@@ -1454,6 +1682,13 @@ impl Sources for LiveSources {
             return Some((1.0, 6));
         }
         self.dex.as_ref()?.token_price(chain, token).await
+    }
+
+    async fn same_coin(&self, chain: DexChain, token: &str) -> Vec<crate::dex::TokenView> {
+        match &self.dex {
+            Some(d) => d.same_coin(chain, token).await,
+            None => Vec::new(),
+        }
     }
 
     async fn gas(&self, user: Uuid, chain: DexChain, work: Work) -> GasCost {

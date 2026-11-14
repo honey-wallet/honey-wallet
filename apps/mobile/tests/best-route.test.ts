@@ -277,3 +277,86 @@ describe('the route planner (privacy first)', () => {
     ).rejects.toThrow('Amount is too low for bridge, try at least 5984899');
   });
 });
+
+describe('the same coin on another contract (15 Nov)', () => {
+  const LINK = 'nep141:eth-0x514910771af9ca656af840dff83e8264ecf986ca.omft.near';
+  const LINK_ARB = '0xf97f4df75117a78c1a5a0dbb814af92458539fb4';
+  const LINK_BASE = getAddress('0x88fb150bdc53a65fe94dea0c9ba0a6daf8c6e196');
+  const linkLeg = {
+    ...jarLeg,
+    fromChain: 'Base' as const,
+    fromToken: USDC_BASE,
+    amount: 500_000n,
+    toToken: LINK,
+    taker: ME,
+    toSymbol: 'LINK',
+  };
+  const elsewhere = option({
+    kind: 'intents_dex',
+    label: 'NEAR Intents, then KyberSwap on Arbitrum',
+    buyToken: LINK_ARB,
+    buyChain: 'arbitrum',
+    buySymbol: 'LINK',
+    buyDecimals: 18,
+    sameCoin: 'chainlink',
+  });
+
+  it('is taken elsewhere only when the device’s own CoinGecko check agrees', async () => {
+    const yes = vi.fn(async () => true);
+    const { d } = deps({ best: elsewhere, fallback: 'fees', alternatives: [], dropped: [] });
+    const r = await planRoute(linkLeg, { ...d, sameCoin: yes });
+    expect(r.holdAs).toBe('LINK (on Arbitrum)');
+    expect(r.elsewhere).toEqual({ chain: 'Arbitrum', token: LINK_ARB, decimals: 18 });
+    expect(yes).toHaveBeenCalledWith({
+      id: 'chainlink',
+      chain: 'Arbitrum',
+      token: LINK_ARB,
+      decimals: 18,
+      pickAsset: LINK,
+    });
+    await expect(planRoute(linkLeg, { ...d, sameCoin: async () => false })).rejects.toThrow(
+      /route changed/,
+    );
+    // Without the server naming the coin, a non-curated contract is refused as before.
+    const { d: bare } = deps({
+      best: { ...elsewhere, sameCoin: undefined },
+      fallback: 'fees',
+      alternatives: [],
+      dropped: [],
+    });
+    await expect(planRoute(linkLeg, { ...bare, sameCoin: yes })).rejects.toThrow(/route changed/);
+  });
+
+  it('is bought on the paying chain in one swap only when the check agrees', async () => {
+    const quote = quoteFor({
+      chain: 'Base',
+      sellToken: USDC_BASE,
+      buyToken: LINK_BASE,
+      sellAmount: '500000',
+      taker: ME,
+      slippageBps: 100,
+    });
+    const body = {
+      best: option({
+        kind: 'wrapped',
+        label: 'KyberSwap on Base',
+        buyToken: LINK_BASE.toLowerCase(),
+        buyChain: 'base',
+        buySymbol: 'LINK',
+        buyDecimals: 18,
+        sameCoin: 'chainlink',
+        dexQuote: quote,
+      }),
+      fallback: 'fees',
+      alternatives: [],
+      dropped: [],
+    };
+    const { d } = deps(body);
+    const r = await planRoute(linkLeg, { ...d, sameCoin: async () => true });
+    expect(r.holdAs).toBe('LINK (on Base)');
+    expect(r.dex?.quote.buyToken).toBe(LINK_BASE);
+    await expect(planRoute(linkLeg, { ...d, sameCoin: async () => false })).rejects.toThrow(
+      /route changed/,
+    );
+  });
+});

@@ -1439,6 +1439,43 @@ impl DexService {
         self.tokens(chain, false).await
     }
 
+    /// The safe tokens, on lists already built, that CoinGecko's coin list places under
+    /// the same coin as the contract `(chain, address)`: LINK on Arbitrum for LINK on
+    /// Ethereum (15 Nov). Reads only what is in memory (the coin list and the built
+    /// lists): never fetches or builds, so a jar leg's plan never waits on it. Empty when
+    /// the contract isn't on CoinGecko's list or nothing else matches.
+    pub async fn same_coin(&self, chain: DexChain, address: &str) -> Vec<TokenView> {
+        if !self.enabled() {
+            return Vec::new();
+        }
+        let Some(address) = chain.normalize(address) else {
+            return Vec::new();
+        };
+        let list = match self.coin_list.read().await.as_ref() {
+            Some((_, list)) => list.clone(),
+            None => return Vec::new(),
+        };
+        let Some(id) = universe::id_of(&list, chain, &address) else {
+            return Vec::new();
+        };
+        let lists = self.universe.read().await;
+        let mut out: Vec<TokenView> = chains::ALL
+            .into_iter()
+            .filter_map(|c| lists.get(&c).map(|(_, t)| (c, t.clone())))
+            .flat_map(|(c, tokens)| {
+                tokens
+                    .iter()
+                    .filter(|t| t.coingecko_id.as_deref() == Some(id.as_str()))
+                    .map(|t| self.view(t, self.safety.cached(c, &t.address)))
+                    .filter(|v| v.safety.ok)
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        drop(lists);
+        out.retain(|v| !(v.chain == chain && v.address == address));
+        out
+    }
+
     /// Every chain's safe tokens from lists already built (never builds one, never calls
     /// a provider): for the thesis registry and jar pricing, which mustn't wait on a
     /// build. Empty while DEX routing is off or before the first build.

@@ -208,3 +208,47 @@ describe('Swap’s DEX quotes keep their value at the app’s prices (15 Nov)', 
     );
   });
 });
+
+describe('a jar pick’s same coin on another contract (15 Nov)', () => {
+  const LINK = 'nep141:eth-0x514910771af9ca656af840dff83e8264ecf986ca.omft.near';
+  const LINK_ARB = getAddress('0xf97f4df75117a78c1a5a0dbb814af92458539fb4');
+  const pick = [
+    {
+      assetId: LINK,
+      decimals: 18,
+      price: 20,
+      symbol: 'LINK',
+      blockchain: 'eth',
+      contractAddress: '0x514910771af9ca656af840dff83e8264ecf986ca',
+    },
+  ];
+  const ref = {
+    chain: 'Arbitrum' as const,
+    address: LINK_ARB,
+    symbol: 'LINK',
+    decimals: 18,
+    priceAsset: LINK,
+  };
+
+  it('is worth the lower of its pick’s NEAR Intents price and its own', async () => {
+    expect(await appPriceOf(ref, deps({ [LINK_ARB]: 19.8 }, 18, pick))).toEqual({
+      price: 19.8,
+      decimals: 18,
+    });
+    forgetAppPrices();
+    expect(await appPriceOf(ref, deps({ [LINK_ARB]: 20.4 }, 18, pick))).toEqual({
+      price: 20,
+      decimals: 18,
+    });
+  });
+
+  it('is refused when the two prices are over 3% apart, or either or its decimals are missing', async () => {
+    expect(await appPriceOf(ref, deps({ [LINK_ARB]: 21 }, 18, pick))).toBeNull();
+    forgetAppPrices();
+    expect(await appPriceOf(ref, deps({}, 18, pick))).toBeNull();
+    forgetAppPrices();
+    expect(await appPriceOf(ref, deps({ [LINK_ARB]: 20 }, null, pick))).toBeNull();
+    forgetAppPrices();
+    expect(await appPriceOf(ref, deps({ [LINK_ARB]: 20 }, 18, []))).toBeNull();
+  });
+});
