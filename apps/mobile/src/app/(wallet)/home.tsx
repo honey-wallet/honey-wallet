@@ -65,12 +65,14 @@ import {
 import { TAB_BAR_HEIGHT } from '@/components/wallet/TabBar';
 import { TabScreen } from '@/components/wallet/TabScreen';
 import { WalletHeader } from '@/components/wallet/WalletHeader';
+import { useAppUpdate } from '@/lib/build-info';
 import { openBuy } from '@/lib/buy';
 import { SHOW_DEMO_LABELS } from '@/lib/demo-money-copy';
 import { useFocusPolling } from '@/lib/focus-polling';
 import { useMoney } from '@/lib/fx';
 import { loadMyGroups } from '@/lib/group-jars';
 import { tap } from '@/lib/haptics';
+import { useInFlight } from '@/lib/in-flight';
 import { inJarsText, jarsHolding } from '@/lib/jar-holdings';
 import { LOADS } from '@/lib/loads';
 import { useHoldingsChart } from '@/lib/market';
@@ -191,6 +193,11 @@ function HomeScreen() {
   const wallet = useActiveWallet();
   const isMain = isMainWallet(wallet);
   const multisig = useMultisig(wallet.id);
+  // The header's last HEADER_BOTTOM points cover what starts right under it: the bars
+  // get that room, only while one shows, so the balance never moves (14 Nov).
+  const update = useAppUpdate();
+  const inFlight = useInFlight(wallet.id);
+  const barShown = update.state === 'ready' || inFlight.count > 0;
   // Pull to refresh: balances and Activity read again, past the server's cache.
   const [refreshing, setRefreshing] = useState(false);
   const refresh = async () => {
@@ -366,7 +373,8 @@ function HomeScreen() {
           <View style={{ height: HEADER_ROW }} />
 
           {/* A swap or jar buy still moving: here, since history is a section below. */}
-          <View style={styles.gutter}>
+          {/* <View style={styles.gutter}> */}
+          <View style={[styles.gutter, barShown && { paddingTop: HEADER_BOTTOM }]}>
             <UpdateReadyBar />
             <InFlightBar walletId={wallet.id} />
           </View>
