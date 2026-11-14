@@ -181,6 +181,8 @@ type Props = {
   headline?: boolean;
   /** A jar's launch (Unix ms): a dashed upright line where it falls inside the chart. */
   launchAt?: number;
+  /** The jar's own ring logo, worn at the end of its line in place of the jar icon. */
+  mark?: ReactNode;
   legend?: boolean;
   caption?: string | null;
 };
@@ -217,6 +219,7 @@ function ConvergeView({
   compare,
   headline = true,
   launchAt,
+  mark,
   // Legend and caption taken off on 14 Nov: each line wears its name and move at its end
   // instead (owner: "Past prices, not a forecast." is filler).
   // legend = true,
@@ -255,6 +258,7 @@ function ConvergeView({
             resultColor={color}
             compare={compare}
             launchAt={launchAt}
+            mark={mark}
             onMerge={() => setMerged(true)}
             onDone={onDone}
             onScrub={onScrub}
@@ -310,6 +314,7 @@ type PlotProps = {
   resultColor: string;
   compare?: { label: string; values: number[] } | null;
   launchAt?: number;
+  mark?: ReactNode;
   onMerge: () => void;
   onDone?: () => void;
   onScrub?: (index: number | null) => void;
@@ -324,6 +329,7 @@ function Plot({
   resultColor,
   compare,
   launchAt,
+  mark,
   onMerge,
   onDone,
   onScrub,
@@ -686,9 +692,12 @@ function Plot({
           accessibilityLabel={`Jar, ${signedPct(model.change)}`}
           style={[styles.endValue, styles.endRow, { right: width - lastX + 6 }, valueStyle]}
         >
-          <Icon name="jar" size={12} color={resultColor} />
+          {/* <Icon name="jar" size={12} color={resultColor} /> */}
+          {/* The jar's own ring at its line's end, then its move (15 Nov, owner). */}
+          {mark ?? <Icon name="jar" size={12} color={resultColor} />}
           <Animated.Text style={[styles.endValueText, valueColor]}>
-            Jar {signedPct(model.change)}
+            {/* Jar {signedPct(model.change)} */}
+            {mark ? signedPct(model.change) : `Jar ${signedPct(model.change)}`}
           </Animated.Text>
           <Animated.Text style={[styles.endValueText, valueColor]}>
             {formatUsd(endValue)}

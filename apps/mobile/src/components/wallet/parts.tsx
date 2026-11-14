@@ -17,6 +17,7 @@ import Animated, {
   runOnJS,
   useAnimatedProps,
   useAnimatedReaction,
+  useAnimatedRef,
   useAnimatedScrollHandler,
   useAnimatedStyle,
   useReducedMotion,
@@ -36,6 +37,7 @@ import { useEntrancePlaying } from '@/components/motion/Rise';
 import { StickyArea } from '@/components/motion/Sticky';
 import { TextsReveal } from '@/components/motion/TextsReveal';
 import { NETWORK_LOGOS } from '@/components/wallet/network-logos';
+import { ToTop } from '@/components/wallet/TabScreen';
 import { TOKEN_IMAGES } from '@/components/wallet/token-images';
 import { TOKEN_LOGOS } from '@/components/wallet/token-logos';
 import { useMoney } from '@/lib/fx';
@@ -811,6 +813,11 @@ export function PushedScreen({
       Extrapolation.CLAMP,
     ),
   }));
+  // Scroll to top, bottom-right once a long page is well underway, as on the tabs
+  // (15 Nov, owner); above the footer when there is one.
+  const scrollRef = useAnimatedRef<Animated.ScrollView>();
+  const reduceMotion = useReducedMotion();
+  const [footerH, setFooterH] = useState(0);
   return (
     // Section headers marked `Sticky` pin just under the header as they scroll up.
     <StickyArea
@@ -822,6 +829,7 @@ export function PushedScreen({
       <Animated.View pointerEvents="none" style={[styles.headerRule, rule]} />
       {scroll ? (
         <Animated.ScrollView
+          ref={scrollRef}
           onScroll={onScroll}
           scrollEventThrottle={16}
           // Only scroll (and bounce) when there's more than fits; a page that fits
@@ -843,8 +851,18 @@ export function PushedScreen({
         <View style={[styles.flex, contentStyle]}>{children}</View>
       )}
       {overlay}
+      {scroll ? (
+        <ToTop
+          scrollY={scrollY}
+          bottom={footer ? footerH + 12 : insets.bottom + 12}
+          onPress={() => scrollRef.current?.scrollTo({ y: 0, animated: !reduceMotion })}
+        />
+      ) : null}
       {footer && (
-        <View style={[styles.screenFooter, { paddingBottom: insets.bottom + SCREEN.footerBottom }]}>
+        <View
+          onLayout={(e) => setFooterH(e.nativeEvent.layout.height)}
+          style={[styles.screenFooter, { paddingBottom: insets.bottom + SCREEN.footerBottom }]}
+        >
           {scroll ? (
             <Animated.View pointerEvents="none" style={[styles.footerRule, footerRule]} />
           ) : null}

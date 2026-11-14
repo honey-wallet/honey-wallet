@@ -792,6 +792,7 @@ function JarBody({
           // The hero above says where it stands; the launch is marked on longer ranges.
           headline={false}
           launchAt={active === 'All' ? undefined : jar.createdAt}
+          mark={<JarIcon jar={jar} size={20} />}
           // title={pricesOnly ? 'Past prices of what it holds' : undefined} (off 14 Nov, owner)
           title={undefined}
           play={once.play}

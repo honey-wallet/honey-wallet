@@ -136,7 +136,7 @@ export function TabScreen({
  * Reduce Motion) bottom-right, and goes again back near the top. Driven by the scroll
  * on the UI thread.
  */
-function ToTop({
+export function ToTop({
   scrollY,
   bottom,
   onPress,
