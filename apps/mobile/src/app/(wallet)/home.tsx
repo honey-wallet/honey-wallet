@@ -3,7 +3,7 @@ import { StatusBar } from 'expo-status-bar';
 import { useEffect, useState } from 'react';
 import {
   RefreshControl,
-  ScrollView,
+  // ScrollView, (the action row no longer scrolls, 15 Nov)
   StyleSheet,
   Text,
   useWindowDimensions,
@@ -481,15 +481,17 @@ function HomeScreen() {
           {/* <View style={[styles.actions, styles.gutter]}> */}
           {/* Buy / Send / Receive / Sell as Uniswap's: a row of fixed-width tiles that
               scrolls sideways, the last one running off the edge (2026-11-14). */}
-          <ScrollView
+          {/* <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
             style={styles.actions}
             contentContainerStyle={styles.actionsRow}
-          >
+          > */}
+          {/* All four fit the width, none cut off at the edge (15 Nov, owner). */}
+          <View style={[styles.actions, styles.actionsRow]}>
             {ACTIONS.map((action, i) => (
-              // <Rise key={action.label} index={2 + i} style={styles.flex}>
-              <Rise key={action.label} index={2 + i}>
+              // <Rise key={action.label} index={2 + i}>
+              <Rise key={action.label} index={2 + i} style={styles.flex}>
                 <PressableScale
                   accessibilityRole="button"
                   accessibilityState={{ disabled: watchBlocked(action.label) }}
@@ -515,7 +517,8 @@ function HomeScreen() {
               </Rise>
             ))}
             {/* </View> */}
-          </ScrollView>
+            {/* </ScrollView> */}
+          </View>
 
           {/* At most two cards here, the two that matter most (see `cards` above). A
               shared wallet's members, rule and what's waiting; elsewhere, a nudge if any
@@ -945,11 +948,12 @@ const useStyles = makeStyles((c) => ({
     flexGrow: 0,
   },
   actionsRow: {
+    flexDirection: 'row',
     paddingHorizontal: 18,
     gap: 8,
   },
   action: {
-    width: 102,
+    // width: 102,
     paddingVertical: 16,
     paddingHorizontal: 12,
     gap: 12,

@@ -8,16 +8,16 @@ tokens), share it, let friends copy it, or buy one together from a shared treasu
 
 Built at [NEAR HACKATHON](https://nearhackathon.com/) (1 to 14 Nov 2026). Honey existed
 before as an EVM wallet; the hackathon work is the diff from the baseline commit:
-[f20e914...main](https://github.com/honey-wallet/honey-wallet/compare/f20e914...main).
+[pre-hackathon...hackathon-submission](https://github.com/honey-wallet/honey-wallet/compare/pre-hackathon...hackathon-submission).
 Tracks, a dated list of what was built and the demo script are in [HACKATHON.md](HACKATHON.md).
 
 ## Watch
 
 <table>
-<tr><th>▶ Demo video · 2 min</th><th>▶ Screen recording on a phone</th></tr>
+<tr><th>▶ Demo video · 2 min</th><th>▶ On a phone</th></tr>
 <tr>
-<td><a href="https://youtu.be/T4bECnY5kW0"><img src="docs/video/demo.jpg" width="400" alt="Play the Honey demo video on YouTube"></a></td>
-<td><a href="https://www.youtube.com/shorts/gY5JyJx0dT4"><img src="docs/video/phone.jpg" width="400" alt="Play the Honey screen recording on YouTube"></a></td>
+<td><a href="https://youtu.be/T4bECnY5kW0"><img src="docs/video/demo.jpg" height="330" alt="Play the Honey demo video on YouTube"></a></td>
+<td><a href="https://www.youtube.com/shorts/gY5JyJx0dT4"><img src="docs/video/phone.jpg" height="330" alt="Play the Honey screen recording on YouTube"></a></td>
 </tr>
 </table>
 
