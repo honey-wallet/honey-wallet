@@ -423,6 +423,18 @@
   height: 1.125rem;
   flex: none;
 }
+/* "on TestFlight" / "coming soon" after the platform's name (14 Nov). */
+.platformNote {
+  font-weight: 500;
+  color: var(--fg-muted);
+}
+a.platform {
+  text-decoration: none;
+  transition: box-shadow 0.15s ease;
+}
+a.platform:hover {
+  box-shadow: 0 0 0 1px var(--fg-muted);
+}
 
 /* The fine print under the waitlist form */
 .fine {

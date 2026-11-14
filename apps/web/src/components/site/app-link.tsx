@@ -8,17 +8,27 @@ import { LiquidButton } from '../liquid/components/ui/liquid-button';
  * of the waitlist. Empty until the link exists; set it here or with NEXT_PUBLIC_TESTFLIGHT_URL.
  */
 // export const TESTFLIGHT_URL = process.env.NEXT_PUBLIC_TESTFLIGHT_URL ?? '';
-/** Beta Users' public TestFlight link (created 14 Nov); the env var overrides it. */
-export const TESTFLIGHT_URL =
-  process.env.NEXT_PUBLIC_TESTFLIGHT_URL ?? 'https://testflight.apple.com/join/5krzqTCR';
+// /** Beta Users' public TestFlight link (created 14 Nov); the env var overrides it. */
+// export const TESTFLIGHT_URL = process.env.NEXT_PUBLIC_TESTFLIGHT_URL ?? 'https://testflight.apple.com/join/5krzqTCR';
+// Moved to ./testflight so the closing card (a server component) can link it too.
+import { TESTFLIGHT_URL } from './testflight';
 
-/** iPhone, iPad or Mac, where TestFlight runs. iPads report themselves as Macs. */
-function useApple() {
-  const [apple, setApple] = useState(false);
+export { TESTFLIGHT_URL };
+
+// /** iPhone, iPad or Mac, where TestFlight runs. iPads report themselves as Macs. */
+// function useApple() { … } (now useDevice: Apple, Android or neither)
+type Device = 'apple' | 'android' | 'other';
+
+/** iPhone, iPad or Mac (TestFlight; iPads report themselves as Macs), Android, or other. */
+function useDevice() {
+  const [device, setDevice] = useState<Device>('other');
   useEffect(() => {
-    setApple(/iPhone|iPad|iPod|Macintosh/.test(navigator.userAgent));
+    const ua = navigator.userAgent;
+    setDevice(
+      /Android/.test(ua) ? 'android' : /iPhone|iPad|iPod|Macintosh/.test(ua) ? 'apple' : 'other',
+    );
   }, []);
-  return apple;
+  return device;
 }
 
 /**
@@ -40,7 +50,9 @@ export function JoinWaitlist({
   children?: React.ReactNode;
 }) {
   // Rendered as the waitlist first (as on the server), then TestFlight once it's an Apple device.
-  const testflight = useApple() && TESTFLIGHT_URL !== '';
+  // const testflight = useApple() && TESTFLIGHT_URL !== '';
+  const device = useDevice();
+  const testflight = device === 'apple' && TESTFLIGHT_URL !== '';
   return (
     <LiquidButton
       className={`${HONEY_BUTTON} ${className ?? ''}`}
@@ -67,7 +79,13 @@ export function JoinWaitlist({
     >
       {children}
       {/* Join the waitlist */}
-      {testflight ? 'Get it on TestFlight' : 'Join the waitlist'}
+      {/* {testflight ? 'Get it on TestFlight' : 'Join the waitlist'} */}
+      {/* Android is coming soon (14 Nov): its button still leads to the waitlist. */}
+      {testflight
+        ? 'Get it on TestFlight'
+        : device === 'android'
+          ? 'Android coming soon'
+          : 'Join the waitlist'}
     </LiquidButton>
   );
 }
