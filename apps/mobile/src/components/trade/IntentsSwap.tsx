@@ -68,6 +68,7 @@ import {
   quoteSwap,
   type ReadySwap,
   readyToPay,
+  refreshDueIn,
   refreshQuote,
   SWAP_SLIPPAGE_BPS,
   type IntentsSwap as Swap,
@@ -82,7 +83,8 @@ import {
   unsupportedReason,
   useIntentsSwaps,
 } from '@/lib/intents-swap';
-import { keepFresh } from '@/lib/keep-fresh';
+// import { keepFresh } from '@/lib/keep-fresh';
+import { refreshBefore } from '@/lib/keep-fresh';
 import { formatBalance } from '@/lib/mock-wallet';
 import { usdToUnits } from '@/lib/pay-with';
 import { refreshAfterChange } from '@/lib/portfolio';
@@ -1019,8 +1021,10 @@ const countdown = (ms: number) => {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 };
 
-/** While the review is open the quote is refreshed this often, and on coming back to the app. */
-const REFRESH_MS = 30_000;
+// /** While the review is open the quote is refreshed this often, and on coming back to the app. */
+// const REFRESH_MS = 30_000;
+/** A refresh that failed with the quote already due is tried again after this long. */
+const RETRY_MS = 30_000;
 /** How long "Price updated" stays. */
 const FLASH_MS = 4_000;
 
@@ -1083,6 +1087,7 @@ function ReviewStep({
       .catch((e) => {
         if (!handedOn.current && nearExpiry(latest.current.swap))
           setError(message(e, REFRESH_FAILED));
+        if (!handedOn.current) setRetries((n) => n + 1);
       })
       .finally(() => {
         inFlight.current = null;
@@ -1115,15 +1120,29 @@ function ReviewStep({
     };
   }, [opened]);
 
-  // Every 30 s while open, and whenever the app comes back to the foreground.
+  // // Every 30 s while open, and whenever the app comes back to the foreground.
+  // useEffect(() => {
+  //   handedOn.current = false;
+  //   const stop = keepFresh(() => void refreshRef.current(), REFRESH_MS);
+  //   return () => {
+  //     handedOn.current = true;
+  //     stop();
+  //   };
+  // }, []);
   useEffect(() => {
     handedOn.current = false;
-    const stop = keepFresh(() => void refreshRef.current(), REFRESH_MS);
     return () => {
       handedOn.current = true;
-      stop();
     };
   }, []);
+  // Since 15 Nov (free API tiers): asked again only shortly before the quote on screen
+  // would need re-quoting at Confirm (lib/intents-swap `refreshDueIn`), and whenever the
+  // app comes back to the foreground; a failed refresh tries again every RETRY_MS.
+  const [retries, setRetries] = useState(0);
+  useEffect(() => {
+    const due = refreshDueIn(swap);
+    return refreshBefore(() => void refreshRef.current(), retries > 0 && due <= 0 ? RETRY_MS : due);
+  }, [swap, retries]);
 
   useEffect(() => {
     if (!flash) return;

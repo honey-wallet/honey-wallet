@@ -327,6 +327,27 @@ describe('the same coin on another contract (15 Nov)', () => {
     await expect(planRoute(linkLeg, { ...bare, sameCoin: yes })).rejects.toThrow(/route changed/);
   });
 
+  it('is refused on Solana or any chain without an EVM contract (security review, 15 Nov)', async () => {
+    const yes = vi.fn(async () => true);
+    const onSolana = option({
+      ...elsewhere,
+      buyToken: 'LinkhB3afbBKb2EQQu7s7umdZceV3wcvAUJhQAfQ23L',
+      buyChain: 'solana',
+      buyDecimals: 8,
+    });
+    const { d } = deps({ best: onSolana, fallback: 'fees', alternatives: [], dropped: [] });
+    await expect(planRoute(linkLeg, { ...d, sameCoin: yes })).rejects.toThrow(/route changed/);
+    expect(yes).not.toHaveBeenCalled();
+    const { d: bad } = deps({
+      best: { ...elsewhere, buyToken: 'not-an-address' },
+      fallback: 'fees',
+      alternatives: [],
+      dropped: [],
+    });
+    await expect(planRoute(linkLeg, { ...bad, sameCoin: yes })).rejects.toThrow(/route changed/);
+    expect(yes).not.toHaveBeenCalled();
+  });
+
   it('is bought on the paying chain in one swap only when the check agrees', async () => {
     const quote = quoteFor({
       chain: 'Base',

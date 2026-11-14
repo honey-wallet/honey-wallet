@@ -11,7 +11,7 @@
  * A check that can't run (offline, signed out, no USDC to plan from) blocks nothing: the
  * buy's own errors still apply.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { type PlannedRoute, type RouteAsk, routeMinimum } from '@/lib/best-route';
 import { type DexChain, isDexChain, usdcOn } from '@/lib/dex';
 import { recipientOn } from '@/lib/intents-quote';
@@ -44,7 +44,11 @@ export const BLOCK_KEPT = 1 - MAX_LEG_LOSS;
 /** The jar's minimum is rounded up to whole steps of this many dollars. */
 export const STEP_USD = 0.5;
 /** Quiet time after the amount or the paying token changes before quotes are asked. */
-export const DEBOUNCE_MS = 500;
+// export const DEBOUNCE_MS = 500;
+// 800 ms since 15 Nov: fewer planner calls while the amount is still being typed.
+export const DEBOUNCE_MS = 800;
+/** A fair check (`JarCheck.fair`) still answers for amounts up to this many times larger. */
+export const REUSE_UP_TO = 2;
 /** The longest the check may take; past it, nothing is blocked. */
 export const CHECK_MS = 10_000;
 
@@ -133,7 +137,9 @@ export type MinimumDeps = {
 };
 
 const defaults: MinimumDeps = {
-  route: async (ask) => (await import('@/lib/best-route')).planRoute(ask),
+  // route: async (ask) => (await import('@/lib/best-route')).planRoute(ask),
+  // Remembered 20 s, so the buy reuses these answers (15 Nov).
+  route: async (ask) => (await import('@/lib/best-route')).planRouteMemo(ask),
   tokens: async () => (await import('@/lib/intents-swap')).fetchSwapTokens(),
 };
 
@@ -149,7 +155,23 @@ type CheckInput = {
    * minimum leaves room for the USDC kept. Without it, the routed legs' total.
    */
   amount?: number;
+  /**
+   * The chain each pick won on in an earlier check of this screen visit (15 Nov): a pick
+   * that trades on several chains is compared across them once, then only its winner is
+   * asked again (see `ChainWinners`). Filled in by the check.
+   */
+  winners?: ChainWinners;
 };
+
+/**
+ * By a leg's planned asset: the chain it quoted the most on, and the leg's size then.
+ * The caller starts a new one when the paying token, balances, wallet or slippage change.
+ */
+export type ChainWinners = Map<string, { choice: RouteChoice; micro: bigint }>;
+/** A winner is asked again alone while the leg stays within this factor of its size then. */
+export const WINNER_RANGE = 2;
+const withinRange = (was: bigint, now: bigint) =>
+  now * BigInt(WINNER_RANGE) >= was && now <= was * BigInt(WINNER_RANGE);
 
 /** Where a pick is bought instead of its planned chain, because it quoted more there. */
 export type RouteChoice = { chain: string; assetId: string };
@@ -161,6 +183,11 @@ export type JarCheck = {
   legs: LegValue[];
   /** By symbol: picks bought on another chain than planned (see `withChoices`). */
   choices: Record<string, RouteChoice>;
+  /**
+   * Every leg quoted and kept at least `FAIR_KEPT` (15 Nov): a somewhat larger amount
+   * can't be under a minimum then (see `reusableCheck`).
+   */
+  fair?: boolean;
 };
 
 /**
@@ -330,8 +357,10 @@ export async function checkJarLegs(
       const weight = Number(l.micro) / Number(whole);
       const planned: RouteChoice = { chain: l.chain, assetId: l.assetId };
       const candidates = [planned, ...(l.options ?? []).filter((o) => o.assetId !== l.assetId)];
-      const quoted = await Promise.all(
-        candidates.map(async (c) => {
+      // const quoted = await Promise.all(
+      //   candidates.map(async (c) => {
+      const quote = (c: RouteChoice) =>
+        (async () => {
           const taker = recipientOn(c.chain, wallet.addresses);
           if (!p || !isDexChain(p.chain) || !p.token || !taker || !from)
             return { choice: c, probe: { kind: 'unknown' } as LegProbe };
@@ -355,9 +384,34 @@ export async function checkJarLegs(
             (error: unknown) => ({ error }),
           );
           return { choice: c, probe: probeOf(answer, inUsd, p) };
-        }),
-      );
-      const best = bestQuoted(quoted) ?? (quoted[0] as (typeof quoted)[number]);
+        })();
+      // Compared across its chains once per visit (15 Nov): later checks ask only the
+      // chain that won, while the leg stays within `WINNER_RANGE` of its size then. A
+      // winner that no longer quotes sends the leg back to comparing every chain, so the
+      // minimum is never read from a chain that lost.
+      const won = candidates.length > 1 ? input.winners?.get(l.assetId) : undefined;
+      const known =
+        won &&
+        withinRange(won.micro, l.micro) &&
+        candidates.some((c) => c.assetId === won.choice.assetId)
+          ? won.choice
+          : null;
+      let quoted = await Promise.all((known ? [known] : candidates).map(quote));
+      let compared = !known;
+      if (known && quoted[0]?.probe.kind !== 'ok') {
+        quoted = await Promise.all(candidates.map(quote));
+        compared = true;
+      }
+      const winner = bestQuoted(quoted);
+      if (candidates.length > 1 && input.winners) {
+        if (winner)
+          input.winners.set(l.assetId, {
+            choice: winner.choice,
+            micro: !compared && won ? won.micro : l.micro,
+          });
+        else input.winners.delete(l.assetId);
+      }
+      const best = winner ?? (quoted[0] as (typeof quoted)[number]);
       return { symbol: l.symbol, weight, probe: best.probe, choice: best.choice, planned };
     }),
   );
@@ -368,7 +422,11 @@ export async function checkJarLegs(
     if (p.probe.kind === 'ok')
       values.push({ symbol: p.symbol, inUsd: p.probe.inUsd, outUsd: p.probe.outUsd });
   }
-  return { minimum: jarMinimum(probes), legs: values, choices };
+  // return { minimum: jarMinimum(probes), legs: values, choices };
+  const fair = probes.every(
+    (p) => p.probe.kind === 'ok' && p.probe.outUsd >= p.probe.inUsd * FAIR_KEPT,
+  );
+  return { minimum: jarMinimum(probes), legs: values, choices, fair };
 }
 
 /** The quote that gets the most out, among those that answered; null when none did. */
@@ -382,8 +440,33 @@ export function bestQuoted<T extends { probe: LegProbe }>(quoted: T[]): T | null
 }
 
 /**
+ * The check made at `checked` dollars, still true at `amount` (15 Nov), or null when it
+ * must be asked again. Only a fair check (every leg quoted, none losing 5% or more, so no
+ * minimum) carries over, and only upwards and up to `REUSE_UP_TO` times the amount checked:
+ * a 1Click minimum is a floor and fixed fees shrink as a share as the amount grows, while
+ * the cap keeps price impact from growing unseen. Smaller amounts are always asked again,
+ * so "Add at least $X" stays right. Each leg's value is scaled to the new amount; the buy
+ * quotes everything afresh and checks it again before anything is paid.
+ */
+export function reusableCheck(check: JarCheck | null, checked: number, amount: number) {
+  if (!check?.fair || check.minimum || !(checked > 0) || !(amount >= checked)) return null;
+  if (amount > checked * REUSE_UP_TO) return null;
+  const k = amount / checked;
+  return {
+    ...check,
+    legs: check.legs.map((l) => ({ ...l, inUsd: l.inUsd * k, outUsd: l.outUsd * k })),
+  };
+}
+
+/**
  * The launch screen's minimum: re-checked (debounced) when the amount, the legs or the
  * paying token change. `checking` covers the debounce too, so Buy never flashes on.
+ *
+ * Since 15 Nov (free API tiers): a pick that trades on several chains is compared across
+ * them once per visit, then only its winning chain is asked again (`ChainWinners`, reset
+ * when the paying token, balances, wallet, slippage or the jar's make-up change); a
+ * larger amount a fair check still answers asks nothing (`reusableCheck`); and every
+ * answer is remembered 20 s for the buy (lib/best-route `planRouteMemo`).
  */
 export function useJarMinimum(input: {
   enabled: boolean;
@@ -392,7 +475,6 @@ export function useJarMinimum(input: {
   slippage: number;
   balances: UsdcBalances;
   wallet: { id: string; addresses?: { evm?: string; solana?: string; near?: string } } | null;
-  // }): { checking: boolean; minimum: JarMinimum | null } {
 }): { checking: boolean } & JarCheck {
   const payWith = jarPayWith.useValue();
   const { enabled, amount, routes, slippage, balances, wallet } = input;
@@ -401,32 +483,44 @@ export function useJarMinimum(input: {
       r.legs.map((l) => `${r.symbol}:${l.assetId ?? l.dex?.address}:${l.usd.toFixed(2)}`),
     )
     .join(',');
+  // The jar's make-up without its size: each leg's share of the amount.
+  const shapeKey = routes
+    .flatMap((r) =>
+      r.legs.map(
+        (l) =>
+          `${r.symbol}:${l.assetId ?? l.dex?.address}:${amount > 0 ? (l.usd / amount).toFixed(3) : 0}:${(r.options ?? []).map((o) => o.assetId).join('+')}`,
+      ),
+    )
+    .join(',');
   const balancesKey = Object.entries(balances)
     .map(([c, v]) => `${c}:${v}`)
     .join(',');
-  const key =
-    enabled && wallet?.addresses
-      ? `${amount}|${slippage}|${payWith?.symbol}:${payWith?.chain}|${legsKey}|${balancesKey}|${wallet.id}`
-      : '';
-  // const [state, setState] = useState<{ key: string; minimum: JarMinimum | null }>({
-  //   key: '',
-  //   minimum: null,
-  // });
-  const [state, setState] = useState<{ key: string; check: JarCheck | null }>({
-    key: '',
-    check: null,
-  });
+  const live = enabled && !!wallet?.addresses;
+  const context = live
+    ? `${slippage}|${payWith?.symbol}:${payWith?.chain}|${shapeKey}|${balancesKey}|${wallet?.id}`
+    : '';
+  const key = live ? `${amount}|${context}|${legsKey}` : '';
+  const [state, setState] = useState<{
+    key: string;
+    context: string;
+    amount: number;
+    check: JarCheck | null;
+  }>({ key: '', context: '', amount: 0, check: null });
+  // Each pick's winning chain, for this visit and context.
+  const winners = useRef<{ context: string; map: ChainWinners }>({ context: '', map: new Map() });
+  if (winners.current.context !== context) winners.current = { context, map: new Map() };
+  // A larger amount the last fair check still answers: nothing is asked.
+  const reused =
+    key && state.key !== key && state.context === context
+      ? reusableCheck(state.check, state.amount, amount)
+      : null;
   // biome-ignore lint/correctness/useExhaustiveDependencies: `key` stands for every input.
   useEffect(() => {
-    if (!key || !wallet?.addresses) return;
+    if (!key || !wallet?.addresses || reused) return;
     let alive = true;
     const addresses = wallet.addresses;
+    const map = winners.current.map;
     const timer = setTimeout(() => {
-      // checkJarMinimum({ routes, slippage, payWith, balances, wallet: { id: wallet.id, addresses } })
-      //   .catch(() => null)
-      //   .then((minimum) => {
-      //     if (alive) setState({ key, minimum });
-      //   });
       checkJarLegs({
         routes,
         slippage,
@@ -434,20 +528,92 @@ export function useJarMinimum(input: {
         balances,
         wallet: { id: wallet.id, addresses },
         amount,
+        winners: map,
       })
         .catch(() => null)
         .then((check) => {
-          if (alive) setState({ key, check });
+          if (alive) setState({ key, context, amount, check });
         });
     }, DEBOUNCE_MS);
     return () => {
       alive = false;
       clearTimeout(timer);
     };
-  }, [key]);
-  // if (!key) return { checking: false, minimum: null };
-  // return { checking: state.key !== key, minimum: state.key === key ? state.minimum : null };
+  }, [key, !!reused]);
   const none: JarCheck = { minimum: null, legs: [], choices: {} };
   if (!key) return { checking: false, ...none };
+  if (reused) return { checking: false, ...reused };
   return { checking: state.key !== key, ...(state.key === key ? (state.check ?? none) : none) };
 }
+
+// Before 15 Nov (every check compared every chain, 500 ms debounce):
+// /**
+//  * The launch screen's minimum: re-checked (debounced) when the amount, the legs or the
+//  * paying token change. `checking` covers the debounce too, so Buy never flashes on.
+//  */
+// export function useJarMinimum(input: {
+//   enabled: boolean;
+//   amount: number;
+//   routes: Route[];
+//   slippage: number;
+//   balances: UsdcBalances;
+//   wallet: { id: string; addresses?: { evm?: string; solana?: string; near?: string } } | null;
+//   // }): { checking: boolean; minimum: JarMinimum | null } {
+// }): { checking: boolean } & JarCheck {
+//   const payWith = jarPayWith.useValue();
+//   const { enabled, amount, routes, slippage, balances, wallet } = input;
+//   const legsKey = routes
+//     .flatMap((r) =>
+//       r.legs.map((l) => `${r.symbol}:${l.assetId ?? l.dex?.address}:${l.usd.toFixed(2)}`),
+//     )
+//     .join(',');
+//   const balancesKey = Object.entries(balances)
+//     .map(([c, v]) => `${c}:${v}`)
+//     .join(',');
+//   const key =
+//     enabled && wallet?.addresses
+//       ? `${amount}|${slippage}|${payWith?.symbol}:${payWith?.chain}|${legsKey}|${balancesKey}|${wallet.id}`
+//       : '';
+//   // const [state, setState] = useState<{ key: string; minimum: JarMinimum | null }>({
+//   //   key: '',
+//   //   minimum: null,
+//   // });
+//   const [state, setState] = useState<{ key: string; check: JarCheck | null }>({
+//     key: '',
+//     check: null,
+//   });
+//   // biome-ignore lint/correctness/useExhaustiveDependencies: `key` stands for every input.
+//   useEffect(() => {
+//     if (!key || !wallet?.addresses) return;
+//     let alive = true;
+//     const addresses = wallet.addresses;
+//     const timer = setTimeout(() => {
+//       // checkJarMinimum({ routes, slippage, payWith, balances, wallet: { id: wallet.id, addresses } })
+//       //   .catch(() => null)
+//       //   .then((minimum) => {
+//       //     if (alive) setState({ key, minimum });
+//       //   });
+//       checkJarLegs({
+//         routes,
+//         slippage,
+//         payWith,
+//         balances,
+//         wallet: { id: wallet.id, addresses },
+//         amount,
+//       })
+//         .catch(() => null)
+//         .then((check) => {
+//           if (alive) setState({ key, check });
+//         });
+//     }, DEBOUNCE_MS);
+//     return () => {
+//       alive = false;
+//       clearTimeout(timer);
+//     };
+//   }, [key]);
+//   // if (!key) return { checking: false, minimum: null };
+//   // return { checking: state.key !== key, minimum: state.key === key ? state.minimum : null };
+//   const none: JarCheck = { minimum: null, legs: [], choices: {} };
+//   if (!key) return { checking: false, ...none };
+//   return { checking: state.key !== key, ...(state.key === key ? (state.check ?? none) : none) };
+// }

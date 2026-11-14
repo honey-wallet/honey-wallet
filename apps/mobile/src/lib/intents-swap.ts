@@ -415,14 +415,30 @@ let tokenCache: { at: number; tokens: OneClickToken[] } | null = null;
 /** 1Click's token list, read from 1Click itself (keyless) and kept for five minutes. */
 export async function fetchSwapTokens(fetcher: typeof fetch = fetch, now = Date.now()) {
   if (tokenCache && now - tokenCache.at < TOKENS_TTL_MS) return tokenCache.tokens;
-  const res = await fetcher(`${ONE_CLICK_BASE}/v0/tokens`, {
-    headers: { accept: 'application/json' },
-  }).catch(() => null);
-  const tokens = res?.ok ? parseOneClickTokens(await res.json().catch(() => null)) : [];
-  if (!tokens.length) throw new Error('Couldn’t reach NEAR Intents. Try again in a moment.');
-  tokenCache = { at: now, tokens };
-  return tokens;
+  // const res = await fetcher(`${ONE_CLICK_BASE}/v0/tokens`, {
+  //   headers: { accept: 'application/json' },
+  // }).catch(() => null);
+  // const tokens = res?.ok ? parseOneClickTokens(await res.json().catch(() => null)) : [];
+  // if (!tokens.length) throw new Error('Couldn’t reach NEAR Intents. Try again in a moment.');
+  // tokenCache = { at: now, tokens };
+  // return tokens;
+  // One read while it's out, shared by every caller (15 Nov: a cold start asked once per
+  // screen and check).
+  if (tokenRead) return tokenRead;
+  tokenRead = (async () => {
+    const res = await fetcher(`${ONE_CLICK_BASE}/v0/tokens`, {
+      headers: { accept: 'application/json' },
+    }).catch(() => null);
+    const tokens = res?.ok ? parseOneClickTokens(await res.json().catch(() => null)) : [];
+    if (!tokens.length) throw new Error('Couldn’t reach NEAR Intents. Try again in a moment.');
+    tokenCache = { at: now, tokens };
+    return tokens;
+  })().finally(() => {
+    tokenRead = null;
+  });
+  return tokenRead;
 }
+let tokenRead: Promise<OneClickToken[]> | null = null;
 
 /** NEAR Intents' token list for screens: null until loaded; `failed` when it couldn't be. */
 export const swapTokenList = createStore<{ tokens: OneClickToken[] | null; failed: boolean }>({
@@ -946,6 +962,16 @@ export async function refreshQuote(
     throw new Error(REFRESH_FAILED, { cause });
   }
 }
+
+/** A reviewed quote is asked again this long before Confirm would have to re-quote it. */
+export const REFRESH_LEAD_MS = 10_000;
+
+/**
+ * How long until the quote under review should be asked again (15 Nov): `REFRESH_LEAD_MS`
+ * before it gets under `REQUOTE_BELOW_MS` left, so Confirm never waits on a re-quote.
+ */
+export const refreshDueIn = (swap: Pick<IntentsSwap, 'deadline'>, now = serverNow()) =>
+  msLeft(swap.deadline, now) - REQUOTE_BELOW_MS - REFRESH_LEAD_MS;
 
 /** Whether a quote has under `REQUOTE_BELOW_MS` left on the server's clock. */
 export const nearExpiry = (swap: Pick<IntentsSwap, 'deadline'>, now = serverNow()) =>

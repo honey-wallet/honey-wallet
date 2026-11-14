@@ -32,13 +32,13 @@ import {
 } from '@honey-wallet/keyring';
 import { createPublicClient, formatUnits, type Hex, http, isAddress, toHex } from 'viem';
 import { api } from '@/lib/api';
-import { type AppPriceDeps, appPriceOf } from '@/lib/app-price';
+import { type AppPriceDeps, appPriceOf, prefetchAppPrices } from '@/lib/app-price';
 import { confirmOwner } from '@/lib/auth';
 import { backendSessionToken } from '@/lib/backend-session';
 import {
   canonicalOf,
   type PlannedRoute,
-  planRoute,
+  planRouteMemo,
   type RouteAsk,
   routeStatus,
 } from '@/lib/best-route';
@@ -484,7 +484,10 @@ const defaults: JarBuyDeps = {
   //     (await fetchAllDexTokens()).map((t) => [dexAssetId(t.chain, t.address), t.priceUsd]),
   //   ),
   appPrice: {},
-  route: (ask) => planRoute(ask),
+  // route: (ask) => planRoute(ask),
+  // Remembered 20 s (15 Nov): the launch check's routes are reused when nothing changed;
+  // an expiring DEX quote is asked again (lib/best-route `planRouteMemo`).
+  route: (ask) => planRouteMemo(ask),
   now: serverNow,
   // depositTx: (chain, hash) => depositTxState(chain, hash),
   // Two "missing" reads minutes apart before a deposit counts as dropped (nov14-c audit 2).
@@ -796,6 +799,22 @@ export async function quoteJarBuy(
     ...d.appPrice,
   };
   const dexProblems: LegProblem[] = [];
+  // Several picks priced by DexScreener: one request per chain for all of them (15 Nov).
+  if (picks.length > 1)
+    await withinTime(
+      prefetchAppPrices(
+        picks.map((p) => ({
+          chain: p.chain,
+          address: p.token,
+          symbol: p.symbol,
+          decimals: p.decimals,
+          priceAsset: p.priceAsset,
+        })),
+        priceDeps,
+      ),
+      STEP_MS,
+      'timed out',
+    ).catch(() => undefined);
   for (const p of picks) {
     const i = legs.findIndex((l) => l.dex === p);
     const bridge = i >= 0 ? (out[i] as BuyLeg) : null;

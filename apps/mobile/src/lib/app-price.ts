@@ -30,6 +30,8 @@ import { TEST_MODE } from '@/lib/test-mode';
 
 /** How far a same coin's own price may be from its pick's NEAR Intents price. */
 export const SAME_COIN_GAP = 0.03;
+/** A same coin's most liquid DexScreener pair must hold at least this much (USD). */
+export const SAME_COIN_MIN_LIQUIDITY = 100_000;
 
 /** A token the app prices: where it is, and what the caller was told its decimals are. */
 export type PriceRef = {
@@ -79,30 +81,44 @@ const PRICE_TTL_MS = 60_000;
 /** Like the device's RPC reads: nothing waits forever. */
 const FETCH_TIMEOUT_MS = 10_000;
 
-const priceCache = new Map<string, { at: number; price: number }>();
+// const priceCache = new Map<string, { at: number; price: number }>();
+/** With the pair's liquidity since 15 Nov (a same coin needs a deep pool). */
+const priceCache = new Map<string, { at: number; price: number; liquidity: number }>();
+/** Reads in flight, by token: one request per token at a time (15 Nov). */
+const priceReads = new Map<string, Promise<ScreenerQuote | null>>();
 /** Decimals never change: read once per token. */
 const decimalsCache = new Map<string, number>();
+/** DexScreener answers up to this many tokens of one chain in one request. */
+const SCREENER_BATCH = 30;
 
 /** Forgets cached prices and decimals (tests). */
 export const forgetAppPrices = () => {
   priceCache.clear();
+  priceReads.clear();
   decimalsCache.clear();
 };
 
 const keyOf = (chain: DexChain, address: string) =>
   `${chain}:${chain === 'Solana' ? address : address.toLowerCase()}`;
 
+/** A token's DexScreener price, from its most liquid pair, and that pair's liquidity (USD). */
+export type ScreenerQuote = { price: number; liquidity: number };
+
 /**
  * The token's USD price from DexScreener: of the pairs it is the base token of, the one
- * with the most liquidity. Null when none is priced.
+ * with the most liquidity, with that liquidity. Null when none is priced.
  */
-export function screenerPrice(body: unknown, chain: DexChain, address: string): number | null {
+export function screenerQuote(
+  body: unknown,
+  chain: DexChain,
+  address: string,
+): ScreenerQuote | null {
   const pairs = Array.isArray(body)
     ? body
     : Array.isArray((body as { pairs?: unknown } | null)?.pairs)
       ? (body as { pairs: unknown[] }).pairs
       : [];
-  let best: { price: number; liquidity: number } | null = null;
+  let best: ScreenerQuote | null = null;
   for (const raw of pairs) {
     if (!raw || typeof raw !== 'object') continue;
     const p = raw as {
@@ -124,31 +140,195 @@ export function screenerPrice(body: unknown, chain: DexChain, address: string): 
     const depth = Number.isFinite(liquidity) && liquidity > 0 ? liquidity : 0;
     if (!best || depth > best.liquidity) best = { price, liquidity: depth };
   }
-  return best?.price ?? null;
+  return best;
 }
 
-async function dexScreenerPrice(chain: DexChain, address: string, d: AppPriceDeps) {
-  const key = keyOf(chain, address);
+/** `screenerQuote`'s price alone. */
+export const screenerPrice = (body: unknown, chain: DexChain, address: string) =>
+  screenerQuote(body, chain, address)?.price ?? null;
+
+/**
+ * One DexScreener request for up to `SCREENER_BATCH` tokens of one chain
+ * (`/tokens/v1/{chain}/{a,b,…}`), each priced token cached. Never throws.
+ */
+async function readScreener(
+  chain: DexChain,
+  addresses: string[],
+  d: AppPriceDeps,
+): Promise<Map<string, ScreenerQuote>> {
   const now = d.now();
-  const hit = priceCache.get(key);
-  if (hit && now - hit.at < PRICE_TTL_MS) return hit.price;
+  const out = new Map<string, ScreenerQuote>();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
     const res = await d.fetcher(
-      `${SCREENER}/${SCREENER_CHAIN[chain]}/${encodeURIComponent(address)}`,
+      `${SCREENER}/${SCREENER_CHAIN[chain]}/${addresses.map(encodeURIComponent).join(',')}`,
       { headers: { accept: 'application/json' }, signal: controller.signal },
     );
-    if (!res.ok) return null;
-    const price = screenerPrice(await res.json(), chain, address);
-    if (price !== null) priceCache.set(key, { at: now, price });
-    return price;
+    if (!res.ok) return out;
+    const body = await res.json();
+    for (const address of addresses) {
+      const quote = screenerQuote(body, chain, address);
+      if (!quote) continue;
+      priceCache.set(keyOf(chain, address), { at: now, ...quote });
+      out.set(keyOf(chain, address), quote);
+    }
+    return out;
   } catch {
-    return null;
+    return out;
   } finally {
     clearTimeout(timer);
   }
 }
+
+async function dexScreenerQuote(
+  chain: DexChain,
+  address: string,
+  d: AppPriceDeps,
+): Promise<ScreenerQuote | null> {
+  const key = keyOf(chain, address);
+  const hit = priceCache.get(key);
+  if (hit && d.now() - hit.at < PRICE_TTL_MS) return { price: hit.price, liquidity: hit.liquidity };
+  const running = priceReads.get(key);
+  if (running) return running;
+  const read = readScreener(chain, [address], d)
+    .then((m) => m.get(key) ?? null)
+    .finally(() => priceReads.delete(key));
+  priceReads.set(key, read);
+  return read;
+}
+
+async function dexScreenerPrice(chain: DexChain, address: string, d: AppPriceDeps) {
+  return (await dexScreenerQuote(chain, address, d))?.price ?? null;
+}
+
+/**
+ * Prices several tokens of a chain with one DexScreener request instead of one each
+ * (15 Nov: a jar buying several long-tail picks), for the `appPriceOf` calls that follow.
+ * Only tokens `appPriceOf` would ask DexScreener about, and only when two or more of a
+ * chain would. Never throws; a token it misses is asked alone as before.
+ */
+export async function prefetchAppPrices(
+  refs: readonly PriceRef[],
+  deps: Partial<AppPriceDeps> = {},
+): Promise<void> {
+  const d = { ...defaults, ...deps };
+  const list = await d.oneClick().catch(() => null);
+  const byChain = new Map<DexChain, string[]>();
+  for (const ref of refs) {
+    const { chain, address } = ref;
+    if (sameToken(chain, address, usdcOn(chain)) || canonicalOf(chain, address)) continue;
+    if (TEST_MODE) continue;
+    const pick = ref.priceAsset ? list?.find((t) => t.assetId === ref.priceAsset) : undefined;
+    const itself =
+      !!pick?.contractAddress &&
+      pick.blockchain === oneClickCodeOf(chain) &&
+      sameToken(chain, pick.contractAddress, address);
+    if (!ref.priceAsset || itself) {
+      const listed = list?.find(
+        (t) =>
+          t.blockchain === oneClickCodeOf(chain) &&
+          !!t.contractAddress &&
+          sameToken(chain, t.contractAddress, address),
+      );
+      if (listed?.price && listed.price > 0) continue;
+    }
+    const key = keyOf(chain, address);
+    const hit = priceCache.get(key);
+    if ((hit && d.now() - hit.at < PRICE_TTL_MS) || priceReads.has(key)) continue;
+    const all = byChain.get(chain) ?? [];
+    if (!all.some((a) => keyOf(chain, a) === key)) all.push(address);
+    byChain.set(chain, all);
+  }
+  const reads: Promise<unknown>[] = [];
+  for (const [chain, addresses] of byChain) {
+    if (addresses.length < 2) continue;
+    for (let i = 0; i < addresses.length; i += SCREENER_BATCH) {
+      const batch = addresses.slice(i, i + SCREENER_BATCH);
+      const read = readScreener(chain, batch, d);
+      // Single asks while it's out wait for it.
+      for (const a of batch) {
+        const key = keyOf(chain, a);
+        const one = read.then((m) => m.get(key) ?? null).finally(() => priceReads.delete(key));
+        priceReads.set(key, one);
+      }
+      reads.push(read);
+    }
+  }
+  await Promise.all(reads);
+}
+
+// Before 15 Nov (no liquidity, no batching, no shared reads):
+// const priceCache = new Map<string, { at: number; price: number }>();
+// /** Decimals never change: read once per token. */
+// const decimalsCache = new Map<string, number>();
+//
+// /** Forgets cached prices and decimals (tests). */
+// export const forgetAppPrices = () => {
+//   priceCache.clear();
+//   decimalsCache.clear();
+// };
+//
+// const keyOf = (chain: DexChain, address: string) =>
+//   `${chain}:${chain === 'Solana' ? address : address.toLowerCase()}`;
+//
+// /**
+//  * The token's USD price from DexScreener: of the pairs it is the base token of, the one
+//  * with the most liquidity. Null when none is priced.
+//  */
+// export function screenerPrice(body: unknown, chain: DexChain, address: string): number | null {
+//   const pairs = Array.isArray(body)
+//     ? body
+//     : Array.isArray((body as { pairs?: unknown } | null)?.pairs)
+//       ? (body as { pairs: unknown[] }).pairs
+//       : [];
+//   let best: { price: number; liquidity: number } | null = null;
+//   for (const raw of pairs) {
+//     if (!raw || typeof raw !== 'object') continue;
+//     const p = raw as {
+//       chainId?: unknown;
+//       baseToken?: { address?: unknown };
+//       priceUsd?: unknown;
+//       liquidity?: { usd?: unknown };
+//     };
+//     const base = p.baseToken?.address;
+//     if (
+//       p.chainId !== SCREENER_CHAIN[chain] ||
+//       typeof base !== 'string' ||
+//       !sameToken(chain, base, address)
+//     )
+//       continue;
+//     const price = Number(p.priceUsd);
+//     const liquidity = Number(p.liquidity?.usd);
+//     if (!(Number.isFinite(price) && price > 0)) continue;
+//     const depth = Number.isFinite(liquidity) && liquidity > 0 ? liquidity : 0;
+//     if (!best || depth > best.liquidity) best = { price, liquidity: depth };
+//   }
+//   return best?.price ?? null;
+// }
+//
+// async function dexScreenerPrice(chain: DexChain, address: string, d: AppPriceDeps) {
+//   const key = keyOf(chain, address);
+//   const now = d.now();
+//   const hit = priceCache.get(key);
+//   if (hit && now - hit.at < PRICE_TTL_MS) return hit.price;
+//   const controller = new AbortController();
+//   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+//   try {
+//     const res = await d.fetcher(
+//       `${SCREENER}/${SCREENER_CHAIN[chain]}/${encodeURIComponent(address)}`,
+//       { headers: { accept: 'application/json' }, signal: controller.signal },
+//     );
+//     if (!res.ok) return null;
+//     const price = screenerPrice(await res.json(), chain, address);
+//     if (price !== null) priceCache.set(key, { at: now, price });
+//     return price;
+//   } catch {
+//     return null;
+//   } finally {
+//     clearTimeout(timer);
+//   }
+// }
 
 /** ERC-20 `decimals()`. */
 const DECIMALS_CALL = '0x313ce567';
@@ -237,10 +417,18 @@ export async function appPriceOf(
       pick.blockchain === oneClickCodeOf(chain) &&
       sameToken(chain, pick.contractAddress, address);
     if (!itself) {
-      const [here, onChain] = await Promise.all([
-        dexScreenerPrice(chain, address, d),
+      // const [here, onChain] = await Promise.all([
+      //   dexScreenerPrice(chain, address, d),
+      //   d.decimals(chain, address).catch(() => null),
+      // ]);
+      // And its most liquid pair must hold SAME_COIN_MIN_LIQUIDITY (15 Nov, security
+      // review): a thin pool's price is too easy to move.
+      const [quote, onChain] = await Promise.all([
+        dexScreenerQuote(chain, address, d),
         d.decimals(chain, address).catch(() => null),
       ]);
+      const here = quote?.price;
+      if (!quote || !(quote.liquidity >= SAME_COIN_MIN_LIQUIDITY)) return null;
       const there = pick?.price;
       if (!(here && here > 0 && there && there > 0) || onChain === null || !agrees(onChain))
         return null;
