@@ -3905,10 +3905,16 @@ async fn people_search_matches_ranks_keeps_to_cards_and_is_rate_limited() {
 
     // Cards only: the private account's bio and everything else stay out.
     let (_, found) = search_people(&app, "q=nina", None, ip).await;
+    // assert_eq!(
+    //     found,
+    //     json!([{ "handle": "nina", "displayName": "Kaiser Nina", "avatarSeed": "",
+    //              "followers": 1, "followedByMe": false, "isMe": false }])
+    // );
+    // Every card says whether it's one of Honey's strategy accounts (2026-11-14).
     assert_eq!(
         found,
         json!([{ "handle": "nina", "displayName": "Kaiser Nina", "avatarSeed": "",
-                 "followers": 1, "followedByMe": false, "isMe": false }])
+                 "official": false, "followers": 1, "followedByMe": false, "isMe": false }])
     );
     // Signed in: who you follow, and you.
     let (_, found) = search_people(&app, "q=kai", Some(&tokens["kai"]), ip).await;

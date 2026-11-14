@@ -66,6 +66,40 @@ async fn main() -> anyhow::Result<()> {
             result?;
             return Ok(());
         }
+        Some("seed-honey-strategies") => {
+            // Creates or updates Honey's strategy accounts and their jars at 1Click's
+            // prices now (routes/social/strategies.rs). Safe to re-run; `--dry-run` only
+            // reports what it would publish. Run after `migrate`.
+            let mut dry_run = false;
+            for arg in std::env::args().skip(2) {
+                match arg.as_str() {
+                    "--dry-run" => dry_run = true,
+                    _ => anyhow::bail!("usage: honey-server seed-honey-strategies [--dry-run]"),
+                }
+            }
+            let pool = infrastructure
+                .postgres()
+                .context("DATABASE_URL required to seed Honey strategies")?;
+            let market = honey_server::market_data::MarketData::new()?;
+            let result = honey_server::routes::social::seed(pool, &market, dry_run).await;
+            infrastructure.close().await;
+            telemetry.shutdown().await;
+            let report = result
+                .map_err(|error| anyhow::anyhow!("seeding Honey strategies failed: {error:?}"))?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            let failed: Vec<&str> = report
+                .accounts
+                .iter()
+                .filter(|a| a.error.is_some())
+                .map(|a| a.handle.as_str())
+                .collect();
+            anyhow::ensure!(
+                failed.is_empty(),
+                "Honey strategies not fully seeded: {}",
+                failed.join(", ")
+            );
+            return Ok(());
+        }
         Some("dead-letters") => {
             // One-shot, bounded, read-only operator view. Never expose this through
             // the public API: job IDs are internal metadata and replay needs a

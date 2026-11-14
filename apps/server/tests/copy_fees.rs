@@ -1425,3 +1425,86 @@ impl CloneLeg for BuyLeg {
     }
 }
 */
+
+/// Honey strategies (routes/social/strategies.rs): a Honey-run jar is copied like
+/// anyone's, and with `HONEY_COPY_FEE_ACCOUNT` unset (users pay no fees, the owner's
+/// decision of 2026-11-14) copying it and selling at a profit charges nothing. The
+/// account has no wallet; copying doesn't need one.
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn copying_a_honey_strategy_jar_is_free_without_honeys_fee_account() {
+    let db = TestDatabase::new().await;
+    let pool = db.pool.clone();
+    let double = Arc::new(Mutex::new(Double::default()));
+    let (market, base) = one_click(double.clone()).await;
+    // The double lists only USDC and ETH on Base: Blue chips seeds as ETH alone, and the
+    // jars with nothing buyable are reported and left out.
+    let report = honey_server::routes::social::seed(&pool, &market, false)
+        .await
+        .unwrap();
+    let bluechip = report
+        .accounts
+        .iter()
+        .find(|a| a.handle == "honey_bluechip")
+        .unwrap();
+    assert!(bluechip.error.is_none());
+    assert_eq!(bluechip.picks.len(), 1);
+    assert_eq!(bluechip.picks[0].symbol, "ETH");
+    let (honey_account, honey_jar) = (bluechip.user_id.unwrap(), bluechip.jar_id.unwrap());
+    let wallets: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM wallet_memberships WHERE user_id = $1")
+            .bind(honey_account)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(wallets, 0);
+
+    // HONEY_COPY_FEE_ACCOUNT unset, as in production.
+    let buys = with_balances(
+        JarBuys::new(base, None, market, 1_000.0)
+            .unwrap()
+            .with_pool(Some(pool.clone()))
+            .with_copy_fee(HoneyFee::parse(None, Some("10")).unwrap()),
+        &double,
+    );
+    let copier = user(&pool, Some([0x07; 20])).await;
+    let me = copier.to_string();
+
+    // The copy buy works: a lot against Honey's jar that settles into a real copy.
+    copied(&buys, &double, &me, honey_jar, BOUGHT_FOR, BOUGHT).await;
+    holds(&double, WALLET_A, 50_000_000_000_000_000);
+    let lots: Vec<(Uuid, bool)> =
+        sqlx::query_as("SELECT jar_id, counts FROM copy_buy_lots WHERE copier = $1")
+            .bind(copier)
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(lots, vec![(honey_jar, true)]);
+
+    // Selling it at a profit ($150 for $100): no fee on the quote, no appFees asked of
+    // 1Click, nothing recorded as received.
+    let sold = buys.quote(&me, sell_from(WALLET_A, BOUGHT)).await.unwrap();
+    assert!(fees_of(&sold).is_empty());
+    assert!(
+        double
+            .lock()
+            .unwrap()
+            .asked
+            .last()
+            .unwrap()
+            .get("appFees")
+            .is_none()
+    );
+    assert!(
+        sale_fees(&pool, &sold.legs[0].deposit_address)
+            .await
+            .is_empty()
+    );
+    // The jar's copy count is that one real copy.
+    assert_eq!(
+        copy_fees::jar_copies(&pool, honey_account).await.unwrap(),
+        vec![(honey_jar, 1)]
+    );
+
+    db.close().await;
+}

@@ -1575,6 +1575,12 @@ export interface SocialProfileCard {
   displayName: string;
   /** Avatars are drawn on the phone from this seed (no remote image URL). */
   avatarSeed: string;
+  /**
+   * One of Honey's strategy accounts (`routes/social/strategies.rs`), shown with the
+   * Honey badge. Set only by Honey's seed command, never through the API. Missing from
+   * servers before 2026-11-14 and on group members: read as false.
+   */
+  official?: boolean;
 }
 
 /**
