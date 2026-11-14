@@ -4,8 +4,10 @@ import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { Text, TextInput, View } from 'react-native';
 import { Icon } from '@/components/Icon';
 import { ContentSwap } from '@/components/motion/ContentSwap';
+import { Pending } from '@/components/motion/Pending';
 import { PressableScale } from '@/components/motion/PressableScale';
 import { SkeletonBar } from '@/components/motion/Skeleton';
+import { Turn } from '@/components/motion/Turn';
 import { PillButton } from '@/components/onboarding/PillButton';
 import { Copyable, ExplorerLink } from '@/components/sheets/Details';
 import { SheetHeader, StatRow } from '@/components/sheets/Sheet';
@@ -423,8 +425,11 @@ function IntentsSwapForm() {
     }
   };
 
+  // Half-turns of the flip button's icon: one per press, so the arrows turn as the cards trade places.
+  const [flips, setFlips] = useState(0);
   const flip = () => {
     tap();
+    setFlips((n) => n + 1);
     // Buy still empty: what was sold becomes the buy, and the sell your largest holding.
     if (!buyChosen) {
       updateSwap({ sell: bestPayWith(holdings, tokens, sell) ?? buy, buy: sell });
@@ -591,7 +596,10 @@ function IntentsSwapForm() {
           onPress={flip}
           style={styles.flip}
         >
-          <Icon name="swapVertical" size={18} color={c.text} />
+          {/* <Icon name="swapVertical" size={18} color={c.text} /> */}
+          <Turn turns={flips}>
+            <Icon name="swapVertical" size={18} color={c.text} />
+          </Turn>
         </PressableScale>
 
         {!buyChosen ? (
@@ -638,19 +646,22 @@ function IntentsSwapForm() {
           <View style={[styles.card, styles.stacked]}>
             <Text style={styles.cardLabel}>Buy</Text>
             <View style={styles.cardRow}>
-              <Text
-                style={[styles.amountOut, !current && styles.placeholder]}
-                numberOfLines={1}
-                adjustsFontSizeToFit
-              >
-                {current
-                  ? `≥ ${atLeast(current.minAmountOut, current.buyDecimals)}`
-                  : dexCurrent
-                    ? `≥ ${atLeast(dexCurrent.quote.minBuyAmount, buyDecimals)}`
-                    : estimate
-                      ? `≈ ${formatBalance(estimate)}`
-                      : '0'}
-              </Text>
+              {/* Dims while a new quote is on its way, so the old amount never reads as the new one. */}
+              <Pending pending={quoting} style={styles.flex}>
+                <Text
+                  style={[styles.amountOut, !current && styles.placeholder]}
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                >
+                  {current
+                    ? `≥ ${atLeast(current.minAmountOut, current.buyDecimals)}`
+                    : dexCurrent
+                      ? `≥ ${atLeast(dexCurrent.quote.minBuyAmount, buyDecimals)}`
+                      : estimate
+                        ? `≈ ${formatBalance(estimate)}`
+                        : '0'}
+                </Text>
+              </Pending>
               <TokenPill side="buy" token={buy} />
             </View>
             {quoting ? (
