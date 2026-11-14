@@ -3,8 +3,16 @@
   isolation: isolate;
   overflow: hidden;
   /* padding: 4rem 1.25rem 2rem; */
-  /* As much room under the button as above the headline, now that nothing follows it. */
-  padding: 4rem 1.25rem 4.5rem;
+  /* padding: 4rem 1.25rem 4.5rem; */
+  /* The first screen holds the headline, centred, and the next card's top peeks in under it, so
+     there is something to scroll to. --nav is the sticky header's height; --peek is how much of the
+     card shows. */
+  --nav: 4.25rem;
+  --peek: 11.5rem;
+  display: flex;
+  align-items: center;
+  min-height: calc(100svh - var(--nav) - var(--peek));
+  padding: 3rem 1.25rem;
 }
 .content {
   position: relative;
@@ -60,7 +68,9 @@
 }
 @media (max-width: 47.999rem) {
   .stage {
-    padding-top: 3rem;
+    /* padding-top: 3rem; */
+    --nav: 3.75rem;
+    --peek: 7rem;
   }
   .headline {
     font-size: min(2.5rem, calc((100vw - 2.5rem) / 8.6));
