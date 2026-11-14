@@ -26,6 +26,9 @@ type Props<T extends string> = {
   onChange: (value: T) => void;
   /** A symbol before each label, shown while there are few enough tabs to fit it. */
   icons?: Partial<Record<T, IconName>>;
+  /** Plain text tabs as wide as their labels, from the left, with no underline or rule
+   * (Home, after Uniswap's), rather than sharing the row. */
+  fit?: boolean;
 };
 
 /**
@@ -33,7 +36,13 @@ type Props<T extends string> = {
  * underline under the selected one. For switching between whole views, e.g. Trade's
  * products.
  */
-export function UnderlineTabs<T extends string>({ options, value, onChange, icons }: Props<T>) {
+export function UnderlineTabs<T extends string>({
+  options,
+  value,
+  onChange,
+  icons,
+  fit,
+}: Props<T>) {
   const styles = useStyles();
   const c = useTheme();
   const reduceMotion = useReducedMotion();
@@ -58,7 +67,7 @@ export function UnderlineTabs<T extends string>({ options, value, onChange, icon
   }));
 
   return (
-    <View style={styles.row} accessibilityRole="tablist">
+    <View style={[styles.row, fit && styles.fitRow]} accessibilityRole="tablist">
       {options.map((option) => {
         const active = option === value;
         const icon = showIcons ? icons[option] : undefined;
@@ -76,20 +85,21 @@ export function UnderlineTabs<T extends string>({ options, value, onChange, icon
               tap();
               onChange(option);
             }}
-            style={styles.tab}
+            style={[styles.tab, fit && styles.fitTab]}
           >
             {icon && <Icon name={icon} size={18} color={active ? c.text : c.textSecondary} />}
             <Text
               numberOfLines={1}
-              adjustsFontSizeToFit
-              style={[styles.label, active && styles.labelActive]}
+              adjustsFontSizeToFit={!fit}
+              style={[styles.label, fit && styles.fitLabel, active && styles.labelActive]}
             >
               {option}
             </Text>
           </Pressable>
         );
       })}
-      <Animated.View style={[styles.bar, barStyle]} />
+      {/* <Animated.View style={[styles.bar, barStyle]} /> */}
+      {fit ? null : <Animated.View style={[styles.bar, barStyle]} />}
     </View>
   );
 }
@@ -116,6 +126,19 @@ const useStyles = makeStyles((c) => ({
   },
   labelActive: {
     color: c.text,
+  },
+  // Uniswap's Home tabs: 16pt between labels, each tab its label's width, no rule.
+  fitRow: {
+    gap: 16,
+    borderBottomWidth: 0,
+  },
+  fitTab: {
+    flex: 0,
+    paddingHorizontal: 0,
+  },
+  fitLabel: {
+    fontSize: 18,
+    fontWeight: '500',
   },
   // Sits on the hairline, covering it under the selected tab.
   bar: {

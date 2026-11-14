@@ -13,6 +13,8 @@ export type Token = {
   /** 24h change, in percent. */
   change: number;
   hidden?: boolean;
+  /** How many networks it's held on: Home's count badge on the logo when more than one. */
+  chains?: number;
 };
 
 export const TOKENS: Token[] = [

@@ -19,6 +19,7 @@ import { WalletButton } from '@/components/wallet/WalletButton';
 import { useCopy } from '@/lib/copy';
 import { tap } from '@/lib/haptics';
 import { useInboxPolling } from '@/lib/inbox';
+import { shortAddress } from '@/lib/mock-wallet';
 import {
   useMultisig,
   useMultisigDeployments,
@@ -59,10 +60,18 @@ export function WalletHeader({
   onSettings = () => router.push('/settings'),
   options = true,
   crossfade,
+  deposit = true,
+  address = false,
   style,
 }: {
   /** Shortcuts before the bell (Jars' Saved heart). */
   extra?: ReactNode;
+  /** Home, as Uniswap's: the chains beside the name and the short address with a copy
+   * icon under it, rather than the chains under the name. */
+  address?: boolean;
+  /** False on Home, whose big balance and Buy already are the pill's two jobs (Uniswap's
+   * Home header is only the wallet and its shortcuts). */
+  deposit?: boolean;
   settingsLabel?: string;
   onSettings?: () => void;
   /** False: only your face, no name, chains or shortcuts. */
@@ -84,6 +93,8 @@ export function WalletHeader({
       settingsLabel={settingsLabel}
       onSettings={onSettings}
       crossfade={crossfade}
+      deposit={deposit}
+      address={address}
       style={style}
     />
   );
@@ -94,12 +105,16 @@ function FullHeader({
   settingsLabel,
   onSettings,
   crossfade,
+  deposit,
+  address,
   style,
 }: {
   extra?: ReactNode;
   settingsLabel: string;
   onSettings: () => void;
   crossfade?: { scrollY: SharedValue<number>; balance: string };
+  deposit: boolean;
+  address: boolean;
   style?: StyleProp<ViewStyle>;
 }) {
   const styles = useStyles();
@@ -129,6 +144,9 @@ function FullHeader({
     tap();
     router.push(href);
   };
+  // Home's address line: the first address (EVM where there is one), copied as shown. A
+  // shared wallet keeps its chains-and-address label under the name instead.
+  const shown = address && !multisig ? addresses[0]?.address : undefined;
   const onAddresses = () =>
     (multisig ? deployments.length > 1 : addresses.length > 1)
       ? open('/addresses' as Href)
@@ -186,25 +204,51 @@ function FullHeader({
             >
               <Icon name="chevronDown" size={13} color={c.textSecondary} />
             </PressableScale>
-          </View>
-          {/* The address; on Home, once the big balance has scrolled away, the balance
-              takes its place, so the total is never out of sight. */}
-          <View>
-            <Animated.View style={crossfade ? addressShown : undefined}>
+            {shown ? (
               <PressableScale
                 accessibilityRole="button"
                 accessibilityLabel="Addresses"
                 hitSlop={6}
                 scaleTo={0.97}
                 onPress={onAddresses}
-                style={styles.addressRow}
+                style={styles.nameChains}
               >
-                <ChainIcons
-                  wallet={multisig ? undefined : wallet}
-                  deployments={multisig ? deployments : undefined}
-                  ring={c.canvas}
-                />
+                <ChainIcons wallet={wallet} ring={c.canvas} />
               </PressableScale>
+            ) : null}
+          </View>
+          {/* The address; on Home, once the big balance has scrolled away, the balance
+              takes its place, so the total is never out of sight. */}
+          <View>
+            <Animated.View style={crossfade ? addressShown : undefined}>
+              {shown ? (
+                <PressableScale
+                  accessibilityRole="button"
+                  accessibilityLabel="Copy address"
+                  hitSlop={6}
+                  scaleTo={0.97}
+                  onPress={() => void copyAddress()}
+                  style={styles.addressRow}
+                >
+                  <Text style={styles.address}>{shortAddress(shown)}</Text>
+                  <Icon name="copy" size={13} color={c.textSecondary} />
+                </PressableScale>
+              ) : (
+                <PressableScale
+                  accessibilityRole="button"
+                  accessibilityLabel="Addresses"
+                  hitSlop={6}
+                  scaleTo={0.97}
+                  onPress={onAddresses}
+                  style={styles.addressRow}
+                >
+                  <ChainIcons
+                    wallet={multisig ? undefined : wallet}
+                    deployments={multisig ? deployments : undefined}
+                    ring={c.canvas}
+                  />
+                </PressableScale>
+              )}
             </Animated.View>
             {crossfade ? (
               <Animated.Text
@@ -220,7 +264,8 @@ function FullHeader({
       <View style={styles.shortcuts}>
         {extra}
         {/* Your balance and the way to add money, as on every tab before (2026-11-13). */}
-        <HeaderActions deposit gear={false} />
+        {/* <HeaderActions deposit gear={false} /> */}
+        {deposit ? <HeaderActions deposit gear={false} /> : null}
         <HeaderShortcut
           icon="bell"
           label="Notifications"
@@ -271,6 +316,10 @@ const useStyles = makeStyles((c) => ({
     flexDirection: 'row',
     alignItems: 'center',
     alignSelf: 'flex-start',
+    gap: 5,
+  },
+  nameChains: {
+    marginLeft: 2,
   },
   address: {
     color: c.textSecondary,
