@@ -71,9 +71,16 @@ impl Pacer {
 
     /// Waits for this call's slot; `Busy` at once when it is more than `max_wait` away.
     pub async fn wait(&self) -> Result<(), AppError> {
+        self.wait_up_to(self.max_wait).await
+    }
+
+    /// [`Pacer::wait`] with its own bound (15 Nov): `Duration::ZERO` takes a slot only
+    /// when one is free now (background work that must never queue ahead of a quote);
+    /// a longer bound lets an interactive lookup get in between a build's calls.
+    pub async fn wait_up_to(&self, max_wait: Duration) -> Result<(), AppError> {
         let wait = match self.redis.get() {
-            Some(redis) => self.reserve_shared(redis).await?,
-            None => self.reserve_local()?,
+            Some(redis) => self.reserve_shared(redis, max_wait).await?,
+            None => self.reserve_local(max_wait)?,
         };
         if !wait.is_zero() {
             tokio::time::sleep(wait).await;
@@ -81,10 +88,10 @@ impl Pacer {
         Ok(())
     }
 
-    fn reserve_local(&self) -> Result<Duration, AppError> {
+    fn reserve_local(&self, max_wait: Duration) -> Result<Duration, AppError> {
         let mut next = self.next.lock().unwrap_or_else(|p| p.into_inner());
-        let (wait, after) = reserve(*next, Instant::now(), self.interval, self.max_wait)
-            .ok_or_else(|| {
+        let (wait, after) =
+            reserve(*next, Instant::now(), self.interval, max_wait).ok_or_else(|| {
                 tracing::info!(provider = self.name, "dex provider queue full");
                 AppError::Busy
             })?;
@@ -92,7 +99,11 @@ impl Pacer {
         Ok(wait)
     }
 
-    async fn reserve_shared(&self, redis: &RedisStore) -> Result<Duration, AppError> {
+    async fn reserve_shared(
+        &self,
+        redis: &RedisStore,
+        max_wait: Duration,
+    ) -> Result<Duration, AppError> {
         let key = redis.key("dex-pace", self.name);
         let wait: i64 = redis
             .query(
@@ -101,7 +112,7 @@ impl Pacer {
                     .arg(1)
                     .arg(key)
                     .arg(self.interval.as_millis() as u64)
-                    .arg(self.max_wait.as_millis() as u64),
+                    .arg(max_wait.as_millis() as u64),
             )
             .await?;
         match u64::try_from(wait) {
@@ -158,5 +169,23 @@ mod tests {
         assert_eq!((ok, busy), (3, 17));
         // Nobody waited past the bound (the last slot was 0.7 s out).
         assert!(started.elapsed() < Duration::from_millis(1_000));
+    }
+
+    #[tokio::test]
+    async fn background_callers_take_only_a_free_slot() {
+        // 15 Nov: a zero bound takes the slot only when it is free now, so background
+        // work never sits in the queue ahead of an interactive caller.
+        let pacer = Pacer::new(
+            "test-idle",
+            Duration::from_millis(300),
+            Duration::from_secs(1),
+        );
+        pacer.wait_up_to(Duration::ZERO).await.unwrap();
+        assert!(matches!(
+            pacer.wait_up_to(Duration::ZERO).await,
+            Err(AppError::Busy)
+        ));
+        // An interactive caller still gets the next slot, an interval out.
+        pacer.wait().await.unwrap();
     }
 }

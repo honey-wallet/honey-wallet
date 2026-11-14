@@ -17,6 +17,14 @@ const SCAM: &str = "0x4ed4e862860bed51a9570b96d89af5e1b0efefed";
 const JUP: &str = "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN";
 const SOLANA_PAYER: &str = "5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1";
 const SOLANA_TAKER: &str = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM";
+/// Long-tail tokens no list has (15 Nov, `GET /dex/token`): one that passes ($40k pool,
+/// $8k a day), a honeypot, one under the liquidity floor; on Solana a mint that passes
+/// and one with a freeze authority.
+const LONG: &str = "0x2222222222222222222222222222222222222222";
+const TRAP: &str = "0x3333333333333333333333333333333333333333";
+const THIN: &str = "0x4444444444444444444444444444444444444444";
+const BONK: &str = "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263";
+const FROZEN: &str = "7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr";
 
 #[derive(Clone)]
 struct Mock {
@@ -210,7 +218,7 @@ async fn goplus(
 ) -> Json<Value> {
     let address = q["contract_addresses"].clone();
     let aero = address == format!("{AERO:#x}");
-    let honeypot = address == SCAM || (aero && *m.aero_honeypot.lock().unwrap());
+    let honeypot = address == SCAM || address == TRAP || (aero && *m.aero_honeypot.lock().unwrap());
     let proxy = aero && *m.aero_proxy.lock().unwrap();
     let one = |b: bool| if b { "1" } else { "0" };
     Json(json!({ "code": 1, "message": "OK", "result": { address: {
@@ -238,6 +246,11 @@ async fn pairs(State(m): State<Mock>) -> Json<Value> {
         pair(format!("{AERO:#x}"), aero),
         pair(SCAM.into(), 1.0),
         pair(JUP.into(), 0.26),
+        pair(LONG.into(), 2.01),
+        pair(TRAP.into(), 3.0),
+        pair(THIN.into(), 0.5),
+        pair(BONK.into(), 0.0000201),
+        pair(FROZEN.into(), 0.4),
     ]))
 }
 
@@ -287,13 +300,19 @@ async fn serve() -> (String, Mock) {
                     return Err(axum::http::StatusCode::INTERNAL_SERVER_ERROR);
                 }
                 let aero = m.aero_price.lock().unwrap().to_string();
-                let token = |address: String, symbol: &str, price: &str| json!({"attributes": {
+                let sized = |address: String, symbol: &str, price: &str, liquidity: &str, volume: &str| json!({"attributes": {
                     "address": address, "name": symbol, "symbol": symbol, "decimals": 18,
-                    "price_usd": price, "total_reserve_in_usd": "4871178", "volume_usd": {"h24": "3660874"}
+                    "price_usd": price, "total_reserve_in_usd": liquidity, "volume_usd": {"h24": volume}
                 }});
+                let token = |address: String, symbol: &str, price: &str| {
+                    sized(address, symbol, price, "4871178", "3660874")
+                };
                 Ok(Json(json!({"data": [
                     token(format!("{AERO:#x}"), "AERO", &aero),
-                    token(SCAM.into(), "SCAM", "1.0")
+                    token(SCAM.into(), "SCAM", "1.0"),
+                    sized(LONG.into(), "LONG", "2.0", "40000", "8000"),
+                    token(TRAP.into(), "TRAP", "3.0"),
+                    sized(THIN.into(), "THIN", "0.5", "10000", "8000")
                 ]})))
             }),
         )
@@ -331,6 +350,24 @@ async fn serve() -> (String, Mock) {
                     "name": "Aerodrome Finance", "decimals": 18,
                     "logoURI": "https://assets.coingecko.com/coins/images/31745/large/token.png"
                 }]}))
+            }),
+        )
+        .route(
+            "/tokens/v2/search",
+            get(|Query(q): Query<std::collections::HashMap<String, String>>| async move {
+                let entry = |mint: &str, freeze_off: bool| json!({
+                    "id": mint, "name": "Long Tail", "symbol": "LT", "decimals": 5,
+                    "usdPrice": if mint == BONK { 0.00002 } else { 0.4 },
+                    "tokenProgram": crate::solana_relayer::TOKEN_PROGRAM,
+                    "liquidity": 60_000.0, "stats24h": {"buyVolume": 9_000.0, "sellVolume": 7_000.0},
+                    "firstPool": {"createdAt": "2025-01-01T00:00:00Z"},
+                    "audit": {"mintAuthorityDisabled": true, "freezeAuthorityDisabled": freeze_off}
+                });
+                Json(match q["query"].as_str() {
+                    BONK => json!([entry(BONK, true)]),
+                    FROZEN => json!([entry(FROZEN, false)]),
+                    _ => json!([]),
+                })
             }),
         )
         .route("/swap/v2/order", get(order))
@@ -888,6 +925,159 @@ async fn upgradeable_tokens_are_blocked_unless_allowlisted() {
     dex.quote(Uuid::new_v4(), request(&AERO.to_string(), "10000000"))
         .await
         .unwrap();
+}
+
+// Lookups by contract (`GET /dex/token`, 15 Nov)
+
+#[tokio::test]
+async fn a_looked_up_long_tail_token_that_passes_can_be_traded() {
+    let (dex, mock) = service().await;
+    // Not on the built list: refused.
+    let r = dex.safe_token(DexChain::Base, LONG).await;
+    assert!(
+        matches!(&r, Err(AppError::BadRequest(m)) if m.contains("isn't on Honey's DEX list")),
+        "{r:?}"
+    );
+    let row = dex.lookup(DexChain::Base, LONG).await.unwrap();
+    assert!(row.safety.ok, "{:?}", row.safety);
+    assert_eq!(row.liquidity_usd, Some(40_000.0));
+    assert_eq!(
+        (row.decimals, row.metadata, row.route),
+        (18, "chain", "dex")
+    );
+    // The same row shape as `/dex/tokens?all=1`.
+    let listed = dex.tokens(DexChain::Base, true).await.unwrap();
+    let keys = |v: &TokenView| {
+        let mut k: Vec<String> = serde_json::to_value(v)
+            .unwrap()
+            .as_object()
+            .unwrap()
+            .keys()
+            .filter(|k| !["logoUrl", "coingeckoId", "marketCapUsd"].contains(&k.as_str()))
+            .cloned()
+            .collect();
+        k.sort();
+        k
+    };
+    let scam = listed.iter().find(|t| t.address == SCAM).unwrap();
+    assert_eq!(keys(&row), keys(scam));
+    // Registered: quotes, the route planner's prices and the thesis registry take it.
+    dex.safe_token(DexChain::Base, LONG).await.unwrap();
+    assert_eq!(dex.token_price(DexChain::Base, LONG).await, Some((2.0, 18)));
+    assert!(
+        dex.safe_tokens_cached()
+            .await
+            .iter()
+            .any(|t| t.address == LONG)
+    );
+    // Asked again: from the cache, no provider call.
+    let calls = *mock.gecko_calls.lock().unwrap();
+    assert_eq!(dex.lookup(DexChain::Base, LONG).await.unwrap(), row);
+    assert_eq!(*mock.gecko_calls.lock().unwrap(), calls);
+    // A token of the built list answers with its row there.
+    let aero = dex.lookup(DexChain::Base, &AERO.to_string()).await.unwrap();
+    assert_eq!(aero.metadata, "uniswap");
+    assert_eq!(*mock.gecko_calls.lock().unwrap(), calls);
+}
+
+#[tokio::test]
+async fn a_looked_up_token_that_fails_a_check_shows_why_and_cant_be_traded() {
+    let (dex, _) = service().await;
+    let trap = dex.lookup(DexChain::Base, TRAP).await.unwrap();
+    assert!(!trap.safety.ok);
+    assert!(trap.safety.flags.contains(&"honeypot".to_string()));
+    let r = dex.safe_token(DexChain::Base, TRAP).await;
+    assert!(
+        matches!(&r, Err(AppError::BadRequest(m)) if m.contains("honeypot")),
+        "{r:?}"
+    );
+    assert!(
+        !dex.safe_tokens_cached()
+            .await
+            .iter()
+            .any(|t| t.address == TRAP)
+    );
+    // Under the $25k floor: shown with its flag, never tradable.
+    let thin = dex.lookup(DexChain::Base, THIN).await.unwrap();
+    assert!(!thin.safety.ok);
+    assert!(thin.safety.flags.contains(&"low_liquidity".to_string()));
+    assert!(dex.safe_token(DexChain::Base, THIN).await.is_err());
+}
+
+#[tokio::test]
+async fn a_lookup_of_an_unknown_or_bad_token_is_404_or_400() {
+    let (dex, mock) = service().await;
+    let unknown = "0x1111111111111111111111111111111111111111";
+    let r = dex.lookup(DexChain::Base, unknown).await;
+    assert!(matches!(r, Err(AppError::NotFound)), "{r:?}");
+    // "No market" is remembered: no second provider call.
+    let calls = *mock.gecko_calls.lock().unwrap();
+    assert!(matches!(
+        dex.lookup(DexChain::Base, unknown).await,
+        Err(AppError::NotFound)
+    ));
+    assert_eq!(*mock.gecko_calls.lock().unwrap(), calls);
+    assert!(matches!(
+        dex.lookup(
+            DexChain::Solana,
+            "So11111111111111111111111111111111111111113"
+        )
+        .await,
+        Err(AppError::NotFound)
+    ));
+    for (chain, address) in [
+        (DexChain::Base, "0x12"),
+        (DexChain::Base, JUP),
+        (DexChain::Solana, LONG),
+        (DexChain::Base, DexChain::Base.usdc()),
+        (DexChain::Solana, chains::WRAPPED_SOL),
+    ] {
+        let r = dex.lookup(chain, address).await;
+        assert!(
+            matches!(r, Err(AppError::BadRequest(_))),
+            "{address}: {r:?}"
+        );
+    }
+    let (off, mock) = service_with(|c| c.enabled = false).await;
+    assert!(matches!(
+        off.lookup(DexChain::Base, LONG).await,
+        Err(AppError::Unsupported(_))
+    ));
+    assert_eq!(*mock.gecko_calls.lock().unwrap(), 0);
+}
+
+#[tokio::test]
+async fn a_looked_up_solana_mint_keeps_the_authority_checks_and_needs_two_prices() {
+    let (dex, _) = service().await;
+    let bonk = dex.lookup(DexChain::Solana, BONK).await.unwrap();
+    assert!(bonk.safety.ok, "{:?}", bonk.safety);
+    assert_eq!((bonk.decimals, bonk.metadata), (5, "jupiter"));
+    dex.safe_token(DexChain::Solana, BONK).await.unwrap();
+    // A freeze authority blocks it.
+    let frozen = dex.lookup(DexChain::Solana, FROZEN).await.unwrap();
+    assert!(!frozen.safety.ok);
+    assert!(frozen.safety.flags.contains(&"freezable".to_string()));
+}
+
+#[tokio::test]
+async fn the_lookup_cache_is_bounded() {
+    let (dex, _) = service().await;
+    for i in 0..LOOKUP_MAX_CACHED + 25 {
+        dex.remember_lookup(DexChain::Base, &format!("0x{i:040x}"), None);
+    }
+    assert_eq!(dex.lookups_held(), LOOKUP_MAX_CACHED);
+    // The newest is kept.
+    let last = format!("0x{:040x}", LOOKUP_MAX_CACHED + 24);
+    assert_eq!(dex.registered(DexChain::Base, &last), Some(None));
+}
+
+#[test]
+fn the_quote_time_limits_are_unchanged_for_the_long_tail() {
+    // 15 Nov: lower list floors, same per-leg cap and impact limit, so a thin pool is
+    // still refused when it is quoted.
+    assert_eq!(MAX_PRICE_IMPACT_PCT, 5.0);
+    assert_eq!(DEFAULT_MAX_LEG_USD, 100.0);
+    assert_eq!(DexConfig::default().max_leg_usd, 100.0);
 }
 
 /// Read-only quotes against the real providers (no signing, nothing sent):

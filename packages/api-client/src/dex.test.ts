@@ -18,6 +18,16 @@ describe('DEX routing', () => {
     expect(fetch.mock.calls[1]?.[0]).toBe('http://api.test/api/v1/dex/tokens?chain=solana&all=1');
   });
 
+  it('looks up one token by contract', async () => {
+    const fetch = json(200, { symbol: 'AERO', safety: { ok: true, flags: [] } });
+    const api = createApiClient({ baseUrl: 'http://api.test', fetch });
+    const token = await api.dexToken('base', '0x940181a94a35a4569e4529a3cdfb74e38fd98631');
+    expect(token.safety.ok).toBe(true);
+    expect(fetch.mock.calls[0]?.[0]).toBe(
+      'http://api.test/api/v1/dex/token?chain=base&address=0x940181a94a35a4569e4529a3cdfb74e38fd98631',
+    );
+  });
+
   it('quotes and routes with only the contract fields', async () => {
     const fetch = json(200, { quoteId: 'q', legs: [] });
     const api = createApiClient({ baseUrl: 'http://api.test', fetch });

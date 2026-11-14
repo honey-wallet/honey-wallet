@@ -14,11 +14,14 @@
 //! to list a chain's tokens (its "latest" lists are paid boosts and profiles, a scam
 //! magnet), so it is used per address only: pool age and a second price.
 //!
-//! Floors (docs/routing/MORE-TOKENS.md §4, raised 2026-11-14): pool liquidity ≥ $250k,
-//! 24 h volume ≥ $100k, oldest pool ≥ 7 days, and on EVM two prices (CoinGecko or
-//! DexScreener, and GeckoTerminal) within 2%; on Solana Jupiter's organic score isn't
-//! `low`. A token that misses one is kept with a flag (`low_liquidity`, `too_new`, ...),
-//! so `?all=1` can show why; flags block it. Every token is keyed by (chain, address).
+//! Floors (docs/routing/MORE-TOKENS.md §4; lowered 15 Nov for the long tail, from $250k,
+//! $100k and 7 days): pool liquidity ≥ $25k, 24 h volume ≥ $5k, oldest pool ≥ 2 days,
+//! and on EVM two prices (CoinGecko or DexScreener, and GeckoTerminal) within 2%; on
+//! Solana Jupiter's organic score isn't `low`. The scam checks are unchanged (GoPlus,
+//! upgradeable proxies, Solana authorities and Token-2022), and a thin pool is still
+//! refused at quote time by the 5% price-impact limit and the per-leg $ cap. A token
+//! that misses one is kept with a flag (`low_liquidity`, `too_new`, ...), so `?all=1`
+//! can show why; flags block it. Every token is keyed by (chain, address).
 
 use std::collections::HashMap;
 
@@ -30,17 +33,27 @@ use crate::solana_relayer::TOKEN_PROGRAM;
 
 // pub const MIN_LIQUIDITY_USD: f64 = 100_000.0;
 // pub const MIN_VOLUME_USD: f64 = 50_000.0;
-pub const MIN_LIQUIDITY_USD: f64 = 250_000.0;
-pub const MIN_VOLUME_USD: f64 = 100_000.0;
-pub const MIN_AGE_SECS: i64 = 7 * 24 * 60 * 60;
+// pub const MIN_LIQUIDITY_USD: f64 = 250_000.0;
+// pub const MIN_VOLUME_USD: f64 = 100_000.0;
+// pub const MIN_AGE_SECS: i64 = 7 * 24 * 60 * 60;
+// Long tail (15 Nov): every token with a real, two-day-old market is listed; the scam
+// checks and the quote-time impact and $ limits do the rest.
+pub const MIN_LIQUIDITY_USD: f64 = 25_000.0;
+pub const MIN_VOLUME_USD: f64 = 5_000.0;
+pub const MIN_AGE_SECS: i64 = 2 * 24 * 60 * 60;
 pub const MAX_PRICE_GAP: f64 = 0.02;
 /// Candidates looked up per EVM chain (GeckoTerminal and DexScreener take 30 a call).
+/// Timing in `dex/mod.rs` (the constants block).
 // pub const MAX_EVM_CANDIDATES: usize = 120;
-pub const MAX_EVM_CANDIDATES: usize = 240;
-/// GeckoTerminal pool pages read per EVM chain (20 pools each, busiest first).
-pub const POOL_PAGES: usize = 2;
+// pub const MAX_EVM_CANDIDATES: usize = 240;
+pub const MAX_EVM_CANDIDATES: usize = 1_200;
+/// GeckoTerminal pool pages read per EVM chain (20 pools each, busiest first). Ten is
+/// GeckoTerminal's keyless maximum: page 11 answers 401 (checked 15 Nov).
+// pub const POOL_PAGES: usize = 2;
+pub const POOL_PAGES: usize = 10;
 /// Tokens kept per chain, most liquid first.
-pub const MAX_TOKENS: usize = 500;
+// pub const MAX_TOKENS: usize = 500;
+pub const MAX_TOKENS: usize = 3_000;
 
 /// One token of the universe, before safety. `route` is always `dex`; the thesis
 /// registry can merge on `(chain, address)` and prefer 1Click where it lists the same
@@ -111,6 +124,35 @@ pub fn floor_flags(
         flags.push("too_new".into());
     }
     flags
+}
+
+/// A second price for a looked-up token (15 Nov, `GET /dex/token`): DexScreener's must
+/// be within `MAX_PRICE_GAP` of the first source's, or the token is `price_mismatch`.
+pub fn second_price(token: &mut DexToken, other: Option<f64>) {
+    let agrees = match other.filter(|p| *p > 0.0) {
+        Some(o) if token.price_usd > 0.0 => (o - token.price_usd).abs() / o <= MAX_PRICE_GAP,
+        _ => false,
+    };
+    if !agrees && !token.flags.iter().any(|f| f == "price_mismatch") {
+        token.flags.push("price_mismatch".into());
+    }
+}
+
+/// Whether a looked-up token trades anywhere: pooled liquidity at the first source, or
+/// a DexScreener pair. Without either `GET /dex/token` answers 404.
+pub fn has_market(liquidity: Option<f64>, dexscreener_pair: bool) -> bool {
+    dexscreener_pair || liquidity.is_some_and(|l| l > 0.0)
+}
+
+/// Whether any DexScreener pair has `address` on either side.
+pub fn pairs_name(pairs: &[Value], address: &str) -> bool {
+    pairs.iter().any(|p| {
+        ["baseToken", "quoteToken"].iter().any(|side| {
+            p[*side]["address"]
+                .as_str()
+                .is_some_and(|a| a.eq_ignore_ascii_case(address))
+        })
+    })
 }
 
 /// A coin placed on a chain by its contract there: from CoinGecko (with its market row)
@@ -484,73 +526,79 @@ fn rfc3339_unix(text: &str) -> Option<i64> {
 pub fn solana_tokens(list: &Value, ids: &HashMap<String, String>, now: i64) -> Vec<DexToken> {
     let mut out = Vec::new();
     for t in list.as_array().into_iter().flatten() {
-        let Some(address) = t["id"].as_str().and_then(|a| DexChain::Solana.normalize(a)) else {
+        let Some(token) = solana_token(t, ids, now) else {
             continue;
         };
-        if address == USDC_SOLANA || address == WRAPPED_SOL {
+        if token.address == USDC_SOLANA || token.address == WRAPPED_SOL {
             continue;
         }
-        let liquidity = num(&t["liquidity"]);
         // Small pools aren't worth listing even with ?all=1.
-        if liquidity.is_none_or(|l| l < MIN_LIQUIDITY_USD / 10.0) {
+        // if liquidity.is_none_or(|l| l < MIN_LIQUIDITY_USD / 10.0) {
+        // 15 Nov: the floor itself ($25k), now that it is a tenth of what it was.
+        if token.liquidity_usd.is_none_or(|l| l < MIN_LIQUIDITY_USD) {
             continue;
         }
-        let (Some(symbol), Some(decimals)) = (text(&t["symbol"], 32), t["decimals"].as_u64())
-        else {
-            continue;
-        };
-        let Ok(decimals) = u8::try_from(decimals) else {
-            continue;
-        };
-        let volume = match (
-            num(&t["stats24h"]["buyVolume"]),
-            num(&t["stats24h"]["sellVolume"]),
-        ) {
-            (Some(b), Some(s)) => Some(b + s),
-            _ => None,
-        };
-        let first = t["firstPool"]["createdAt"].as_str().and_then(rfc3339_unix);
-        let mut flags = floor_flags(liquidity, volume, first, now);
-        let price = num(&t["usdPrice"]).filter(|p| *p > 0.0);
-        if price.is_none() {
-            flags.push("no_price".into());
-        }
-        if t["tokenProgram"].as_str() != Some(TOKEN_PROGRAM) {
-            flags.push("token_2022".into());
-        }
-        let audit = &t["audit"];
-        if audit["mintAuthorityDisabled"].as_bool() != Some(true) {
-            flags.push("owner_can_mint".into());
-        }
-        if audit["freezeAuthorityDisabled"].as_bool() != Some(true) {
-            flags.push("freezable".into());
-        }
-        if audit["isSus"].as_bool() == Some(true) {
-            flags.push("suspicious".into());
-        }
-        // Wash-traded or botted volume (Jupiter's organic score); absent counts as fine.
-        if t["organicScoreLabel"].as_str() == Some("low") {
-            flags.push("low_organic".into());
-        }
-        out.push(DexToken {
-            chain: DexChain::Solana,
-            symbol,
-            name: text(&t["name"], 64).unwrap_or_default(),
-            decimals,
-            logo_url: logo(&t["icon"]),
-            price_usd: price.unwrap_or(0.0),
-            liquidity_usd: liquidity,
-            volume24h_usd: volume,
-            coingecko_id: ids.get(&address).cloned(),
-            market_cap_usd: num(&t["mcap"]).filter(|m| *m > 0.0),
-            change24h_pct: num(&t["stats24h"]["priceChange"]),
-            address,
-            first_pool_at: first,
-            metadata: "jupiter",
-            flags,
-        });
+        out.push(token);
     }
     sort_and_cap(out)
+}
+
+/// One Jupiter token entry (its verified list, or `/tokens/v2/search` for a lookup) →
+/// a token with floor and authority flags. Nothing is dropped for size here.
+pub fn solana_token(t: &Value, ids: &HashMap<String, String>, now: i64) -> Option<DexToken> {
+    let address = t["id"]
+        .as_str()
+        .and_then(|a| DexChain::Solana.normalize(a))?;
+    let liquidity = num(&t["liquidity"]);
+    let symbol = text(&t["symbol"], 32)?;
+    let decimals = u8::try_from(t["decimals"].as_u64()?).ok()?;
+    let volume = match (
+        num(&t["stats24h"]["buyVolume"]),
+        num(&t["stats24h"]["sellVolume"]),
+    ) {
+        (Some(b), Some(s)) => Some(b + s),
+        _ => None,
+    };
+    let first = t["firstPool"]["createdAt"].as_str().and_then(rfc3339_unix);
+    let mut flags = floor_flags(liquidity, volume, first, now);
+    let price = num(&t["usdPrice"]).filter(|p| *p > 0.0);
+    if price.is_none() {
+        flags.push("no_price".into());
+    }
+    if t["tokenProgram"].as_str() != Some(TOKEN_PROGRAM) {
+        flags.push("token_2022".into());
+    }
+    let audit = &t["audit"];
+    if audit["mintAuthorityDisabled"].as_bool() != Some(true) {
+        flags.push("owner_can_mint".into());
+    }
+    if audit["freezeAuthorityDisabled"].as_bool() != Some(true) {
+        flags.push("freezable".into());
+    }
+    if audit["isSus"].as_bool() == Some(true) {
+        flags.push("suspicious".into());
+    }
+    // Wash-traded or botted volume (Jupiter's organic score); absent counts as fine.
+    if t["organicScoreLabel"].as_str() == Some("low") {
+        flags.push("low_organic".into());
+    }
+    Some(DexToken {
+        chain: DexChain::Solana,
+        symbol,
+        name: text(&t["name"], 64).unwrap_or_default(),
+        decimals,
+        logo_url: logo(&t["icon"]),
+        price_usd: price.unwrap_or(0.0),
+        liquidity_usd: liquidity,
+        volume24h_usd: volume,
+        coingecko_id: ids.get(&address).cloned(),
+        market_cap_usd: num(&t["mcap"]).filter(|m| *m > 0.0),
+        change24h_pct: num(&t["stats24h"]["priceChange"]),
+        address,
+        first_pool_at: first,
+        metadata: "jupiter",
+        flags,
+    })
 }
 
 #[cfg(test)]
@@ -564,32 +612,92 @@ mod tests {
     fn floors() {
         assert!(floor_flags(Some(1e6), Some(1e6), Some(NOW - MIN_AGE_SECS), NOW).is_empty());
         assert_eq!(
-            floor_flags(Some(99_999.0), Some(49_999.0), Some(NOW - 60), NOW),
+            floor_flags(Some(24_999.0), Some(4_999.0), Some(NOW - 60), NOW),
             vec!["low_liquidity", "low_volume", "too_new"]
         );
         assert_eq!(floor_flags(None, None, None, NOW).len(), 3);
-        // Raised 2026-11-14: a $200k pool with $80k a day no longer passes.
-        assert_eq!(
-            floor_flags(
-                Some(200_000.0),
-                Some(80_000.0),
-                Some(NOW - MIN_AGE_SECS),
-                NOW
-            ),
-            vec!["low_liquidity", "low_volume"]
-        );
+        // Lowered 15 Nov (long tail): a $40k pool with $8k a day, three days old, passes
+        // (it read low_liquidity, low_volume and too_new before).
         assert!(
             floor_flags(
-                Some(250_000.0),
-                Some(100_000.0),
-                Some(NOW - MIN_AGE_SECS),
+                Some(40_000.0),
+                Some(8_000.0),
+                Some(NOW - 3 * 24 * 60 * 60),
                 NOW
             )
             .is_empty()
         );
         assert!(
+            floor_flags(Some(25_000.0), Some(5_000.0), Some(NOW - MIN_AGE_SECS), NOW).is_empty()
+        );
+        // A day-old pool is still too new.
+        assert_eq!(
+            floor_flags(Some(1e6), Some(1e6), Some(NOW - 24 * 60 * 60), NOW),
+            vec!["too_new"]
+        );
+        assert!(
             floor_flags(Some(1e9), Some(1e9), Some(NOW - MIN_AGE_SECS + 1), NOW) == ["too_new"]
         );
+    }
+
+    #[test]
+    fn caps_fit_the_free_providers() {
+        // 15 Nov: GeckoTerminal's keyless pool listing stops at page 10, and a chain's
+        // GeckoTerminal calls (pool pages, then 30 tokens a call) stay under 60, about six
+        // minutes at its 6 s pace.
+        const { assert!(POOL_PAGES <= 10) };
+        let calls = POOL_PAGES + (MAX_EVM_CANDIDATES + POOL_PAGES * 20).div_ceil(30);
+        assert!(calls <= 60, "{calls}");
+        const { assert!(MAX_TOKENS >= MAX_EVM_CANDIDATES + POOL_PAGES * 20) };
+        // More candidates than CoinGecko's ranking gives one chain are simply fewer.
+        let markets = Value::Array(
+            (0..MAX_EVM_CANDIDATES + 50)
+                .map(|i| json!({"id": format!("c{i}"), "current_price": 1.0}))
+                .collect(),
+        );
+        let list = Value::Array(
+            (0..MAX_EVM_CANDIDATES + 50)
+                .map(|i| json!({"id": format!("c{i}"), "platforms": {"base": format!("0x{:040x}", i + 1)}}))
+                .collect(),
+        );
+        assert_eq!(
+            evm_candidates(&markets, &list, DexChain::Base).len(),
+            MAX_EVM_CANDIDATES
+        );
+    }
+
+    #[test]
+    fn a_looked_up_token_needs_a_market_and_a_second_price() {
+        let mut t = DexToken {
+            chain: DexChain::Solana,
+            address: "x".into(),
+            symbol: "X".into(),
+            name: "X".into(),
+            decimals: 6,
+            logo_url: None,
+            price_usd: 1.00,
+            liquidity_usd: Some(30_000.0),
+            volume24h_usd: Some(6_000.0),
+            coingecko_id: None,
+            market_cap_usd: None,
+            change24h_pct: None,
+            first_pool_at: Some(0),
+            metadata: "jupiter",
+            flags: vec![],
+        };
+        second_price(&mut t, Some(1.015));
+        assert!(t.flags.is_empty());
+        second_price(&mut t, Some(1.05));
+        assert_eq!(t.flags, vec!["price_mismatch"]);
+        let mut lone = t.clone();
+        lone.flags.clear();
+        second_price(&mut lone, None);
+        second_price(&mut lone, None);
+        assert_eq!(lone.flags, vec!["price_mismatch"]);
+        assert!(has_market(Some(1.0), false));
+        assert!(has_market(None, true));
+        assert!(!has_market(Some(0.0), false));
+        assert!(!has_market(None, false));
     }
 
     #[test]
@@ -683,7 +791,7 @@ mod tests {
                 "price_usd": "0.4747", "total_reserve_in_usd": "4871178.8", "volume_usd": {"h24": "3660874.9"}}}),
             json!({"attributes": {"address": "0x4ed4e862860bed51a9570b96d89af5e1b0efefed",
                 "name": "Degen", "symbol": "DEGEN", "decimals": 18,
-                "price_usd": "0.0020", "total_reserve_in_usd": "50000", "volume_usd": {"h24": "100"}}}),
+                "price_usd": "0.0020", "total_reserve_in_usd": "20000", "volume_usd": {"h24": "100"}}}),
         ];
         let ages = oldest_pairs(&[json!({"pairCreatedAt": 1_694_127_045_000i64,
                 "baseToken": {"address": "0x940181a94A35A4569E4529A3CDfB74e38FD98631"},
@@ -722,7 +830,9 @@ mod tests {
              "firstPool": {"createdAt": "2026-11-12T00:00:00Z"},
              "audit": {"mintAuthorityDisabled": false, "isSus": true}},
             {"id": USDC_SOLANA, "symbol": "USDC", "decimals": 6, "liquidity": 1e9},
-            {"id": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL", "symbol": "DUST", "decimals": 6, "liquidity": 10}
+            {"id": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL", "symbol": "DUST", "decimals": 6, "liquidity": 10},
+            // 15 Nov: under the $25k floor is dropped outright (it was a tenth of $250k).
+            {"id": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263", "symbol": "THIN", "decimals": 5, "liquidity": 24_000}
         ]);
         let ids = HashMap::from([(
             "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN".to_string(),
@@ -730,6 +840,9 @@ mod tests {
         )]);
         let tokens = solana_tokens(&list, &ids, NOW);
         assert_eq!(tokens.len(), 2);
+        // A lookup of the same entry keeps it, flagged.
+        let thin = solana_token(&list[4], &ids, NOW).unwrap();
+        assert!(thin.flags.contains(&"low_liquidity".to_string()));
         assert_eq!(tokens[0].symbol, "JUP");
         assert!(tokens[0].flags.is_empty(), "{:?}", tokens[0].flags);
         assert_eq!(

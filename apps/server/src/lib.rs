@@ -253,6 +253,24 @@ fn router(config: &Config, health: runtime::RuntimeHealth, services: RouterServi
             .map(routes::dex::public_router)
             .unwrap_or_default(),
     );
+    // `GET /dex/token` (15 Nov): its own tighter per-IP budget, then the public reads'.
+    let dex_lookup = dex
+        .clone()
+        .map(routes::dex::lookup_router)
+        .unwrap_or_default();
+    let dex_lookup = if let Some(redis) = redis.clone() {
+        dex_lookup.route_layer(middleware::from_fn_with_state(
+            routes::identity::AuthenticatedApiAdmission::new(
+                redis,
+                config.trust_proxy_headers,
+                config.trusted_proxy_cidrs.clone(),
+            ),
+            routes::identity::limit_dex_token_lookups_by_ip,
+        ))
+    } else {
+        dex_lookup
+    };
+    let public_markets = public_markets.merge(dex_lookup);
     let public_markets = if let Some(redis) = redis.clone() {
         public_markets.route_layer(middleware::from_fn_with_state(
             routes::identity::AuthenticatedApiAdmission::new(
