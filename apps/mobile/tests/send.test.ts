@@ -58,7 +58,8 @@ beforeEach(() => {
 });
 
 it('recognises recipients per chain', () => {
-  expect(recipientChains(TO)).toEqual(['Ethereum', 'Base', 'Arbitrum', 'Polygon']);
+  // expect(recipientChains(TO)).toEqual(['Ethereum', 'Base', 'Arbitrum', 'Polygon']);
+  expect(recipientChains(TO)).toEqual(['Ethereum', 'Base', 'Arbitrum', 'Optimism', 'Polygon']);
   expect(recipientChains(sol)).toEqual(['Solana']);
   expect(recipientChains('alice.near')).toEqual(['NEAR']);
   expect(recipientChains('alice')).toEqual([]);

@@ -6,12 +6,15 @@ import { closeSheet, SheetScreen } from '@/components/sheets/Sheet';
 import { Chip } from '@/components/wallet/Chip';
 import { TokenIcon } from '@/components/wallet/parts';
 // import { CHAINS } from '@/lib/mock-wallet';
+import { CHAINS, EVM_CHAINS, listNames } from '@/lib/mock-wallet';
 import { makeStyles, radius, useTheme } from '@/theme';
 
 /**
  * The networks whose balances Honey reads (lib/receive.ts EVM_LOGOS). Every EVM chain
  * shares the Ethereum address. NEAR is phrase wallets only.
  */
+/* Replaced (14 Nov): from the one supported list (lib/mock-wallet CHAINS), Solana and
+NEAR first, then the EVM networks, so Optimism (and any later one) shows here too.
 const NETWORKS = [
   { name: 'Solana', symbol: 'SOL' },
   { name: 'NEAR', symbol: 'NEAR' },
@@ -19,6 +22,11 @@ const NETWORKS = [
   { name: 'Base', symbol: 'BASE' },
   { name: 'Arbitrum', symbol: 'ARB' },
   { name: 'Polygon', symbol: 'POL' },
+];
+*/
+const NETWORKS = [
+  ...CHAINS.filter((c) => !EVM_CHAINS.includes(c.name)),
+  ...CHAINS.filter((c) => EVM_CHAINS.includes(c.name)),
 ];
 
 export default function NetworksSheet() {
@@ -38,8 +46,11 @@ export default function NetworksSheet() {
         first={<Text style={styles.title}>Supported networks</Text>}
         second={
           // <Text style={styles.subtitle}>One Honey wallet holds addresses on each of these.</Text>
+          // <Text style={styles.subtitle}>
+          //   Solana, NEAR, Ethereum, Base, Arbitrum and Polygon, all in one Honey wallet.
+          // </Text>
           <Text style={styles.subtitle}>
-            Solana, NEAR, Ethereum, Base, Arbitrum and Polygon, all in one Honey wallet.
+            {listNames(NETWORKS.map((n) => n.name))}, all in one Honey wallet.
           </Text>
         }
       />

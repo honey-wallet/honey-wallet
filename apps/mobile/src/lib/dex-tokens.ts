@@ -14,13 +14,22 @@ import { TEST_MODE } from '@/lib/test-mode';
 // Chains
 
 /** Chains with a DEX route, by the name the app shows. */
-export const DEX_CHAINS = ['Base', 'Arbitrum', 'Polygon', 'Ethereum', 'Solana'] as const;
+// export const DEX_CHAINS = ['Base', 'Arbitrum', 'Polygon', 'Ethereum', 'Solana'] as const;
+export const DEX_CHAINS = [
+  'Base',
+  'Arbitrum',
+  'Optimism',
+  'Polygon',
+  'Ethereum',
+  'Solana',
+] as const;
 export type DexChain = (typeof DEX_CHAINS)[number];
 
 /** The server's code for each chain (`?chain=base`). */
 const CODE: Record<DexChain, string> = {
   Base: 'base',
   Arbitrum: 'arbitrum',
+  Optimism: 'optimism',
   Polygon: 'polygon',
   Ethereum: 'ethereum',
   Solana: 'solana',
@@ -29,6 +38,7 @@ const CODE: Record<DexChain, string> = {
 const ONE_CLICK_CODE: Record<DexChain, string> = {
   Base: 'base',
   Arbitrum: 'arb',
+  Optimism: 'op',
   Polygon: 'pol',
   Ethereum: 'eth',
   Solana: 'sol',
@@ -36,6 +46,7 @@ const ONE_CLICK_CODE: Record<DexChain, string> = {
 export const DEX_CHAIN_IDS: Record<Exclude<DexChain, 'Solana'>, number> = {
   Base: 8453,
   Arbitrum: 42161,
+  Optimism: 10,
   Polygon: 137,
   Ethereum: 1,
 };
@@ -262,7 +273,7 @@ export const forgetDexTokens = () => {
 
 /**
  * The DEX token for a symbol: on `chain` when it trades there, else on the first chain
- * that lists it (Base, Arbitrum, Polygon, Ethereum, Solana). Only tokens the server
+ * that lists it (Base, Arbitrum, Optimism, Polygon, Ethereum, Solana). Only tokens the server
  * marked safe; null when none.
  */
 export function findDexToken(tokens: readonly DexToken[], symbol: string, chain?: string) {

@@ -4,8 +4,18 @@
  * flat list of matches. Pure, so the picker sheet only renders what this returns.
  */
 import { BLOCKCHAINS, type OneClickToken, sameToken, tokenRef } from '@/lib/intents-swap';
+import { isSupportedBlockchain, SUPPORTED_BLOCKCHAINS } from '@/lib/mock-wallet';
 import { createStore } from '@/lib/store';
 import type { TokenRef } from '@/lib/swap';
+
+/**
+ * Only tokens on networks Honey supports (lib/mock-wallet CHAINS): NEAR Intents trades on
+ * many more (BNB Chain, Bitcoin, Tron…), but a token there could neither be shown on Home
+ * nor be paid out to this wallet, so the picker never offers it.
+ */
+export const onSupportedNetworks = <T extends Pick<OneClickToken, 'blockchain'>>(
+  tokens: readonly T[],
+) => tokens.filter((t) => isSupportedBlockchain(t.blockchain));
 
 /** How many picks "Recent searches" keeps. */
 export const RECENT_MAX = 6;
@@ -95,8 +105,10 @@ const QUICK_PICKS: readonly [symbol: string, home: string][] = [
 ];
 
 export function quickPicks(tokens: readonly OneClickToken[], chain: string | null) {
+  const shown = onSupportedNetworks(tokens);
   return QUICK_PICKS.flatMap(([symbol, home]) => {
-    const t = tokens.find((x) => x.symbol === symbol && x.blockchain === (chain ?? home));
+    // const t = tokens.find((x) => x.symbol === symbol && x.blockchain === (chain ?? home));
+    const t = shown.find((x) => x.symbol === symbol && x.blockchain === (chain ?? home));
     return t ? [t] : [];
   });
 }
@@ -107,9 +119,16 @@ const rank = (symbol: string) => {
   const i = FIRST.indexOf(symbol);
   return i === -1 ? FIRST.length : i;
 };
+// const chainOrder = (blockchain: string) => {
+//   const i = Object.keys(BLOCKCHAINS).indexOf(blockchain);
+//   return i === -1 ? 999 : i;
+// };
+/** The supported list's order (lib/mock-wallet CHAINS), then NEAR Intents' own. */
 const chainOrder = (blockchain: string) => {
+  const own = SUPPORTED_BLOCKCHAINS.indexOf(blockchain);
+  if (own !== -1) return own;
   const i = Object.keys(BLOCKCHAINS).indexOf(blockchain);
-  return i === -1 ? 999 : i;
+  return i === -1 ? 999 : SUPPORTED_BLOCKCHAINS.length + i;
 };
 
 /** Every token as one list (no volume data): the majors and stables first, then A to Z. */
@@ -225,7 +244,11 @@ export function pickerLists(
     popularity?: Popularity;
   },
 ): PickerLists {
-  const sorted = popularity ? popularOrder(tokens, popularity, networkOf) : sortTokens(tokens);
+  // const sorted = popularity ? popularOrder(tokens, popularity, networkOf) : sortTokens(tokens);
+  const supported = onSupportedNetworks(tokens);
+  const sorted = popularity
+    ? popularOrder(supported, popularity, networkOf)
+    : sortTokens(supported);
   const chains = [...new Set(sorted.map((t) => t.blockchain))].sort(
     (a, b) => chainOrder(a) - chainOrder(b),
   );

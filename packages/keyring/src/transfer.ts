@@ -41,6 +41,7 @@ export const EVM_USDC: Record<number, `0x${string}`> = {
   1: '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48',
   8453: '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913',
   42161: '0xaf88d065e77c8cc2239327c5edb3a432268e5831',
+  10: '0x0b2c639c533813f4aa9d7837caf62653d097ff85',
   137: '0x3c499c542cef5e3811e1192ce70d8cc03d5c3359',
 };
 

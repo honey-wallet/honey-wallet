@@ -46,7 +46,7 @@ import {
   viewStorageMin,
   viewStorageRegistered,
 } from '@/lib/jar-dao-core';
-import { type Chain, EVM_CHAIN_IDS, NATIVE_COIN } from '@/lib/mock-wallet';
+import { type Chain, EVM_CHAIN_IDS, EVM_CHAINS, NATIVE_COIN } from '@/lib/mock-wallet';
 import { signAndSendNearCall, signNearDelegate } from '@/lib/near-call';
 import { sendNear } from '@/lib/near-execution';
 import { TEST_MODE } from '@/lib/test-mode';
@@ -55,7 +55,7 @@ import { type AddedWallet, wallets } from '@/lib/wallets';
 
 /**
  * Real sends from a wallet whose keys are on this device: ETH and USDC on Ethereum,
- * Base and Arbitrum, POL and USDC on Polygon (one EVM key for all four), SOL and USDC on
+ * Base, Arbitrum and Optimism, POL and USDC on Polygon (one EVM key for all five), SOL and USDC on
  * Solana, and NEAR and USDC (NEP-141) on NEAR. Swaps also pass a `token` (contract and
  * decimals, from NEAR Intents' list) to pay any ERC-20 on those EVM chains, classic SPL
  * token on Solana, or NEP-141 token on NEAR; its decimals are checked against the token
@@ -125,7 +125,8 @@ export function validRecipient(chain: Chain, to: string) {
 export function recipientChains(to: string): Chain[] {
   const t = to.trim();
   const out: Chain[] = [];
-  if (isAddress(t)) out.push('Ethereum', 'Base', 'Arbitrum', 'Polygon');
+  // if (isAddress(t)) out.push('Ethereum', 'Base', 'Arbitrum', 'Polygon');
+  if (isAddress(t)) out.push(...EVM_CHAINS);
   if (isSolanaAddress(t)) out.push('Solana');
   if (isNearRecipient(t)) out.push('NEAR');
   return out;

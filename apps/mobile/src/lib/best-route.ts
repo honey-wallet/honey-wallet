@@ -48,6 +48,9 @@ export const CANONICAL: Readonly<Record<string, { symbol: string; family: 'BTC' 
   'Arbitrum:0x2f2a2543b76a4166549f7aab2e75bef0aefc5b0f': { symbol: 'WBTC', family: 'BTC' },
   'Ethereum:0x2260fac5e5542a773aa44fbcfedf7c193bc2c599': { symbol: 'WBTC', family: 'BTC' },
   'Polygon:0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6': { symbol: 'WBTC', family: 'BTC' },
+  // Optimism's, read on chain on 2026-11-14 (apps/server/src/dex/canonical.rs).
+  'Optimism:0x68f180fcce6836688e9084f035309e29bf0a2095': { symbol: 'WBTC', family: 'BTC' },
+  'Optimism:0x4200000000000000000000000000000000000006': { symbol: 'WETH', family: 'ETH' },
   'Base:0x4200000000000000000000000000000000000006': { symbol: 'WETH', family: 'ETH' },
   'Arbitrum:0x82af49447d8a07e3bd95bd0d56f35241523fbab1': { symbol: 'WETH', family: 'ETH' },
   'Ethereum:0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2': { symbol: 'WETH', family: 'ETH' },

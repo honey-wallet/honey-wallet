@@ -1,4 +1,5 @@
 import type { ChainFamily } from '@honey-wallet/keyring';
+import { CHAINS, EVM_CHAINS, listNames } from '@/lib/mock-wallet';
 import { type AddedWallet, canReceive } from '@/lib/wallets';
 
 /** One address to receive on, and what can be sent to it. */
@@ -16,9 +17,15 @@ export type ReceiveAddress = {
 };
 
 const FAMILIES: Record<ChainFamily, Omit<ReceiveAddress, 'family' | 'address' | 'uri'>> = {
+  // evm: {
+  //   title: 'Ethereum, Base, Arbitrum or Polygon',
+  //   name: 'Ethereum, Base, Arbitrum and Polygon',
+  //   symbol: 'ETH',
+  // },
+  // The supported EVM networks (lib/mock-wallet CHAINS), so a new one is named here too.
   evm: {
-    title: 'Ethereum, Base, Arbitrum or Polygon',
-    name: 'Ethereum, Base, Arbitrum and Polygon',
+    title: listNames(EVM_CHAINS, 'or'),
+    name: listNames(EVM_CHAINS),
     symbol: 'ETH',
   },
   solana: { title: 'Solana', name: 'Solana', symbol: 'SOL' },
@@ -34,11 +41,12 @@ const ORDER: ChainFamily[] = ['evm', 'solana', 'near'];
 /**
  * EVM networks shown beside the one EVM address, as logos: only the ones whose balances
  * Honey reads (apps/server/src/portfolio.rs `Endpoints`: Ethereum, Base, Arbitrum,
- * Polygon).
+ * Optimism, Polygon), from the one supported list (lib/mock-wallet CHAINS).
  * The address works on any EVM chain, but money sent on one Honey doesn't read would be
- * invisible here, so Receive doesn't invite it. Add a logo when its balances are read.
+ * invisible here, so Receive doesn't invite it.
  */
-export const EVM_LOGOS = ['ETH', 'BASE', 'ARB', 'POL'];
+// export const EVM_LOGOS = ['ETH', 'BASE', 'ARB', 'POL'];
+export const EVM_LOGOS = CHAINS.filter((c) => EVM_CHAINS.includes(c.name)).map((c) => c.symbol);
 
 // EIP-681 and Solana Pay prefixes; NEAR, Tron and XRP wallets scan the bare address.
 const uriFor = (family: ChainFamily, address: string) =>
