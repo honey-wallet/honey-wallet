@@ -16,7 +16,13 @@ import { Sticky } from '@/components/motion/Sticky';
 import { TextSwap } from '@/components/motion/TextSwap';
 import { PersonResult } from '@/components/social/FeedSections';
 import { useCreators } from '@/components/social/FindPeople';
-import { FollowButton, openProfile, SocialAvatar, TokenStack } from '@/components/social/parts';
+import {
+  FollowButton,
+  HoneyBadge,
+  openProfile,
+  SocialAvatar,
+  TokenStack,
+} from '@/components/social/parts';
 import { HeaderShortcut } from '@/components/wallet/HeaderShortcut';
 import { Change, EmptyState, TokenIcon } from '@/components/wallet/parts';
 import { SearchField } from '@/components/wallet/SearchField';
@@ -606,9 +612,16 @@ function TopPeopleRows({ sort }: { sort: PeopleSort }) {
             <Text style={styles.rank}>{i + 1}</Text>
             <SocialAvatar who={who} size={40} />
             <View style={styles.flex}>
-              <Text style={styles.rowTitle} numberOfLines={1}>
+              {/* <Text style={styles.rowTitle} numberOfLines={1}>
                 {who.displayName}
-              </Text>
+              </Text> */}
+              {/* The name, then the Honey badge on an account Honey runs. */}
+              <View style={styles.titleBadge}>
+                <Text style={[styles.rowTitle, styles.shrink]} numberOfLines={1}>
+                  {who.displayName}
+                </Text>
+                <HoneyBadge who={who} />
+              </View>
               {/* Like a token's "Vol" line: their jar, with its coins. */}
               <View style={styles.personMeta}>
                 {jar.holdingsHidden ? (
@@ -777,6 +790,7 @@ function PeopleToFollow() {
                 >
                   {who.displayName}
                 </Text>
+                <HoneyBadge who={who} />
               </View>
               {/* The return, with their coins to its right so the card has no dead space. */}
               <View style={styles.personRow}>
@@ -956,6 +970,7 @@ const useStyles = makeStyles((c) => ({
   shrink: {
     flexShrink: 1,
   },
+  titleBadge: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   // Room on the name's line for the round + in the corner.
   personName: {
     paddingRight: 32,

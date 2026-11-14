@@ -1088,6 +1088,13 @@ export function createApiClient({ baseUrl, fetch: fetchImpl = fetch }: ApiClient
         maybeAuthorized(accessToken),
       ),
     /**
+     * Who to follow while the network is young: Honey's strategy jars, each with its
+     * account as `owner` (badged `official`), best return first. Empty once people have
+     * enough public jars of their own, or while Honey's strategies are switched off.
+     */
+    socialSuggestions: (accessToken?: string | null) =>
+      request<SocialJar[]>('/api/v1/social/suggestions', maybeAuthorized(accessToken)),
+    /**
      * Shares one of your finished NEAR Intents swaps, by its deposit address: the server
      * verifies it with 1Click (succeeded, paid from or to a wallet you signed in with) and
      * posts 1Click's amounts. 409 while trade sharing is off or the swap isn't finished,

@@ -23,7 +23,7 @@ use uuid::Uuid;
 
 use super::{
     Pick, PostToken, ProfileCard, PublicJar, SocialState, jar_rows_by_id, pool, posts_where,
-    present_jars, present_posts, prices, visible_jars,
+    present_jars, present_posts, prices,
 };
 use crate::error::AppError;
 
@@ -113,7 +113,10 @@ async fn jar(
     let rows = jar_rows_by_id(pool, &[id]).await?;
     let now = prices(state.market.as_ref()).await;
     // Always as a signed-out viewer, whoever asks: the answer is cached and shared.
-    let jar = visible_jars(&present_jars(pool, now.as_ref(), rows, None).await?, None)
+    // let jar = visible_jars(&present_jars(pool, now.as_ref(), rows, None).await?, None)
+    // (Honey's strategy jars are not found while switched off.)
+    let jar = state
+        .shown(&present_jars(pool, now.as_ref(), rows, None).await?, None)
         .pop()
         .ok_or(AppError::NotFound)?;
     Ok((
@@ -146,6 +149,7 @@ mod tests {
             handle: "alice".into(),
             display_name: "Alice".into(),
             avatar_seed: "a".into(),
+            official: false,
         }
     }
 
@@ -216,9 +220,15 @@ mod tests {
         ] {
             assert!(!text.contains(private), "{private} leaked: {text}");
         }
+        // assert_eq!(
+        //     value["owner"],
+        //     serde_json::json!({ "handle": "alice", "displayName": "Alice", "avatarSeed": "a" })
+        // );
+        // The card says whether Honey runs the account (2026-11-14, Honey strategies).
         assert_eq!(
             value["owner"],
-            serde_json::json!({ "handle": "alice", "displayName": "Alice", "avatarSeed": "a" })
+            serde_json::json!({ "handle": "alice", "displayName": "Alice", "avatarSeed": "a",
+                                "official": false })
         );
     }
 

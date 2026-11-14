@@ -34,11 +34,23 @@
 //! account's profile serves anyway). People without a handle have no profile to find.
 //! Share links (`public`): one published jar or thesis as a signed-out viewer sees it,
 //! cacheable, for the site's share pages and their preview images.
+//!
+//! Honey strategies (`strategies`): a few accounts Honey runs, marked `official` (the
+//! app's Honey badge), each with one real jar valued like anyone's. They seed the Feed,
+//! the Following suggestions and the Leaderboard while organic data is thin, step back
+//! once there's enough (`HONEY_STRATEGIES_MIN_ORGANIC`) and disappear with
+//! `HONEY_STRATEGIES_ENABLED=0`. Only `honey-server seed-honey-strategies` creates or
+//! changes them; nothing in the API can.
 
 mod groups;
 mod public;
+mod strategies;
 pub(crate) use groups::{majority, record_created};
 pub use public::{JarSnapshot, ThesisSnapshot};
+pub use strategies::{
+    HoneyStrategies, STRATEGIES, SeedReport, SeededAccount, Strategy, StrategyPick, seed,
+    seeded_picks,
+};
 
 use std::{
     collections::HashMap,
@@ -153,6 +165,8 @@ struct SocialState {
     /// signed-out reads keyed by client address.
     trust_proxy: bool,
     trusted_proxy_cidrs: Arc<[TrustedProxyCidr]>,
+    /// Whether Honey's strategy accounts are shown and boosted (`strategies`).
+    honey: HoneyStrategies,
 }
 
 /// A jar as its owner sees it, with what's needed to serve it to anyone else: always
@@ -165,6 +179,8 @@ struct Listed {
     jar: PublicJar,
     /// A group jar's current members (creator first): user, public profile, card.
     group: Option<Vec<(Uuid, bool, ProfileCard)>>,
+    /// Its owner is one of Honey's strategy accounts (`strategies`).
+    official: bool,
 }
 
 pub fn router(
@@ -174,6 +190,14 @@ pub fn router(
     trust_proxy: bool,
     trusted_proxy_cidrs: Vec<TrustedProxyCidr>,
 ) -> Router {
+    // build(
+    //     identity,
+    //     market,
+    //     ONE_CLICK_ORIGIN.to_string(),
+    //     dao,
+    //     trust_proxy,
+    //     trusted_proxy_cidrs,
+    // )
     build(
         identity,
         market,
@@ -181,7 +205,18 @@ pub fn router(
         dao,
         trust_proxy,
         trusted_proxy_cidrs,
+        HoneyStrategies::from_env(),
     )
+}
+
+/// `router_with_one_click` with Honey's strategies switched as given (tests).
+pub fn router_with_strategies(
+    identity: Option<Identity>,
+    market: Option<Arc<MarketData>>,
+    one_click: String,
+    honey: HoneyStrategies,
+) -> Router {
+    build(identity, market, one_click, None, false, Vec::new(), honey)
 }
 
 /// `router` with 1Click's status API somewhere else and no chain reads (tests).
@@ -201,7 +236,16 @@ pub fn router_with(
     one_click: String,
     dao: Option<Arc<JarDao>>,
 ) -> Router {
-    build(identity, market, one_click, dao, false, Vec::new())
+    // build(identity, market, one_click, dao, false, Vec::new())
+    build(
+        identity,
+        market,
+        one_click,
+        dao,
+        false,
+        Vec::new(),
+        HoneyStrategies::default(),
+    )
 }
 
 fn build(
@@ -211,6 +255,7 @@ fn build(
     dao: Option<Arc<JarDao>>,
     trust_proxy: bool,
     trusted_proxy_cidrs: Vec<TrustedProxyCidr>,
+    honey: HoneyStrategies,
 ) -> Router {
     let client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(3))
@@ -240,6 +285,7 @@ fn build(
         .route("/social/posts/{id}", get(get_post).delete(delete_post))
         .route("/social/feed", get(feed))
         .route("/social/leaderboard", get(leaderboard))
+        .route("/social/suggestions", get(suggestions))
         .route("/social/trades", post(record_trade))
         .route("/social/holders", get(holders))
         .merge(groups::routes())
@@ -253,6 +299,7 @@ fn build(
             dao,
             trust_proxy,
             trusted_proxy_cidrs: trusted_proxy_cidrs.into(),
+            honey,
         })
 }
 
@@ -266,6 +313,9 @@ pub struct ProfileCard {
     pub handle: String,
     pub display_name: String,
     pub avatar_seed: String,
+    /// One of Honey's strategy accounts (`strategies`): the app shows the Honey badge.
+    /// Set only by `honey-server seed-honey-strategies`, never through the API.
+    pub official: bool,
 }
 
 /// Someone people search found: their card, follower count and whether you follow
@@ -626,8 +676,15 @@ pub fn like_escape(text: &str) -> String {
 }
 
 /// The team's names, and anything that reads as Honey Wallet itself.
+// pub fn reserved(handle: &str) -> bool {
+//     RESERVED.contains(&handle) || handle.replace('_', "").contains("honeywallet")
+// }
+/// The team's names, anything that reads as Honey Wallet itself, and `honey_…`, the
+/// prefix of Honey's strategy accounts (`strategies`), so nobody can pose as one.
 pub fn reserved(handle: &str) -> bool {
-    RESERVED.contains(&handle) || handle.replace('_', "").contains("honeywallet")
+    RESERVED.contains(&handle)
+        || handle.replace('_', "").contains("honeywallet")
+        || handle.starts_with(strategies::HANDLE_PREFIX)
 }
 
 /// Text people see under someone's name: no control characters (bios may break lines),
@@ -919,6 +976,28 @@ async fn user_by_handle(pool: &PgPool, handle: &str) -> Result<Uuid, AppError> {
         .ok_or(AppError::NotFound)
 }
 
+/// Whether `user` is one of Honey's strategy accounts.
+async fn is_official(pool: &PgPool, user: Uuid) -> Result<bool, AppError> {
+    sqlx::query_scalar("SELECT official FROM social_profiles WHERE user_id = $1")
+        .bind(user)
+        .fetch_optional(pool)
+        .await
+        .map_err(unavailable)
+        .map(|o| o.unwrap_or(false))
+}
+
+/// Live public jars by people (not Honey's strategy accounts): what decides whether
+/// Honey's jars are still boosted (`HoneyStrategies::boosted`).
+async fn organic_jars(pool: &PgPool) -> Result<i64, AppError> {
+    sqlx::query_scalar(
+        "SELECT count(*) FROM social_jars j JOIN social_profiles p ON p.user_id = j.owner
+         WHERE j.unpublished_at IS NULL AND p.public_profile AND NOT p.official",
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(unavailable)
+}
+
 /// Live 1Click prices by uppercase symbol (the median across chains, as Search shows).
 async fn prices(market: Option<&Arc<MarketData>>) -> Option<HashMap<String, f64>> {
     let tokens = market?.tokens().await.ok()?;
@@ -933,7 +1012,8 @@ async fn prices(market: Option<&Arc<MarketData>>) -> Option<HashMap<String, f64>
 type CardRow = (String, String, String);
 
 /// user, handle, name, avatar seed, bio, share trades, followers, following, followed
-/// by the viewer, then `Privacy` (public profile, holdings, returns, copy).
+/// by the viewer, then `Privacy` (public profile, holdings, returns, copy), then
+/// whether it's one of Honey's accounts.
 type ProfileRow = (
     Uuid,
     String,
@@ -948,25 +1028,56 @@ type ProfileRow = (
     bool,
     bool,
     bool,
+    bool,
 );
 
+/// A card that isn't one of Honey's accounts (or where that can't matter, like groups,
+/// which Honey's accounts never join); `official_card` where it can.
 fn card((handle, display_name, avatar_seed): CardRow) -> ProfileCard {
     ProfileCard {
         handle,
         display_name,
         avatar_seed,
+        official: false,
     }
 }
 
+/// A card with its `official` flag as stored.
+fn official_card(row: CardRow, official: bool) -> ProfileCard {
+    ProfileCard {
+        official,
+        ..card(row)
+    }
+}
+
+// const JAR_SELECT: &str = "SELECT j.id, j.owner, j.client_id, j.name, j.thesis, j.picks::text,
+//     j.start_prices::text, j.copy_fee,
+//     (SELECT count(*) FROM social_jar_copies c WHERE c.jar_id = j.id),
+//     j.base_value, (extract(epoch FROM j.published_at) * 1000)::bigint,
+//     p.handle, p.display_name, p.avatar_seed,
+//     jsonb_build_object('publicProfile', p.public_profile, 'showHoldings', p.show_holdings,
+//       'showReturns', p.show_returns, 'allowCopy', p.allow_copy, 'hidePicks', j.hide_picks)::text,
+//     j.group_id
+//     FROM social_jars j JOIN social_profiles p ON p.user_id = j.owner";
+// The owner's `official` rides in the privacy object (a row is already 16 columns, the
+// most a tuple row reads); `Exposure` ignores it and `OwnerFlags` reads it.
 const JAR_SELECT: &str = "SELECT j.id, j.owner, j.client_id, j.name, j.thesis, j.picks::text,
     j.start_prices::text, j.copy_fee,
     (SELECT count(*) FROM social_jar_copies c WHERE c.jar_id = j.id),
     j.base_value, (extract(epoch FROM j.published_at) * 1000)::bigint,
     p.handle, p.display_name, p.avatar_seed,
     jsonb_build_object('publicProfile', p.public_profile, 'showHoldings', p.show_holdings,
-      'showReturns', p.show_returns, 'allowCopy', p.allow_copy, 'hidePicks', j.hide_picks)::text,
+      'showReturns', p.show_returns, 'allowCopy', p.allow_copy, 'hidePicks', j.hide_picks,
+      'official', p.official)::text,
     j.group_id
     FROM social_jars j JOIN social_profiles p ON p.user_id = j.owner";
+
+/// What `JAR_SELECT`'s privacy object says about the owner besides their privacy.
+#[derive(Deserialize, Default)]
+struct OwnerFlags {
+    #[serde(default)]
+    official: bool,
+}
 
 type JarRow = (
     Uuid,
@@ -1056,6 +1167,9 @@ async fn present_jars(
             exposure,
             group_id,
         ) = row;
+        let official = serde_json::from_str::<OwnerFlags>(&exposure)
+            .unwrap_or_default()
+            .official;
         // Unreadable privacy fails closed: hidden from everyone but the owner.
         let exposure: Exposure = serde_json::from_str(&exposure).unwrap_or(Exposure {
             privacy: Privacy {
@@ -1082,6 +1196,7 @@ async fn present_jars(
             client_id: client_id.clone(),
             exposure,
             group: group_id.map(|g| groups.remove(&g).unwrap_or_default()),
+            official,
             jar: PublicJar {
                 id,
                 name,
@@ -1090,7 +1205,8 @@ async fn present_jars(
                 copy_fee,
                 copies,
                 published_at,
-                owner: card((handle, display_name, avatar_seed)),
+                // owner: card((handle, display_name, avatar_seed)),
+                owner: official_card((handle, display_name, avatar_seed), official),
                 mine: false,
                 client_id: None,
                 return_since_publish: index.map(|i| i - 1.0),
@@ -1191,6 +1307,21 @@ impl SocialState {
     /// within `LIST_TTL`).
     async fn forget_lists(&self) {
         self.lists.write().await.clear();
+    }
+
+    /// `visible_jars`, without Honey's strategy jars while they're switched off
+    /// (`HONEY_STRATEGIES_ENABLED=0`).
+    fn shown(&self, list: &[Listed], viewer: Option<Uuid>) -> Vec<PublicJar> {
+        if self.honey.enabled {
+            return visible_jars(list, viewer);
+        }
+        let kept: Vec<Listed> = list.iter().filter(|l| !l.official).cloned().collect();
+        visible_jars(&kept, viewer)
+    }
+
+    /// Whether one of Honey's accounts is hidden right now (the switch is off).
+    fn hides(&self, official: bool) -> bool {
+        official && !self.honey.enabled
     }
 }
 
@@ -1594,7 +1725,8 @@ async fn load_profile(
                     (SELECT count(*) FROM social_follows WHERE follower = p.user_id),
                     EXISTS(SELECT 1 FROM social_follows
                            WHERE follower = $2 AND followee = p.user_id),
-                    p.public_profile, p.show_holdings, p.show_returns, p.allow_copy
+                    p.public_profile, p.show_holdings, p.show_returns, p.allow_copy,
+                    p.official
              FROM social_profiles p WHERE p.handle = $1",
     )
     .bind(&handle)
@@ -1616,13 +1748,19 @@ async fn load_profile(
         show_holdings,
         show_returns,
         allow_copy,
+        official,
     ) = row.ok_or(AppError::NotFound)?;
+    // Honey's accounts are gone while switched off.
+    if state.hides(official) {
+        return Err(AppError::NotFound);
+    }
     let is_me = me == Some(user);
-    let card = ProfileCard {
-        handle,
-        display_name,
-        avatar_seed,
-    };
+    // let card = ProfileCard {
+    //     handle,
+    //     display_name,
+    //     avatar_seed,
+    // };
+    let card = official_card((handle, display_name, avatar_seed), official);
     // Someone else's private account: the card and follower counts, nothing else.
     if !public_profile && !is_me {
         return Ok(Profile {
@@ -1655,7 +1793,8 @@ async fn load_profile(
         .fetch_all(pool)
         .await
         .map_err(unavailable)?;
-    let jars = visible_jars(&present_jars(pool, now.as_ref(), rows, None).await?, me);
+    // let jars = visible_jars(&present_jars(pool, now.as_ref(), rows, None).await?, me);
+    let jars = state.shown(&present_jars(pool, now.as_ref(), rows, None).await?, me);
     let trades = if share {
         load_feed_page(state, pool, me, None, Some(user), Some("trade"), None, 20)
             .await?
@@ -1698,6 +1837,10 @@ async fn follow(
     if them == me {
         return Err(AppError::BadRequest("you can't follow yourself".into()));
     }
+    // Honey's accounts can't be followed while they're switched off (they're not found).
+    if state.hides(is_official(pool, them).await?) {
+        return Err(AppError::NotFound);
+    }
     sqlx::query(
         "INSERT INTO social_follows (follower, followee) VALUES ($1, $2) ON CONFLICT DO NOTHING",
     )
@@ -1734,6 +1877,10 @@ async fn people(
 ) -> Result<Json<Vec<ProfileCard>>, AppError> {
     let pool = pool(state)?;
     let user = user_by_handle(pool, handle).await?;
+    // Honey's accounts are not found while switched off.
+    if state.hides(is_official(pool, user).await?) {
+        return Err(AppError::NotFound);
+    }
     // A private account's lists are its own: others get an empty list.
     let public: bool =
         sqlx::query_scalar("SELECT public_profile FROM social_profiles WHERE user_id = $1")
@@ -1746,24 +1893,50 @@ async fn people(
         return Ok(Json(Vec::new()));
     }
     // Private accounts stay out of other people's lists too (you always see yourself).
+    // let sql = if followers {
+    //     "SELECT p.handle, p.display_name, p.avatar_seed FROM social_follows f
+    //      JOIN social_profiles p ON p.user_id = f.follower
+    //      WHERE f.followee = $1 AND (p.public_profile OR p.user_id = $2)
+    //      ORDER BY f.created_at DESC LIMIT 200"
+    // } else {
+    //     "SELECT p.handle, p.display_name, p.avatar_seed FROM social_follows f
+    //      JOIN social_profiles p ON p.user_id = f.followee
+    //      WHERE f.follower = $1 AND (p.public_profile OR p.user_id = $2)
+    //      ORDER BY f.created_at DESC LIMIT 200"
+    // };
+    // let rows: Vec<CardRow> = sqlx::query_as(sql)
+    //     .bind(user)
+    //     .bind(viewer)
+    //     .fetch_all(pool)
+    //     .await
+    //     .map_err(unavailable)?;
+    // Ok(Json(rows.into_iter().map(card).collect()))
+    // With each person's Honey badge; Honey's accounts leave the lists while switched off.
     let sql = if followers {
-        "SELECT p.handle, p.display_name, p.avatar_seed FROM social_follows f
+        "SELECT p.handle, p.display_name, p.avatar_seed, p.official FROM social_follows f
          JOIN social_profiles p ON p.user_id = f.follower
          WHERE f.followee = $1 AND (p.public_profile OR p.user_id = $2)
+           AND ($3 OR NOT p.official)
          ORDER BY f.created_at DESC LIMIT 200"
     } else {
-        "SELECT p.handle, p.display_name, p.avatar_seed FROM social_follows f
+        "SELECT p.handle, p.display_name, p.avatar_seed, p.official FROM social_follows f
          JOIN social_profiles p ON p.user_id = f.followee
          WHERE f.follower = $1 AND (p.public_profile OR p.user_id = $2)
+           AND ($3 OR NOT p.official)
          ORDER BY f.created_at DESC LIMIT 200"
     };
-    let rows: Vec<CardRow> = sqlx::query_as(sql)
+    let rows: Vec<(String, String, String, bool)> = sqlx::query_as(sql)
         .bind(user)
         .bind(viewer)
+        .bind(state.honey.enabled)
         .fetch_all(pool)
         .await
         .map_err(unavailable)?;
-    Ok(Json(rows.into_iter().map(card).collect()))
+    Ok(Json(
+        rows.into_iter()
+            .map(|(h, d, s, official)| official_card((h, d, s), official))
+            .collect(),
+    ))
 }
 
 async fn followers(
@@ -1842,17 +2015,34 @@ async fn search_people(
         .await?;
     let prefix = format!("{}%", like_escape(&q));
     let word = format!("% {prefix}");
-    type PersonRow = (String, String, String, i64, bool, bool);
+    // type PersonRow = (String, String, String, i64, bool, bool);
+    // let rows: Vec<PersonRow> = sqlx::query_as(
+    //     "SELECT p.handle, p.display_name, p.avatar_seed,
+    //             (SELECT count(*) FROM social_follows f WHERE f.followee = p.user_id) AS followers,
+    //             EXISTS(SELECT 1 FROM social_follows f
+    //                    WHERE f.follower = $4 AND f.followee = p.user_id),
+    //             COALESCE(p.user_id = $4, false)
+    //      FROM social_profiles p
+    //      WHERE p.handle LIKE $2
+    //         OR lower(p.display_name) LIKE $2
+    //         OR lower(p.display_name) LIKE $3
+    //      ORDER BY CASE WHEN p.handle = $1 THEN 0 WHEN p.handle LIKE $2 THEN 1 ELSE 2 END,
+    //               followers DESC, p.handle
+    //      LIMIT $5",
+    // )
+    // With the Honey badge; Honey's accounts aren't found while switched off.
+    type PersonRow = (String, String, String, i64, bool, bool, bool);
     let rows: Vec<PersonRow> = sqlx::query_as(
         "SELECT p.handle, p.display_name, p.avatar_seed,
                 (SELECT count(*) FROM social_follows f WHERE f.followee = p.user_id) AS followers,
                 EXISTS(SELECT 1 FROM social_follows f
                        WHERE f.follower = $4 AND f.followee = p.user_id),
-                COALESCE(p.user_id = $4, false)
+                COALESCE(p.user_id = $4, false), p.official
          FROM social_profiles p
-         WHERE p.handle LIKE $2
+         WHERE (p.handle LIKE $2
             OR lower(p.display_name) LIKE $2
-            OR lower(p.display_name) LIKE $3
+            OR lower(p.display_name) LIKE $3)
+           AND ($6 OR NOT p.official)
          ORDER BY CASE WHEN p.handle = $1 THEN 0 WHEN p.handle LIKE $2 THEN 1 ELSE 2 END,
                   followers DESC, p.handle
          LIMIT $5",
@@ -1862,17 +2052,29 @@ async fn search_people(
     .bind(&word)
     .bind(me)
     .bind(limit)
+    .bind(state.honey.enabled)
     .fetch_all(pool(&state)?)
     .await
     .map_err(unavailable)?;
     Ok(Json(
         rows.into_iter()
             .map(
-                |(handle, display_name, avatar_seed, followers, followed_by_me, is_me)| Person {
-                    card: card((handle, display_name, avatar_seed)),
+                |(
+                    handle,
+                    display_name,
+                    avatar_seed,
                     followers,
                     followed_by_me,
                     is_me,
+                    official,
+                )| {
+                    Person {
+                        // card: card((handle, display_name, avatar_seed)),
+                        card: official_card((handle, display_name, avatar_seed), official),
+                        followers,
+                        followed_by_me,
+                        is_me,
+                    }
                 },
             )
             .collect(),
@@ -1939,7 +2141,8 @@ async fn list_jars(
             list
         }
     };
-    Ok(Json(visible_jars(&list, me)))
+    // Ok(Json(visible_jars(&list, me)))
+    Ok(Json(state.shown(&list, me)))
 }
 
 async fn jar(
@@ -1951,7 +2154,9 @@ async fn jar(
     let pool = pool(&state)?;
     let rows = jar_rows_by_id(pool, &[id]).await?;
     let now = prices(state.market.as_ref()).await;
-    visible_jars(&present_jars(pool, now.as_ref(), rows, None).await?, me)
+    // visible_jars(&present_jars(pool, now.as_ref(), rows, None).await?, me)
+    state
+        .shown(&present_jars(pool, now.as_ref(), rows, None).await?, me)
         .pop()
         .map(Json)
         .ok_or(AppError::NotFound)
@@ -2000,7 +2205,22 @@ async fn publish_as(
     body: &PublishRequest,
     group: Option<Uuid>,
 ) -> Result<(Uuid, HashMap<String, f64>), AppError> {
-    let pool = pool(state)?;
+    let published = publish_with(pool(state)?, state.market.as_ref(), me, body, group).await?;
+    state.forget_lists().await;
+    Ok(published)
+}
+
+/// `publish_as` given the pool and market directly, so the Honey strategy seed
+/// (`strategies::seed`, a command with no router) publishes exactly as people do. The
+/// caller forgets cached lists.
+async fn publish_with(
+    pool: &PgPool,
+    market: Option<&Arc<MarketData>>,
+    me: Uuid,
+    body: &PublishRequest,
+    group: Option<Uuid>,
+) -> Result<(Uuid, HashMap<String, f64>), AppError> {
+    // let pool = pool(state)?;
     let name = body.name.trim();
     let thesis = body.thesis.trim();
     if name.is_empty()
@@ -2022,15 +2242,17 @@ async fn publish_as(
     }
     validate_picks(&body.picks)?;
     // Only jars people can actually copy: every pick buyable through NEAR Intents.
-    let tokens = state
-        .market
-        .as_ref()
+    // let tokens = state
+    //     .market
+    //     .as_ref()
+    let tokens = market
         .ok_or(AppError::Busy)?
         .tokens()
         .await
         .map_err(|_| AppError::Busy)?;
     buyable_picks(&body.picks, &market_list(&tokens))?;
-    let now = prices(state.market.as_ref()).await.ok_or(AppError::Busy)?;
+    // let now = prices(state.market.as_ref()).await.ok_or(AppError::Busy)?;
+    let now = prices(market).await.ok_or(AppError::Busy)?;
     let start: HashMap<String, f64> = body
         .picks
         .iter()
@@ -2178,7 +2400,7 @@ async fn publish_as(
         }
     };
     tx.commit().await.map_err(unavailable)?;
-    state.forget_lists().await;
+    // state.forget_lists().await;
     Ok((id, now))
 }
 
@@ -2221,9 +2443,15 @@ async fn record_copy(
     let pool = pool(&state)?;
     has_profile(pool, me).await?;
     let mut tx = pool.begin().await.map_err(unavailable)?;
-    let (owner, public_profile, copyable): (Uuid, bool, bool) = sqlx::query_as(
+    // let (owner, public_profile, copyable): (Uuid, bool, bool) = sqlx::query_as(
+    //     "SELECT j.owner, p.public_profile,
+    //             p.allow_copy AND p.show_holdings AND NOT j.hide_picks
+    //      FROM social_jars j JOIN social_profiles p ON p.user_id = j.owner
+    //      WHERE j.id = $1 AND j.unpublished_at IS NULL FOR SHARE OF j",
+    // )
+    let (owner, public_profile, copyable, official): (Uuid, bool, bool, bool) = sqlx::query_as(
         "SELECT j.owner, p.public_profile,
-                p.allow_copy AND p.show_holdings AND NOT j.hide_picks
+                p.allow_copy AND p.show_holdings AND NOT j.hide_picks, p.official
          FROM social_jars j JOIN social_profiles p ON p.user_id = j.owner
          WHERE j.id = $1 AND j.unpublished_at IS NULL FOR SHARE OF j",
     )
@@ -2234,6 +2462,10 @@ async fn record_copy(
     .ok_or(AppError::NotFound)?;
     if owner == me {
         return Err(AppError::BadRequest("you can't copy your own jar".into()));
+    }
+    // Honey's strategy jars aren't there while switched off.
+    if state.hides(official) {
+        return Err(AppError::NotFound);
     }
     // A private account's jars aren't there for anyone else; copying can be turned off.
     if !public_profile {
@@ -2279,8 +2511,12 @@ async fn record_copy(
 // ---------------------------------------------------------------------------
 // Theses ("this is my thesis")
 
+// const POST_SELECT: &str = "SELECT s.id, s.body, s.tokens::text, s.jar_id, s.author,
+//     (extract(epoch FROM s.created_at) * 1000)::bigint, p.handle, p.display_name, p.avatar_seed
+//     FROM social_posts s JOIN social_profiles p ON p.user_id = s.author";
 const POST_SELECT: &str = "SELECT s.id, s.body, s.tokens::text, s.jar_id, s.author,
-    (extract(epoch FROM s.created_at) * 1000)::bigint, p.handle, p.display_name, p.avatar_seed
+    (extract(epoch FROM s.created_at) * 1000)::bigint, p.handle, p.display_name, p.avatar_seed,
+    p.official
     FROM social_posts s JOIN social_profiles p ON p.user_id = s.author";
 
 type PostRow = (
@@ -2293,6 +2529,7 @@ type PostRow = (
     String,
     String,
     String,
+    bool,
 );
 
 /// Posts at live prices for one viewer, in the rows' order.
@@ -2303,7 +2540,18 @@ fn present_posts(
 ) -> Vec<Post> {
     rows.into_iter()
         .map(
-            |(id, body, tokens, jar_id, author, at, handle, display_name, avatar_seed)| {
+            |(
+                id,
+                body,
+                tokens,
+                jar_id,
+                author,
+                at,
+                handle,
+                display_name,
+                avatar_seed,
+                official,
+            )| {
                 let mut tokens: Vec<PostToken> = serde_json::from_str(&tokens).unwrap_or_default();
                 for t in &mut tokens {
                     t.price_now = now.and_then(|n| n.get(&t.symbol.to_ascii_uppercase()).copied());
@@ -2314,7 +2562,8 @@ fn present_posts(
                     body,
                     tokens,
                     jar_id,
-                    author: card((handle, display_name, avatar_seed)),
+                    // author: card((handle, display_name, avatar_seed)),
+                    author: official_card((handle, display_name, avatar_seed), official),
                     at,
                     mine: me == Some(author),
                 }
@@ -2588,6 +2837,20 @@ async fn load_feed_page(
     cursor: Option<i64>,
     limit: i64,
 ) -> Result<Feed, AppError> {
+    // type EventRow = (
+    //     i64,
+    //     String,
+    //     i64,
+    //     Option<Uuid>,
+    //     String,
+    //     String,
+    //     String,
+    //     String,
+    //     Option<Uuid>,
+    // );
+    // With the actor's Honey badge; while Honey's strategies are switched off ($7 false)
+    // their events, and events about their jars, are left out. Otherwise they're ranked
+    // like everyone's (newest first): no boost in the feed.
     type EventRow = (
         i64,
         String,
@@ -2598,10 +2861,11 @@ async fn load_feed_page(
         String,
         String,
         Option<Uuid>,
+        bool,
     );
     let rows: Vec<EventRow> = sqlx::query_as(
         "SELECT e.id, e.kind, (extract(epoch FROM e.created_at) * 1000)::bigint, e.jar_id,
-                e.payload::text, p.handle, p.display_name, p.avatar_seed, e.post_id
+                e.payload::text, p.handle, p.display_name, p.avatar_seed, e.post_id, p.official
          FROM social_events e
          JOIN social_profiles p ON p.user_id = e.actor
          LEFT JOIN social_jars j ON j.id = e.jar_id
@@ -2620,6 +2884,8 @@ async fn load_feed_page(
                 OR e.actor IN (SELECT followee FROM social_follows WHERE follower = $2))
            AND ($3::uuid IS NULL OR e.actor = $3)
            AND ($4::text IS NULL OR e.kind = $4)
+           AND ($7 OR NOT p.official)
+           AND (e.jar_id IS NULL OR $7 OR NOT jo.official)
          ORDER BY e.id DESC LIMIT $5",
     )
     .bind(cursor)
@@ -2628,6 +2894,7 @@ async fn load_feed_page(
     .bind(kind)
     .bind(limit + 1)
     .bind(me)
+    .bind(state.honey.enabled)
     .fetch_all(pool)
     .await
     .map_err(unavailable)?;
@@ -2642,7 +2909,8 @@ async fn load_feed_page(
     if !jar_ids.is_empty() {
         let jar_rows = jar_rows_by_id(pool, &jar_ids).await?;
         let now = prices(state.market.as_ref()).await;
-        for jar in visible_jars(&present_jars(pool, now.as_ref(), jar_rows, None).await?, me) {
+        // for jar in visible_jars(&present_jars(pool, now.as_ref(), jar_rows, None).await?, me) {
+        for jar in state.shown(&present_jars(pool, now.as_ref(), jar_rows, None).await?, me) {
             jars.insert(jar.id, jar);
         }
     }
@@ -2667,7 +2935,18 @@ async fn load_feed_page(
     let items = rows
         .into_iter()
         .map(
-            |(id, kind, at, jar_id, payload, handle, display_name, avatar_seed, post_id)| {
+            |(
+                id,
+                kind,
+                at,
+                jar_id,
+                payload,
+                handle,
+                display_name,
+                avatar_seed,
+                post_id,
+                official,
+            )| {
                 let payload: Value = serde_json::from_str(&payload).unwrap_or_default();
                 FeedItem {
                     id: id.to_string(),
@@ -2680,7 +2959,8 @@ async fn load_feed_page(
                         .and_then(|p| i16::try_from(p).ok()),
                     kind,
                     at,
-                    actor: card((handle, display_name, avatar_seed)),
+                    // actor: card((handle, display_name, avatar_seed)),
+                    actor: official_card((handle, display_name, avatar_seed), official),
                     jar: jar_id.and_then(|id| jars.get(&id).cloned()),
                     post: post_id.and_then(|id| posts.get(&id).cloned()),
                 }
@@ -2716,6 +2996,7 @@ async fn leaderboard(
         Some(list) => list,
         None => {
             let pool = pool(&state)?;
+            /* Before Honey's strategies (2026-11-14), every ranked jar alike:
             let ranked: Vec<(Uuid, f64)> = sqlx::query_as(
                 "SELECT id, base FROM (
                    SELECT j.id, cur.value AS cur,
@@ -2745,6 +3026,44 @@ async fn leaderboard(
             .fetch_all(pool)
             .await
             .map_err(unavailable)?;
+            */
+            // Honey's strategy jars rank on their real returns like anyone's, until the
+            // board has `min_organic` jars of people's own ($4), and never while
+            // switched off ($3).
+            let ranked: Vec<(Uuid, f64)> = sqlx::query_as(
+                "SELECT id, base FROM (
+                   SELECT r.*, count(*) FILTER (WHERE NOT r.official) OVER () AS organic
+                   FROM (
+                   SELECT j.id, p.official, cur.value AS cur,
+                          COALESCE(b.value, CASE WHEN $1::int IS NULL OR j.published_at
+                              > clock_timestamp() - make_interval(days => $1::int)
+                            THEN f.value END) AS base
+                   FROM social_jars j
+                   JOIN social_profiles p ON p.user_id = j.owner
+                   JOIN LATERAL (SELECT value FROM social_jar_marks m WHERE m.jar_id = j.id
+                                 ORDER BY m.at DESC LIMIT 1) cur ON true
+                   LEFT JOIN LATERAL (SELECT value FROM social_jar_marks m
+                                      WHERE m.jar_id = j.id
+                                        AND $1::int IS NOT NULL
+                                        AND m.at <= clock_timestamp() - make_interval(days => $1::int)
+                                      ORDER BY m.at DESC LIMIT 1) b ON true
+                   LEFT JOIN LATERAL (SELECT value FROM social_jar_marks m WHERE m.jar_id = j.id
+                                      ORDER BY m.at LIMIT 1) f ON true
+                   WHERE j.unpublished_at IS NULL
+                     -- Ranked by return: only public accounts that show returns.
+                     AND p.public_profile AND p.show_returns
+                     AND j.published_at <= clock_timestamp() - make_interval(hours => $2)) r
+                   WHERE r.base IS NOT NULL) s
+                 WHERE NOT s.official OR ($3 AND s.organic < $4)
+                 ORDER BY s.cur / s.base DESC LIMIT 20",
+            )
+            .bind(days)
+            .bind(LEADERBOARD_MIN_AGE_HOURS)
+            .bind(state.honey.enabled)
+            .bind(state.honey.min_organic)
+            .fetch_all(pool)
+            .await
+            .map_err(unavailable)?;
             let ids: Vec<Uuid> = ranked.iter().map(|r| r.0).collect();
             let bases: HashMap<Uuid, f64> = ranked.into_iter().collect();
             let rows = ordered_rows(pool, &ids).await?;
@@ -2762,7 +3081,51 @@ async fn leaderboard(
             list
         }
     };
-    Ok(Json(visible_jars(&list, me)))
+    // Ok(Json(visible_jars(&list, me)))
+    Ok(Json(state.shown(&list, me)))
+}
+
+/// "Who to follow" while the network is young: Honey's strategy jars (`strategies`),
+/// best return since launch first, each with its account (`owner`, badged `official`).
+/// Empty once people have `min_organic` live public jars of their own, or while
+/// switched off; the app then suggests people from the leaderboard alone. Follows are
+/// the normal `POST /social/profiles/{handle}/follow`.
+async fn suggestions(
+    State(state): State<SocialState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<PublicJar>>, AppError> {
+    let me = viewer(&state, &headers).await?;
+    let list = match state.cached_list("suggestions").await {
+        Some(list) => list,
+        None => {
+            let pool = pool(&state)?;
+            let boosted = state.honey.boosted(organic_jars(pool).await?);
+            let mut list = if boosted {
+                let sql = format!(
+                    "{JAR_SELECT} WHERE j.unpublished_at IS NULL AND p.official
+                       AND p.public_profile ORDER BY p.handle, j.published_at"
+                );
+                let rows: Vec<JarRow> = sqlx::query_as(&sql)
+                    .fetch_all(pool)
+                    .await
+                    .map_err(unavailable)?;
+                let now = prices(state.market.as_ref()).await;
+                present_jars(pool, now.as_ref(), rows, None).await?
+            } else {
+                Vec::new()
+            };
+            list.sort_by(|a, b| {
+                b.jar
+                    .return_since_publish
+                    .unwrap_or(f64::MIN)
+                    .total_cmp(&a.jar.return_since_publish.unwrap_or(f64::MIN))
+            });
+            let list = Arc::new(list);
+            state.store_list("suggestions", list.clone()).await;
+            list
+        }
+    };
+    Ok(Json(state.shown(&list, me)))
 }
 
 /// Shares one of the caller's finished NEAR Intents swaps. Only the deposit address
@@ -2891,7 +3254,7 @@ async fn holders(
         "WITH holders AS (
            SELECT DISTINCT p.user_id, p.handle, p.display_name, p.avatar_seed
            FROM social_follows f JOIN social_profiles p ON p.user_id = f.followee
-           WHERE f.follower = $1 AND p.public_profile AND (
+           WHERE f.follower = $1 AND p.public_profile AND ($3 OR NOT p.official) AND (
              (p.show_holdings AND EXISTS (SELECT 1 FROM social_jars j
                      WHERE j.owner = p.user_id AND j.unpublished_at IS NULL
                        AND NOT j.hide_picks
@@ -2907,6 +3270,8 @@ async fn holders(
     )
     .bind(me)
     .bind(&symbol)
+    // Honey's accounts aren't counted as holders while switched off.
+    .bind(state.honey.enabled)
     .fetch_all(pool(&state)?)
     .await
     .map_err(unavailable)?;
@@ -3040,6 +3405,7 @@ mod tests {
                 handle: "alice".into(),
                 display_name: "Alice".into(),
                 avatar_seed: String::new(),
+                official: false,
             },
             mine: false,
             client_id: None,

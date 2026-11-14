@@ -16,16 +16,24 @@ import { Icon } from '@/components/Icon';
 import { PressableRow } from '@/components/motion/PressableRow';
 import { PressableScale } from '@/components/motion/PressableScale';
 import { SkeletonBar, SkeletonReveal } from '@/components/motion/Skeleton';
-import { FollowButton, openProfile, SocialAvatar, TokenStack } from '@/components/social/parts';
+import {
+  FollowButton,
+  HoneyBadge,
+  openProfile,
+  SocialAvatar,
+  TokenStack,
+} from '@/components/social/parts';
 import { Sparkline } from '@/components/wallet/parts';
 import { tap } from '@/lib/haptics';
+import { type Creator as SuggestedCreator, suggestedCreators } from '@/lib/honey-strategies';
 import {
+  // social: unused since 14 Nov (cleanup), only the commented-out TopPeople used it.
+  loadSuggestions,
   // loadLeaderboard: unused since 14 Nov (cleanup), only the commented-out TopPeople used it.
   openSocialJar,
   pct,
-  type SocialJar,
+  // type SocialJar: unused since 14 Nov (Honey strategies), Creator comes from lib/honey-strategies.
   type SocialProfileCard,
-  // social: unused since 14 Nov (cleanup), only the commented-out TopPeople used it.
   socialError,
   toggleFollow,
   useSocial,
@@ -41,8 +49,10 @@ import { makeStyles, useTheme } from '@/theme';
  * asks you to sign in first.
  */
 
-/** A person to suggest, with the jar they're best known for (their best return). */
-export type Creator = { who: SocialProfileCard; jar: SocialJar };
+// /** A person to suggest, with the jar they're best known for (their best return). */
+// export type Creator = { who: SocialProfileCard; jar: SocialJar };
+/** A person to suggest, with the jar they're best known for (lib/honey-strategies). */
+export type Creator = SuggestedCreator;
 
 /** The collage's hand-placed spots: centre as a fraction of the box, and a size. */
 const SLOTS = [
@@ -63,6 +73,10 @@ export function FollowingEmpty({ signedIn: _signedIn }: { signedIn: boolean }) {
   const styles = useStyles();
   const { leaderboard, profiles, pendingFollow } = useSocial();
   const creators = useCreators(8);
+  // Honey's strategy accounts lead "Who to follow" while the server still suggests them.
+  useEffect(() => {
+    void loadSuggestions();
+  }, []);
 
   return (
     <SkeletonReveal loading={!leaderboard} skeleton={<FindPeopleSkeleton />}>
@@ -94,21 +108,32 @@ export function FollowingEmpty({ signedIn: _signedIn }: { signedIn: boolean }) {
   );
 }
 
-/** Each leaderboard owner once (not you), with the jar they're best known for, best first. */
+// /** Each leaderboard owner once (not you), with the jar they're best known for, best first. */
+// export function useCreators(limit: number): Creator[] {
+//   const { leaderboard, me } = useSocial();
+//   return useMemo(() => {
+//     const best = new Map<string, Creator>();
+//     for (const jar of leaderboard ?? []) {
+//       if (jar.mine || jar.owner.handle === me?.handle) continue;
+//       const seen = best.get(jar.owner.handle);
+//       const r = jar.returnSincePublish;
+//       const was = seen?.jar.returnSincePublish;
+//       if (!seen) best.set(jar.owner.handle, { who: jar.owner, jar });
+//       else if (r != null && (was == null || r > was)) seen.jar = jar;
+//     }
+//     return [...best.values()].slice(0, limit);
+//   }, [leaderboard, me?.handle, limit]);
+// }
+/**
+ * Honey's strategy accounts while the server suggests them, then each leaderboard owner
+ * once (not you), with the jar they're best known for, best first.
+ */
 export function useCreators(limit: number): Creator[] {
-  const { leaderboard, me } = useSocial();
-  return useMemo(() => {
-    const best = new Map<string, Creator>();
-    for (const jar of leaderboard ?? []) {
-      if (jar.mine || jar.owner.handle === me?.handle) continue;
-      const seen = best.get(jar.owner.handle);
-      const r = jar.returnSincePublish;
-      const was = seen?.jar.returnSincePublish;
-      if (!seen) best.set(jar.owner.handle, { who: jar.owner, jar });
-      else if (r != null && (was == null || r > was)) seen.jar = jar;
-    }
-    return [...best.values()].slice(0, limit);
-  }, [leaderboard, me?.handle, limit]);
+  const { leaderboard, suggestions, me } = useSocial();
+  return useMemo(
+    () => suggestedCreators(suggestions, leaderboard, me?.handle, limit),
+    [suggestions, leaderboard, me?.handle, limit],
+  );
 }
 
 // Unused since 14 Nov (cleanup): nothing imports it.
@@ -287,6 +312,7 @@ function WhoRow({
             <Text style={styles.name} numberOfLines={1}>
               {who.displayName}
             </Text>
+            <HoneyBadge who={who} />
             <Text style={styles.handle} numberOfLines={1}>
               @{who.handle}
             </Text>

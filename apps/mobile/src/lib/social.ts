@@ -18,6 +18,7 @@ import { api } from '@/lib/api';
 import { backendSession, backendSessionToken } from '@/lib/backend-session';
 import { signedPct } from '@/lib/format';
 import { DEMO_FRIENDS, demoCollabPost, setDemoHandle } from '@/lib/group-demo';
+import { demoHoneyPost } from '@/lib/honey-strategies';
 import { getProfile } from '@/lib/profile';
 import {
   jarLink,
@@ -66,6 +67,11 @@ export type SocialState = {
   leaderboardError: boolean;
   /** The Leaderboard view, by window (7d / 30d / all). */
   boards: Partial<Record<SocialLeaderboardWindow, SocialJar[]>>;
+  /**
+   * Honey's strategy jars the server suggests following while the network is young
+   * (lib/honey-strategies); empty once it stops, or on a server without them.
+   */
+  suggestions: SocialJar[] | null;
   boardErrors: Partial<Record<SocialLeaderboardWindow, boolean>>;
   /** Recent theses by token symbol (token pages). */
   postsAbout: Record<string, SocialPost[]>;
@@ -83,6 +89,7 @@ export const social = createStore<SocialState>({
   leaderboardError: false,
   boards: {},
   boardErrors: {},
+  suggestions: null,
   postsAbout: {},
   profiles: {},
   pendingFollow: {},
@@ -265,8 +272,13 @@ export async function loadFeed(scope: SocialFeedScope, more = false) {
   try {
     const page = await api.socialFeed(scope, token, more ? current.nextCursor : null);
     // Test mode: a sample group jar's launch on top of Everyone.
+    // const fresh =
+    //   TEST_MODE && scope === 'everyone' ? [demoCollabPost(), ...page.items] : page.items;
+    // Test mode: a sample Honey strategy launch and a sample group jar's on top of Everyone.
     const fresh =
-      TEST_MODE && scope === 'everyone' ? [demoCollabPost(), ...page.items] : page.items;
+      TEST_MODE && scope === 'everyone'
+        ? [demoHoneyPost(), demoCollabPost(), ...page.items]
+        : page.items;
     const items = more ? [...current.items, ...page.items] : fresh;
     setFeed(scope, { items, nextCursor: page.nextCursor, loading: false, loaded: true });
     if (!more)
@@ -298,6 +310,20 @@ export async function loadLeaderboard() {
     retryIfPending('leaderboard', ranked.length ? ranked : fresh, () => void loadLeaderboard());
   } catch {
     social.set((s) => ({ ...s, leaderboardError: true }));
+  }
+}
+
+/**
+ * Who to follow while the network is young: Honey's strategy jars, from the server
+ * (`GET /social/suggestions`). A server without it (or a failed read) suggests nothing
+ * extra: Following then suggests leaderboard people alone, as before.
+ */
+export async function loadSuggestions() {
+  try {
+    const jars = await api.socialSuggestions(backendSessionToken());
+    social.set((s) => ({ ...s, suggestions: jars }));
+  } catch {
+    social.set((s) => ({ ...s, suggestions: s.suggestions ?? [] }));
   }
 }
 
@@ -850,6 +876,8 @@ const personOf = (p: SocialProfile): SocialPerson => ({
   handle: p.handle,
   displayName: p.displayName,
   avatarSeed: p.avatarSeed,
+  // The Honey badge, on Honey's strategy accounts.
+  official: p.official,
   followers: p.followers,
   followedByMe: p.followedByMe,
   isMe: p.isMe,

@@ -10,7 +10,7 @@ import Animated, {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Icon } from '@/components/Icon';
 import { SkeletonBar } from '@/components/motion/Skeleton';
-import { SocialAvatar, TokenStack } from '@/components/social/parts';
+import { HoneyBadge, SocialAvatar, TokenStack } from '@/components/social/parts';
 import { Sparkline } from '@/components/wallet/parts';
 import { FADE_EXTRA, TAB_BAR_HEIGHT } from '@/components/wallet/TabBar';
 import {
@@ -295,10 +295,19 @@ const Tile = memo(function Tile({
           <View style={styles.faceRing}>
             <SocialAvatar who={jar.owner} size={parts.avatar} />
           </View>
-          {parts.name && first ? (
+          {/* {parts.name && first ? (
             <Text style={[styles.name, { fontSize: parts.name }]} numberOfLines={1}>
               {first}
             </Text>
+          ) : null} */}
+          {/* The first name, then the Honey badge on a jar Honey runs. */}
+          {parts.name && first ? (
+            <View style={styles.nameBadge}>
+              <Text style={[styles.name, { fontSize: parts.name }]} numberOfLines={1}>
+                {first}
+              </Text>
+              <HoneyBadge who={jar.owner} size={parts.name} color={HEAT_TEXT} />
+            </View>
           ) : null}
           <Text
             style={[styles.value, { fontSize: parts.value, lineHeight: parts.valueLine }]}
@@ -385,6 +394,7 @@ const useStyles = makeStyles(() => ({
     paddingHorizontal: 6,
   },
   name: { ...LIFT, color: HEAT_TEXT, fontWeight: '600', maxWidth: '100%' },
+  nameBadge: { flexDirection: 'row', alignItems: 'center', gap: 3, maxWidth: '100%' },
   value: {
     ...LIFT,
     color: HEAT_TEXT,

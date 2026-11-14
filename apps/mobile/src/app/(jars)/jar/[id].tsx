@@ -41,6 +41,7 @@ import {
   CopyOff,
   CopyStepper,
   copyNow,
+  HoneyBadge,
   openCollaborators,
   openProfile,
   ReturnText,
@@ -311,6 +312,7 @@ function JarPage({ jar, id }: { jar: ThesisJar | undefined; id: string }) {
             <Text style={styles.headerName} numberOfLines={1}>
               {jar.name}
             </Text>
+            <HoneyBadge who={person} />
           </PressableScale>
         ) : (
           ''
@@ -494,7 +496,9 @@ function PreviewActions({ post, saved }: { post: SocialPost; saved: boolean }) {
   );
 }
 
-type Person = { name: string; handle?: string; seed: string };
+// type Person = { name: string; handle?: string; seed: string };
+/** Who's behind a jar; `official` when Honey runs it (a Honey strategy: the badge). */
+type Person = { name: string; handle?: string; seed: string; official?: boolean };
 
 /**
  * Who's behind a jar: someone's public jar is its owner (their profile once loaded, for
@@ -511,6 +515,7 @@ function personOf(
       name: owner?.displayName || ownerHandle,
       handle: ownerHandle,
       seed: owner?.avatarSeed || ownerHandle,
+      official: owner?.official,
     };
   // A group jar someone else started: they're who's behind it.
   if (jar.groupId && jar.creator !== ME)
@@ -936,16 +941,31 @@ function JarBody({
           icon={<Icon name="personOutline" size={15} color={c.textSecondary} />}
           label="Created by"
           value={
+            // handle ? (
+            //   <Text
+            //     style={styles.creator}
+            //     numberOfLines={1}
+            //     onPress={() => openProfile(handle)}
+            //     suppressHighlighting
+            //     accessibilityRole="link"
+            //   >
+            //     @{handle}
+            //   </Text>
+            // ) : (
+            // The @handle, then the Honey badge when Honey runs the jar.
             handle ? (
-              <Text
-                style={styles.creator}
-                numberOfLines={1}
-                onPress={() => openProfile(handle)}
-                suppressHighlighting
-                accessibilityRole="link"
-              >
-                @{handle}
-              </Text>
+              <View style={styles.creatorRow}>
+                <Text
+                  style={styles.creator}
+                  numberOfLines={1}
+                  onPress={() => openProfile(handle)}
+                  suppressHighlighting
+                  accessibilityRole="link"
+                >
+                  @{handle}
+                </Text>
+                <HoneyBadge who={person} />
+              </View>
             ) : (
               <Text style={styles.creator} numberOfLines={1}>
                 {person?.name ?? jar.creator}
@@ -1122,6 +1142,7 @@ const useStyles = makeStyles((c) => ({
   headerTitle: { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1 },
   // Shrinks into "…" before it pushes the label off the row.
   creator: { flexShrink: 1, maxWidth: '60%', color: c.text, fontSize: 15, fontWeight: '500' },
+  creatorRow: { flexDirection: 'row', alignItems: 'center', gap: 4, flexShrink: 1 },
   // The icon as tall as the number and its line beside it.
   heroRow: { flexDirection: 'row', alignItems: 'center', gap: 14 },
   // A touch under the coin page's 36: beside the jar's mark, 36 outweighed it.
