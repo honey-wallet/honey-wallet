@@ -153,6 +153,27 @@ pub fn check_order(
     })
 }
 
+/// A dry `/swap/v2/order` (no taker, so no transaction): the output for exactly what was
+/// asked, on a Metis route. For the thesis agent's buyability check only.
+pub fn check_dry(body: &Value, sell: &str, buy: &str, amount: U256) -> Result<U256, AppError> {
+    if let Some(error) = body["error"].as_str() {
+        tracing::info!(error, "jupiter refused a dry order");
+        return Err(AppError::BadRequest("Jupiter has no quote for this".into()));
+    }
+    let s = |f: &str| body[f].as_str().unwrap_or_default();
+    if s("inputMint") != sell || s("outputMint") != buy || s("swapMode") != "ExactIn" {
+        return Err(upstream("dry order"));
+    }
+    if s("inAmount").parse::<U256>().ok() != Some(amount) {
+        return Err(upstream("dry order amount"));
+    }
+    s("outAmount")
+        .parse::<U256>()
+        .ok()
+        .filter(|a| !a.is_zero())
+        .ok_or_else(|| upstream("dry order output"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -251,5 +272,21 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn a_dry_order_must_echo_the_request() {
+        let usdc = super::super::chains::USDC_SOLANA;
+        let jup = "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN";
+        let body = json!({"inputMint": usdc, "outputMint": jup, "swapMode": "ExactIn",
+            "inAmount": "10000000", "outAmount": "38830097", "transaction": null});
+        let ten = U256::from(10_000_000u64);
+        assert_eq!(
+            check_dry(&body, usdc, jup, ten).unwrap(),
+            U256::from(38_830_097u64)
+        );
+        assert!(check_dry(&body, usdc, jup, U256::from(1u64)).is_err());
+        assert!(check_dry(&body, usdc, usdc, ten).is_err());
+        assert!(check_dry(&json!({"error": "no route"}), usdc, jup, ten).is_err());
     }
 }

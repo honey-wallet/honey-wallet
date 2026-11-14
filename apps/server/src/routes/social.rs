@@ -47,6 +47,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use crate::dex::{DexChain, DexService, TokenView};
 use axum::{
     Json, Router,
     extract::{ConnectInfo, Path, Query, State},
@@ -153,6 +154,8 @@ struct SocialState {
     /// signed-out reads keyed by client address.
     trust_proxy: bool,
     trusted_proxy_cidrs: Arc<[TrustedProxyCidr]>,
+    /// Honey's DEX list: picks bought on a DEX, and their prices.
+    dex: Option<Arc<DexService>>,
 }
 
 /// A jar as its owner sees it, with what's needed to serve it to anyone else: always
@@ -173,6 +176,7 @@ pub fn router(
     dao: Option<Arc<JarDao>>,
     trust_proxy: bool,
     trusted_proxy_cidrs: Vec<TrustedProxyCidr>,
+    dex: Option<Arc<DexService>>,
 ) -> Router {
     build(
         identity,
@@ -181,6 +185,7 @@ pub fn router(
         dao,
         trust_proxy,
         trusted_proxy_cidrs,
+        dex,
     )
 }
 
@@ -201,7 +206,7 @@ pub fn router_with(
     one_click: String,
     dao: Option<Arc<JarDao>>,
 ) -> Router {
-    build(identity, market, one_click, dao, false, Vec::new())
+    build(identity, market, one_click, dao, false, Vec::new(), None)
 }
 
 fn build(
@@ -211,6 +216,7 @@ fn build(
     dao: Option<Arc<JarDao>>,
     trust_proxy: bool,
     trusted_proxy_cidrs: Vec<TrustedProxyCidr>,
+    dex: Option<Arc<DexService>>,
 ) -> Router {
     let client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(3))
@@ -253,6 +259,7 @@ fn build(
             dao,
             trust_proxy,
             trusted_proxy_cidrs: trusted_proxy_cidrs.into(),
+            dex,
         })
 }
 
@@ -313,6 +320,31 @@ pub struct Pick {
     pub chain: String,
     /// Percent of the jar, the picks summing to 100.
     pub weight: f64,
+    /// The token's contract (mint on Solana) for a pick bought on a DEX (2026-11-14):
+    /// such a pick is matched by (chain, address) on Honey's DEX list, never by symbol.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+}
+
+/// The DEX chain a pick names: its 1Click code ("arb"), Honey's name ("Arbitrum") or
+/// the DEX wire name ("arbitrum").
+pub fn dex_chain_of(chain: &str) -> Option<DexChain> {
+    let c = chain.trim().to_ascii_lowercase();
+    crate::dex::chains::ALL
+        .into_iter()
+        .find(|d| d.name() == c || d.oneclick() == c)
+}
+
+/// The key a pick's prices go by: `dex:<chain>:<address>` for a DEX pick (so a
+/// look-alike symbol can't borrow another token's price), else its symbol.
+pub fn pick_key(pick: &Pick) -> String {
+    match (&pick.address, dex_chain_of(&pick.chain)) {
+        (Some(a), Some(chain)) => match chain.normalize(a) {
+            Some(a) => format!("dex:{}:{a}", chain.name()),
+            None => pick.symbol.to_ascii_uppercase(),
+        },
+        _ => pick.symbol.to_ascii_uppercase(),
+    }
 }
 
 /// `SocialJar`.
@@ -669,6 +701,13 @@ pub fn validate_picks(picks: &[Pick]) -> Result<(), AppError> {
         if !valid_symbol(&pick.symbol) || !valid_chain(&pick.chain) {
             return Err(AppError::BadRequest("invalid pick".into()));
         }
+        if let Some(address) = &pick.address
+            && dex_chain_of(&pick.chain)
+                .and_then(|c| c.normalize(address))
+                .is_none()
+        {
+            return Err(AppError::BadRequest("invalid pick".into()));
+        }
         if !pick.weight.is_finite() || pick.weight <= 0.0 || pick.weight > 100.0 {
             return Err(AppError::BadRequest("invalid pick weight".into()));
         }
@@ -686,8 +725,27 @@ pub fn validate_picks(picks: &[Pick]) -> Result<(), AppError> {
 /// Every pick must be a token NEAR Intents can deliver on one of Honey's chains, so a
 /// public jar can always be copied (bought) in full. Matched case-insensitively against
 /// the live 1Click list (`market_list`, which lists native NEAR as NEAR).
-pub fn buyable_picks(picks: &[Pick], list: &[MarketListToken]) -> Result<(), AppError> {
+// pub fn buyable_picks(picks: &[Pick], list: &[MarketListToken]) -> Result<(), AppError> {
+/// A pick with an `address` may instead be a token on Honey's safe DEX list
+/// (KyberSwap or Jupiter on its own chain, 1Click to that chain's USDC first): matched
+/// on (chain, address), with the symbol it is listed under.
+pub fn buyable_picks(
+    picks: &[Pick],
+    list: &[MarketListToken],
+    dex: &[TokenView],
+) -> Result<(), AppError> {
     for pick in picks {
+        if let (Some(address), Some(chain)) = (&pick.address, dex_chain_of(&pick.chain))
+            && let Some(address) = chain.normalize(address)
+            && dex.iter().any(|t| {
+                t.safety.ok
+                    && t.chain == chain
+                    && chain.normalize(&t.address).as_deref() == Some(address.as_str())
+                    && t.symbol.eq_ignore_ascii_case(&pick.symbol)
+            })
+        {
+            continue;
+        }
         // A thesis jar names its chain by 1Click's code ("eth"), a hand-built one by name
         // ("Ethereum"): both mean the same network (2026-11-14: thesis jars couldn't post).
         let named = oneclick_chain_label(&pick.chain.to_ascii_lowercase()).unwrap_or(&pick.chain);
@@ -758,7 +816,8 @@ pub fn value_index(
     let mut weight = 0.0;
     let mut value = 0.0;
     for pick in picks {
-        let key = pick.symbol.to_ascii_uppercase();
+        // let key = pick.symbol.to_ascii_uppercase();
+        let key = pick_key(pick);
         let (Some(s), Some(n)) = (start.get(&key), now.get(&key)) else {
             continue;
         };
@@ -920,14 +979,34 @@ async fn user_by_handle(pool: &PgPool, handle: &str) -> Result<Uuid, AppError> {
 }
 
 /// Live 1Click prices by uppercase symbol (the median across chains, as Search shows).
-async fn prices(market: Option<&Arc<MarketData>>) -> Option<HashMap<String, f64>> {
+// async fn prices(market: Option<&Arc<MarketData>>) -> Option<HashMap<String, f64>> {
+/// Live prices by symbol (1Click), plus Honey's DEX list by `dex:<chain>:<address>`
+/// (`pick_key`), from lists already built.
+async fn prices(
+    market: Option<&Arc<MarketData>>,
+    dex: Option<&DexService>,
+) -> Option<HashMap<String, f64>> {
     let tokens = market?.tokens().await.ok()?;
-    Some(
-        market_list(&tokens)
-            .into_iter()
-            .map(|t| (t.symbol.to_ascii_uppercase(), t.price_usd))
-            .collect(),
-    )
+    let mut out: HashMap<String, f64> = market_list(&tokens)
+        .into_iter()
+        .map(|t| (t.symbol.to_ascii_uppercase(), t.price_usd))
+        .collect();
+    if let Some(dex) = dex {
+        for t in dex.safe_tokens_cached().await {
+            if t.price_usd.is_finite() && t.price_usd > 0.0 {
+                out.insert(format!("dex:{}:{}", t.chain.name(), t.address), t.price_usd);
+            }
+        }
+    }
+    Some(out)
+}
+
+/// The DEX list for `buyable_picks` (empty without DEX routing).
+async fn dex_tokens(state: &SocialState) -> Vec<TokenView> {
+    match &state.dex {
+        Some(dex) => dex.safe_tokens_cached().await,
+        None => Vec::new(),
+    }
 }
 
 type CardRow = (String, String, String);
@@ -1221,7 +1300,7 @@ pub async fn mark_jars(pool: &PgPool, market: &Arc<MarketData>) -> Result<MarkRe
         pruned,
         ..MarkReport::default()
     };
-    let Some(now) = prices(Some(market)).await else {
+    let Some(now) = prices(Some(market), None).await else {
         return Ok(report);
     };
     let mut after = Uuid::nil();
@@ -1640,7 +1719,7 @@ async fn load_profile(
             posts: Vec::new(),
         });
     }
-    let now = prices(state.market.as_ref()).await;
+    let now = prices(state.market.as_ref(), state.dex.as_deref()).await;
     // Their own jars and the group jars they're in.
     let sql = format!(
         "{JAR_SELECT} WHERE j.unpublished_at IS NULL AND (j.owner = $1
@@ -1933,7 +2012,7 @@ async fn list_jars(
                 .await
                 .map_err(unavailable)?;
             let rows = ordered_rows(pool, &ids).await?;
-            let now = prices(state.market.as_ref()).await;
+            let now = prices(state.market.as_ref(), state.dex.as_deref()).await;
             let list = Arc::new(present_jars(pool, now.as_ref(), rows, None).await?);
             state.store_list(key, list.clone()).await;
             list
@@ -1950,7 +2029,7 @@ async fn jar(
     let me = viewer(&state, &headers).await?;
     let pool = pool(&state)?;
     let rows = jar_rows_by_id(pool, &[id]).await?;
-    let now = prices(state.market.as_ref()).await;
+    let now = prices(state.market.as_ref(), state.dex.as_deref()).await;
     visible_jars(&present_jars(pool, now.as_ref(), rows, None).await?, me)
         .pop()
         .map(Json)
@@ -2029,13 +2108,17 @@ async fn publish_as(
         .tokens()
         .await
         .map_err(|_| AppError::Busy)?;
-    buyable_picks(&body.picks, &market_list(&tokens))?;
-    let now = prices(state.market.as_ref()).await.ok_or(AppError::Busy)?;
+    // buyable_picks(&body.picks, &market_list(&tokens))?;
+    buyable_picks(&body.picks, &market_list(&tokens), &dex_tokens(state).await)?;
+    let now = prices(state.market.as_ref(), state.dex.as_deref())
+        .await
+        .ok_or(AppError::Busy)?;
     let start: HashMap<String, f64> = body
         .picks
         .iter()
         .filter_map(|p| {
-            let key = p.symbol.to_ascii_uppercase();
+            // let key = p.symbol.to_ascii_uppercase();
+            let key = pick_key(p);
             now.get(&key).map(|price| (key, *price))
         })
         .collect();
@@ -2366,9 +2449,11 @@ async fn create_post(
             symbol: symbol.clone(),
             chain: chain.clone(),
             weight: 1.0,
+            address: None,
         })
         .collect();
-    buyable_picks(&picks, &list)?;
+    // buyable_picks(&picks, &list)?;
+    buyable_picks(&picks, &list, &[])?;
     // Each token as 1Click spells it (cbBTC, not CBBTC), so it reads right everywhere.
     let tokens: Vec<(String, String)> = tokens
         .into_iter()
@@ -2380,7 +2465,9 @@ async fn create_post(
             (canonical, chain)
         })
         .collect();
-    let now = prices(state.market.as_ref()).await.ok_or(AppError::Busy)?;
+    let now = prices(state.market.as_ref(), state.dex.as_deref())
+        .await
+        .ok_or(AppError::Busy)?;
     let mut snapshot = Vec::with_capacity(tokens.len());
     for (symbol, chain) in &tokens {
         let price = now
@@ -2462,7 +2549,7 @@ async fn get_post(
 ) -> Result<Json<Post>, AppError> {
     let me = viewer(&state, &headers).await?;
     let rows = posts_where(pool(&state)?, me, "s.id = $2", Some(id), None, 1).await?;
-    let now = prices(state.market.as_ref()).await;
+    let now = prices(state.market.as_ref(), state.dex.as_deref()).await;
     present_posts(rows, now.as_ref(), me)
         .pop()
         .map(Json)
@@ -2529,7 +2616,7 @@ async fn list_posts(
             return Err(AppError::BadRequest("pass symbol or handle".into()));
         }
     };
-    let now = prices(state.market.as_ref()).await;
+    let now = prices(state.market.as_ref(), state.dex.as_deref()).await;
     Ok(Json(present_posts(rows, now.as_ref(), me)))
 }
 
@@ -2641,7 +2728,7 @@ async fn load_feed_page(
     let mut jars: HashMap<Uuid, PublicJar> = HashMap::new();
     if !jar_ids.is_empty() {
         let jar_rows = jar_rows_by_id(pool, &jar_ids).await?;
-        let now = prices(state.market.as_ref()).await;
+        let now = prices(state.market.as_ref(), state.dex.as_deref()).await;
         for jar in visible_jars(&present_jars(pool, now.as_ref(), jar_rows, None).await?, me) {
             jars.insert(jar.id, jar);
         }
@@ -2657,7 +2744,7 @@ async fn load_feed_page(
                 .fetch_all(pool)
                 .await
                 .map_err(unavailable)?;
-        let now = prices(state.market.as_ref()).await;
+        let now = prices(state.market.as_ref(), state.dex.as_deref()).await;
         for post in present_posts(post_rows, now.as_ref(), me) {
             posts.insert(post.id, post);
         }
@@ -2748,7 +2835,7 @@ async fn leaderboard(
             let ids: Vec<Uuid> = ranked.iter().map(|r| r.0).collect();
             let bases: HashMap<Uuid, f64> = ranked.into_iter().collect();
             let rows = ordered_rows(pool, &ids).await?;
-            let now = prices(state.market.as_ref()).await;
+            let now = prices(state.market.as_ref(), state.dex.as_deref()).await;
             let mut list = present_jars(pool, now.as_ref(), rows, Some(&bases)).await?;
             // Shown at live prices, so re-sort by what's shown.
             list.sort_by(|a, b| {
@@ -2981,16 +3068,111 @@ mod tests {
             symbol: symbol.into(),
             chain: chain.into(),
             weight: 50.0,
+            address: None,
         };
-        assert!(buyable_picks(&[pick("eth", "base"), pick("XAUT", "Ethereum")], &list).is_ok());
-        assert!(buyable_picks(&[pick("NEAR", "NEAR")], &list).is_ok());
+        let none: &[TokenView] = &[];
+        assert!(
+            buyable_picks(
+                &[pick("eth", "base"), pick("XAUT", "Ethereum")],
+                &list,
+                none
+            )
+            .is_ok()
+        );
+        assert!(buyable_picks(&[pick("NEAR", "NEAR")], &list, none).is_ok());
         // PAXG isn't sold by NEAR Intents; ETH isn't delivered on Solana.
-        let err = buyable_picks(&[pick("PAXG", "Ethereum")], &list).unwrap_err();
+        let err = buyable_picks(&[pick("PAXG", "Ethereum")], &list, none).unwrap_err();
         assert!(matches!(err, AppError::BadRequest(ref m) if m.starts_with("PAXG on Ethereum")));
-        assert!(buyable_picks(&[pick("ETH", "Solana")], &list).is_err());
+        assert!(buyable_picks(&[pick("ETH", "Solana")], &list, none).is_err());
         // A thesis jar's picks name their chain by 1Click's code (2026-11-14).
-        assert!(buyable_picks(&[pick("XAUT", "eth")], &list).is_ok());
-        assert!(buyable_picks(&[pick("XAUT", "sol")], &list).is_err());
+        assert!(buyable_picks(&[pick("XAUT", "eth")], &list, none).is_ok());
+        assert!(buyable_picks(&[pick("XAUT", "sol")], &list, none).is_err());
+    }
+
+    fn dex_token(chain: DexChain, address: &str, symbol: &str, ok: bool) -> TokenView {
+        TokenView {
+            chain,
+            address: address.into(),
+            symbol: symbol.into(),
+            name: symbol.into(),
+            decimals: 18,
+            logo_url: None,
+            price_usd: 2.0,
+            liquidity_usd: Some(1e6),
+            volume24h_usd: Some(1e6),
+            market_cap_usd: None,
+            change24h_pct: None,
+            coingecko_id: None,
+            metadata: "uniswap",
+            route: "dex",
+            safety: crate::dex::SafetyView { ok, flags: vec![] },
+        }
+    }
+
+    #[test]
+    fn dex_picks_are_buyable_by_chain_and_address_only() {
+        const PAXG: &str = "0x45804880de22913dafe09f4980848ece6ecbaf78";
+        const AERO: &str = "0x940181a94a35a4569e4529a3cdfb74e38fd98631";
+        let dex = [
+            dex_token(DexChain::Ethereum, PAXG, "PAXG", true),
+            dex_token(DexChain::Base, AERO, "AERO", true),
+            dex_token(
+                DexChain::Base,
+                "0x4ed4e862860bed51a9570b96d89af5e1b0efefed",
+                "DEGEN",
+                false,
+            ),
+        ];
+        let pick = |symbol: &str, chain: &str, address: Option<&str>| Pick {
+            symbol: symbol.into(),
+            chain: chain.into(),
+            weight: 50.0,
+            address: address.map(String::from),
+        };
+        // PAXG isn't on 1Click, but Honey's DEX list has it on Ethereum: by any chain name,
+        // in any address case.
+        for chain in ["eth", "Ethereum", "ethereum"] {
+            assert!(buyable_picks(&[pick("PAXG", chain, Some(PAXG))], &[], &dex).is_ok());
+        }
+        let upper = format!("0x{}", PAXG[2..].to_uppercase());
+        assert!(buyable_picks(&[pick("paxg", "eth", Some(&upper))], &[], &dex).is_ok());
+        // Never by symbol alone, never on another chain, never under another symbol.
+        assert!(buyable_picks(&[pick("PAXG", "eth", None)], &[], &dex).is_err());
+        assert!(buyable_picks(&[pick("PAXG", "base", Some(PAXG))], &[], &dex).is_err());
+        assert!(buyable_picks(&[pick("GOLD", "eth", Some(PAXG))], &[], &dex).is_err());
+        // A token that failed the safety checks isn't buyable.
+        let degen = "0x4ed4e862860bed51a9570b96d89af5e1b0efefed";
+        assert!(buyable_picks(&[pick("DEGEN", "base", Some(degen))], &[], &dex).is_err());
+        assert!(buyable_picks(&[pick("AERO", "Base", Some(AERO))], &[], &dex).is_ok());
+        // A malformed address is refused before any lookup.
+        assert!(
+            validate_picks(&[
+                pick("AERO", "base", Some("0x12")),
+                pick("ETH", "base", None)
+            ])
+            .is_err()
+        );
+        assert!(
+            validate_picks(&[pick("AERO", "near", Some(AERO)), pick("ETH", "base", None)]).is_err()
+        );
+        // Prices go by (chain, address) for DEX picks.
+        assert_eq!(
+            pick_key(&pick(
+                "AERO",
+                "Base",
+                Some(&AERO.to_uppercase().replace("0X", "0x"))
+            )),
+            format!("dex:base:{AERO}")
+        );
+        assert_eq!(pick_key(&pick("eth", "base", None)), "ETH");
+        let p = [pick("AERO", "base", Some(AERO)), pick("ETH", "base", None)];
+        let start = HashMap::from([(format!("dex:base:{AERO}"), 1.0), ("ETH".into(), 100.0)]);
+        let now = HashMap::from([
+            (format!("dex:base:{AERO}"), 2.0),
+            ("ETH".into(), 100.0),
+            ("AERO".into(), 50.0),
+        ]);
+        assert!((value_index(&p, &start, &now).unwrap() - 1.5).abs() < 1e-9);
     }
 
     use super::*;
@@ -3099,6 +3281,7 @@ mod tests {
 
     fn pick(symbol: &str, weight: f64) -> Pick {
         Pick {
+            address: None,
             symbol: symbol.into(),
             chain: "Base".into(),
             weight,

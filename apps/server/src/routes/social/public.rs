@@ -111,7 +111,7 @@ async fn jar(
 ) -> Result<impl IntoResponse, AppError> {
     let pool = pool(&state)?;
     let rows = jar_rows_by_id(pool, &[id]).await?;
-    let now = prices(state.market.as_ref()).await;
+    let now = prices(state.market.as_ref(), state.dex.as_deref()).await;
     // Always as a signed-out viewer, whoever asks: the answer is cached and shared.
     let jar = visible_jars(&present_jars(pool, now.as_ref(), rows, None).await?, None)
         .pop()
@@ -127,7 +127,7 @@ async fn post(
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, AppError> {
     let rows = posts_where(pool(&state)?, None, "s.id = $2", Some(id), None, 1).await?;
-    let now = prices(state.market.as_ref()).await;
+    let now = prices(state.market.as_ref(), state.dex.as_deref()).await;
     let post = present_posts(rows, now.as_ref(), None)
         .pop()
         .ok_or(AppError::NotFound)?;
@@ -158,6 +158,7 @@ mod tests {
                 symbol: "ETH".into(),
                 chain: "Base".into(),
                 weight: 100.0,
+                address: None,
             }],
             copy_fee: 10,
             copies: 2,

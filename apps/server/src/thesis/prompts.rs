@@ -23,7 +23,10 @@ impl Prompt {
 
 pub const UNDERSTAND: Prompt = Prompt {
     name: "understand",
-    version: "understand/7",
+    // version: "understand/7",
+    // understand/7 said (replaced 2026-11-14, when the DEX list joined the registry):
+    // "What Honey can do: buy and hold tokens (long only). Through NEAR Intents it can buy crypto tokens, stablecoins, tokenized gold and, when listed, tokenized shares (Ondo, xStocks). It cannot short, use leverage, buy options, perps or prediction markets, or buy anything off chain."
+    version: "understand/8",
     file: include_str!("prompts/understand.md"),
 };
 

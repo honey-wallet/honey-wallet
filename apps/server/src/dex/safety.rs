@@ -49,6 +49,8 @@ pub const BLOCKING: &[&str] = &[
     "default_frozen",
     "token_2022",
     "suspicious",
+    "low_organic",
+    "no_decimals",
     "low_liquidity",
     "low_volume",
     "too_new",
@@ -215,7 +217,10 @@ pub struct Safety {
     /// Spaces calls (bounded wait, shared across replicas with Redis).
     pacer: Pacer,
     quiet_until: Mutex<Option<Instant>>,
-    warming: std::sync::atomic::AtomicBool,
+    // warming: std::sync::atomic::AtomicBool,
+    /// Chains with a warm-up running: one per chain (a single flag for all chains left
+    /// every chain but the first unchecked until its next build).
+    warming: Mutex<std::collections::HashSet<DexChain>>,
     /// Upgradeable tokens a person reviewed: `upgradeable` doesn't block these.
     upgradeable_ok: Vec<(DexChain, String)>,
 }
@@ -234,7 +239,8 @@ impl Safety {
             cache: Mutex::default(),
             pacer: Pacer::new("goplus", interval, super::pacer::DEFAULT_MAX_WAIT),
             quiet_until: Mutex::new(None),
-            warming: std::sync::atomic::AtomicBool::new(false),
+            // warming: std::sync::atomic::AtomicBool::new(false),
+            warming: Mutex::default(),
             upgradeable_ok,
         }
     }
@@ -400,7 +406,6 @@ impl Safety {
     /// Checks `addresses` one by one in the background (one warm-up at a time), so the
     /// token list fills in without a request ever waiting on GoPlus.
     pub fn warm(self: &std::sync::Arc<Self>, chain: DexChain, addresses: Vec<String>) {
-        use std::sync::atomic::Ordering;
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
             return;
         };
@@ -408,7 +413,14 @@ impl Safety {
             .into_iter()
             .filter(|a| self.cached(chain, a).is_none())
             .collect();
-        if todo.is_empty() || self.warming.swap(true, Ordering::AcqRel) {
+        // if todo.is_empty() || self.warming.swap(true, Ordering::AcqRel) {
+        if todo.is_empty()
+            || !self
+                .warming
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .insert(chain)
+        {
             return;
         }
         let me = std::sync::Arc::clone(self);
@@ -422,7 +434,11 @@ impl Safety {
                     tokio::time::sleep(me.interval).await;
                 }
             }
-            me.warming.store(false, Ordering::Release);
+            // me.warming.store(false, Ordering::Release);
+            me.warming
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .remove(&chain);
         });
     }
 }

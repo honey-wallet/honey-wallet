@@ -6,7 +6,7 @@
 use super::Risk;
 use super::{
     Exposure, categories,
-    registry::{InstrumentType, RegistryAsset},
+    registry::{AssetRoute, InstrumentType, RegistryAsset},
     suspicious,
 };
 use crate::market_data::{CoinMarket, asset_key, normalize_symbol, oneclick_chain_label};
@@ -117,8 +117,9 @@ impl Coin {
     }
 
     /// The liquidity rules plus the risk level's asset types (R-RK-1): low risk keeps to
-    /// stablecoins, tokenized stocks and $1B+ coins with no meme coins; medium adds coins
-    /// from $100M; high allows down to the $20M floor.
+    /// stablecoins, tokenized stocks and $1B+ coins; medium adds coins from $100M; high
+    /// allows down to the $20M floor. Meme coins only at high risk (2026-11-14; they were
+    /// kept out of low only).
     pub fn allowed_at(&self, risk: Risk) -> bool {
         if !(self.market.price_usd.is_finite() && self.market.price_usd > 0.0) {
             return false;
@@ -131,7 +132,8 @@ impl Coin {
                     Risk::Medium => 100_000_000.0,
                     Risk::High => MIN_MARKET_CAP_USD,
                 };
-                !(risk == Risk::Low && self.is_meme())
+                // !(risk == Risk::Low && self.is_meme())
+                !(risk != Risk::High && self.is_meme())
                     && self.market.market_cap_usd.is_some_and(|c| c >= floor)
                     && self
                         .market
@@ -210,9 +212,16 @@ pub fn universe(
         if asset.price_usd.is_none() || !honey_chain(&asset.chain) {
             continue;
         }
-        let key = match asset.coingecko_id.as_deref() {
-            Some(id) => coin_key(id).to_string(),
-            None => format!("sym:{}", symbol.to_ascii_uppercase()),
+        // let key = match asset.coingecko_id.as_deref() {
+        //     Some(id) => coin_key(id).to_string(),
+        //     None => format!("sym:{}", symbol.to_ascii_uppercase()),
+        // };
+        // A DEX token CoinGecko doesn't place is its own coin, keyed by its contract:
+        // a symbol alone never folds two tokens together.
+        let key = match (asset.coingecko_id.as_deref(), asset.route) {
+            (Some(id), _) => coin_key(id).to_string(),
+            (None, AssetRoute::Dex) => asset.asset_id.clone(),
+            (None, AssetRoute::Intents) => format!("sym:{}", symbol.to_ascii_uppercase()),
         };
         groups.entry(key).or_default().push((asset, symbol));
     }
@@ -255,9 +264,11 @@ pub fn universe(
                 (Some(coin), Some(p)) => ((p - coin) / coin).abs() > 0.02,
                 _ => false,
             };
+            // NEAR Intents before a DEX for the same coin (privacy first).
             let (asset, _) = members.iter().min_by_key(|(a, s)| {
                 (
                     off_price(a),
+                    a.route != AssetRoute::Intents,
                     native != Some(a.chain.as_str()),
                     !s.eq_ignore_ascii_case(&ticker),
                     chain_rank(&a.chain, native),
@@ -270,19 +281,27 @@ pub fn universe(
                 r.price_usd
                     .is_none_or(|p| ((p - price) / price).abs() <= MAX_PRICE_GAP)
             });
+            // Without a CoinGecko row, a DEX asset's own numbers (CoinGecko's or
+            // Jupiter's, from Honey's DEX list).
+            let dex = members
+                .iter()
+                .find_map(|(a, _)| a.dex_market.clone())
+                .filter(|_| row.is_none())
+                .unwrap_or_default();
             Some(Coin {
                 key: key.clone(),
                 ticker: display.clone(),
                 name: row
                     .map(|r| r.name.clone())
+                    .or_else(|| members.iter().find_map(|(a, _)| a.name.clone()))
                     .unwrap_or_else(|| display.clone()),
                 symbols,
                 asset: (*asset).clone(),
                 market: Market {
                     price_usd: price,
-                    market_cap_usd: row.and_then(|r| r.market_cap),
-                    volume24h_usd: row.and_then(|r| r.volume_24h),
-                    change24h_pct: row.and_then(|r| r.change_24h),
+                    market_cap_usd: row.and_then(|r| r.market_cap).or(dex.market_cap_usd),
+                    volume24h_usd: row.and_then(|r| r.volume_24h).or(dex.volume24h_usd),
+                    change24h_pct: row.and_then(|r| r.change_24h).or(dex.change24h_pct),
                 },
                 has_coingecko: row.is_some(),
             })
@@ -467,7 +486,9 @@ pub fn shortlist(
 /// level's checks right now (ticker and name, largest first), so exposures aim at things
 /// that can be bought. Names only; the numbers stay in code.
 pub fn buyable_menu(universe: &[Coin], risk: Option<Risk>) -> String {
-    const MAX: usize = 80;
+    // const MAX: usize = 80;
+    // More names since the DEX list joined (2026-11-14), so themes reach their own tokens.
+    const MAX: usize = 150;
     let ok: Vec<&Coin> = universe
         .iter()
         .filter(|c| c.kind() != InstrumentType::Stablecoin)

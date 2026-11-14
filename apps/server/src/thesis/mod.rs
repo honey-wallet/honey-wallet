@@ -407,6 +407,18 @@ impl ThesisService {
         redis: Option<crate::redis_store::RedisStore>,
         pool: Option<sqlx::PgPool>,
     ) -> anyhow::Result<Self> {
+        Self::new_with_dex(settings, markets, redis, pool, None)
+    }
+
+    /// `new` plus Honey's DEX list: its safe tokens join the registry (`route: dex`) and
+    /// picks on it are dry-quoted on KyberSwap or Jupiter (2026-11-14, more tokens).
+    pub fn new_with_dex(
+        settings: Settings,
+        markets: Option<Arc<MarketData>>,
+        redis: Option<crate::redis_store::RedisStore>,
+        pool: Option<sqlx::PgPool>,
+        dex: Option<Arc<crate::dex::DexService>>,
+    ) -> anyhow::Result<Self> {
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(5))
             .redirect(reqwest::redirect::Policy::limited(5))
@@ -422,8 +434,19 @@ impl ThesisService {
             settings.oneclick_api_key,
             settings.quote_account,
         );
+        // let mut service = Self::with_parts(
+        //     Registry::new(client.clone(), settings.oneclick_base_url),
+        //     ...
+        // .with_quoter(Arc::new(quoter));
+        let dex = dex.filter(|d| d.enabled());
+        let registry = Registry::new(client.clone(), settings.oneclick_base_url)
+            .with_dex(dex.clone().map(|d| d as Arc<dyn registry::DexSource>));
+        let quoter = quote::RoutedQuoter {
+            intents: Arc::new(quoter),
+            dex: dex.map(|d| d as Arc<dyn quote::DexQuotes>),
+        };
         let mut service = Self::with_parts(
-            Registry::new(client.clone(), settings.oneclick_base_url),
+            registry,
             Intake::new()?,
             NearAi::new(client, settings.near_ai_base_url, settings.near_ai_api_key),
         )
@@ -1098,7 +1121,15 @@ impl ThesisService {
                 run,
                 Stage::Strategize,
                 "quote",
-                "Checking live prices on NEAR Intents",
+                // "Checking live prices on NEAR Intents",
+                if base
+                    .iter()
+                    .any(|p| p.asset.route == registry::AssetRoute::Dex)
+                {
+                    "Checking live prices on NEAR Intents and DEXes"
+                } else {
+                    "Checking live prices on NEAR Intents"
+                },
             )
             .await;
             self.event(
