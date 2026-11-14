@@ -24,7 +24,9 @@ const FAQS = [
   // },
   {
     q: 'What does it cost?',
-    a: 'You see the network and route fees before you approve. If you copy someone’s jar, its creator takes the cut they chose of your profit, never of a loss.',
+    // a: 'You see the network and route fees before you approve. If you copy someone’s jar, its creator takes the cut they chose of your profit, never of a loss.',
+    // No fees for users (14 Nov): as the app's Help says.
+    a: 'Only the network and route fees, and they show before you approve.',
   },
   {
     q: 'When can I use it?',

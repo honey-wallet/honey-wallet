@@ -3,7 +3,7 @@ import { JoinWaitlist } from './app-link';
 import { Friends } from './friends';
 import styles from './hero.module.css';
 import { JarGlyph } from './jar';
-import { ProductPhone } from './product-phone';
+// import { ProductPhone } from './product-phone';
 import { Display } from './type';
 
 /*
@@ -35,10 +35,9 @@ export function Hero() {
           </JoinWaitlist>
         </div>
       </div>
-      {/* 14 Nov: the two phones flank the headline, tilted outward (the owner's sketch):
-          Following on the left, everyone's jars on the right. Was below it, with captions:
       <div className={styles.product}>
         <div aria-hidden="true" className={styles.halo} />
+        {/* No phones in the hero (14 Nov, owner): headline, friends and the waitlist only.
         <figure className={styles.feedPhone}>
           <ProductPhone eager screen="feed" />
           <figcaption>The feed. Find your next idea.</figcaption>
@@ -46,14 +45,7 @@ export function Hero() {
         <figure className={styles.walletPhone}>
           <ProductPhone eager screen="wallet" />
           <figcaption>Your wallet. Always in your hands.</figcaption>
-        </figure>
-      </div> */}
-      <div aria-hidden="true" className={styles.halo} />
-      <div className={`${styles.side} ${styles.left}`}>
-        <ProductPhone eager screen="feed" />
-      </div>
-      <div className={`${styles.side} ${styles.right}`}>
-        <ProductPhone eager screen="everyone" />
+        </figure> */}
       </div>
     </section>
   );
