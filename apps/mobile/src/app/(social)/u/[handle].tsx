@@ -24,6 +24,7 @@ import { EdgeTabs, openCompose } from '@/components/social/FeedSections';
 import {
   FeedCard,
   FollowButton,
+  HoneyBadge,
   MascotEmpty,
   noPnlText,
   openProfile,
@@ -321,9 +322,16 @@ function ProfileBody({
         {/* The name, and what they hold most as logos in the room to its right; a long
             name truncates before it reaches them. */}
         <View style={styles.nameRow}>
-          <Text style={[styles.name, styles.nameText]} numberOfLines={1}>
+          {/* <Text style={[styles.name, styles.nameText]} numberOfLines={1}>
             {profile.displayName}
-          </Text>
+          </Text> */}
+          {/* The name, then the Honey badge on an account Honey runs. */}
+          <View style={styles.nameBadge}>
+            <Text style={[styles.name, styles.nameText]} numberOfLines={1}>
+              {profile.displayName}
+            </Text>
+            <HoneyBadge who={profile} size={18} />
+          </View>
           {tokens.length ? (
             // Tap: everything they hold, each opening its coin page.
             <PressableScale
@@ -793,6 +801,7 @@ const useStyles = makeStyles((c) => ({
     gap: 12,
   },
   nameText: { flexShrink: 1, minWidth: 0 },
+  nameBadge: { flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 1, minWidth: 0 },
   tokens: { flexShrink: 0 },
   handle: { color: c.textSecondary, fontSize: 16, marginTop: 4 },
   bio: { color: c.text, fontSize: 16, lineHeight: 22, marginTop: 12 },

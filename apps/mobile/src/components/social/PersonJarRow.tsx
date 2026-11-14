@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Icon } from '@/components/Icon';
 import { PressableRow } from '@/components/motion/PressableRow';
-import { openProfile, SocialAvatar, TokenStack } from '@/components/social/parts';
+import { HoneyBadge, openProfile, SocialAvatar, TokenStack } from '@/components/social/parts';
 import { Sparkline } from '@/components/wallet/parts';
 import { pct, type SocialJar } from '@/lib/social';
 import { makeStyles, useTheme } from '@/theme';
@@ -68,6 +68,7 @@ export function PersonJarRow({
             <Text style={styles.name} numberOfLines={1}>
               {who.displayName}
             </Text>
+            <HoneyBadge who={who} />
             <Text style={styles.handle} numberOfLines={1}>
               @{who.handle}
             </Text>

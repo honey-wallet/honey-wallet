@@ -20,6 +20,7 @@ import {
   FeedCard,
   FeedSkeleton,
   FollowButton,
+  HoneyBadge,
   MascotEmpty,
   openProfile,
   ReturnText,
@@ -271,10 +272,16 @@ function PersonRow({
   const { profiles, pendingFollow, me } = useSocial();
   // A profile opened or followed since is newer than the search's answer.
   const following = profiles[who.handle]?.followedByMe ?? who.followedByMe ?? false;
+  // const card: SocialProfileCard = {
+  //   handle: who.handle,
+  //   displayName: who.displayName,
+  //   avatarSeed: who.avatarSeed,
+  // };
   const card: SocialProfileCard = {
     handle: who.handle,
     displayName: who.displayName,
     avatarSeed: who.avatarSeed,
+    official: who.official,
   };
   return (
     <PressableRow
@@ -286,9 +293,16 @@ function PersonRow({
     >
       <SocialAvatar who={card} size={40} />
       <View style={styles.flex}>
-        <Text style={styles.suggestionName} numberOfLines={1}>
+        {/* <Text style={styles.suggestionName} numberOfLines={1}>
           {who.displayName}
-        </Text>
+        </Text> */}
+        {/* The name, then the Honey badge on an account Honey runs. */}
+        <View style={styles.nameBadge}>
+          <Text style={[styles.suggestionName, styles.shrink]} numberOfLines={1}>
+            {who.displayName}
+          </Text>
+          <HoneyBadge who={who} />
+        </View>
         <Text style={styles.suggestionHandle} numberOfLines={1}>
           @{who.handle}
         </Text>
@@ -637,5 +651,7 @@ const useStyles = makeStyles((c) => ({
   moreText: { color: c.text, fontSize: 15, fontWeight: '500' },
   end: { color: c.textSecondary, fontSize: 13, textAlign: 'center', paddingVertical: 8 },
   suggestionName: { color: c.text, fontSize: 15, fontWeight: '600' },
+  nameBadge: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  shrink: { flexShrink: 1 },
   suggestionHandle: { color: c.textSecondary, fontSize: 13 },
 }));

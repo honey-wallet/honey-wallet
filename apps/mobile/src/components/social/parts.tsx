@@ -30,6 +30,7 @@ import { equalWeights } from '@/lib/compose';
 import { useMoney } from '@/lib/fx';
 import { othersLabel } from '@/lib/group-jar-core';
 import { limit, success, tap } from '@/lib/haptics';
+import { HONEY_BADGE_LABEL, isHoneyAccount } from '@/lib/honey-strategies';
 import { livePrices, useLivePrices, useTokenChart } from '@/lib/market';
 import type { Chain } from '@/lib/mock-wallet';
 import { pnlOf } from '@/lib/pnl';
@@ -135,6 +136,7 @@ export function PersonByline({
           <Text style={styles.rowName} numberOfLines={1} onPress={open} suppressHighlighting>
             {who.displayName}
           </Text>
+          <HoneyBadge who={who} />
           {at ? (
             <Text style={styles.rowTime} numberOfLines={1}>
               · {timeAgo(at)}
@@ -151,6 +153,30 @@ export function PersonByline({
 
 export function SocialAvatar({ who, size }: { who: SocialProfileCard; size: number }) {
   return <Avatar name={who.displayName} size={size} seed={who.avatarSeed || who.handle} />;
+}
+
+/**
+ * The Honey badge, after the name of an account Honey runs (a Honey strategy,
+ * lib/honey-strategies): the verified seal, as a verified site is marked when it asks
+ * to connect. Nothing for anyone else.
+ */
+export function HoneyBadge({
+  who,
+  size = 14,
+  color,
+}: {
+  who: Pick<SocialProfileCard, 'official'> | null | undefined;
+  size?: number;
+  /** The seal's colour where honey text wouldn't read (a leaderboard tile). */
+  color?: string;
+}) {
+  const c = useTheme();
+  if (!isHoneyAccount(who)) return null;
+  return (
+    <View accessible accessibilityLabel={HONEY_BADGE_LABEL} testID="honey-badge">
+      <Icon name="verified" size={size} color={color ?? c.accentText} />
+    </View>
+  );
 }
 
 /**
@@ -1107,6 +1133,7 @@ export function FeedCard({
             >
               {collab ? collab.name : item.actor.displayName}
             </Text>
+            {collab ? null : <HoneyBadge who={item.actor} />}
             {/* Name and when on one line, the @handle under it (2026-11-13). */}
             <Text style={styles.rowTime} numberOfLines={1}>
               · {kind ? `${kind} · ${timeAgo(item.at)}` : timeAgo(item.at)}
