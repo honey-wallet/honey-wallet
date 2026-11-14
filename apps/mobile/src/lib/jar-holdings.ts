@@ -214,10 +214,21 @@ export function jarHoldings(
  */
 export function jarsHolding(jars: ThesisJar[]): Map<string, string[]> {
   const out = new Map<string, string[]>();
-  const add = (symbol: string, name: string) => {
+  for (const [key, held] of jarsHoldingEach(jars))
+    out.set(
+      key,
+      held.map((j) => j.name),
+    );
+  return out;
+}
+
+/** `jarsHolding` with the jars themselves, so a row can show each jar's icon (14 Nov). */
+export function jarsHoldingEach(jars: ThesisJar[]): Map<string, ThesisJar[]> {
+  const out = new Map<string, ThesisJar[]>();
+  const add = (symbol: string, jar: ThesisJar) => {
     const key = symbol.toUpperCase();
-    const names = out.get(key) ?? [];
-    if (!names.includes(name)) out.set(key, [...names, name]);
+    const held = out.get(key) ?? [];
+    if (!held.includes(jar)) out.set(key, [...held, jar]);
   };
   for (const jar of jars) {
     if (!jar.mine || jar.groupId || jar.sharedWallet) continue;
@@ -227,9 +238,9 @@ export function jarsHolding(jars: ThesisJar[]): Map<string, string[]> {
           !LEG_RETURNED.has(leg.status) &&
           (leg.status !== 'SUCCESS' || heldUnits(leg, jar.sells) > 0n)
         )
-          add(leg.symbol, jar.name);
-    } else if (TEST_MODE) for (const p of jar.picks) add(p.symbol, jar.name);
-    if (jarCash(jar) > 0) add('USDC', jar.name);
+          add(leg.symbol, jar);
+    } else if (TEST_MODE) for (const p of jar.picks) add(p.symbol, jar);
+    if (jarCash(jar) > 0) add('USDC', jar);
   }
   return out;
 }

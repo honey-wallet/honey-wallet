@@ -180,6 +180,37 @@ export function JarIcon({ jar, size = 40 }: { jar: ThesisJar; size?: number }) {
 }
 
 /** Ideas to start from, shared by the Jars page and the empty chat. */
+/**
+ * The jars holding a token, as their icons in a small overlapping stack: a token row's
+ * note on Home (14 Nov: "AI Bubble has a nice token logo, show that these tokens belong
+ * here"). Up to three; the row's label reads the names aloud.
+ */
+export function JarMarks({ jars, size = 18 }: { jars: ThesisJar[]; size?: number }) {
+  const c = useTheme();
+  return (
+    <View
+      style={{ flexDirection: 'row' }}
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
+    >
+      {jars.slice(0, 3).map((jar, i) => (
+        <View
+          key={jar.id}
+          style={{
+            marginLeft: i ? -size * 0.3 : 0,
+            borderRadius: size,
+            borderWidth: 1.5,
+            borderColor: c.canvas,
+            backgroundColor: c.canvas,
+          }}
+        >
+          <JarIcon jar={jar} size={size} />
+        </View>
+      ))}
+    </View>
+  );
+}
+
 export const IDEAS: {
   title: string;
   hint: string;

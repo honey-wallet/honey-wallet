@@ -310,7 +310,8 @@ const useStyles = makeStyles((c) => ({
   name: {
     flexShrink: 1,
     color: c.text,
-    fontSize: 17,
+    // fontSize: 17,
+    fontSize: 19, // Uniswap's, measured on the same phone (14 Nov)
     fontWeight: '500',
   },
   addressRow: {
@@ -325,7 +326,8 @@ const useStyles = makeStyles((c) => ({
   },
   address: {
     color: c.textSecondary,
-    fontSize: 15,
+    // fontSize: 15,
+    fontSize: 16,
   },
   headerBalance: {
     position: 'absolute',

@@ -259,6 +259,8 @@ export function AssetRow({
   detail,
   onPress,
   accessibilityLabel,
+  note,
+  large,
 }: {
   icon: ReactNode;
   title: string;
@@ -267,6 +269,10 @@ export function AssetRow({
   detail?: ReactNode;
   onPress?: () => void;
   accessibilityLabel?: string;
+  /** Beside the subtitle: Home's jar icons on a token a jar holds. */
+  note?: ReactNode;
+  /** Home's list, at Uniswap's sizes (14 Nov: measured on the same phone, ~1.2× ours). */
+  large?: boolean;
 }) {
   const styles = useStyles();
   return (
@@ -274,19 +280,25 @@ export function AssetRow({
       onPress={onPress}
       accessibilityRole={onPress ? 'button' : undefined}
       accessibilityLabel={accessibilityLabel}
-      style={styles.tokenRow}
+      style={[styles.tokenRow, large && styles.tokenRowLarge]}
     >
       {icon}
       <View style={styles.flex}>
-        <Text style={styles.rowTitle} numberOfLines={1}>
+        <Text style={[styles.rowTitle, large && styles.rowTitleLarge]} numberOfLines={1}>
           {title}
         </Text>
-        <Text style={styles.rowSubtitle} numberOfLines={1}>
-          {subtitle}
-        </Text>
+        <View style={styles.rowSubtitleLine}>
+          <Text
+            style={[styles.rowSubtitle, large && styles.rowSubtitleLarge, styles.shrink]}
+            numberOfLines={1}
+          >
+            {subtitle}
+          </Text>
+          {note}
+        </View>
       </View>
       <View style={styles.rowEnd}>
-        <Text style={styles.rowTitle}>{value}</Text>
+        <Text style={[styles.rowTitle, large && styles.rowTitleLarge]}>{value}</Text>
         {typeof detail === 'string' ? <Text style={styles.rowDetail}>{detail}</Text> : detail}
       </View>
     </PressableRow>
@@ -298,11 +310,16 @@ export function TokenRow({
   token,
   onPress,
   inJar,
+  jarNote,
+  large,
 }: {
   token: Token;
   onPress?: () => void;
   /** "In AI Bubble": the jars of yours holding it, after the amount (lib/jar-holdings). */
   inJar?: string | null;
+  /** The holding jars' icons, after the amount; `inJar` is then only read aloud (14 Nov). */
+  jarNote?: ReactNode;
+  large?: boolean;
 }) {
   const money = useMoney();
   const amount = `${token.amount.toLocaleString('en-US', { maximumFractionDigits: 6 })} ${token.symbol}`;
@@ -318,9 +335,13 @@ export function TokenRow({
       }
       title={token.name}
       // subtitle={`${token.amount.toLocaleString('en-US', { maximumFractionDigits: 6 })} ${token.symbol}`}
-      subtitle={inJar ? `${amount} · ${inJar}` : amount}
+      // subtitle={inJar ? `${amount} · ${inJar}` : amount}
+      subtitle={inJar && !jarNote ? `${amount} · ${inJar}` : amount}
+      note={jarNote}
+      accessibilityLabel={inJar ? `${token.name}, ${amount}, ${inJar}` : undefined}
+      large={large}
       value={money.format(token.usd)}
-      detail={<Change value={token.change} />}
+      detail={<Change value={token.change} size={large ? 16 : 15} />}
       onPress={onPress}
     />
   );
@@ -900,10 +921,29 @@ const useStyles = makeStyles((c) => ({
     fontSize: 16,
     fontWeight: '500',
   },
-  rowSubtitle: {
+  rowTitleLarge: {
+    fontSize: 18,
+  },
+  tokenRowLarge: {
+    gap: 14,
+    paddingVertical: 11,
+  },
+  rowSubtitleLine: {
     marginTop: 2,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  shrink: {
+    flexShrink: 1,
+  },
+  rowSubtitle: {
+    // marginTop: 2,
     color: c.textSecondary,
     fontSize: 15,
+  },
+  rowSubtitleLarge: {
+    fontSize: 16,
   },
   rowEnd: {
     alignItems: 'flex-end',

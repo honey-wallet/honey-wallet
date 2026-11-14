@@ -137,7 +137,8 @@ const useStyles = makeStyles((c) => ({
     paddingHorizontal: 0,
   },
   fitLabel: {
-    fontSize: 18,
+    // fontSize: 18,
+    fontSize: 19, // Uniswap's, measured on the same phone (14 Nov)
     fontWeight: '500',
   },
   // Sits on the hairline, covering it under the selected tab.

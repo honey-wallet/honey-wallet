@@ -17,7 +17,7 @@ import { Share } from 'react-native';
 import { api } from '@/lib/api';
 import { backendSession, backendSessionToken } from '@/lib/backend-session';
 import { signedPct } from '@/lib/format';
-import { DEMO_FRIENDS, demoCollabPost, setDemoHandle } from '@/lib/group-demo';
+import { DEMO_FRIENDS, demoCollabPost, demoFollowingPosts, setDemoHandle } from '@/lib/group-demo';
 import { demoHoneyPost } from '@/lib/honey-strategies';
 import { getProfile } from '@/lib/profile';
 import {
@@ -265,7 +265,13 @@ export async function loadFeed(scope: SocialFeedScope, more = false) {
   if (current.loading || (more && !current.nextCursor)) return;
   const token = backendSessionToken();
   if (scope === 'following' && !token) {
-    setFeed(scope, { ...emptyFeed, loaded: true });
+    // setFeed(scope, { ...emptyFeed, loaded: true });
+    // Test mode: the sample people you follow, so Following shows what it's for.
+    setFeed(scope, {
+      ...emptyFeed,
+      items: TEST_MODE ? demoFollowingPosts() : [],
+      loaded: true,
+    });
     return;
   }
   setFeed(scope, { loading: true, error: null });

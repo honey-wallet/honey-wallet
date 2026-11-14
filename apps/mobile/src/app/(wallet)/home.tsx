@@ -33,7 +33,7 @@ import { NftGallery } from '@/components/home/NftGallery';
 import { TradesList, useHasTrades } from '@/components/home/PositionsList';
 import { Icon, type IconName } from '@/components/Icon';
 import { PendingGroupList, usePendingGroups } from '@/components/jars/GroupJar';
-import { JarList } from '@/components/jars/JarParts';
+import { JarList, JarMarks } from '@/components/jars/JarParts';
 import { HoneyJar } from '@/components/logo/HoneyJar';
 import { HoneyMascot } from '@/components/logo/HoneyMascot';
 import { Accordion, AccordionChevron } from '@/components/motion/Accordion';
@@ -73,7 +73,7 @@ import { useMoney } from '@/lib/fx';
 import { loadMyGroups } from '@/lib/group-jars';
 import { tap } from '@/lib/haptics';
 import { useInFlight } from '@/lib/in-flight';
-import { inJarsText, jarsHolding } from '@/lib/jar-holdings';
+import { inJarsText, jarsHolding, jarsHoldingEach } from '@/lib/jar-holdings';
 import { LOADS } from '@/lib/loads';
 import { useHoldingsChart } from '@/lib/market';
 import { BALANCE_HISTORY, EARN } from '@/lib/mock-wallet';
@@ -193,8 +193,8 @@ function HomeScreen() {
   const wallet = useActiveWallet();
   const isMain = isMainWallet(wallet);
   const multisig = useMultisig(wallet.id);
-  // The header's last HEADER_BOTTOM points cover what starts right under it: the bars
-  // get that room, only while one shows, so the balance never moves (14 Nov).
+  // A bar showing (a buy in progress or a downloaded update) floats above the tab bar;
+  // the list gets that much more room at the bottom.
   const update = useAppUpdate();
   const inFlight = useInFlight(wallet.id);
   const barShown = update.state === 'ready' || inFlight.count > 0;
@@ -243,6 +243,12 @@ function HomeScreen() {
   // Tokens one of your jars holds say which (a shared wallet's balances aren't a jar's).
   const inJars = multisig ? null : jarsHolding(jars);
   const inJarOf = (symbol: string) => inJarsText(inJars?.get(symbol.toUpperCase()));
+  // The jars' own icons after the amount, rather than their names (14 Nov).
+  const jarsEach = multisig ? null : jarsHoldingEach(jars);
+  const jarNoteOf = (symbol: string) => {
+    const held = jarsEach?.get(symbol.toUpperCase());
+    return held?.length ? <JarMarks jars={held} /> : null;
+  };
   const pastActivity = (usePortfolio(wallet, exploring).activity?.length ?? 0) > 0;
   // const sections = SECTIONS.filter(
   //   (s) =>
@@ -364,7 +370,9 @@ function HomeScreen() {
           }
           contentContainerStyle={{
             paddingTop: insets.top + HEADER_TOP,
-            paddingBottom: insets.bottom + TAB_BAR_HEIGHT + 24,
+            // paddingBottom: insets.bottom + TAB_BAR_HEIGHT + 24,
+            // A floating bar above the tab bar takes its height too, so nothing hides under it.
+            paddingBottom: insets.bottom + TAB_BAR_HEIGHT + 24 + (barShown ? FLOAT_BAR : 0),
           }}
         >
           <StatusBar style="auto" />
@@ -372,12 +380,12 @@ function HomeScreen() {
           {/* Room for the pinned header row above the balance */}
           <View style={{ height: HEADER_ROW }} />
 
-          {/* A swap or jar buy still moving: here, since history is a section below. */}
-          {/* <View style={styles.gutter}> */}
+          {/* A swap or jar buy still moving: here, since history is a section below.
+              Moved above the tab bar (14 Nov): under the header it looked cut off.
           <View style={[styles.gutter, barShown && { paddingTop: HEADER_BOTTOM }]}>
             <UpdateReadyBar />
             <InFlightBar walletId={wallet.id} />
-          </View>
+          </View> */}
 
           {/* Balance and today's change */}
           <Rise index={1}>
@@ -689,6 +697,8 @@ function HomeScreen() {
                       <TokenRow
                         token={token}
                         inJar={inJarOf(token.symbol)}
+                        jarNote={jarNoteOf(token.symbol)}
+                        large
                         onPress={() => open(tokenHref(token.symbol))}
                       />
                     </Rise>
@@ -709,6 +719,8 @@ function HomeScreen() {
                                 key={token.symbol}
                                 token={token}
                                 inJar={inJarOf(token.symbol)}
+                                jarNote={jarNoteOf(token.symbol)}
+                                large
                                 onPress={() => open(tokenHref(token.symbol))}
                               />
                             ))}
@@ -750,11 +762,23 @@ function HomeScreen() {
           </Rise>
         </Animated.View>
       </StickyArea>
+
+      {/* A swap or jar buy still moving, and a downloaded update: floating just above the
+          tab bar, where the eye already is (14 Nov), as wallets show a pending send. */}
+      <View
+        pointerEvents="box-none"
+        style={[styles.floatBars, { bottom: Math.max(insets.bottom, 12) + 8 + 58 }]}
+      >
+        <UpdateReadyBar />
+        <InFlightBar walletId={wallet.id} />
+      </View>
     </Entrance>
   );
 }
 
 /** The pinned profile row: space above it (under the status bar), its height, below. */
+/** Room a floating bar above the tab bar takes (its height and gap). */
+const FLOAT_BAR = 66;
 const HEADER_TOP = 12;
 const HEADER_ROW = 48;
 const HEADER_BOTTOM = 10;
@@ -797,6 +821,11 @@ const useStyles = makeStyles((c) => ({
   },
   gutter: {
     paddingHorizontal: 18,
+  },
+  floatBars: {
+    position: 'absolute',
+    left: 18,
+    right: 18,
   },
   bleed: {
     marginHorizontal: -18,
@@ -846,16 +875,18 @@ const useStyles = makeStyles((c) => ({
   },
   balance: {
     color: c.text,
-    fontSize: 38,
+    // fontSize: 38,
+    fontSize: 42, // Uniswap's, measured on the same phone (14 Nov)
     fontWeight: '500',
-    letterSpacing: -0.8,
+    letterSpacing: -1,
   },
   cents: {
     color: c.textSecondary,
   },
   // The same footprint as the balance and today's change, so nothing jumps on reveal.
   balanceSkeleton: {
-    height: 67,
+    // height: 67,
+    height: 76,
     justifyContent: 'center',
     gap: 10,
   },
@@ -881,7 +912,8 @@ const useStyles = makeStyles((c) => ({
   },
   changeText: {
     color: c.textSecondary,
-    fontSize: 15,
+    // fontSize: 15,
+    fontSize: 16,
   },
   // actions: {
   //   marginTop: 18,

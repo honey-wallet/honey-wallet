@@ -73,7 +73,8 @@ export function demoHoneyPost(now = Date.now()): SocialFeedItem {
         { symbol: 'XAUT', chain: 'Ethereum', weight: 50 },
         { symbol: 'WBTC', chain: 'Ethereum', weight: 50 },
       ],
-      copyFee: 10,
+      // copyFee: 10,
+      copyFee: 0, // Honey's jars carry no fee (14 Nov)
       copies: 0,
       publishedAt: at,
       owner,

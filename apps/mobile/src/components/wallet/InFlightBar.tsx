@@ -117,6 +117,12 @@ const useStyles = makeStyles((c) => ({
     marginBottom: 12,
     ...radius(18),
     backgroundColor: c.accentSurface,
+    // It floats over the list above the tab bar (14 Nov): a soft lift, as the tab bar has.
+    shadowColor: '#000',
+    shadowOpacity: 0.18,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 6,
   },
   flex: { flex: 1 },
   title: { color: c.text, fontSize: 15, fontWeight: '600' },

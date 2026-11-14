@@ -11,6 +11,7 @@ import type {
   SocialGroupMemberState,
   SocialGroupProposalKind,
   SocialInboxItem,
+  SocialJar,
   SocialPick,
   SocialProfileCard,
 } from '@honey-wallet/api-client';
@@ -293,7 +294,8 @@ export function demoCollabPost(): SocialFeedItem {
       name: 'Dollar abroad',
       thesis: g?.thesis ?? '',
       picks: g?.picks ?? [],
-      copyFee: 10,
+      // copyFee: 10,
+      copyFee: 0, // users pay no fees (14 Nov)
       copies: 4,
       publishedAt: at,
       owner: NINA,
@@ -425,4 +427,113 @@ export function demoStartGroup(o: {
     ],
     ago: 0,
   });
+}
+
+/**
+ * Test mode's Following: what the sample people you follow did (14 Nov, for the site's
+ * captures and for trying the feed signed out). A shared trade, a copy, a launch and a
+ * milestone, from the same cast as the group jars. No fees: users pay none.
+ */
+export function demoFollowingPosts(now = Date.now()): SocialFeedItem[] {
+  const jar = (
+    id: string,
+    name: string,
+    thesis: string,
+    owner: SocialProfileCard,
+    picks: { symbol: string; chain: string; weight: number }[],
+    at: number,
+    copies: number,
+    spark: number[],
+  ): SocialJar => {
+    const ret = spark[spark.length - 1] / spark[0] - 1;
+    return {
+      id,
+      name,
+      thesis,
+      picks,
+      copyFee: 0,
+      copies,
+      publishedAt: at,
+      owner,
+      mine: false,
+      clientId: null,
+      returnSincePublish: ret,
+      periodReturn: ret,
+      spark,
+      copyable: true,
+    };
+  };
+  const item = (
+    id: string,
+    kind: SocialFeedItem['kind'],
+    actor: SocialProfileCard,
+    at: number,
+    rest: Partial<SocialFeedItem>,
+  ): SocialFeedItem => ({
+    id,
+    kind,
+    at,
+    actor,
+    jar: null,
+    trade: null,
+    post: null,
+    milestone: null,
+    ...rest,
+  });
+  const blueChips = jar(
+    'demo-follow-bluechips',
+    'DeFi blue chips',
+    'The lending and trading apps everyone already uses.',
+    ANA,
+    [
+      { symbol: 'AAVE', chain: 'Ethereum', weight: 40 },
+      { symbol: 'UNI', chain: 'Ethereum', weight: 30 },
+      { symbol: 'LINK', chain: 'Ethereum', weight: 30 },
+    ],
+    now - 9 * 24 * HOUR,
+    7,
+    [1, 1.04, 1.09, 1.07, 1.15, 1.19, 1.24, 1.279],
+  );
+  const hardMoney = jar(
+    'demo-follow-hardmoney',
+    'Hard money',
+    'Money nobody can print more of.',
+    NINA,
+    [
+      { symbol: 'BTC', chain: 'Bitcoin', weight: 60 },
+      { symbol: 'XAUT', chain: 'Ethereum', weight: 40 },
+    ],
+    now - 5 * HOUR,
+    6,
+    [1, 1.01, 1.03, 1.02, 1.06, 1.08, 1.1, 1.116],
+  );
+  const solana = jar(
+    'demo-follow-solana',
+    'Solana summer',
+    'Fast, cheap and where the new apps launch.',
+    SARA,
+    [
+      { symbol: 'SOL', chain: 'Solana', weight: 50 },
+      { symbol: 'JUP', chain: 'Solana', weight: 30 },
+      { symbol: 'USDC', chain: 'Solana', weight: 20 },
+    ],
+    now - 12 * 24 * HOUR,
+    12,
+    [1, 1.05, 1.08, 1.14, 1.12, 1.19, 1.22, 1.25],
+  );
+  return [
+    item('demo-follow-trade', 'trade', DEV, now - 4 * HOUR, {
+      trade: {
+        sell: { symbol: 'USDC', chain: 'Base', amount: 250 },
+        buy: { symbol: 'SOL', chain: 'Solana', amount: 3.1 },
+        usd: 250,
+      },
+    }),
+    item('demo-follow-copy', 'jar_copied', RAJ, now - 4.5 * HOUR, { jar: blueChips }),
+    item('demo-follow-launch', 'jar_published', NINA, now - 5 * HOUR, { jar: hardMoney }),
+    item('demo-follow-milestone', 'jar_milestone', SARA, now - 8 * HOUR, {
+      jar: solana,
+      milestone: 25,
+    }),
+  ];
 }
