@@ -56,6 +56,7 @@ import { tap } from '@/lib/haptics';
 import { refreshJarBuy } from '@/lib/jar-buy';
 import {
   chartRangeOf,
+  defaultJarRange,
   JAR_RANGE_MS,
   type JarRange,
   jarLine,
@@ -85,7 +86,7 @@ import {
   loadProfile,
   loadSocialJar,
   POST_PREFIX,
-  pct,
+  // pct: unused since the hero shows someone's jar as a price index (14 Nov).
   previewPostOf,
   SOCIAL_PREFIX,
   type SocialPost,
@@ -548,7 +549,9 @@ function JarBody({
   const copiedBy = earned.known ? earned.copies : jar.copiers;
   const withdraw = withdrawLine(earnings?.nearAccount);
   const money = useMoney();
-  const [range, setRange] = useState<JarRange>('All');
+  // const [range, setRange] = useState<JarRange>('All');
+  // Unset: the jar's default (defaultJarRange), 1M for a young jar so it has history.
+  const [range, setRange] = useState<JarRange | null>(null);
   const [scrub, setScrub] = useState<number | null>(null);
   // The chart fits the page it's on (the extension popup is narrower than the window).
   const [width, setWidth] = useState(0);
@@ -578,7 +581,9 @@ function JarBody({
   const ageMs = Math.max(openedAt - jar.createdAt, 0);
   // Only the ranges it has lived through (a longer one would redraw All), and All.
   const ranges = jarRanges(ageMs);
-  const active: JarRange = ranges.includes(range) ? range : 'All';
+  // const active: JarRange = ranges.includes(range) ? range : 'All';
+  const picked = range ?? defaultJarRange(ageMs);
+  const active: JarRange = ranges.includes(picked) ? picked : 'All';
   // A dense line like a coin's: its tokens' real price charts, blended by the jar's
   // weights. All uses the shortest chart that covers its life, cut at launch.
   const chartRange = chartRangeOf(active, ageMs);
@@ -628,11 +633,14 @@ function JarBody({
     const target = active === 'All' ? ret : undefined;
     // The jar's line on the converge chart: the hero follows the same points.
     if (basket) return basket;
-    if (dense) return jarLine(blended, JAR_RANGE_MS[chartRange], ageMs, target);
+    // if (dense) return jarLine(blended, JAR_RANGE_MS[chartRange], ageMs, target);
+    // A range longer than the jar keeps its history before launch (only All is cut).
+    if (dense)
+      return jarLine(blended, JAR_RANGE_MS[chartRange], active === 'All' ? ageMs : spanMs, target);
     // No token charts (samples, offline): the jar's own marks, all of them in the range.
     const marks = active === 'All' ? jar.history : jar.history.slice(-RANGE_POINTS[active]);
     return jarLine(marks, ageMs, ageMs, target);
-  }, [basket, dense, blended, chartRange, ageMs, active, ret, jar.history]);
+  }, [basket, dense, blended, chartRange, ageMs, spanMs, active, ret, jar.history]);
   const first = data[0] ?? 0;
   const last = data.at(-1) ?? 0;
   const point = scrub === null ? last : (data[scrub] ?? last);
@@ -647,6 +655,13 @@ function JarBody({
     !!converge.model && active === 'All' && Math.abs(converge.model.change - ret) > 0.01;
   // Your jar's value at that point: today's value carried back along the line.
   const shown = last > 0 ? jarValue(jar) * (point / last) : jarValue(jar);
+  // Someone's jar as an index: $100 at launch, now $100 × (1 + its return), carried back
+  // along the line under the finger.
+  const indexNow = 100 * (1 + ret);
+  const indexShown = last > 0 ? indexNow * (point / last) : indexNow;
+  // Where the index stood at the line's start, so the chart's end reads the hero's value.
+  const basketMove = basket ? (basket.at(-1) ?? 1) / (basket[0] || 1) : 1;
+  const indexStart = basketMove > 0 ? indexNow / basketMove : 100;
   const prices = useLivePrices();
   // What it holds, slice by slice with its USDC (2026-11-14). Your real jar's rows are its
   // swaps' tokens at live prices and the USDC it keeps; otherwise the slice of its value.
@@ -677,10 +692,16 @@ function JarBody({
   // Your own jar (bought or copied, not a group's or a shared wallet's): on All it's your
   // profit since you bought, in dollars and %, from what you paid (history[0], the cost
   // basis), as a broker shows a position.
-  const bought = jar.mine && !jar.groupId && !jar.sharedWallet && active === 'All';
+  // const bought = jar.mine && !jar.groupId && !jar.sharedWallet && active === 'All';
+  // On every range: your profit is always since you bought, whatever the line shows.
+  const bought = jar.mine && !jar.groupId && !jar.sharedWallet;
   const profit = jarValue(jar) - (jar.history[0] ?? jarValue(jar));
-  const period =
-    active === 'All' ? (bought ? 'since you bought' : 'since launch') : RANGE_LABEL[active];
+  // const period = active === 'All' ? (bought ? 'since you bought' : 'since launch') : RANGE_LABEL[active];
+  const period = bought
+    ? 'since you bought'
+    : active === 'All'
+      ? 'since launch'
+      : RANGE_LABEL[active];
   // The date under the finger: the line's points are spread evenly up to now.
   const dateAt = (i: number) =>
     new Date(Date.now() - (1 - i / Math.max(data.length - 1, 1)) * spanMs).toLocaleDateString(
@@ -722,19 +743,22 @@ function JarBody({
             )
           ) : noReturns ? (
             <Text style={[styles.price, { color: c.textSecondary }]}>—</Text>
+          ) : // // Someone's jar: the move over the chosen range (since launch on All), or up
+          // // to the point under the finger, coloured by its own sign.
+          // <NumberPopIn value={pct(change)} style={[styles.price, { color: change < 0 ? c.error : c.success }]} />
+          // Someone's jar as a price index (14 Nov, owner): $100 at launch, now what
+          // its return makes it; the move over the range sits under it, as a coin's.
+          scrub !== null ? (
+            <Text style={styles.price}>{formatUsd(indexShown)}</Text>
           ) : (
-            // Someone's jar: the move over the chosen range (since launch on All), or up
-            // to the point under the finger, coloured by its own sign.
-            <NumberPopIn
-              value={pct(change)}
-              style={[styles.price, { color: change < 0 ? c.error : c.success }]}
-            />
+            <NumberPopIn value={formatUsd(indexShown)} style={styles.price} />
           )}
           <View style={styles.changeRow}>
             {/* {jar.mine ? <Change value={change * 100} /> : null} */}
             {bought && scrub === null ? (
-              <ProfitChange usd={profit} pct={change * 100} />
-            ) : jar.mine ? (
+              // <ProfitChange usd={profit} pct={change * 100} />
+              <ProfitChange usd={profit} pct={ret * 100} />
+            ) : /* jar.mine ? */ !noReturns ? (
               <Change value={change * 100} />
             ) : null}
             <TextSwap
@@ -760,9 +784,14 @@ function JarBody({
         <ConvergeChart
           picks={convergePicks}
           model={converge.model}
-          amount={jar.mine && jar.invested > 0 ? jar.invested : 100}
+          // amount={jar.mine && jar.invested > 0 ? jar.invested : 100}
+          // Someone's jar on the same index as the hero: the line ends at its value.
+          amount={jar.mine && jar.invested > 0 ? jar.invested : indexStart}
           range={chartRange}
           period={active === 'All' ? 'since launch' : `over ${active}`}
+          // The hero above says where it stands; the launch is marked on longer ranges.
+          headline={false}
+          launchAt={active === 'All' ? undefined : jar.createdAt}
           // title={pricesOnly ? 'Past prices of what it holds' : undefined} (off 14 Nov, owner)
           title={undefined}
           play={once.play}
@@ -992,7 +1021,17 @@ function JarBody({
           label="Tokens"
           /* Counts the jar's USDC too, as its rows above do (14 Nov). Was:
              value={jar.holdingsHidden ? '—' : String(jar.picks.length)} */
-          value={jar.holdingsHidden ? '—' : String(holdingRows.length)}
+          // value={jar.holdingsHidden ? '—' : String(holdingRows.length)}
+          // Their symbols, not only how many (14 Nov, owner).
+          value={
+            jar.holdingsHidden ? (
+              '—'
+            ) : (
+              <Text style={styles.tokensValue} numberOfLines={1}>
+                {tokenList(holdingRows.map((r) => r.pick.symbol))}
+              </Text>
+            )
+          }
         />
       </View>
 
@@ -1125,6 +1164,12 @@ function Message({ text, action, onPress }: { text: string; action: string; onPr
   );
 }
 
+/** "ZEC, ETH, USDC", or the first three and "+2" past that. */
+function tokenList(symbols: string[]) {
+  const shown = symbols.slice(0, 3).join(', ');
+  return symbols.length > 3 ? `${shown} +${symbols.length - 3}` : shown;
+}
+
 /** "▲ $154.09 (15.41%)": your jar's profit since you bought, the coin page's Change with dollars. */
 function ProfitChange({ usd, pct }: { usd: number; pct: number }) {
   const c = useTheme();
@@ -1165,8 +1210,12 @@ const useStyles = makeStyles((c) => ({
   // The header's title: their face, then the jar's name.
   headerTitle: { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1 },
   // Shrinks into "…" before it pushes the label off the row.
-  creator: { flexShrink: 1, maxWidth: '60%', color: c.text, fontSize: 15, fontWeight: '500' },
-  creatorRow: { flexDirection: 'row', alignItems: 'center', gap: 4, flexShrink: 1 },
+  // creator: { flexShrink: 1, maxWidth: '60%', color: c.text, fontSize: 15, fontWeight: '500' },
+  // creatorRow: { flexDirection: 'row', alignItems: 'center', gap: 4, flexShrink: 1 },
+  // The 60% cap sits on the row: on the text it was 60% of a shrink-wrapped row, "@…".
+  creator: { flexShrink: 1, color: c.text, fontSize: 15, fontWeight: '500' },
+  creatorRow: { flexDirection: 'row', alignItems: 'center', gap: 4, maxWidth: '60%' },
+  tokensValue: { flexShrink: 1, maxWidth: '60%', color: c.text, fontSize: 16 },
   // The icon as tall as the number and its line beside it.
   heroRow: { flexDirection: 'row', alignItems: 'center', gap: 14 },
   // A touch under the coin page's 36: beside the jar's mark, 36 outweighed it.

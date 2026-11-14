@@ -179,6 +179,8 @@ type Props = {
   /** A faint line to compare against (the builder's BTC), on the shared scale. */
   compare?: { label: string; values: number[] } | null;
   headline?: boolean;
+  /** A jar's launch (Unix ms): a dashed upright line where it falls inside the chart. */
+  launchAt?: number;
   legend?: boolean;
   caption?: string | null;
 };
@@ -214,6 +216,7 @@ function ConvergeView({
   footer,
   compare,
   headline = true,
+  launchAt,
   // Legend and caption taken off on 14 Nov: each line wears its name and move at its end
   // instead (owner: "Past prices, not a forecast." is filler).
   // legend = true,
@@ -251,6 +254,7 @@ function ConvergeView({
             play={play && !reduceMotion}
             resultColor={color}
             compare={compare}
+            launchAt={launchAt}
             onMerge={() => setMerged(true)}
             onDone={onDone}
             onScrub={onScrub}
@@ -305,6 +309,7 @@ type PlotProps = {
   play: boolean;
   resultColor: string;
   compare?: { label: string; values: number[] } | null;
+  launchAt?: number;
   onMerge: () => void;
   onDone?: () => void;
   onScrub?: (index: number | null) => void;
@@ -318,6 +323,7 @@ function Plot({
   play,
   resultColor,
   compare,
+  launchAt,
   onMerge,
   onDone,
   onScrub,
@@ -550,6 +556,13 @@ function Plot({
   });
 
   const endValue = amount * ((model.basket.at(-1) ?? 1) / (model.basket[0] || 1));
+  // The jar's launch on the time axis, when the chart reaches back past it.
+  const t0 = model.times[0] ?? 0;
+  const tN = model.times.at(-1) ?? t0;
+  const launchX =
+    launchAt !== undefined && launchAt > t0 && launchAt < tN
+      ? (xs[0] ?? 0) + ((launchAt - t0) / (tN - t0)) * (lastX - (xs[0] ?? 0))
+      : null;
 
   return (
     <GestureDetector gesture={gesture}>
@@ -580,6 +593,32 @@ function Plot({
             {formatUsd(amount)}
           </Animated.Text>
         </Animated.View>
+
+        {launchX !== null ? (
+          <View pointerEvents="none" style={[styles.launch, { left: launchX }]}>
+            <Svg width={2} height={height}>
+              <Line
+                x1={1}
+                y1={18}
+                x2={1}
+                y2={height}
+                stroke={c.textSecondary}
+                strokeOpacity={0.6}
+                strokeWidth={1}
+                strokeDasharray={[3, 3]}
+              />
+            </Svg>
+            {/* Centred on the line, or kept inside the chart near either edge. */}
+            <Text
+              style={[
+                styles.launchLabel,
+                launchX > width - 34 ? { left: -61 } : launchX < 32 ? { left: 0 } : null,
+              ]}
+            >
+              Launched
+            </Text>
+          </View>
+        ) : null}
 
         <Svg width={width} height={height} style={styles.layer}>
           {compareYs ? (
@@ -806,6 +845,18 @@ const useStyles = makeStyles((c) => ({
   title: { marginBottom: 8, color: c.textSecondary, fontSize: 15 },
   layer: { position: 'absolute', top: 0, left: 0 },
   base: { position: 'absolute', top: -1, left: 0 },
+  // The launch marker: an upright dashed line, its name at the top.
+  launch: { position: 'absolute', top: 0, bottom: 0, width: 2 },
+  launchLabel: {
+    position: 'absolute',
+    top: 2,
+    left: -30,
+    width: 62,
+    textAlign: 'center',
+    color: c.textSecondary,
+    fontSize: 11,
+    fontWeight: '600',
+  },
   baseLabel: {
     position: 'absolute',
     top: 0,

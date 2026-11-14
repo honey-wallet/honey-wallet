@@ -15,8 +15,20 @@ const SPANS = ['1D', '1W', '1M', '1Y'] as const;
  * The ranges a jar has lived through, then All (since launch). A range longer than the
  * jar would only redraw All, so it's left out; All is always there.
  */
-export function jarRanges(ageMs: number): JarRange[] {
-  return [...SPANS.filter((r) => JAR_RANGE_MS[r] <= ageMs), 'All'];
+// export function jarRanges(ageMs: number): JarRange[] {
+//   return [...SPANS.filter((r) => JAR_RANGE_MS[r] <= ageMs), 'All'];
+// }
+/**
+ * Every range, then All (since launch). A range longer than the jar shows its tokens'
+ * history before launch too, with the launch marked on the line (14 Nov, owner).
+ */
+export function jarRanges(_ageMs: number): JarRange[] {
+  return [...SPANS, 'All'];
+}
+
+/** A jar under a week old opens on 1M, so its line has history; an older one on All. */
+export function defaultJarRange(ageMs: number): JarRange {
+  return ageMs < JAR_RANGE_MS['1W'] ? '1M' : 'All';
 }
 
 /** The token chart a range draws from: All takes the shortest one that spans the jar's life. */
@@ -26,7 +38,12 @@ export function chartRangeOf(range: JarRange, ageMs: number): Exclude<JarRange, 
 }
 
 /** How much time a range's line covers: the range, or the jar's life when that's shorter. */
+// export function lineSpanMs(range: JarRange, ageMs: number) {
+//   return Math.min(JAR_RANGE_MS[chartRangeOf(range, ageMs)], Math.max(ageMs, 0));
+// }
+/** How much time a range's line covers: the whole range, or All's the jar's life. */
 export function lineSpanMs(range: JarRange, ageMs: number) {
+  if (range !== 'All') return JAR_RANGE_MS[range];
   return Math.min(JAR_RANGE_MS[chartRangeOf(range, ageMs)], Math.max(ageMs, 0));
 }
 
