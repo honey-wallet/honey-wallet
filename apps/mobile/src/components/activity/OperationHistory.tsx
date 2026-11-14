@@ -178,9 +178,9 @@ function ScopedHistory({
   return (
     <View style={[styles.card, style]}>
       <Text style={styles.title}>Your Honey requests</Text>
-      <Text style={styles.note}>
+      {/* <Text style={styles.note}>
         Requests made through Honey. This does not include all on-chain activity.
-      </Text>
+      </Text> */}
       {error ? (
         <Text accessibilityRole="alert" style={styles.error}>
           {error}

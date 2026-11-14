@@ -2,13 +2,20 @@ import { router } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
 import { Text, View } from 'react-native';
 import { OperationHistory } from '@/components/activity/OperationHistory';
+import { SwapRow } from '@/components/activity/SwapRow';
 import { Icon, type IconName } from '@/components/Icon';
 import { PressableRow } from '@/components/motion/PressableRow';
 import { SkeletonBar, SkeletonReveal, useFirstLoad } from '@/components/motion/Skeleton';
 import { Sticky } from '@/components/motion/Sticky';
 import { ProposalRow, ProposalRowSkeleton } from '@/components/wallet/MultisigParts';
 import { EmptyState, TokenIcon } from '@/components/wallet/parts';
-import { activityFeed, dexSwapRecords, jarBuyRecords, swapRecords } from '@/lib/activity-feed';
+import {
+  activityFeed,
+  dexSwapRecords,
+  jarBuyRecords,
+  swapRecords,
+  swapSides,
+} from '@/lib/activity-feed';
 import { useDexSwaps } from '@/lib/dex';
 import { tap } from '@/lib/haptics';
 import { loadSwapTokens, swapTokenList, useIntentsSwaps } from '@/lib/intents-swap';
@@ -132,7 +139,10 @@ export function ActivitySection() {
   return (
     <View>
       {/* With months to list, the filter sits at the right of the first month's row. */}
-      {!multisig && months.length > 0 ? null : filter}
+      {/* {!multisig && months.length > 0 ? null : filter} */}
+      {/* Not while loading either: the skeleton's month row stands in for the row the filter
+          joins, so it no longer sits on top and then jumps into it. */}
+      {!multisig && (loading || months.length > 0) ? null : filter}
       <SkeletonReveal
         loading={loading}
         skeleton={multisig ? <ProposalsSkeleton /> : <ActivitySkeleton />}
@@ -315,13 +325,26 @@ function ActivityRow({ activity: a }: { activity: Activity }) {
   const styles = useStyles();
   const c = useTheme();
   const kind = KIND[a.kind];
+  // Every row opens its detail sheet; live ones link out to the explorer from there.
+  const open = () => {
+    tap();
+    router.push({ pathname: '/activity/[id]', params: { id: a.id } });
+  };
+  // A swap reads as Uniswap's: the two tokens' split face and what went in and out.
+  if (a.swap) {
+    const { from, to } = swapSides(a.swap);
+    return (
+      <SwapRow title={a.title ?? kind.title} date={a.date} from={from} to={to} onPress={open} />
+    );
+  }
   return (
     <PressableRow
-      onPress={() => {
-        tap();
-        // Every row opens its detail sheet; live ones link out to the explorer from there.
-        router.push({ pathname: '/activity/[id]', params: { id: a.id } });
-      }}
+      // onPress={() => {
+      //   tap();
+      //   // Every row opens its detail sheet; live ones link out to the explorer from there.
+      //   router.push({ pathname: '/activity/[id]', params: { id: a.id } });
+      // }}
+      onPress={open}
       style={styles.row}
     >
       <View>
@@ -332,6 +355,7 @@ function ActivityRow({ activity: a }: { activity: Activity }) {
       </View>
       <View style={styles.flex}>
         <Text style={styles.title}>{a.title ?? kind.title}</Text>
+        {/* Swaps are drawn by SwapRow above (2026-11-14):
         {a.swap ? (
           <View style={styles.swap}>
             <TokenIcon symbol={a.swap.from[0]} size={16} />
@@ -343,11 +367,11 @@ function ActivityRow({ activity: a }: { activity: Activity }) {
               {a.swap.to[1]} {a.swap.to[0]}
             </Text>
           </View>
-        ) : (
-          <Text style={styles.detail} numberOfLines={1}>
-            {a.detail}
-          </Text>
-        )}
+        ) : ( */}
+        <Text style={styles.detail} numberOfLines={1}>
+          {a.detail}
+        </Text>
+        {/* )} */}
       </View>
       <Text style={styles.date}>{a.date}</Text>
     </PressableRow>

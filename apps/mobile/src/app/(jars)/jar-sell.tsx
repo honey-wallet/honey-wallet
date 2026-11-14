@@ -13,7 +13,8 @@ import { SuccessPage } from '@/components/sheets/SuccessPage';
 import { FlowTray, InlineTray } from '@/components/sheets/Tray';
 import { TokenIcon } from '@/components/wallet/parts';
 import { confirmOwner } from '@/lib/auth';
-import { copiedJarId, copyFeeText } from '@/lib/copy-fees';
+// copiedJarId: unused while the fee row needs a charged fee (14 Nov).
+import { copyFeeText } from '@/lib/copy-fees';
 import { dexGasNote, priceImpactText, routeLabel } from '@/lib/dex-tokens';
 import { SPONSORED_FEE } from '@/lib/evm-gas';
 import { useMoney } from '@/lib/fx';
@@ -307,7 +308,8 @@ function JarSellSheet() {
                   {/* {real && copiedJarId(jar) ? ( */}
                   {/* Any sell of copied tokens pays it, so it shows whenever there's one. */}
                   {/* Honey keeps the copy fee (2026-11-14): it's Honey's, not the creator's. */}
-                  {real && (copiedJarId(jar) || quote?.copyFee) ? (
+                  {/* Only when a fee is actually charged (none since 14 Nov: no fees for users). */}
+                  {real && quote?.copyFee ? (
                     <StatRow
                       // label="Creator's fee"
                       label="Honey fee"

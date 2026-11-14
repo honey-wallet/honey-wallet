@@ -38,7 +38,7 @@ import { routeLabel } from '@/lib/dex-tokens';
 import { useMoney } from '@/lib/fx';
 import { inviteLabel, MAX_FRIENDS, dollars as plainDollars } from '@/lib/group-jar-core';
 import { friendPicks, groupError, startGroup } from '@/lib/group-jars';
-import { tap } from '@/lib/haptics';
+import { success, tap } from '@/lib/haptics';
 import { declaredCopyFees, REFRESH_FAILED } from '@/lib/intents-quote';
 // import { type BuyLeg, JarBuyError, payJarBuy, QuoteRanOut, quoteJarBuy } from '@/lib/jar-buy';
 import {
@@ -443,6 +443,8 @@ export default function NewThesisSheet() {
           })),
         },
       });
+      // Felt as well as read: the jar exists (or its proposal went out).
+      success();
       showToast(executed ? 'Jar bought' : 'Proposed. Waiting for approvals');
       openJar(id);
       return;
@@ -611,6 +613,7 @@ export default function NewThesisSheet() {
     // with another token, it was bought as a USDC leg, which the jar holds instead.
     const paidInToken = real && !!buy?.some((l) => l.symbol === 'USDC' && l.pay);
     const id = createThesisJar(jarProposal, { ...options, buy, cash: paidInToken ? 0 : cashUsd });
+    success();
     showToast(toast);
     openJar(id);
     // A jar others can see is a post: once it's bought, ask for the words it leads with
@@ -737,7 +740,7 @@ export default function NewThesisSheet() {
                   onChange={(next) => {
                     // From the chat: back to it, asking for this risk in the conversation.
                     if (from === 'chat') {
-                      tap();
+                      // tap(); SegmentedTabs already ticked: this doubled it.
                       chatAsk.set(
                         next === 'Medium'
                           ? 'Make it medium risk'

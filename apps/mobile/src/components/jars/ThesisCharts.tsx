@@ -130,7 +130,7 @@ function CompareChart({
   picks: boolean;
 }) {
   const styles = useStyles();
-  const c = useTheme();
+  // const c = useTheme();
   const [range, setRange] = useState(first);
   const [width, setWidth] = useState(0);
   const all = useTokenCharts(symbols, range);
@@ -138,9 +138,19 @@ function CompareChart({
     const values = rebase(all[symbol]?.prices ?? []);
     return { symbol, color: tokenColor(symbol, i), values, move: moveOf(values) };
   });
+  // const lines = tokens
+  //   .filter((t) => t.values.length)
+  //   .map((t) => ({ key: t.symbol, color: t.color, values: t.values }));
+  // Each line's end wears its logo, symbol and move, and opens its token's page.
   const lines = tokens
     .filter((t) => t.values.length)
-    .map((t) => ({ key: t.symbol, color: t.color, values: t.values }));
+    .map((t) => ({
+      key: t.symbol,
+      color: t.color,
+      values: t.values,
+      move: t.move,
+      onPress: () => openToken(t.symbol),
+    }));
   const loading = symbols.some((s) => all[s]?.loading);
   return (
     <View style={styles.card}>
@@ -158,6 +168,7 @@ function CompareChart({
           )}
         </SkeletonReveal>
       </View>
+      {/* Taken off on 14 Nov: the key under the chart; each line's end is labelled instead.
       <View style={styles.keys}>
         {tokens.map((t, i) => (
           <PressableScale
@@ -177,9 +188,9 @@ function CompareChart({
             )}
           </PressableScale>
         ))}
-      </View>
+      </View> */}
       <SegmentedTabs bare options={CHAT_RANGES} value={range} onChange={setRange} />
-      <Text style={styles.footnote}>Each line starts at 100, so the moves compare directly.</Text>
+      {/* <Text style={styles.footnote}>Each line starts at 100, so the moves compare directly.</Text> */}
     </View>
   );
 }

@@ -3,7 +3,6 @@ import { type ReactElement, type ReactNode, useEffect, useId, useMemo, useState 
 import {
   type AccessibilityState,
   Image,
-  Pressable,
   type RefreshControlProps,
   type StyleProp,
   StyleSheet,
@@ -174,7 +173,7 @@ export function TokenIcon({
   // Any token given a network wears its badge, its own chain's coin included (ETH on
   // Ethereum), so every row and chip says where the token is.
   const network = chain ? chainSymbol(chain) : undefined;
-  if (!network) return logo;
+  if (!network || !chain) return logo;
   const badge = Math.round(size * 0.42);
   return (
     <View style={{ width: size, height: size }}>
@@ -189,13 +188,26 @@ export function TokenIcon({
           backgroundColor: ring ?? c.card,
         }}
       >
-        <SvgXml
+        <ChainLogo chain={chain} size={badge} />
+        {/* <SvgXml
           xml={TOKEN_LOGOS[network] ?? NETWORK_LOGOS[network] ?? TOKEN_LOGOS.GENERIC}
           width={badge}
           height={badge}
-        />
+        /> */}
       </View>
     </View>
+  );
+}
+
+/** A network's logo on its own (the badge `TokenIcon` wears), e.g. beside an amount. */
+export function ChainLogo({ chain, size }: { chain: string; size: number }) {
+  const network = chainSymbol(chain);
+  return (
+    <SvgXml
+      xml={TOKEN_LOGOS[network] ?? NETWORK_LOGOS[network] ?? TOKEN_LOGOS.GENERIC}
+      width={size}
+      height={size}
+    />
   );
 }
 
@@ -327,7 +339,9 @@ export function LabeledDivider({
   const styles = useStyles();
   const c = useTheme();
   return (
-    <Pressable
+    // Before: a plain Pressable, with no sign it was pressed.
+    // <Pressable accessibilityRole="button" accessibilityState={{ expanded: open }} onPress={…} style={styles.divider} hitSlop={8}>
+    <PressableScale
       accessibilityRole="button"
       accessibilityState={{ expanded: open }}
       onPress={() => {
@@ -341,7 +355,7 @@ export function LabeledDivider({
       <Text style={styles.dividerLabel}>{label}</Text>
       <AccordionChevron open={open} size={11} color={c.textSecondary} />
       <View style={styles.rule} />
-    </Pressable>
+    </PressableScale>
   );
 }
 
@@ -839,7 +853,7 @@ export function EmptyState({
         id={title}
         align="center"
         first={<Text style={styles.emptyTitle}>{title}</Text>}
-        second={<Text style={styles.emptyHint}>{hint}</Text>}
+        second={hint ? <Text style={styles.emptyHint}>{hint}</Text> : null}
       />
       {action && (
         <PressableScale

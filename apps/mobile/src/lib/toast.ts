@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react';
 import { demoLabel } from '@/lib/demo-money-copy';
-import { tap } from '@/lib/haptics';
+import { failure, tap } from '@/lib/haptics';
 
 /**
  * A toast on screen. Each show() gets a fresh id. `top` when a tray was open as it
@@ -70,6 +70,8 @@ export function pressToast(id: number) {
 
 /** The same pill when something failed: a few words, a warning icon (review: errors showed a check). */
 export function showErrorToast(message: string, ms = 2400) {
+  // Every error toast is felt as well as seen, so failures don't each need their own call.
+  failure();
   showToast(message, ms, true);
 }
 

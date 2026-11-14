@@ -257,7 +257,9 @@ export type Activity = {
   symbol: string;
   /** e.g. "0.300 USDC to 0x41CD…eEE3". Swaps use `swap` instead. */
   detail?: string;
-  swap?: { from: [string, string]; to: [string, string] };
+  // swap?: { from: [string, string]; to: [string, string] };
+  /** [symbol, amount] in and out; `chains`: the networks each side was on, in and out. */
+  swap?: { from: [string, string]; to: [string, string]; chains?: [string, string] };
   month: string;
   date: string;
   /** Live rows: the transaction on the chain's explorer (linked from the detail sheet). */
@@ -267,6 +269,14 @@ export type Activity = {
 };
 
 export const ACTIVITY: Activity[] = [
+  {
+    id: '9',
+    kind: 'swapped',
+    symbol: 'USDC',
+    swap: { from: ['USDC', '5.10'], to: ['USDC', '5.10'], chains: ['Arbitrum', 'Base'] },
+    month: 'October',
+    date: 'Oct 25',
+  },
   {
     id: '1',
     kind: 'sent',
@@ -295,7 +305,8 @@ export const ACTIVITY: Activity[] = [
     id: '4',
     kind: 'swapped',
     symbol: 'SOL',
-    swap: { from: ['SOL', '0.010'], to: ['USDC', '1.49'] },
+    // swap: { from: ['SOL', '0.010'], to: ['USDC', '1.49'] },
+    swap: { from: ['SOL', '0.010'], to: ['USDC', '1.49'], chains: ['Solana', 'Solana'] },
     month: 'October',
     date: 'Oct 23',
   },
@@ -691,6 +702,15 @@ export const ACTIVITY_DETAILS: Record<string, ActivityDetail> = {
     fee: '<$0.01',
     hash: '7c0d5a91…44fe',
     time: 'October 23, 2026 8:55 AM',
+  },
+  '9': {
+    amount: '5.10 USDC → 5.10 USDC',
+    usd: 5.1,
+    counterparty: 'Honey swap',
+    chain: 'Arbitrum',
+    fee: '<$0.01',
+    hash: '0x5e1d…09b2',
+    time: 'October 25, 2026 6:12 PM',
   },
   '5': {
     amount: 'Unlimited USDC',

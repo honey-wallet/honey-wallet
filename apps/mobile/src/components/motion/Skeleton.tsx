@@ -1,17 +1,31 @@
-// Motion: placeholder bars breathe between full and half opacity on a steady 1000ms
+// Motion: placeholder bars breathe between full and half opacity on a steady 800ms
 // cycle, then the skeleton and the real content crossfade (200ms, ease) so the
-// content doesn't pop in. Under Reduce Motion the pulse (decorative) stops; the
-// crossfade stays because it has no movement.
-import { type ReactNode, useEffect, useState, useSyncExternalStore } from 'react';
+// content doesn't pop in. Every bar on screen shares one breath, so a list that
+// mounts row by row still pulses as one surface. A skeleton waits 150ms before it
+// fades in: a fetch that's done by then shows no placeholder at all, only the content
+// fading in. Content that's already there when the screen opens (a revisit) appears
+// at once. Under Reduce Motion the pulse (decorative) stops; the fades stay because
+// they have no movement.
+import {
+  createContext,
+  type ReactNode,
+  useContext,
+  useEffect,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 import { type DimensionValue, type StyleProp, View, type ViewStyle } from 'react-native';
 import Animated, {
   cancelAnimation,
   FadeIn,
   FadeOut,
+  makeMutable,
   ReduceMotion,
+  type SharedValue,
   useAnimatedStyle,
   useReducedMotion,
   useSharedValue,
+  withDelay,
   withRepeat,
   withTiming,
 } from 'react-native-reanimated';
@@ -19,11 +33,21 @@ import Svg, { Path } from 'react-native-svg';
 import { TEST_MODE } from '@/lib/test-mode';
 import { makeStyles, radius, useTheme } from '@/theme';
 import { DURATION, EASE } from '@/theme/motion';
+import { useHasMounted } from './useHasMounted';
 
 // A slow, shallow breath: enough to read as "loading" without flickering.
 const PULSE = { duration: 800, easing: EASE.inOut } as const;
 const PULSE_LOW = 0.55;
 const REVEAL = { duration: DURATION.fast, easing: EASE.ease } as const;
+/**
+ * A load shorter than this never shows a skeleton: below ~150ms a placeholder only
+ * flashes. The space stays reserved (the skeleton is there, just transparent), so
+ * nothing jumps when it does fade in.
+ */
+const GRACE = 150;
+const APPEAR = { duration: DURATION.quick, easing: EASE.ease } as const;
+/** True inside a SkeletonReveal, whose skeleton handles the grace period as a whole. */
+const InReveal = createContext(false);
 
 /** How long a first fetch takes. Data is mocked, so this stands in for the network. */
 export const LOAD_DELAY = 600;
@@ -83,16 +107,57 @@ export function SkeletonGroup({ children }: { children: ReactNode }) {
   );
 }
 
-/** The shared breath: full to PULSE_LOW and back. Still under Reduce Motion. */
+/*
+ * Before: each bar ran its own repeat, so bars mounted at different moments (rows of a
+ * list, a section below) breathed out of step.
+ * function usePulse() {
+ *   const reduceMotion = useReducedMotion();
+ *   const opacity = useSharedValue(1);
+ *   useEffect(() => {
+ *     if (reduceMotion) return;
+ *     opacity.value = withRepeat(withTiming(PULSE_LOW, PULSE), -1, true);
+ *     return () => cancelAnimation(opacity);
+ *   }, [reduceMotion, opacity]);
+ *   return useAnimatedStyle(() => ({ opacity: opacity.value }));
+ * }
+ */
+
+// One breath for every bar on screen: it runs while at least one bar is mounted. Made on
+// first use, not at module load, so it doesn't race the worklets runtime's startup.
+let breath: SharedValue<number> | undefined;
+let breathers = 0;
+const sharedBreath = () => {
+  breath ??= makeMutable(1);
+  return breath;
+};
+
+/**
+ * The shared breath (full to PULSE_LOW and back), times the bar's own grace-period fade
+ * when it isn't inside a SkeletonReveal. Still under Reduce Motion.
+ */
 function usePulse() {
   const reduceMotion = useReducedMotion();
-  const opacity = useSharedValue(1);
+  const inReveal = useContext(InReveal);
+  const opacity = sharedBreath();
+  const appear = useSharedValue(inReveal ? 1 : 0);
+  useEffect(() => {
+    if (!inReveal) appear.set(withDelay(GRACE, withTiming(1, APPEAR)));
+  }, [inReveal, appear]);
   useEffect(() => {
     if (reduceMotion) return;
-    opacity.value = withRepeat(withTiming(PULSE_LOW, PULSE), -1, true);
-    return () => cancelAnimation(opacity);
+    breathers++;
+    if (breathers === 1) opacity.set(withRepeat(withTiming(PULSE_LOW, PULSE), -1, true));
+    return () => {
+      breathers--;
+      if (breathers === 0) {
+        cancelAnimation(opacity);
+        opacity.set(1);
+      }
+    };
   }, [reduceMotion, opacity]);
-  return useAnimatedStyle(() => ({ opacity: opacity.value }));
+  return useAnimatedStyle(() => ({
+    opacity: appear.get() * (reduceMotion ? 1 : opacity.get()),
+  }));
 }
 
 /** A pulsing placeholder bar. */
@@ -118,7 +183,11 @@ export function SkeletonBar({
   );
 }
 
-/** Shows `skeleton` while loading, then cross-fades to the content. */
+/**
+ * Shows `skeleton` while loading, then cross-fades to the content. The skeleton fades in
+ * only after the grace period, and content that's there from the first render (cached
+ * data on a revisit) doesn't fade at all.
+ */
 export function SkeletonReveal({
   loading,
   skeleton,
@@ -128,6 +197,7 @@ export function SkeletonReveal({
   skeleton: ReactNode;
   children: ReactNode;
 }) {
+  const mounted = useHasMounted();
   return (
     <View>
       {loading ? (
@@ -136,18 +206,28 @@ export function SkeletonReveal({
           accessible
           accessibilityLabel="Loading"
           accessibilityState={{ busy: true }}
+          entering={FadeIn.delay(GRACE)
+            .duration(APPEAR.duration)
+            .easing(APPEAR.easing)
+            .reduceMotion(ReduceMotion.Never)}
           exiting={FadeOut.duration(REVEAL.duration)
             .easing(REVEAL.easing)
             .reduceMotion(ReduceMotion.Never)}
         >
-          {skeleton}
+          <InReveal.Provider value>{skeleton}</InReveal.Provider>
         </Animated.View>
       ) : (
         <Animated.View
           key="content"
-          entering={FadeIn.duration(REVEAL.duration)
-            .easing(REVEAL.easing)
-            .reduceMotion(ReduceMotion.Never)}
+          // Before: the content faded in on every mount, cached revisits included.
+          // entering={FadeIn.duration(REVEAL.duration).easing(REVEAL.easing).reduceMotion(ReduceMotion.Never)}
+          entering={
+            mounted
+              ? FadeIn.duration(REVEAL.duration)
+                  .easing(REVEAL.easing)
+                  .reduceMotion(ReduceMotion.Never)
+              : undefined
+          }
         >
           {children}
         </Animated.View>

@@ -170,6 +170,7 @@ export function AgentRun() {
                 </motion.li>
               ))}
             </ul>
+            {/* The critic's caution line is off (14 Nov, owner).
             <motion.div
               animate={{ opacity: 1, y: 0 }}
               className={styles.critic}
@@ -177,7 +178,7 @@ export function AgentRun() {
               transition={{ delay: animate ? 1.15 : 0, duration: 0.45, ease: EASE }}
             >
               <b>Critic</b> {PROPOSAL.caution}
-            </motion.div>
+            </motion.div> */}
           </motion.div>
         )}
       </AnimatePresence>

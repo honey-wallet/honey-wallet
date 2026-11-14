@@ -639,6 +639,7 @@ function JarBody({
   const change = ownReturn ? ret : first > 0 ? (point - first) / first : 0;
   // When the tokens' prices and the jar's own return disagree, the chart says what it is
   // and the since-launch number stays in the header only.
+  // biome-ignore lint/correctness/noUnusedVariables: kept for the chart title, off since 14 Nov.
   const pricesOnly =
     !!converge.model && active === 'All' && Math.abs(converge.model.change - ret) > 0.01;
   // Your jar's value at that point: today's value carried back along the line.
@@ -747,7 +748,8 @@ function JarBody({
           amount={jar.mine && jar.invested > 0 ? jar.invested : 100}
           range={chartRange}
           period={active === 'All' ? 'since launch' : `over ${active}`}
-          title={pricesOnly ? 'Past prices of what it holds' : undefined}
+          // title={pricesOnly ? 'Past prices of what it holds' : undefined} (off 14 Nov, owner)
+          title={undefined}
           play={once.play}
           onDone={once.markPlayed}
           onScrub={setScrub}

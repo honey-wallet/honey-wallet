@@ -1,11 +1,13 @@
 import type { ChainActivityItem } from '@honey-wallet/api-client';
 import { formatUnits } from 'viem';
 import type { DexSwapRecord } from '@/lib/dex';
+import { swapAmount } from '@/lib/format';
 import type { IntentsSwap, SwapStatus } from '@/lib/intents-swap';
 import type { BuyLeg } from '@/lib/jar-buy';
 import type { DexLeg } from '@/lib/jar-dex';
 import type { Activity } from '@/lib/mock-wallet';
-import { dayLabel, formatAmount, monthLabel, toActivity } from '@/lib/portfolio';
+// import { dayLabel, formatAmount, monthLabel, toActivity } from '@/lib/portfolio';
+import { dayLabel, monthLabel, toActivity } from '@/lib/portfolio';
 import type { ThesisJar } from '@/lib/thesis';
 
 /**
@@ -15,6 +17,17 @@ import type { ThesisJar } from '@/lib/thesis';
  * record replaces the on-chain row of the deposit that paid it, so nothing shows twice.
  * Imports types only from the swap and jar modules, so it stays a pure function.
  */
+
+/** One side of a swap row: what went in or came out, and on which network. */
+export type SwapSide = { symbol: string; amount: string; chain?: string };
+
+/** An Activity row's `swap` as its two sides. */
+export function swapSides(swap: NonNullable<Activity['swap']>): { from: SwapSide; to: SwapSide } {
+  return {
+    from: { symbol: swap.from[0], amount: swap.from[1], chain: swap.chains?.[0] },
+    to: { symbol: swap.to[0], amount: swap.to[1], chain: swap.chains?.[1] },
+  };
+}
 
 export const swapRowId = (depositAddress: string) => `swap:${depositAddress}`;
 export const jarBuyRowId = (jarId: string) => `jarbuy:${jarId}`;
@@ -49,10 +62,21 @@ export function swapState(status: SwapStatus | BuyLeg['status']): {
   }
 }
 
-const units = (atomic: string | undefined, decimals: number | undefined) => {
+// Replaced by `swapUnits` below (Uniswap's amounts on swap rows):
+// const units = (atomic: string | undefined, decimals: number | undefined) => {
+//   if (!atomic || decimals == null) return null;
+//   try {
+//     return formatAmount(Number(formatUnits(BigInt(atomic), decimals)));
+//   } catch {
+//     return null;
+//   }
+// };
+
+/** A swap side's amount, as Uniswap's Activity writes it ("5.10", "~<0.001"). */
+const swapUnits = (atomic: string | undefined, decimals: number | undefined) => {
   if (!atomic || decimals == null) return null;
   try {
-    return formatAmount(Number(formatUnits(BigInt(atomic), decimals)));
+    return swapAmount(Number(formatUnits(BigInt(atomic), decimals)));
   } catch {
     return null;
   }
@@ -84,8 +108,10 @@ export function swapRecords(
     .filter((s) => s.walletId === walletId && s.status !== 'QUOTED' && s.sentAt)
     .map((s) => {
       const date = new Date(s.sentAt ?? 0);
-      const sold = units(s.amountIn, s.sellDecimals) ?? '';
-      const got = units(s.amountOut, s.buyDecimals) ?? '';
+      // const sold = units(s.amountIn, s.sellDecimals) ?? '';
+      // const got = units(s.amountOut, s.buyDecimals) ?? '';
+      const sold = swapUnits(s.amountIn, s.sellDecimals) ?? '';
+      const got = swapUnits(s.amountOut, s.buyDecimals) ?? '';
       return {
         at: date.getTime(),
         hashes: s.txHash ? [s.txHash] : [],
@@ -95,7 +121,12 @@ export function swapRecords(
           title: swapTitle(s.status),
           symbol: s.buy.symbol,
           detail: `${sold} ${s.sell.symbol} → ${got} ${s.buy.symbol}`,
-          swap: { from: [s.sell.symbol, sold], to: [s.buy.symbol, got] },
+          // swap: { from: [s.sell.symbol, sold], to: [s.buy.symbol, got] },
+          swap: {
+            from: [s.sell.symbol, sold],
+            to: [s.buy.symbol, got],
+            chains: [s.sell.chain, s.buy.chain],
+          },
           month: monthLabel(date, now),
           date: dayLabel(date),
         },
@@ -113,8 +144,10 @@ export function dexSwapRecords(
     .filter((s) => s.walletId === walletId)
     .map((s) => {
       const date = new Date(s.at);
-      const sold = units(s.sell.amount, s.sell.decimals) ?? '';
-      const got = units(s.buy.amount, s.buy.decimals) ?? '';
+      // const sold = units(s.sell.amount, s.sell.decimals) ?? '';
+      // const got = units(s.buy.amount, s.buy.decimals) ?? '';
+      const sold = swapUnits(s.sell.amount, s.sell.decimals) ?? '';
+      const got = swapUnits(s.buy.amount, s.buy.decimals) ?? '';
       return {
         at: s.at,
         hashes: [s.hash],
@@ -125,7 +158,13 @@ export function dexSwapRecords(
             s.status === 'SUCCESS' ? 'Swapped' : s.status === 'FAILED' ? 'Swap failed' : 'Swapping',
           symbol: s.buy.symbol,
           detail: `${sold} ${s.sell.symbol} → ${got} ${s.buy.symbol}`,
-          swap: { from: [s.sell.symbol, sold], to: [s.buy.symbol, got] },
+          // swap: { from: [s.sell.symbol, sold], to: [s.buy.symbol, got] },
+          // One transaction: both sides are on its network.
+          swap: {
+            from: [s.sell.symbol, sold],
+            to: [s.buy.symbol, got],
+            chains: [s.chain, s.chain],
+          },
           month: monthLabel(date, now),
           date: dayLabel(date),
         },

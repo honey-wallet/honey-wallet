@@ -17,10 +17,11 @@ const FAQS = [
     q: 'Which chains does it buy on?',
     a: 'Ethereum, Base, Arbitrum, Optimism, Polygon, BNB Chain, Avalanche and Gnosis, plus Solana and NEAR. NEAR Intents quotes and settles each buy and bridge, so one approval fills picks across all of them. Your wallet also holds and sends on Linea and Scroll.',
   },
-  {
-    q: 'Can the agent get it wrong?',
-    a: 'Yes. That is why every proposal shows its sources and a critic’s case against it, and why nothing is bought until you review it and sign.',
-  },
+  // Off 14 Nov (owner):
+  // {
+  //   q: 'Can the agent get it wrong?',
+  //   a: 'Yes. That is why every proposal shows its sources and a critic’s case against it, and why nothing is bought until you review it and sign.',
+  // },
   {
     q: 'What does it cost?',
     a: 'You see the network and route fees before you approve. If you copy someone’s jar, its creator takes the cut they chose of your profit, never of a loss.',

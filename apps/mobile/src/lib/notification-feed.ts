@@ -1,7 +1,16 @@
 import type { ChainActivityItem } from '@honey-wallet/api-client';
+import {
+  dexSwapRowId,
+  jarBuyRowId,
+  type SwapSide,
+  swapRowId,
+  swapSides,
+} from '@/lib/activity-feed';
 import { type DexSwapRecord, dexSwaps } from '@/lib/dex';
+import { swapAmount } from '@/lib/format';
 import { useInboxUnread } from '@/lib/inbox';
 import { type IntentsSwap, intentsSwaps } from '@/lib/intents-swap';
+import { ACTIVITY } from '@/lib/mock-wallet';
 import { useNeedsMyApproval } from '@/lib/multisig';
 import { useSeenAt, useTestUnread } from '@/lib/notifications';
 import { formatAmount, isLikelySpam, toActivity, usePortfolio } from '@/lib/portfolio';
@@ -19,6 +28,10 @@ export type WalletNotification = {
   detail: string;
   symbol: string;
   url: string;
+  /** The Activity detail it opens (`/activity/[id]`): Honey's own record when it has one. */
+  detailId: string;
+  /** A swap's two sides, for its row (components/activity/SwapRow). */
+  swap?: { from: SwapSide; to: SwapSide };
 };
 
 const short = (value: string) =>
@@ -38,6 +51,9 @@ type Operation = {
   title: string;
   detail: string;
   symbol: string;
+  /** Its Activity detail, when Honey keeps one (swaps and jar buys). */
+  detailId?: string;
+  swap?: { from: SwapSide; to: SwapSide };
   /** Its own payments: their hashes, or the one-time addresses they paid. */
   paid: Set<string>;
   /** Payouts that come back for it, by hash when known. */
@@ -69,6 +85,19 @@ export function toOperations(src: {
       title: `Swapped ${formatAmount(units(s.amountIn, s.sellDecimals))} ${s.sell.symbol} → ${got}`,
       detail: s.sell.chain === s.buy.chain ? s.sell.chain : `${s.sell.chain} → ${s.buy.chain}`,
       symbol: s.buy.symbol,
+      detailId: swapRowId(s.depositAddress),
+      swap: {
+        from: {
+          symbol: s.sell.symbol,
+          amount: swapAmount(units(s.amountIn, s.sellDecimals)),
+          chain: s.sell.chain,
+        },
+        to: {
+          symbol: s.buy.symbol,
+          amount: s.status === 'SUCCESS' ? swapAmount(units(s.amountOut, s.buyDecimals)) : '',
+          chain: s.buy.chain,
+        },
+      },
       paid: new Set([low(s.depositAddress), low(s.txHash)].filter(Boolean)),
       payouts: new Set((s.destinationTxHashes ?? []).map(low)),
       expect: at
@@ -84,6 +113,19 @@ export function toOperations(src: {
       title: `Swapped ${formatAmount(units(r.sell.amount, r.sell.decimals))} ${r.sell.symbol} → ${formatAmount(units(r.buy.amount, r.buy.decimals))} ${r.buy.symbol}`,
       detail: r.chain,
       symbol: r.buy.symbol,
+      detailId: dexSwapRowId(r.hash),
+      swap: {
+        from: {
+          symbol: r.sell.symbol,
+          amount: swapAmount(units(r.sell.amount, r.sell.decimals)),
+          chain: r.chain,
+        },
+        to: {
+          symbol: r.buy.symbol,
+          amount: swapAmount(units(r.buy.amount, r.buy.decimals)),
+          chain: r.chain,
+        },
+      },
       paid: new Set([low(r.hash)]),
       payouts: new Set([low(r.hash)]),
     });
@@ -98,6 +140,7 @@ export function toOperations(src: {
         title: `Bought ${jar.name}`,
         detail: `$${usd.toFixed(2)} · ${legs.length} ${legs.length === 1 ? 'token' : 'tokens'}`,
         symbol: legs[0].symbol,
+        detailId: jarBuyRowId(jar.id),
         paid: new Set(legs.flatMap((l) => [low(l.depositAddress), low(l.txHash)]).filter(Boolean)),
         payouts: new Set(),
         expect: {
@@ -174,6 +217,8 @@ export function toNotifications(
             detail: op.detail,
             symbol: op.symbol,
             url: item.explorerUrl,
+            detailId: op.detailId ?? row.id,
+            swap: op.swap,
           });
         }
         continue;
@@ -219,6 +264,7 @@ export function toNotifications(
             : item.chain,
       symbol: row.symbol,
       url: item.explorerUrl,
+      detailId: row.id,
     });
   }
   return out.sort((a, b) => b.at - a.at).slice(0, LIMIT);
@@ -298,9 +344,31 @@ export function toNotifications(
 */
 
 /**
+ * Test mode's sample swaps (Activity's fixtures, same-chain and cross-chain), so
+ * Notifications shows swap rows too: one today, one earlier.
+ */
+function sampleSwaps(now = Date.now()): WalletNotification[] {
+  return ACTIVITY.filter((a) => a.swap).map((a, i) => {
+    const sides = swapSides(a.swap as NonNullable<typeof a.swap>);
+    return {
+      id: `sample:${a.id}`,
+      at: now - (i === 0 ? 2 * HOUR : (i + 2) * 24 * HOUR),
+      kind: 'swapped',
+      title: `Swapped ${sides.from.amount} ${sides.from.symbol} → ${sides.to.amount} ${sides.to.symbol}`,
+      detail: sides.from.chain ?? '',
+      symbol: a.symbol,
+      url: '',
+      detailId: a.id,
+      swap: sides,
+    };
+  });
+}
+const SAMPLE_SWAPS = TEST_MODE ? sampleSwaps() : [];
+
+/**
  * The live app's notifications for the active wallet, read from the same on-chain history
- * as Activity. Sample wallets (test mode) have none: their shared wallets' requests are
- * the demo's notifications.
+ * as Activity. Sample wallets (test mode) show Activity's sample swaps; their shared
+ * wallets' requests are the rest of the demo's notifications.
  */
 export function useWalletNotifications() {
   const wallet = useActiveWallet();
@@ -311,7 +379,8 @@ export function useWalletNotifications() {
   const jars = thesisJars.useValue().filter((j) => j.mine);
   const ops = toOperations({ swaps, dexSwaps: dex, jars });
   return {
-    items: real ? toNotifications(live.activity ?? [], ops) : [],
+    // items: real ? toNotifications(live.activity ?? [], ops) : [],
+    items: real ? toNotifications(live.activity ?? [], ops) : SAMPLE_SWAPS,
     loading: real && live.loadingActivity,
   };
 }
