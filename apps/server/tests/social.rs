@@ -664,16 +664,22 @@ async fn profiles_follows_jars_feed_and_holders() {
     let (_, feed) = call(&app_up, "GET", "/social/feed?scope=everyone", None, None).await;
     assert_ne!(feed["items"][0]["kind"], "jar_milestone");
     // The publish mark is under an hour old, so this pass only announces the milestone.
-    let report = routes::social::mark_jars(&db.pool, &up).await.unwrap();
+    let report = routes::social::mark_jars(&db.pool, &up, None)
+        .await
+        .unwrap();
     assert_eq!(report.milestones, 1);
     assert_eq!(report.marked, 0);
     sqlx::query("UPDATE social_jar_marks SET at = at - interval '2 hours'")
         .execute(&db.pool)
         .await
         .unwrap();
-    let report = routes::social::mark_jars(&db.pool, &up).await.unwrap();
+    let report = routes::social::mark_jars(&db.pool, &up, None)
+        .await
+        .unwrap();
     assert_eq!((report.marked, report.milestones), (1, 0));
-    let report = routes::social::mark_jars(&db.pool, &up).await.unwrap();
+    let report = routes::social::mark_jars(&db.pool, &up, None)
+        .await
+        .unwrap();
     assert_eq!(
         (report.marked, report.milestones),
         (0, 0),

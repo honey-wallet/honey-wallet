@@ -735,16 +735,36 @@ pub fn buyable_picks(
     dex: &[TokenView],
 ) -> Result<(), AppError> {
     for pick in picks {
-        if let (Some(address), Some(chain)) = (&pick.address, dex_chain_of(&pick.chain))
-            && let Some(address) = chain.normalize(address)
-            && dex.iter().any(|t| {
-                t.safety.ok
-                    && t.chain == chain
-                    && chain.normalize(&t.address).as_deref() == Some(address.as_str())
-                    && t.symbol.eq_ignore_ascii_case(&pick.symbol)
-            })
-        {
-            continue;
+        // if let (Some(address), Some(chain)) = (&pick.address, dex_chain_of(&pick.chain))
+        //     && let Some(address) = chain.normalize(address)
+        //     && dex.iter().any(|t| { ... })
+        // {
+        //     continue;
+        // }
+        // (Security review, 2026-11-14: a pick whose DEX check failed fell through to the
+        // symbol check below while `pick_key` still priced it by its address, so "USDC on
+        // base" with any address passed and was priced from that address.)
+        // A pick with an address is a DEX pick: on the safe DEX list at that (chain,
+        // address) under that symbol, or refused. Never the symbol check.
+        if let Some(address) = &pick.address {
+            let listed = dex_chain_of(&pick.chain)
+                .and_then(|chain| Some((chain, chain.normalize(address)?)))
+                .is_some_and(|(chain, address)| {
+                    dex.iter().any(|t| {
+                        t.safety.ok
+                            && t.chain == chain
+                            && chain.normalize(&t.address).as_deref() == Some(address.as_str())
+                            && t.symbol.eq_ignore_ascii_case(&pick.symbol)
+                    })
+                });
+            if listed {
+                continue;
+            }
+            return Err(AppError::BadRequest(format!(
+                "{} on {} can't be bought with Honey yet. Remove it or pick another token.",
+                pick.symbol.to_ascii_uppercase(),
+                pick.chain
+            )));
         }
         // A thesis jar names its chain by 1Click's code ("eth"), a hand-built one by name
         // ("Ethereum"): both mean the same network (2026-11-14: thesis jars couldn't post).
@@ -999,6 +1019,52 @@ async fn prices(
         }
     }
     Some(out)
+}
+
+/// The longest a DEX pick's recorded price may be old (start price at publish, hourly
+/// marks). `DexService::price_now` reads within a minute; this bounds it regardless.
+pub const MAX_DEX_PRICE_AGE: Duration = Duration::from_secs(5 * 60);
+
+/// Fresh prices (DexScreener by address, read within `MAX_DEX_PRICE_AGE`) for the DEX
+/// picks among `picks`, keyed by `pick_key`, added to `cache` (one read per token per
+/// pass). A pick that can't be priced now is simply absent.
+async fn fresh_dex_prices(
+    dex: Option<&DexService>,
+    picks: &[Pick],
+    cache: &mut HashMap<String, f64>,
+) {
+    let Some(dex) = dex else { return };
+    for pick in picks {
+        let (Some(address), Some(chain)) = (&pick.address, dex_chain_of(&pick.chain)) else {
+            continue;
+        };
+        let key = pick_key(pick);
+        if cache.contains_key(&key) {
+            continue;
+        }
+        let asked = Instant::now();
+        if let Ok(price) = dex.price_now(chain, address).await
+            && price.is_finite()
+            && price > 0.0
+            && asked.elapsed() < MAX_DEX_PRICE_AGE
+        {
+            cache.insert(key, price);
+        }
+    }
+}
+
+/// Every pick has a positive start and current price: a mark is recorded only then,
+/// never renormalised over a priced subset.
+pub fn fully_priced(
+    picks: &[Pick],
+    start: &HashMap<String, f64>,
+    now: &HashMap<String, f64>,
+) -> bool {
+    picks.iter().all(|p| {
+        let key = pick_key(p);
+        start.get(&key).is_some_and(|s| s.is_finite() && *s > 0.0)
+            && now.get(&key).is_some_and(|n| n.is_finite() && *n > 0.0)
+    })
 }
 
 /// The DEX list for `buyable_picks` (empty without DEX routing).
@@ -1282,12 +1348,21 @@ pub struct MarkReport {
     pub marked: u64,
     pub milestones: u64,
     pub pruned: u64,
+    /// Jars left unmarked this hour because a pick had no start or current price.
+    pub unpriced: u64,
 }
 
 /// One pass: a mark for each live jar not marked in the last 55 minutes, a feed post
 /// for each newly reached milestone, and old marks dropped. Prices unavailable ⇒ no
 /// marks this hour (never an invented value).
-pub async fn mark_jars(pool: &PgPool, market: &Arc<MarketData>) -> Result<MarkReport, AppError> {
+// pub async fn mark_jars(pool: &PgPool, market: &Arc<MarketData>) -> Result<MarkReport, AppError> {
+/// DEX picks are priced now by address (`dex`), keyed as at publish; a jar with any pick
+/// unpriced is skipped this hour, never marked on the priced subset.
+pub async fn mark_jars(
+    pool: &PgPool,
+    market: &Arc<MarketData>,
+    dex: Option<&DexService>,
+) -> Result<MarkReport, AppError> {
     let pruned = sqlx::query(
         "DELETE FROM social_jar_marks WHERE at < clock_timestamp() - make_interval(days => $1)",
     )
@@ -1300,7 +1375,7 @@ pub async fn mark_jars(pool: &PgPool, market: &Arc<MarketData>) -> Result<MarkRe
         pruned,
         ..MarkReport::default()
     };
-    let Some(now) = prices(Some(market), None).await else {
+    let Some(mut now) = prices(Some(market), None).await else {
         return Ok(report);
     };
     let mut after = Uuid::nil();
@@ -1320,6 +1395,11 @@ pub async fn mark_jars(pool: &PgPool, market: &Arc<MarketData>) -> Result<MarkRe
         for (id, owner, picks, start, base, announced) in rows {
             let picks: Vec<Pick> = serde_json::from_str(&picks).unwrap_or_default();
             let start: HashMap<String, f64> = serde_json::from_str(&start).unwrap_or_default();
+            fresh_dex_prices(dex, &picks, &mut now).await;
+            if !fully_priced(&picks, &start, &now) {
+                report.unpriced += 1;
+                continue;
+            }
             let Some(index) = jar_index(&picks, &start, base, &now) else {
                 continue;
             };
@@ -1372,16 +1452,22 @@ pub async fn mark_jars(pool: &PgPool, market: &Arc<MarketData>) -> Result<MarkRe
 
 /// Runs `mark_jars` a minute after start and then hourly, for as long as the process.
 /// A failed pass is logged and retried next hour; the task itself never ends.
-pub fn start_marker(pool: PgPool, market: Arc<MarketData>) -> tokio::task::JoinHandle<()> {
+// pub fn start_marker(pool: PgPool, market: Arc<MarketData>) -> tokio::task::JoinHandle<()> {
+pub fn start_marker(
+    pool: PgPool,
+    market: Arc<MarketData>,
+    dex: Option<Arc<DexService>>,
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_secs(60)).await;
         let mut every = tokio::time::interval(MARK_EVERY);
         every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             every.tick().await;
-            match mark_jars(&pool, &market).await {
+            match mark_jars(&pool, &market, dex.as_deref()).await {
                 Ok(report) => tracing::info!(
                     marked = report.marked,
+                    unpriced = report.unpriced,
                     milestones = report.milestones,
                     pruned = report.pruned,
                     "social jars marked"
@@ -2110,9 +2196,24 @@ async fn publish_as(
         .map_err(|_| AppError::Busy)?;
     // buyable_picks(&body.picks, &market_list(&tokens))?;
     buyable_picks(&body.picks, &market_list(&tokens), &dex_tokens(state).await)?;
-    let now = prices(state.market.as_ref(), state.dex.as_deref())
+    // let now = prices(state.market.as_ref(), state.dex.as_deref())
+    //     .await
+    //     .ok_or(AppError::Busy)?;
+    // DEX picks start at a price read now, never the six-hour list's (security review).
+    let mut now = prices(state.market.as_ref(), None)
         .await
         .ok_or(AppError::Busy)?;
+    fresh_dex_prices(state.dex.as_deref(), &body.picks, &mut now).await;
+    if let Some(p) = body
+        .picks
+        .iter()
+        .find(|p| p.address.is_some() && !now.contains_key(&pick_key(p)))
+    {
+        return Err(AppError::BadRequest(format!(
+            "no live price for {} right now; try again in a minute",
+            p.symbol.to_ascii_uppercase()
+        )));
+    }
     let start: HashMap<String, f64> = body
         .picks
         .iter()
@@ -2122,7 +2223,10 @@ async fn publish_as(
             now.get(&key).map(|price| (key, *price))
         })
         .collect();
-    if value_index(&body.picks, &start, &now).is_none() {
+    // if value_index(&body.picks, &start, &now).is_none() {
+    // Every pick needs a start price: marks are never renormalised over a priced subset.
+    if value_index(&body.picks, &start, &now).is_none() || !fully_priced(&body.picks, &start, &now)
+    {
         return Err(AppError::BadRequest("no prices for these tokens".into()));
     }
     let picks = serde_json::to_string(&body.picks).map_err(|_| AppError::Busy)?;
@@ -3110,6 +3214,51 @@ mod tests {
     }
 
     #[test]
+    fn a_jar_is_marked_only_when_every_pick_has_both_prices() {
+        // Security review 2: a jar with an unpriced pick is skipped, never marked on the
+        // priced subset (which would hide a DEX pick's fall).
+        const AERO: &str = "0x940181a94a35a4569e4529a3cdfb74e38fd98631";
+        let p = |symbol: &str, address: Option<&str>| Pick {
+            symbol: symbol.into(),
+            chain: "base".into(),
+            weight: 50.0,
+            address: address.map(String::from),
+        };
+        let picks = [p("AERO", Some(AERO)), p("ETH", None)];
+        let dex_key = format!("dex:base:{AERO}");
+        let start = HashMap::from([(dex_key.clone(), 1.0), ("ETH".into(), 100.0)]);
+        let all = HashMap::from([(dex_key.clone(), 0.5), ("ETH".into(), 100.0)]);
+        assert!(fully_priced(&picks, &start, &all));
+        // The cached symbol price for AERO doesn't count: only the address key does.
+        let no_dex = HashMap::from([("AERO".into(), 0.9), ("ETH".into(), 100.0)]);
+        assert!(!fully_priced(&picks, &start, &no_dex));
+        let zero = HashMap::from([(dex_key, 0.0), ("ETH".into(), 100.0)]);
+        assert!(!fully_priced(&picks, &start, &zero));
+        assert!(!fully_priced(&picks, &HashMap::new(), &all));
+    }
+
+    #[tokio::test]
+    async fn dex_picks_are_priced_now_or_not_at_all() {
+        // Security review 3: without a live DEX price a DEX pick gets none (publish then
+        // refuses it), never the list's six-hour-old one.
+        const AERO: &str = "0x940181a94a35a4569e4529a3cdfb74e38fd98631";
+        let picks = [Pick {
+            symbol: "AERO".into(),
+            chain: "base".into(),
+            weight: 100.0,
+            address: Some(AERO.into()),
+        }];
+        let mut prices = HashMap::from([("AERO".to_string(), 0.9)]);
+        fresh_dex_prices(None, &picks, &mut prices).await;
+        assert!(!prices.contains_key(&pick_key(&picks[0])));
+        // DEX routing off: `price_now` refuses, so still no price.
+        let off = DexService::new(crate::dex::DexConfig::default()).unwrap();
+        fresh_dex_prices(Some(&off), &picks, &mut prices).await;
+        assert!(!prices.contains_key(&pick_key(&picks[0])));
+        assert!(MAX_DEX_PRICE_AGE <= Duration::from_secs(5 * 60));
+    }
+
+    #[test]
     fn dex_picks_are_buyable_by_chain_and_address_only() {
         const PAXG: &str = "0x45804880de22913dafe09f4980848ece6ecbaf78";
         const AERO: &str = "0x940181a94a35a4569e4529a3cdfb74e38fd98631";
@@ -3144,6 +3293,18 @@ mod tests {
         let degen = "0x4ed4e862860bed51a9570b96d89af5e1b0efefed";
         assert!(buyable_picks(&[pick("DEGEN", "base", Some(degen))], &[], &dex).is_err());
         assert!(buyable_picks(&[pick("AERO", "Base", Some(AERO))], &[], &dex).is_ok());
+        // Security review 1: an address that isn't on the DEX list is refused, even when
+        // the symbol is one NEAR Intents sells on that chain (no symbol fallback).
+        let usdc = [MarketListToken {
+            symbol: "USDC".into(),
+            price_usd: 1.0,
+            chains: vec!["Base"],
+        }];
+        assert!(buyable_picks(&[pick("USDC", "base", None)], &usdc, &dex).is_ok());
+        let err = buyable_picks(&[pick("USDC", "base", Some(AERO))], &usdc, &dex).unwrap_err();
+        assert!(matches!(err, AppError::BadRequest(ref m) if m.starts_with("USDC on base")));
+        let stranger = "0x1111111111111111111111111111111111111111";
+        assert!(buyable_picks(&[pick("USDC", "base", Some(stranger))], &usdc, &dex).is_err());
         // A malformed address is refused before any lookup.
         assert!(
             validate_picks(&[

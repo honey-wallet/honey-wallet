@@ -781,6 +781,20 @@ async fn honey_never_pays_a_new_token_accounts_rent_in_a_swap() {
 }
 
 #[tokio::test]
+async fn price_now_reads_dexscreener_not_the_list() {
+    // A jar's recorded DEX prices (start, marks) come from DexScreener now, not from the
+    // universe's six-hour-old price (security review 3).
+    let (dex, mock) = service().await;
+    dex.tokens(DexChain::Base, true).await.unwrap();
+    *mock.fresh.lock().unwrap() = Some(0.61);
+    let aero = format!("{AERO:#x}");
+    assert_eq!(dex.price_now(DexChain::Base, &aero).await.unwrap(), 0.61);
+    assert!(dex.price_now(DexChain::Base, "0x12").await.is_err());
+    let (off, _) = service_with(|c| c.enabled = false).await;
+    assert!(off.price_now(DexChain::Base, &aero).await.is_err());
+}
+
+#[tokio::test]
 async fn a_failed_universe_build_is_remembered_for_a_minute() {
     // Finding 3: while GeckoTerminal is down, the public token list doesn't rebuild the
     // universe (10–30 s of provider calls) on every request.

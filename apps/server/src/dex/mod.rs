@@ -1453,6 +1453,19 @@ impl DexService {
         });
     }
 
+    /// A DEX token's USD price read within the last minute (DexScreener by address,
+    /// `fresh_price`), for prices that are recorded: a jar's start price at publish and
+    /// its hourly marks. Never the six-hour list's. Fails closed (`Busy`, or off).
+    pub async fn price_now(&self, chain: DexChain, address: &str) -> Result<f64, AppError> {
+        if !self.enabled() {
+            return Err(off());
+        }
+        let address = chain
+            .normalize(address)
+            .ok_or_else(|| bad("invalid token"))?;
+        self.fresh_price(chain, &address).await
+    }
+
     /// The token's USD price now (cached a minute): DexScreener's most liquid pair that
     /// has it as base token. Fails closed (`Busy`) without one.
     async fn fresh_price(&self, chain: DexChain, address: &str) -> Result<f64, AppError> {

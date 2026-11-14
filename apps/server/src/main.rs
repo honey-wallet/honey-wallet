@@ -167,9 +167,21 @@ async fn main() -> anyhow::Result<()> {
         // Social jars' hourly marks and milestones: reads never write.
         if let Some(pool) = infrastructure.postgres() {
             match honey_server::market_data::MarketData::new() {
+                // Ok(market) => background.push(honey_server::routes::social::start_marker(
+                //     pool.clone(),
+                //     market,
+                // )),
+                // DEX picks are marked at prices read now by address (DexScreener, paced
+                // with the API's budget in Redis); off with DEX routing.
                 Ok(market) => background.push(honey_server::routes::social::start_marker(
                     pool.clone(),
                     market,
+                    honey_server::dex::DexService::from_env()
+                        .ok()
+                        .filter(|d| d.enabled())
+                        .map(|d| {
+                            std::sync::Arc::new(d.with_redis(infrastructure.redis().cloned()))
+                        }),
                 )),
                 Err(error) => tracing::error!(%error, "social jar marker disabled"),
             }
