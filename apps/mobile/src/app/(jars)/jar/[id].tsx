@@ -48,8 +48,9 @@ import {
 } from '@/components/social/parts';
 import { Change, HEADER_BUTTON, PushedScreen, SCREEN } from '@/components/wallet/parts';
 import { useCopyEarnings } from '@/lib/copy-fee-account';
-import { jarEarnings, withdrawLine } from '@/lib/copy-fees';
-import { useMoney } from '@/lib/fx';
+// import { jarEarnings, withdrawLine } from '@/lib/copy-fees';
+import { jarEarnings } from '@/lib/copy-fees';
+// import { useMoney } from '@/lib/fx';
 import { membersIn } from '@/lib/group-jar-core';
 import { tap } from '@/lib/haptics';
 import { refreshJarBuy } from '@/lib/jar-buy';
@@ -527,8 +528,9 @@ function JarBody({
   const earnings = useCopyEarnings(own);
   const earned = jarEarnings(own ? earnings : undefined, serverId);
   const copiedBy = earned.known ? earned.copies : jar.copiers;
-  const withdraw = withdrawLine(earnings?.nearAccount);
-  const money = useMoney();
+  // Honey keeps the copy fee (2026-11-14): no earnings or payout line for the creator.
+  // const withdraw = withdrawLine(earnings?.nearAccount);
+  // const money = useMoney();
   const [range, setRange] = useState<JarRange>('All');
   const [scrub, setScrub] = useState<number | null>(null);
   // The chart fits the page it's on (the extension popup is narrower than the window).
@@ -861,14 +863,15 @@ function JarBody({
                 value={copiedBy.toLocaleString()}
               />
             ) : null}
-            {/* Your published jar: what its copies earned you, from sells that settled. */}
+            {/* Your published jar: what its copies earned you, from sells that settled.
+                Honey keeps the copy fee (2026-11-14): creators earn nothing from copies.
             {earned.known && !TEST_MODE ? (
               <StatRow
                 icon={<Icon name="pieOutline" size={15} color={c.textSecondary} />}
                 label="Earned from copies"
                 value={money.format(earned.earnedUsd)}
               />
-            ) : null}
+            ) : null} */}
             {/* Copy fees aren't charged yet: outside test mode, no fee is shown (lib/surface). */}
             {COPY_FEES ? (
               <StatRow
@@ -877,9 +880,9 @@ function JarBody({
                 value={`${jar.copiedFrom?.fee ?? jar.copyFee}%`}
               />
             ) : null}
-            {earned.known && !TEST_MODE && withdraw ? (
+            {/* {earned.known && !TEST_MODE && withdraw ? (
               <Text style={styles.earnedNote}>{withdraw}</Text>
-            ) : null}
+            ) : null} */}
           </>
         )}
         <StatRow

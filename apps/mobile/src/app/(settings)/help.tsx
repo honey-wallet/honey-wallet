@@ -61,9 +61,13 @@ const JAR_FAQ: { q: string; a: string }[] = [
   {
     q: 'What does copying cost?',
     // Copy fees aren't charged yet (lib/surface COPY_FEES).
+    // a: COPY_FEES
+    //   ? 'The creator’s fee is a share of your profit, and nothing on a loss. Network and route fees show before you approve.'
+    //   : 'Only the network and route fees, and they show before you approve.',
+    // Honey keeps the copy fee (2026-11-14), whatever COPY_FEES (creators' cut) says.
     a: COPY_FEES
       ? 'The creator’s fee is a share of your profit, and nothing on a loss. Network and route fees show before you approve.'
-      : 'Only the network and route fees, and they show before you approve.',
+      : 'The Honey fee is a share of your profit, and nothing on a loss. Network and route fees show before you approve.',
   },
   ...(warningOn('jarGuideSmallBuys')
     ? [

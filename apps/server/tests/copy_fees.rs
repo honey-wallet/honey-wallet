@@ -1,6 +1,7 @@
-//! Creators' copy fees end to end against real PostgreSQL and a local 1Click double: a
-//! copy buy records its cost, 1Click's status settles it, and the copier's sell carries
-//! the creator's fee as `appFees`, worked out by the server alone.
+//! Honey's copy fee end to end against real PostgreSQL and a local 1Click double: a copy
+//! buy records its cost, 1Click's status settles it, and the copier's sell carries Honey's
+//! fee as one `appFees` entry, worked out by the server alone. (Until 2026-11-14 it paid
+//! the jar's creator.)
 //! Explicitly run with --ignored and TEST_DATABASE_URL.
 mod common;
 
@@ -18,7 +19,7 @@ use axum::{
 };
 use common::TestDatabase;
 use honey_server::{
-    copy_fees,
+    copy_fees::{self, HoneyFee},
     error::AppError,
     jar_buys::{BuyLeg, BuyRequest, JarBuys},
     market_data::MarketData,
@@ -29,6 +30,18 @@ use uuid::Uuid;
 const USDC: &str = "nep141:base-usdc";
 const ETH: &str = "nep141:base-eth";
 const ONE_CLICK_FEES: &str = "5880ad2b362620fadf759cbceb1cd5737ce8c6ed7fb8e9942881e6731f9247dd";
+/// Honey's NEAR Intents account (`HONEY_COPY_FEE_ACCOUNT`) in these tests.
+const HONEY: &str = "honey-fees.near";
+
+/// Honey's copy fee as production sets it: 10% of profit, paid to `HONEY`.
+fn honey() -> HoneyFee {
+    HoneyFee::parse(Some(HONEY), Some("10")).unwrap()
+}
+
+/// Honey's one entry on a sell, as `fees_of` lists it.
+fn to_honey(bps: u16) -> Vec<(String, u16)> {
+    vec![(HONEY.to_string(), bps)]
+}
 
 #[derive(Default)]
 struct Double {
@@ -272,6 +285,18 @@ fn fees_of(quote: &honey_server::jar_buys::BuyQuote) -> Vec<(String, u16)> {
         .collect()
 }
 
+/// What a sell recorded as received, per jar: (jar, its creator, micro-USD, recipient).
+async fn sale_fees(pool: &sqlx::PgPool, sale: &str) -> Vec<(Uuid, Uuid, i64, Option<String>)> {
+    sqlx::query_as(
+        "SELECT jar_id, creator, received_micro_usd, recipient FROM copy_sale_fees
+         WHERE sale = $1 ORDER BY received_micro_usd, jar_id",
+    )
+    .bind(sale)
+    .fetch_all(pool)
+    .await
+    .unwrap()
+}
+
 /// The copier's lots: (state, units, sold), oldest first.
 async fn lot_rows(pool: &sqlx::PgPool, copier: Uuid) -> Vec<(String, Option<String>, String)> {
     sqlx::query_as(
@@ -318,7 +343,8 @@ async fn every_sell_of_copied_units_pays_whatever_the_phone_says() {
     let (market, base) = one_click(double.clone()).await;
     let buys = JarBuys::new(base, None, market, 1_000.0)
         .unwrap()
-        .with_pool(Some(pool.clone()));
+        .with_pool(Some(pool.clone()))
+        .with_copy_fee(honey());
     let ana_wallet = [0xAB; 20];
     let ana = user(&pool, Some(ana_wallet)).await;
     let copier = user(&pool, Some([0x01; 20])).await;
@@ -359,32 +385,35 @@ async fn every_sell_of_copied_units_pays_whatever_the_phone_says() {
     assert_eq!(lot_rows(&pool, copier).await[0].1.as_deref(), Some(BOUGHT));
 
     // Selling it all without naming the jar (a modified phone): $150 for $100, 10% of $50
-    // = $5 = 333 bps of $150, to Ana's signed-in wallet.
+    // = $5 = 333 bps of $150, to Honey's account (until 2026-11-14: Ana's wallet).
     let sold = buys.quote(&me, request(ETH, USDC, BOUGHT)).await.unwrap();
-    assert_eq!(fees_of(&sold), vec![(account(ana_wallet), 333)]);
+    // assert_eq!(fees_of(&sold), vec![(account(ana_wallet), 333)]);
+    assert_eq!(fees_of(&sold), to_honey(333));
     assert_eq!(
         double.lock().unwrap().asked.last().unwrap()["appFees"],
-        json!([{ "recipient": account(ana_wallet), "fee": 333 }])
+        // json!([{ "recipient": account(ana_wallet), "fee": 333 }])
+        json!([{ "recipient": HONEY, "fee": 333 }])
     );
+    assert_ne!(sold.legs[0].copy_fees[0].recipient, account(ana_wallet));
     // Naming some other jar changes nothing.
     let mut other = request(ETH, USDC, BOUGHT);
     other.copy_sale_of = Some(Uuid::new_v4());
     assert_eq!(
         fees_of(&buys.quote(&me, other).await.unwrap()),
-        vec![(account(ana_wallet), 333)]
+        to_honey(333)
     );
     // Half of it: the same share of profit.
     let half = buys
         .quote(&me, request(ETH, USDC, "25000000000000000"))
         .await
         .unwrap();
-    assert_eq!(fees_of(&half), vec![(account(ana_wallet), 333)]);
+    assert_eq!(fees_of(&half), to_honey(333));
     // Twice the copied units ($300): only the copied half counts, $5 of $300 = 166 bps.
     let more = buys
         .quote(&me, request(ETH, USDC, "100000000000000000"))
         .await
         .unwrap();
-    assert_eq!(fees_of(&more), vec![(account(ana_wallet), 166)]);
+    assert_eq!(fees_of(&more), to_honey(166));
 
     // Someone who didn't copy pays nothing.
     let quote = buys
@@ -416,15 +445,95 @@ async fn every_sell_of_copied_units_pays_whatever_the_phone_says() {
     assert!(fees_of(&after).is_empty());
     assert_eq!(lot_rows(&pool, copier).await[0].2, BOUGHT);
 
-    // Ana sees it: her share as 1Click paid it (167 of the 333 bps, on $150 = $2.505),
-    // and the one copy, counted when the copy buy settled.
+    // // Ana sees it: her share as 1Click paid it (167 of the 333 bps, on $150 = $2.505),
+    // // and the one copy, counted when the copy buy settled.
+    // assert_eq!(
+    //     copy_fees::earnings(&pool, ana).await.unwrap(),
+    //     vec![(jar, 2_505_000, 1)]
+    // );
+    // Ana sees the one copy, counted when the copy buy settled; she earns nothing.
     assert_eq!(
-        copy_fees::earnings(&pool, ana).await.unwrap(),
-        vec![(jar, 2_505_000, 1)]
+        copy_fees::jar_copies(&pool, ana).await.unwrap(),
+        vec![(jar, 1)]
+    );
+    // Honey's share as 1Click paid it (167 of the 333 bps, on $150 = $2.505) is recorded
+    // against Ana's jar for accounting, paid to Honey's account.
+    assert_eq!(
+        sale_fees(&pool, &sold.legs[0].deposit_address).await,
+        vec![(jar, ana, 2_505_000, Some(HONEY.to_string()))]
     );
 
     db.close().await;
 }
+
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn copies_of_several_creators_pay_honey_one_merged_fee() {
+    let db = TestDatabase::new().await;
+    let pool = db.pool.clone();
+    let double = Arc::new(Mutex::new(Double::default()));
+    let (market, base) = one_click(double.clone()).await;
+    let buys = JarBuys::new(base, None, market, 1_000.0)
+        .unwrap()
+        .with_pool(Some(pool.clone()))
+        .with_copy_fee(honey());
+    let (ana_wallet, ben_wallet) = ([0xA1; 20], [0xB1; 20]);
+    let ana = user(&pool, Some(ana_wallet)).await;
+    let ben = user(&pool, Some(ben_wallet)).await;
+    let copier = user(&pool, Some([0x03; 20])).await;
+    // The creators' own settings (10% and 20%) no longer count: Honey's 10% for both.
+    let (ana_jar, ben_jar) = (jar(&pool, ana, 10).await, jar(&pool, ben, 20).await);
+    let me = copier.to_string();
+
+    // Ana's copy first, then Ben's: 0.05 ETH for $100 each. Both settle at sale time,
+    // from 1Click itself (the phone never polled).
+    copied(&buys, &double, &me, ana_jar, BOUGHT_FOR, BOUGHT).await;
+    copied(&buys, &double, &me, ben_jar, BOUGHT_FOR, BOUGHT).await;
+    // Selling 0.1 ETH ($300): each half made $50 → $5 each, $10 of $300 = 333 bps, in one
+    // entry for Honey (never one per creator).
+    let both = buys
+        .quote(&me, request(ETH, USDC, "100000000000000000"))
+        .await
+        .unwrap();
+    assert_eq!(fees_of(&both), to_honey(333));
+    assert_eq!(
+        double.lock().unwrap().asked.last().unwrap()["appFees"],
+        json!([{ "recipient": HONEY, "fee": 333 }])
+    );
+    let named: Vec<String> = both.legs[0]
+        .copy_fees
+        .iter()
+        .map(|f| f.recipient.clone())
+        .collect();
+    assert!(!named.contains(&account(ana_wallet)) && !named.contains(&account(ben_wallet)));
+    // What Honey received (167 bps of $300 = $5.01) is split across the two jars for
+    // accounting, both paid to Honey.
+    assert_eq!(sale_fees(&pool, &both.legs[0].deposit_address).await, {
+        let mut rows = vec![
+            (ana_jar, ana, 2_505_000, Some(HONEY.to_string())),
+            (ben_jar, ben, 2_505_000, Some(HONEY.to_string())),
+        ];
+        rows.sort_by_key(|r| r.0);
+        rows
+    });
+    // Selling only 0.05 ETH takes Ana's (older) copy alone.
+    let first = buys.quote(&me, request(ETH, USDC, BOUGHT)).await.unwrap();
+    assert_eq!(fees_of(&first), to_honey(333));
+
+    // A third copy (Ben's jar again), 0.05 ETH for $10. Selling all 0.15 ETH ($450):
+    copied(&buys, &double, &me, ben_jar, "10000000000000000000", BOUGHT).await;
+    let all = buys
+        .quote(&me, request(ETH, USDC, "150000000000000000"))
+        .await
+        .unwrap();
+    // $50 + $50 + $140 = $240 profit → $24 of $450 = 533 bps, capped at 475.
+    assert_eq!(fees_of(&all), to_honey(copy_fees::ABS_CAP_BPS));
+
+    db.close().await;
+}
+
+/*
+Superseded 2026-11-14 (Honey keeps the copy fee): one entry per creator.
 
 #[tokio::test]
 #[ignore = "requires TEST_DATABASE_URL"]
@@ -435,7 +544,8 @@ async fn copies_of_several_creators_pay_oldest_first_each_their_own() {
     let (market, base) = one_click(double.clone()).await;
     let buys = JarBuys::new(base, None, market, 1_000.0)
         .unwrap()
-        .with_pool(Some(pool.clone()));
+        .with_pool(Some(pool.clone()))
+        .with_copy_fee(honey());
     let (ana_wallet, ben_wallet) = ([0xA1; 20], [0xB1; 20]);
     let ana = user(&pool, Some(ana_wallet)).await;
     let ben = user(&pool, Some(ben_wallet)).await;
@@ -468,6 +578,7 @@ async fn copies_of_several_creators_pay_oldest_first_each_their_own() {
 
     db.close().await;
 }
+*/
 
 #[tokio::test]
 #[ignore = "requires TEST_DATABASE_URL"]
@@ -478,7 +589,8 @@ async fn unsettled_rows_can_neither_hide_settled_ones_nor_pile_up() {
     let (market, base) = one_click(double.clone()).await;
     let buys = JarBuys::new(base, None, market, 1_000.0)
         .unwrap()
-        .with_pool(Some(pool.clone()));
+        .with_pool(Some(pool.clone()))
+        .with_copy_fee(honey());
     let ana_wallet = [0xC1; 20];
     let ana = user(&pool, Some(ana_wallet)).await;
     let copier = user(&pool, Some([0x04; 20])).await;
@@ -502,7 +614,8 @@ async fn unsettled_rows_can_neither_hide_settled_ones_nor_pile_up() {
     .await
     .unwrap();
     let sold = buys.quote(&me, request(ETH, USDC, BOUGHT)).await.unwrap();
-    assert_eq!(fees_of(&sold), vec![(account(ana_wallet), 333)]);
+    // assert_eq!(fees_of(&sold), vec![(account(ana_wallet), 333)]);
+    assert_eq!(fees_of(&sold), to_honey(333));
 
     // With that many unsettled, a new copy buy is refused in plain words.
     let mut buy = request(USDC, ETH, BOUGHT_FOR);
@@ -561,14 +674,16 @@ async fn unsettled_rows_can_neither_hide_settled_ones_nor_pile_up() {
 
 #[tokio::test]
 #[ignore = "requires TEST_DATABASE_URL"]
-async fn a_loss_a_refund_or_no_wallet_means_no_fee() {
+// async fn a_loss_a_refund_or_no_wallet_means_no_fee() {
+async fn a_loss_means_no_fee_and_the_creators_wallet_no_longer_matters() {
     let db = TestDatabase::new().await;
     let pool = db.pool.clone();
     let double = Arc::new(Mutex::new(Double::default()));
     let (market, base) = one_click(double.clone()).await;
     let buys = JarBuys::new(base, None, market, 1_000.0)
         .unwrap()
-        .with_pool(Some(pool.clone()));
+        .with_pool(Some(pool.clone()))
+        .with_copy_fee(honey());
     let creator = user(&pool, Some([0xCD; 20])).await;
     let copier = user(&pool, Some([0x05; 20])).await;
     let jar1 = jar(&pool, creator, 20).await;
@@ -598,16 +713,23 @@ async fn a_loss_a_refund_or_no_wallet_means_no_fee() {
         .await
         .unwrap();
 
-    // A creator with no signed-in wallet has nowhere to be paid: no fee.
+    // // A creator with no signed-in wallet has nowhere to be paid: no fee.
+    // let walletless = user(&pool, None).await;
+    // assert_eq!(
+    //     copy_fees::payout_account(&pool, walletless).await.unwrap(),
+    //     None
+    // );
+    // let jar2 = jar(&pool, walletless, 30).await;
+    // copied(&buys, &double, &me, jar2, "10000000000000000000", BOUGHT).await;
+    // let quote = buys.quote(&me, request(ETH, USDC, BOUGHT)).await.unwrap();
+    // assert!(fees_of(&quote).is_empty());
+    // A creator with no signed-in wallet: Honey's fee is charged all the same (Honey is
+    // paid, not the creator). $10 → $150: 10% of $140 = 933 bps, capped at 475.
     let walletless = user(&pool, None).await;
-    assert_eq!(
-        copy_fees::payout_account(&pool, walletless).await.unwrap(),
-        None
-    );
     let jar2 = jar(&pool, walletless, 30).await;
     copied(&buys, &double, &me, jar2, "10000000000000000000", BOUGHT).await;
     let quote = buys.quote(&me, request(ETH, USDC, BOUGHT)).await.unwrap();
-    assert!(fees_of(&quote).is_empty());
+    assert_eq!(fees_of(&quote), to_honey(copy_fees::ABS_CAP_BPS));
     let rows = lot_rows(&pool, copier).await;
     assert_eq!(rows[0].2, BOUGHT, "the loss-making sell counted as sold");
 
@@ -644,7 +766,8 @@ async fn setup(
     let (market, base) = one_click(double.clone()).await;
     let buys = JarBuys::new(base, None, market, 1_000.0)
         .unwrap()
-        .with_pool(Some(pool.clone()));
+        .with_pool(Some(pool.clone()))
+        .with_copy_fee(honey());
     let buys = if balances {
         with_balances(buys, &double)
     } else {
@@ -670,7 +793,7 @@ fn holds(double: &Arc<Mutex<Double>>, wallet: &str, units: u128) {
 async fn copied_units_stay_with_their_wallet_and_what_it_still_holds() {
     let db = TestDatabase::new().await;
     let pool = db.pool.clone();
-    let (buys, double, _, copier, ana, jar) = setup(&db, true).await;
+    let (buys, double, _, copier, _, jar) = setup(&db, true).await;
     let me = copier.to_string();
     copied(&buys, &double, &me, jar, BOUGHT_FOR, BOUGHT).await;
     holds(&double, WALLET_A, 50_000_000_000_000_000);
@@ -687,7 +810,7 @@ async fn copied_units_stay_with_their_wallet_and_what_it_still_holds() {
         .quote(&me, sell_from(WALLET_A, "20000000000000000"))
         .await
         .unwrap();
-    assert_eq!(fees_of(&part), vec![(account(ana), 333)]);
+    assert_eq!(fees_of(&part), to_honey(333));
     assert_eq!(lot_rows(&pool, copier).await[0].2, "30000000000000000");
 
     // Everything sent away, then the same amount bought again by hand: no phantom profit.
@@ -706,14 +829,14 @@ async fn copied_units_stay_with_their_wallet_and_what_it_still_holds() {
 async fn two_sells_in_flight_never_charge_the_same_units() {
     let db = TestDatabase::new().await;
     let pool = db.pool.clone();
-    let (buys, double, _, copier, ana, jar) = setup(&db, true).await;
+    let (buys, double, _, copier, _, jar) = setup(&db, true).await;
     let me = copier.to_string();
     copied(&buys, &double, &me, jar, BOUGHT_FOR, BOUGHT).await;
     holds(&double, WALLET_A, 50_000_000_000_000_000);
 
     // The first sell is paid (the app reports its deposit): its units are spoken for.
     let first = buys.quote(&me, sell_from(WALLET_A, BOUGHT)).await.unwrap();
-    assert_eq!(fees_of(&first), vec![(account(ana), 333)]);
+    assert_eq!(fees_of(&first), to_honey(333));
     copy_fees::mark_deposited(&pool, &first.legs[0].deposit_address)
         .await
         .unwrap();
@@ -770,7 +893,7 @@ async fn two_sells_in_flight_never_charge_the_same_units() {
 #[ignore = "requires TEST_DATABASE_URL"]
 async fn a_jar_buy_paid_with_copied_tokens_carries_the_fee_it_shows() {
     let db = TestDatabase::new().await;
-    let (buys, double, _, copier, ana, jar) = setup(&db, true).await;
+    let (buys, double, _, copier, _, jar) = setup(&db, true).await;
     let me = copier.to_string();
     copied(&buys, &double, &me, jar, BOUGHT_FOR, BOUGHT).await;
     holds(&double, WALLET_A, 50_000_000_000_000_000);
@@ -789,7 +912,7 @@ async fn a_jar_buy_paid_with_copied_tokens_carries_the_fee_it_shows() {
             .iter()
             .map(|f| (f.recipient.clone(), f.bps))
             .collect();
-        assert_eq!(named, vec![(account(ana), 333)]);
+        assert_eq!(named, to_honey(333));
     }
     db.close().await;
 }
@@ -798,14 +921,14 @@ async fn a_jar_buy_paid_with_copied_tokens_carries_the_fee_it_shows() {
 #[ignore = "requires TEST_DATABASE_URL"]
 async fn price_impact_is_not_profit() {
     let db = TestDatabase::new().await;
-    let (buys, double, _, copier, ana, jar) = setup(&db, true).await;
+    let (buys, double, _, copier, _, jar) = setup(&db, true).await;
     let me = copier.to_string();
     copied(&buys, &double, &me, jar, BOUGHT_FOR, BOUGHT).await;
     holds(&double, WALLET_A, 50_000_000_000_000_000);
     // The index says $150, but the swap only pays $120: 10% of $20 is 166 bps of $120.
     double.lock().unwrap().paid_usd = Some("120".into());
     let sold = buys.quote(&me, sell_from(WALLET_A, BOUGHT)).await.unwrap();
-    assert_eq!(fees_of(&sold), vec![(account(ana), 166)]);
+    assert_eq!(fees_of(&sold), to_honey(166));
     db.close().await;
 }
 
@@ -907,11 +1030,13 @@ async fn only_a_real_copy_counts() {
     let mut other = request(ETH, USDC, "1000000000000000");
     other.copy_of = Some(jar);
     buys.quote(&me, other).await.unwrap();
-    assert_eq!(copy_fees::earnings(&pool, creator).await.unwrap()[0].2, 0);
+    // assert_eq!(copy_fees::earnings(&pool, creator).await.unwrap()[0].2, 0);
+    assert_eq!(copy_fees::jar_copies(&pool, creator).await.unwrap()[0].1, 0);
     // A real one counts.
     copied(&buys, &double, &me, jar, BOUGHT_FOR, BOUGHT).await;
     buys.quote(&me, sell_from(WALLET_A, "1")).await.ok();
-    assert_eq!(copy_fees::earnings(&pool, creator).await.unwrap()[0].2, 1);
+    // assert_eq!(copy_fees::earnings(&pool, creator).await.unwrap()[0].2, 1);
+    assert_eq!(copy_fees::jar_copies(&pool, creator).await.unwrap()[0].1, 1);
     db.close().await;
 }
 
@@ -969,7 +1094,7 @@ async fn a_swap_with_no_copied_units_may_refund_to_an_unlinked_wallet() {
 async fn a_bare_deposit_report_shields_nothing() {
     let db = TestDatabase::new().await;
     let pool = db.pool.clone();
-    let (buys, double, _, copier, ana, jar) = setup(&db, true).await;
+    let (buys, double, _, copier, _, jar) = setup(&db, true).await;
     let me = copier.to_string();
     copied(&buys, &double, &me, jar, BOUGHT_FOR, BOUGHT).await;
     holds(&double, WALLET_A, 50_000_000_000_000_000);
@@ -997,7 +1122,7 @@ async fn a_bare_deposit_report_shields_nothing() {
     assert!(buys.deposit(&me, report(&first_deposit)).await.is_err());
     assert!(!deposited(first_deposit.clone()).await);
     let again = buys.quote(&me, sell_from(WALLET_A, BOUGHT)).await.unwrap();
-    assert_eq!(fees_of(&again), vec![(account(ana), 333)]);
+    assert_eq!(fees_of(&again), to_honey(333));
 
     // 1Click takes it: now the units are spoken for.
     double.lock().unwrap().accept_deposits = true;
@@ -1013,6 +1138,67 @@ async fn a_bare_deposit_report_shields_nothing() {
         .insert(other.clone(), json!({ "status": "KNOWN_DEPOSIT_TX" }));
     buys.status(&me, &other).await.unwrap();
     assert!(deposited(other).await);
+    db.close().await;
+}
+
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn without_honeys_account_no_fee_is_charged_but_copies_are_still_counted() {
+    let db = TestDatabase::new().await;
+    let pool = db.pool.clone();
+    let double = Arc::new(Mutex::new(Double::default()));
+    let (market, base) = one_click(double.clone()).await;
+    // HONEY_COPY_FEE_ACCOUNT unset (the default).
+    let buys = with_balances(
+        JarBuys::new(base, None, market, 1_000.0)
+            .unwrap()
+            .with_pool(Some(pool.clone()))
+            .with_copy_fee(HoneyFee::parse(None, Some("10")).unwrap()),
+        &double,
+    );
+    let creator = user(&pool, Some([0xF1; 20])).await;
+    let copier = user(&pool, Some([0x08; 20])).await;
+    let jar = jar(&pool, creator, 10).await;
+    let me = copier.to_string();
+    copied(&buys, &double, &me, jar, BOUGHT_FOR, BOUGHT).await;
+    holds(&double, WALLET_A, 50_000_000_000_000_000);
+
+    // A profitable sell of the copied units: no appFees at all, nothing on the quote.
+    let sold = buys.quote(&me, sell_from(WALLET_A, BOUGHT)).await.unwrap();
+    assert!(fees_of(&sold).is_empty());
+    assert!(
+        double
+            .lock()
+            .unwrap()
+            .asked
+            .last()
+            .unwrap()
+            .get("appFees")
+            .is_none()
+    );
+    // The lot accounting still runs: the sell is recorded, its units sold once it settles,
+    // and no fee is recorded for anyone.
+    assert!(
+        sale_fees(&pool, &sold.legs[0].deposit_address)
+            .await
+            .is_empty()
+    );
+    double
+        .lock()
+        .unwrap()
+        .swaps
+        .insert(sold.legs[0].deposit_address.clone(), success("150000000"));
+    copy_fees::mark_deposited(&pool, &sold.legs[0].deposit_address)
+        .await
+        .unwrap();
+    buys.status(&me, &sold.legs[0].deposit_address)
+        .await
+        .unwrap();
+    assert_eq!(lot_rows(&pool, copier).await[0].2, BOUGHT);
+    assert_eq!(
+        copy_fees::jar_copies(&pool, creator).await.unwrap(),
+        vec![(jar, 1)]
+    );
     db.close().await;
 }
 

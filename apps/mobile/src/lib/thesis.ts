@@ -1481,10 +1481,12 @@ export function copyProposal(jar: ThesisJar, amount: number): Proposal {
     //   ? `Past returns don’t promise future ones. ${jar.creator} gets ${jar.copyFee}% of your profit, and nothing if it loses.`
     //   : 'Past returns don’t promise future ones.',
     // Copy fees are collected (2026-11-14, lib/copy-fees), like lib/surface `COPY_FEES`.
-    caution:
-      jar.copyFee > 0
-        ? `Past returns don’t promise future ones. ${jar.creator} gets ${jar.copyFee}% of your profit, and nothing if it loses.`
-        : 'Past returns don’t promise future ones.',
+    // caution:
+    //   jar.copyFee > 0
+    //     ? `Past returns don’t promise future ones. ${jar.creator} gets ${jar.copyFee}% of your profit, and nothing if it loses.`
+    //     : 'Past returns don’t promise future ones.',
+    // Honey keeps the copy fee (2026-11-14): the creator earns nothing from copies.
+    caution: 'Past returns don’t promise future ones.',
     feesUsd: TEST_MODE ? +(amount * 0.006).toFixed(2) : 0,
     sources: [],
     provenance: TEST_MODE

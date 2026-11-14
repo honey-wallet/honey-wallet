@@ -36,6 +36,61 @@ describe('checkOneClickFees', () => {
     expect(() => checkOneClickFees(record({ fee: 1 }), null)).toThrow(changed);
   });
 
+  // it('with a declared fee, takes exactly it (or 1Click’s half of it) plus 1Click’s share', () => {
+  //   const fee: DeclaredCopyFee = { recipient: 'creator.near', bps: 100, pct: 10, usd: 0.1 };
+  // Honey keeps the copy fee (2026-11-14): the declared fee is Honey's single entry.
+  it('with Honey’s fee declared, takes exactly it (or 1Click’s half of it) plus 1Click’s share', () => {
+    const fee: DeclaredCopyFee = { recipient: 'honey-fees.near', bps: 100, pct: 10, usd: 0.1 };
+    const own = { recipient: ONE_CLICK_FEE_RECIPIENT, fee: 20 };
+    expect(() =>
+      checkOneClickFees(record([{ recipient: 'honey-fees.near', fee: 100 }, own]), fee),
+    ).not.toThrow();
+    expect(() =>
+      checkOneClickFees(record([{ recipient: 'honey-fees.near', fee: 50 }]), fee),
+    ).not.toThrow();
+    expect(() => checkOneClickFees(record([]), fee)).toThrow(changed);
+    expect(() =>
+      checkOneClickFees(record([{ recipient: 'honey-fees.near', fee: 101 }]), fee),
+    ).toThrow(changed);
+    expect(() =>
+      checkOneClickFees(
+        record([
+          { recipient: 'honey-fees.near', fee: 100 },
+          { recipient: 'mallory.near', fee: 30 },
+        ]),
+        fee,
+      ),
+    ).toThrow(changed);
+  });
+
+  it('rejects a record whose fee goes anywhere but Honey and 1Click, however small', () => {
+    const fee: DeclaredCopyFee = { recipient: 'honey-fees.near', bps: 100, pct: 10, usd: 0.1 };
+    // Within the total (100 + 25), but 10 bps go to someone else: refused.
+    for (const appFees of [
+      [
+        { recipient: 'honey-fees.near', fee: 50 },
+        { recipient: ONE_CLICK_FEE_RECIPIENT, fee: 40 },
+        { recipient: 'mallory.near', fee: 10 },
+      ],
+      // The whole fee to a creator instead of Honey.
+      [
+        { recipient: '0x97a5c31bfbfa1809cf20454f2aaefa05932ab18e', fee: 100 },
+        { recipient: ONE_CLICK_FEE_RECIPIENT, fee: 20 },
+      ],
+      // 1Click named twice.
+      [
+        { recipient: 'honey-fees.near', fee: 50 },
+        { recipient: ONE_CLICK_FEE_RECIPIENT, fee: 25 },
+        { recipient: ONE_CLICK_FEE_RECIPIENT, fee: 25 },
+      ],
+    ])
+      expect(() => checkOneClickFees(record(appFees), fee)).toThrow(changed);
+  });
+});
+
+/*
+Superseded 2026-11-14 (Honey keeps the copy fee): the declared fee was a creator's.
+
   it('with a declared fee, takes exactly it (or 1Click’s half of it) plus 1Click’s share', () => {
     const fee: DeclaredCopyFee = { recipient: 'creator.near', bps: 100, pct: 10, usd: 0.1 };
     const own = { recipient: ONE_CLICK_FEE_RECIPIENT, fee: 20 };
@@ -60,3 +115,4 @@ describe('checkOneClickFees', () => {
     ).toThrow(changed);
   });
 });
+*/
