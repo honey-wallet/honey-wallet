@@ -133,8 +133,10 @@ describe('Optimism', () => {
     expect(ownAddressOn('op', { evm: '0xme' })).toBe('0xme');
     expect(EVM_USDC[10]).toBe('0x0b2c639c533813f4aa9d7837caf62653d097ff85');
     expect(EVM_NETWORKS.find((n) => n.chainId === 10)?.rpc).toBe('https://mainnet.optimism.io');
-    // Honey doesn't pay gas there (no 7702 sponsor on Optimism).
-    expect(SPONSORED_CHAIN_IDS).not.toContain(10);
+    // // Honey doesn't pay gas there (no 7702 sponsor on Optimism).
+    // expect(SPONSORED_CHAIN_IDS).not.toContain(10);
+    // Honey pays gas there since 14 Nov, as on Base.
+    expect(SPONSORED_CHAIN_IDS).toContain(10);
   });
 
   it('links to its explorer and wears its logo', () => {

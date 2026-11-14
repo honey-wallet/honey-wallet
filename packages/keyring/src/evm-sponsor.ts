@@ -30,7 +30,9 @@ import type { Rpc } from './rpc';
 /** Calibur v1.1.0, the same address and code on Base, Arbitrum and Polygon. */
 export const CALIBUR: Address = '0x000000005c84F8Fd50b21CAC312528A64437030e';
 /** Chains where Honey can pay gas (Ethereum mainnet never). */
-export const SPONSORED_CHAIN_IDS: readonly number[] = [8453, 42161, 137];
+// export const SPONSORED_CHAIN_IDS: readonly number[] = [8453, 42161, 137];
+/** Base, Arbitrum, Polygon and (since 14 Nov) Optimism; never Ethereum mainnet. */
+export const SPONSORED_CHAIN_IDS: readonly number[] = [8453, 42161, 137, 10];
 /** Calibur's root key: the wallet's own key. */
 export const ROOT_KEY_HASH: Hex = `0x${'00'.repeat(32)}`;
 /** What an EOA's code is once delegated: `0xef0100 || address`. */

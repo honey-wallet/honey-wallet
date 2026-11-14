@@ -278,7 +278,8 @@ fn relayer_signs_type_4_and_type_2_transactions() {
 #[test]
 fn config_defaults_fit_a_two_dollar_relayer() {
     let c = SponsorConfig::default();
-    assert_eq!(c.chains, vec![8453, 42161, 137]);
+    // assert_eq!(c.chains, vec![8453, 42161, 137]);
+    assert_eq!(c.chains, vec![8453, 42161, 137, 10]);
     assert_eq!(c.floor_eth, parse_units("0.00015", 18).unwrap());
     assert_eq!(c.floor_pol, parse_units("3.5", 18).unwrap());
     assert_eq!(c.max_tx_usd_micros, 50_000);

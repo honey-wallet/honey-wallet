@@ -42,12 +42,14 @@ pub const DEFAULT_USER_30D: i64 = USD;
 pub const DEFAULT_CHAIN_DAILY: i64 = USD / 2;
 /// Daily totals sized to what each relayer holds: Solana ~$2 of SOL, NEAR ~$7, the EVM
 /// relayers ~$2 each (Polygon ~$1 of POL).
-pub const DEFAULT_DAILY: [(&str, i64); 5] = [
+// pub const DEFAULT_DAILY: [(&str, i64); 5] = [
+pub const DEFAULT_DAILY: [(&str, i64); 6] = [
     ("solana", USD),
     ("near", 2 * USD),
     ("base", USD / 2),
     ("arbitrum", USD / 2),
     ("polygon", USD / 2),
+    ("optimism", USD / 2),
 ];
 /// `GAS_USER_DAILY_USD_<CHAIN>` default: $0.10 per person per chain per 24 hours.
 pub const DEFAULT_USER_CHAIN_DAILY: i64 = USD / 10;

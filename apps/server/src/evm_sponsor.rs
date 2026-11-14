@@ -108,7 +108,9 @@ pub struct ChainSpec {
     pub usdc: Address,
 }
 
-pub const CHAINS: [ChainSpec; 3] = [
+// pub const CHAINS: [ChainSpec; 3] = [
+// Optimism joins on 14 Nov (owner funded the relayer there; Calibur is deployed on it).
+pub const CHAINS: [ChainSpec; 4] = [
     ChainSpec {
         id: 8453,
         name: "base",
@@ -147,6 +149,19 @@ pub const CHAINS: [ChainSpec; 3] = [
         op_stack: false,
         usdc: address!("3c499c542cef5e3811e1192ce70d8cc03d5c3359"),
     },
+    ChainSpec {
+        id: 10,
+        name: "optimism",
+        native: "ETH",
+        oneclick: "op",
+        rpc_env: "EVM_SPONSOR_RPC_OPTIMISM",
+        default_rpc: "https://mainnet.optimism.io",
+        // As Base: an OP Stack chain, a DEX swap's batch runs ~500k gas.
+        max_gas: 1_000_000,
+        max_fee_per_gas: GWEI,
+        op_stack: true,
+        usdc: address!("0b2c639c533813f4aa9d7837caf62653d097ff85"),
+    },
 ];
 
 pub fn chain(id: u64) -> Option<&'static ChainSpec> {
@@ -158,7 +173,7 @@ pub fn chain(id: u64) -> Option<&'static ChainSpec> {
 /// From the environment; see `.env.example`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SponsorConfig {
-    /// Chains switched on (`EVM_SPONSOR_CHAINS`, default all three).
+    /// Chains switched on (`EVM_SPONSOR_CHAINS`, default all of them).
     pub chains: Vec<u64>,
     /// The relayer stops below this much native coin (`EVM_RELAYER_FLOOR_ETH`, 0.00015).
     pub floor_eth: u128,

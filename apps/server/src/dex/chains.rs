@@ -262,8 +262,13 @@ mod tests {
             "\"optimism\"",
             "the wire name the app sends"
         );
-        // Honey doesn't pay gas on Optimism (no 7702 sponsor there).
-        assert!(crate::evm_sponsor::chain(10).is_none());
+        // // Honey doesn't pay gas on Optimism (no 7702 sponsor there).
+        // assert!(crate::evm_sponsor::chain(10).is_none());
+        // Honey pays gas on Optimism since 14 Nov, with the same USDC as the DEX table.
+        assert_eq!(
+            crate::evm_sponsor::chain(10).map(|c| c.op_stack),
+            Some(true)
+        );
     }
 
     #[test]
