@@ -204,6 +204,22 @@ pub struct JarBuys {
     held: Option<HeldFn>,
     /// 1Click statuses read for copy fee records, kept briefly (audit L4).
     statuses: Mutex<HashMap<String, (Instant, RawStatus)>>,
+    /// Dry quotes answered in the last [`DRY_TTL`] (15 Nov): Redis when configured, else
+    /// this map.
+    dry_redis: Option<crate::redis_store::RedisStore>,
+    dry: Mutex<HashMap<String, (Instant, DryAnswer)>>,
+}
+
+/// How long a dry quote (or 1Click's refusal of one) is reused (15 Nov): the app's
+/// repeated jar-minimum checks within a buy ask the same thing seconds apart.
+pub const DRY_TTL: Duration = Duration::from_secs(20);
+const MAX_LOCAL_DRY: usize = 2_000;
+
+/// A cached dry quote: the quote, or 1Click's refusal message.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+enum DryAnswer {
+    Quote(DryQuote),
+    Refused(String),
 }
 
 /// (address, 1Click asset) → atomic units held on chain now; None when it can't be read.
@@ -320,6 +336,8 @@ impl JarBuys {
             pool: None,
             held: None,
             statuses: Mutex::default(),
+            dry_redis: None,
+            dry: Mutex::default(),
         })
     }
 
@@ -338,6 +356,7 @@ impl JarBuys {
     /// Keep deposit-address ownership in Redis so every replica agrees.
     pub fn with_redis(mut self, redis: Option<crate::redis_store::RedisStore>) -> Self {
         if let Some(redis) = redis {
+            self.dry_redis = Some(redis.clone());
             self.owners = Owners::Redis(redis);
         }
         self
@@ -1157,7 +1176,7 @@ fn lapse(deadline: &str) -> Option<String> {
 }
 
 /// A 1Click dry quote: what a swap would deliver, with no deposit address made.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DryQuote {
     pub amount_out: String,
     pub min_amount_out: String,
@@ -1189,6 +1208,22 @@ impl JarBuys {
         {
             return Err(AppError::BadRequest("invalid NEAR Intents quote".into()));
         }
+        // 15 Nov: the same question within `DRY_TTL` gets the same answer, 1Click's
+        // refusal ("Amount is too low…") included; only `Busy` is never kept.
+        let key = dry_key(
+            origin_asset,
+            destination_asset,
+            amount,
+            recipient,
+            refund_to,
+            slippage_bps,
+        );
+        if let Some(answer) = self.dry_cached(&key).await {
+            return match answer {
+                DryAnswer::Quote(q) => Ok(q),
+                DryAnswer::Refused(m) => Err(AppError::BadRequest(m)),
+            };
+        }
         let deadline = (OffsetDateTime::now_utc() + time::Duration::minutes(DEADLINE_MINUTES))
             .replace_nanosecond(0)
             .map_err(|_| AppError::Busy)?
@@ -1201,14 +1236,67 @@ impl JarBuys {
             "amount": amount, "recipient": recipient, "refundTo": refund_to,
             "slippageTolerance": slippage_bps, "deadline": deadline,
         });
-        let body = self
+        // let body = self.call(..).await?;
+        // check_dry(&body, &payload)
+        let answer = match self
             .call(
                 self.client
                     .post(format!("{}/quote", self.origin))
                     .json(&payload),
             )
-            .await?;
-        check_dry(&body, &payload)
+            .await
+            .and_then(|body| check_dry(&body, &payload))
+        {
+            Ok(q) => DryAnswer::Quote(q),
+            Err(AppError::BadRequest(m)) => DryAnswer::Refused(m),
+            Err(e) => return Err(e),
+        };
+        self.dry_keep(key, &answer).await;
+        match answer {
+            DryAnswer::Quote(q) => Ok(q),
+            DryAnswer::Refused(m) => Err(AppError::BadRequest(m)),
+        }
+    }
+
+    async fn dry_cached(&self, key: &str) -> Option<DryAnswer> {
+        if let Some(redis) = &self.dry_redis {
+            let body: Option<String> = redis
+                .query(redis::cmd("GET").arg(redis.key("oneclick-dry", key)))
+                .await
+                .ok()?;
+            return serde_json::from_str(&body?).ok();
+        }
+        self.dry
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(key)
+            .filter(|(at, _)| at.elapsed() < DRY_TTL)
+            .map(|(_, a)| a.clone())
+    }
+
+    async fn dry_keep(&self, key: String, answer: &DryAnswer) {
+        if let Some(redis) = &self.dry_redis {
+            if let Ok(body) = serde_json::to_string(answer) {
+                let _: Result<(), AppError> = redis
+                    .query(
+                        redis::cmd("SET")
+                            .arg(redis.key("oneclick-dry", &key))
+                            .arg(body)
+                            .arg("EX")
+                            .arg(DRY_TTL.as_secs()),
+                    )
+                    .await;
+            }
+            return;
+        }
+        let mut dry = self.dry.lock().unwrap_or_else(|p| p.into_inner());
+        if dry.len() >= MAX_LOCAL_DRY {
+            dry.retain(|_, (at, _)| at.elapsed() < DRY_TTL);
+            if dry.len() >= MAX_LOCAL_DRY {
+                return;
+            }
+        }
+        dry.insert(key, (Instant::now(), answer.clone()));
     }
 
     /// What a swap pays in dollars by 1Click's own dry quote (`amountOutUsd`), checked like
@@ -1257,6 +1345,31 @@ impl JarBuys {
             .and_then(|v| v.parse::<f64>().ok())
             .filter(|v| v.is_finite() && *v >= 0.0))
     }
+}
+
+/// The cache key of a dry quote: a digest of everything that shapes its answer.
+fn dry_key(
+    origin_asset: &str,
+    destination_asset: &str,
+    amount: &str,
+    recipient: &str,
+    refund_to: &str,
+    slippage_bps: u16,
+) -> String {
+    use sha2::Digest;
+    let mut h = sha2::Sha256::new();
+    for part in [
+        origin_asset,
+        destination_asset,
+        amount,
+        recipient,
+        refund_to,
+    ] {
+        h.update(part.as_bytes());
+        h.update([0u8]);
+    }
+    h.update(slippage_bps.to_be_bytes());
+    hex::encode(h.finalize())
 }
 
 /// A dry quote must echo what was asked and keep its minimum within the slippage floor.
@@ -1823,5 +1936,107 @@ mod tests {
         assert_eq!(q.time_estimate, Some(47));
         payload["recipient"] = json!("0x0000000000000000000000000000000000000001");
         assert!(matches!(check_dry(&body, &payload), Err(AppError::Busy)));
+    }
+
+    /// A local 1Click double that counts dry quotes: 1,000,000 units in is refused as too
+    /// low, anything else is quoted (98% of it out, 1% slippage).
+    async fn dry_double() -> (String, Arc<std::sync::atomic::AtomicU32>) {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        let calls = Arc::new(AtomicU32::new(0));
+        let counted = calls.clone();
+        let app = axum::Router::new().route(
+            "/quote",
+            axum::routing::post(move |axum::Json(p): axum::Json<Value>| {
+                let calls = counted.clone();
+                async move {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    let amount: u128 = p["amount"].as_str().unwrap().parse().unwrap();
+                    if amount == 1_000_000 {
+                        return (
+                            axum::http::StatusCode::BAD_REQUEST,
+                            axum::Json(json!({"message": "Amount is too low for bridge, try at least 2000000"})),
+                        );
+                    }
+                    let out = amount * 98 / 100;
+                    (
+                        axum::http::StatusCode::OK,
+                        axum::Json(json!({"quoteRequest": p, "quote": {
+                            "amountIn": p["amount"], "amountOut": out.to_string(),
+                            "minAmountOut": (out * 99 / 100).to_string(), "timeEstimate": 20
+                        }})),
+                    )
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (base, calls)
+    }
+
+    fn dry_buys(base: String) -> JarBuys {
+        let market = Arc::new(crate::market_data::MarketData::with_bases(
+            reqwest::Client::new(),
+            base.clone(),
+            base.clone(),
+            base.clone(),
+        ));
+        JarBuys::new(base, None, market, DEFAULT_CAP_USD).unwrap()
+    }
+
+    async fn ask_twice(buys: &JarBuys, amount: &str) -> [Result<DryQuote, AppError>; 2] {
+        let ask = || {
+            buys.dry_quote(
+                "nep141:arb-usdc.omft.near",
+                "nep141:btc.omft.near",
+                amount,
+                "0x2c7536e3605d9c16a7a3d7b1898e529396a65c23",
+                "0x2c7536e3605d9c16a7a3d7b1898e529396a65c23",
+                100,
+            )
+        };
+        [ask().await, ask().await]
+    }
+
+    #[tokio::test]
+    async fn a_repeated_dry_quote_or_refusal_is_answered_from_the_cache() {
+        use std::sync::atomic::Ordering;
+        let (base, calls) = dry_double().await;
+        let buys = dry_buys(base);
+        let [a, b] = ask_twice(&buys, "5000000").await;
+        assert_eq!(a.unwrap(), b.unwrap());
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "one 1Click call for both");
+        // 1Click's minimum refusal is reused too (the app's jar-minimum checks).
+        let [a, b] = ask_twice(&buys, "1000000").await;
+        for r in [a, b] {
+            assert!(matches!(r, Err(AppError::BadRequest(m)) if m.contains("too low")));
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        // A different amount is its own question.
+        let _ = ask_twice(&buys, "6000000").await;
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires isolated TEST_REDIS_URL"]
+    async fn a_dry_quote_is_shared_through_redis_for_twenty_seconds() {
+        use std::sync::atomic::Ordering;
+        let (base, calls) = dry_double().await;
+        let redis = || {
+            Some(crate::redis_store::RedisStore::new(
+                redis::Client::open(std::env::var("TEST_REDIS_URL").unwrap()).unwrap(),
+                format!("dry-test:{}", uuid::Uuid::new_v4().simple()),
+                Duration::from_secs(2),
+            ))
+        };
+        let namespace = redis();
+        // Two replicas (or a restart) on one namespace: the second asks nobody.
+        let first = dry_buys(base.clone()).with_redis(namespace.clone());
+        let second = dry_buys(base).with_redis(namespace);
+        let [a, _] = ask_twice(&first, "5000000").await;
+        let [b, _] = ask_twice(&second, "5000000").await;
+        assert_eq!(a.unwrap(), b.unwrap());
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        let _ = redis;
     }
 }

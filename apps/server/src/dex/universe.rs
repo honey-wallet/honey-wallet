@@ -253,6 +253,104 @@ pub fn id_of(list: &Value, chain: DexChain, address: &str) -> Option<String> {
     })
 }
 
+/// CoinGecko's coin list (`/coins/list?include_platform=true`, tens of MB) reduced to
+/// what DEX routing reads (15 Nov): each Honey chain's (id, contract) pairs in list order,
+/// contracts normalized. Kept in memory instead of the list and copied to Redis, so a
+/// restart doesn't download the list again and same-coin routing works at once.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct CoinIndex {
+    pub chains: HashMap<DexChain, Vec<(String, String)>>,
+}
+
+impl CoinIndex {
+    pub fn from_list(list: &Value) -> Self {
+        let mut chains: HashMap<DexChain, Vec<(String, String)>> = HashMap::new();
+        for c in list.as_array().into_iter().flatten() {
+            let Some(id) = c["id"].as_str() else {
+                continue;
+            };
+            for chain in super::chains::ALL {
+                if let Some(address) = c["platforms"][chain.coingecko_platform()]
+                    .as_str()
+                    .and_then(|a| chain.normalize(a))
+                {
+                    chains
+                        .entry(chain)
+                        .or_default()
+                        .push((id.to_string(), address));
+                }
+            }
+        }
+        Self { chains }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.chains.values().all(Vec::is_empty)
+    }
+
+    fn pairs(&self, chain: DexChain) -> &[(String, String)] {
+        self.chains.get(&chain).map(Vec::as_slice).unwrap_or(&[])
+    }
+
+    /// [`ids_by_address`] from the index.
+    pub fn ids_by_address(&self, chain: DexChain) -> HashMap<String, String> {
+        self.pairs(chain)
+            .iter()
+            .map(|(id, a)| (a.clone(), id.clone()))
+            .collect()
+    }
+
+    /// [`id_of`] from the index.
+    pub fn id_of(&self, chain: DexChain, address: &str) -> Option<String> {
+        self.pairs(chain)
+            .iter()
+            .find(|(_, a)| a == address)
+            .map(|(id, _)| id.clone())
+    }
+
+    /// [`evm_candidates`] from the index.
+    pub fn evm_candidates(&self, markets: &Value, chain: DexChain) -> Vec<Candidate> {
+        let addresses: HashMap<&str, &str> = self
+            .pairs(chain)
+            .iter()
+            .map(|(id, a)| (id.as_str(), a.as_str()))
+            .collect();
+        let mut seen = std::collections::HashSet::new();
+        markets
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|m| {
+                let id = m["id"].as_str()?;
+                let address = (*addresses.get(id)?).to_string();
+                (address != chain.usdc() && seen.insert(address.clone())).then(|| Candidate {
+                    coingecko_id: Some(id.to_string()),
+                    address,
+                    price: num(&m["current_price"]),
+                    market_cap: num(&m["market_cap"]).filter(|c| *c > 0.0),
+                    change_24h: num(&m["price_change_percentage_24h"]),
+                })
+            })
+            .take(MAX_EVM_CANDIDATES)
+            .collect()
+    }
+}
+
+/// `/coins/markets` rows cut to the fields [`evm_candidates`] reads (15 Nov), for the
+/// Redis copy.
+pub fn compact_markets(rows: &[Value]) -> Vec<Value> {
+    rows.iter()
+        .filter_map(|m| {
+            Some(serde_json::json!({
+                "id": m["id"].as_str()?,
+                "current_price": m["current_price"],
+                "market_cap": m["market_cap"],
+                "price_change_percentage_24h": m["price_change_percentage_24h"],
+            }))
+        })
+        .collect()
+}
+
 /// `/coins/markets` pages (by market cap, then by volume) joined with
 /// `/coins/list?include_platform=true`. USDC itself is left out (it is the other side of
 /// every swap).

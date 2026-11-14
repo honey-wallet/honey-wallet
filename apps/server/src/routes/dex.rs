@@ -6,6 +6,12 @@
 //!   as one `/dex/tokens?all=1` row (public; 400 for a bad chain or address, 404 when it
 //!   trades nowhere). One that passes can then be quoted. Its own per-IP budget
 //!   (`limit_dex_token_lookups_by_ip`) on top of the public reads'.
+//! - `GET /dex/token?address=<EVM contract>` (15 Nov, no `chain`): the same row for the
+//!   Honey EVM chain that trades the contract deepest. One DexScreener call
+//!   (`/latest/dex/tokens/{address}`) finds the chains with pairs, then only that chain
+//!   is looked up; the row's `chain` says which. Use it instead of one lookup per chain
+//!   (the shared lookup pace answers all but one of those `busy`). 404 when no Honey EVM
+//!   chain trades it; Solana mints still need `chain=solana`.
 //! - `POST /dex/quote` (signed in): a KyberSwap or Jupiter quote, stored so the gas
 //!   sponsors can bind execution to it.
 //! - `POST /dex/route` (signed in): the legs of a cross-chain buy or sell (1Click USDC
@@ -132,7 +138,10 @@ async fn tokens(
 
 #[derive(Deserialize)]
 struct TokenQuery {
-    chain: String,
+    // chain: String,
+    /// Optional since 15 Nov: without it an EVM contract is looked up where it trades
+    /// deepest ([`DexService::lookup_any`]).
+    chain: Option<String>,
     address: String,
 }
 
@@ -140,9 +149,17 @@ async fn token(
     State(s): State<StateData>,
     Query(q): Query<TokenQuery>,
 ) -> Result<Json<crate::dex::TokenView>, AppError> {
-    let chain = DexChain::parse(&q.chain)
-        .ok_or_else(|| AppError::BadRequest("unsupported chain".into()))?;
-    s.dex.lookup(chain, &q.address).await.map(Json)
+    // let chain = DexChain::parse(&q.chain)
+    //     .ok_or_else(|| AppError::BadRequest("unsupported chain".into()))?;
+    // s.dex.lookup(chain, &q.address).await.map(Json)
+    match q.chain.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
+        Some(chain) => {
+            let chain = DexChain::parse(chain)
+                .ok_or_else(|| AppError::BadRequest("unsupported chain".into()))?;
+            s.dex.lookup(chain, &q.address).await.map(Json)
+        }
+        None => s.dex.lookup_any(&q.address).await.map(Json),
+    }
 }
 
 async fn signed_in(s: &StateData, headers: &HeaderMap) -> Result<(Identity, Uuid), AppError> {

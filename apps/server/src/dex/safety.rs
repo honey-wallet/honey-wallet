@@ -1,12 +1,19 @@
 //! Token safety from GoPlus's token security API (keyless; free tier 150 CU per minute,
-//! 30k per day, no batch calls: gopluslabs.io/security-api). One address per call, calls
-//! paced (`GOPLUS_MIN_INTERVAL_MS`, 2.5 s by default, shared across replicas through
-//! Redis, and refused with `Busy` rather than queued for more than a few seconds), a 60 s
-//! pause after a rate-limit answer, and every verdict cached for a day for the token
-//! list. A quote asks again when its verdict is more than an hour old
-//! ([`Safety::check_fresh`]). A token GoPlus hasn't answered for is `unchecked`, which
-//! blocks it, and so is an upgradeable (proxy) token unless it is on the reviewed
-//! allowlist (`DEX_UPGRADEABLE_ALLOWLIST`).
+//! 30k per day and 150k per month, no batch calls: gopluslabs.io/security-api answers
+//! "Yes, but only for Pro, Ultra or Enterprise Packages" to batching, and its API
+//! reference notes a multi-address call returns only the first token without an access
+//! token, so one address per call). Calls paced (`GOPLUS_MIN_INTERVAL_MS`, 2.5 s by
+//! default, shared across replicas through Redis, and refused with `Busy` rather than
+//! queued for more than a few seconds), a 60 s pause after a rate-limit answer, and a
+//! hard daily budget ([`WARM_DAILY_BUDGET`] for the background warm-up,
+//! [`DAILY_CAP`] for everything) counted in Redis.
+//!
+//! Verdicts (15 Nov) are kept three days for the token list and copied to Redis
+//! (`{dex-goplus}:<chain>:<address>`, TTL = the verdict's), so a deploy reads them back
+//! instead of asking GoPlus again. A quote asks again when its verdict is more than an
+//! hour old ([`Safety::check_fresh`]). A token GoPlus has no data for is `unchecked`,
+//! which blocks it, and is asked again a day later; so is an upgradeable (proxy) token
+//! unless it is on the reviewed allowlist (`DEX_UPGRADEABLE_ALLOWLIST`).
 
 use std::{
     collections::HashMap,
@@ -14,10 +21,11 @@ use std::{
     time::{Duration, Instant},
 };
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::{chains::DexChain, pacer::Pacer};
-use crate::error::AppError;
+use super::{chains::DexChain, pacer::Pacer, store::unix_now};
+use crate::{error::AppError, redis_store::RedisStore};
 
 /// Flags that block a token.
 pub const BLOCKING: &[&str] = &[
@@ -60,8 +68,31 @@ pub const BLOCKING: &[&str] = &[
 
 /// The most tax Honey accepts (GoPlus gives tax as a fraction: "0.01" is 1%).
 const MAX_TAX: f64 = 0.0;
-const TTL: Duration = Duration::from_secs(24 * 60 * 60);
-const RETRY_UNCHECKED: Duration = Duration::from_secs(10 * 60);
+// const TTL: Duration = Duration::from_secs(24 * 60 * 60);
+// const RETRY_UNCHECKED: Duration = Duration::from_secs(10 * 60);
+/// How long a passed or failed verdict stands for the token list (15 Nov: was a day).
+/// Quotes still re-ask past [`FRESH`].
+pub const TTL: Duration = Duration::from_secs(3 * 24 * 60 * 60);
+/// GoPlus answered but had no data for the token (15 Nov: was 10 minutes, so each such
+/// token was re-asked about 72 times a day by the refresher).
+pub const RETRY_UNCHECKED: Duration = Duration::from_secs(24 * 60 * 60);
+/// GoPlus answered with an error code (not "no data"): asked again sooner.
+const RETRY_ERROR: Duration = Duration::from_secs(10 * 60);
+/// The most GoPlus calls the background warm-up makes a day (15 Nov), across replicas.
+/// The free tier is 30k CU a day but 150k a month (about 5k a day).
+pub const WARM_DAILY_BUDGET: u64 = 2_500;
+/// The most GoPlus calls of any kind a day (warm-up, lookups, quotes): past it a token
+/// is `unchecked` (blocked) until the next UTC day. 31 days of it stay under 150k.
+pub const DAILY_CAP: u64 = 4_500;
+/// Reserves one call of a day's budget when the count is under ARGV[1]. KEYS[1] is the
+/// day's counter; ARGV[2] its expiry. Returns 1 when reserved, 0 when spent.
+const SPEND: &str = r"
+local n = tonumber(redis.call('GET', KEYS[1]) or '0')
+if n >= tonumber(ARGV[1]) then return 0 end
+redis.call('INCR', KEYS[1])
+redis.call('EXPIRE', KEYS[1], ARGV[2])
+return 1
+";
 /// A quote re-checks a verdict older than this: a token upgraded into a honeypot keeps
 /// passing for at most an hour (docs/routing/AUDIT.md finding 7).
 pub const FRESH: Duration = Duration::from_secs(60 * 60);
@@ -95,8 +126,25 @@ pub fn bounded_insert<K: std::hash::Hash + Eq + Clone, V>(
     map.insert(key, (Instant::now(), value));
 }
 
+// fn verdict_ttl(v: &Verdict) -> Duration {
+//     if v.checked { TTL } else { RETRY_UNCHECKED }
+// }
 fn verdict_ttl(v: &Verdict) -> Duration {
     if v.checked { TTL } else { RETRY_UNCHECKED }
+}
+
+/// A cached verdict with how long it stands.
+type Held = (Verdict, Duration);
+
+/// A verdict as copied to Redis.
+#[derive(Serialize, Deserialize)]
+struct Saved {
+    flags: Vec<String>,
+    checked: bool,
+    /// Unix seconds when GoPlus answered.
+    at: u64,
+    /// Seconds it stands.
+    ttl: u64,
 }
 
 fn unchecked() -> Verdict {
@@ -245,9 +293,15 @@ pub struct Safety {
     client: reqwest::Client,
     base: String,
     interval: Duration,
-    cache: Mutex<HashMap<(DexChain, String), (Instant, Verdict)>>,
+    // cache: Mutex<HashMap<(DexChain, String), (Instant, Verdict)>>,
+    cache: Mutex<HashMap<(DexChain, String), (Instant, Held)>>,
     /// Spaces calls (bounded wait, shared across replicas with Redis).
     pacer: Pacer,
+    /// Where verdicts and the daily budget are kept across deploys and replicas.
+    redis: std::sync::OnceLock<RedisStore>,
+    /// The daily budgets (warm-up, everything) and, without Redis, this process's count.
+    budget: (u64, u64),
+    spent: Mutex<(u64, u64, u64)>,
     quiet_until: Mutex<Option<Instant>>,
     // warming: std::sync::atomic::AtomicBool,
     /// Chains with a warm-up running: one per chain (a single flag for all chains left
@@ -270,6 +324,9 @@ impl Safety {
             interval,
             cache: Mutex::default(),
             pacer: Pacer::new("goplus", interval, super::pacer::DEFAULT_MAX_WAIT),
+            redis: std::sync::OnceLock::new(),
+            budget: (WARM_DAILY_BUDGET, DAILY_CAP),
+            spent: Mutex::new((0, 0, 0)),
             quiet_until: Mutex::new(None),
             // warming: std::sync::atomic::AtomicBool::new(false),
             warming: Mutex::default(),
@@ -281,16 +338,35 @@ impl Safety {
         &self.pacer
     }
 
+    /// Keeps verdicts and the daily budget in Redis (15 Nov), and shares the pace.
+    pub fn share(&self, redis: RedisStore) {
+        self.pacer.share(redis.clone());
+        let _ = self.redis.set(redis);
+    }
+
+    /// Other daily budgets (tests): (warm-up, everything).
+    pub fn with_budget(mut self, warm: u64, all: u64) -> Self {
+        self.budget = (warm, all);
+        self
+    }
+
     fn age(&self, chain: DexChain, address: &str) -> Option<(Duration, Verdict)> {
         let cache = self.cache.lock().unwrap_or_else(|p| p.into_inner());
         cache
             .get(&(chain, address.to_string()))
-            .map(|(at, v)| (at.elapsed(), v.clone()))
+            .map(|(at, (v, _))| (at.elapsed(), v.clone()))
     }
 
-    /// For a quote: the cached verdict while it is under an hour old, else GoPlus asked
-    /// again now. `Busy` when GoPlus's queue is full.
+    /// For a quote: the cached verdict (memory, else Redis's copy) while it is under an
+    /// hour old, else GoPlus asked again now. `Busy` when GoPlus's queue is full.
     pub async fn check_fresh(&self, chain: DexChain, address: &str) -> Result<Verdict, AppError> {
+        if let Some((age, v)) = self.age(chain, address)
+            && v.checked
+            && age < FRESH
+        {
+            return Ok(v);
+        }
+        self.load_many(chain, &[address.to_string()]).await;
         if let Some((age, v)) = self.age(chain, address)
             && v.checked
             && age < FRESH
@@ -305,8 +381,153 @@ impl Safety {
         let cache = self.cache.lock().unwrap_or_else(|p| p.into_inner());
         cache
             .get(&(chain, address.to_string()))
-            .filter(|(at, v)| at.elapsed() < verdict_ttl(v))
-            .map(|(_, v)| v.clone())
+            .filter(|(at, (_, ttl))| at.elapsed() < *ttl)
+            .map(|(_, (v, _))| v.clone())
+    }
+
+    /// Reads Redis's copies of these tokens' verdicts into memory (15 Nov): after a
+    /// deploy the list's verdicts come back without asking GoPlus. Best effort; tokens
+    /// with a live verdict in memory are skipped.
+    pub async fn load_many(&self, chain: DexChain, addresses: &[String]) {
+        let Some(redis) = self.redis.get() else {
+            return;
+        };
+        let missing: Vec<&String> = addresses
+            .iter()
+            .filter(|a| self.cached(chain, a).is_none())
+            .collect();
+        for chunk in missing.chunks(500) {
+            let mut command = redis::cmd("MGET");
+            for a in chunk {
+                command.arg(self.key(redis, chain, a));
+            }
+            let Ok(bodies) = redis.query::<Vec<Option<String>>>(&mut command).await else {
+                return;
+            };
+            let now = unix_now();
+            for (address, body) in chunk.iter().zip(bodies) {
+                let Some(saved) = body.and_then(|b| serde_json::from_str::<Saved>(&b).ok()) else {
+                    continue;
+                };
+                let age = Duration::from_secs(now.saturating_sub(saved.at));
+                let ttl = Duration::from_secs(saved.ttl);
+                let Some(at) = Instant::now().checked_sub(age).filter(|_| age < ttl) else {
+                    continue;
+                };
+                let verdict = Verdict {
+                    flags: saved.flags,
+                    checked: saved.checked,
+                };
+                let mut cache = self.cache.lock().unwrap_or_else(|p| p.into_inner());
+                let key = (chain, address.to_string());
+                // A newer verdict in memory wins.
+                if cache.get(&key).is_some_and(|(held, _)| *held >= at) {
+                    continue;
+                }
+                bounded_insert(&mut cache, key, (verdict, ttl), MAX_VERDICTS, |(_, t)| *t);
+                if let Some((held, _)) = cache.get_mut(&(chain, address.to_string())) {
+                    *held = at;
+                }
+            }
+        }
+    }
+
+    fn key(&self, redis: &RedisStore, chain: DexChain, address: &str) -> String {
+        redis.key("dex-goplus", &format!("{}:{address}", chain.name()))
+    }
+
+    /// Copies a verdict to Redis for as long as it stands (best effort).
+    async fn save(&self, chain: DexChain, address: &str, verdict: &Verdict, ttl: Duration) {
+        let Some(redis) = self.redis.get() else {
+            return;
+        };
+        let Ok(body) = serde_json::to_string(&Saved {
+            flags: verdict.flags.clone(),
+            checked: verdict.checked,
+            at: unix_now(),
+            ttl: ttl.as_secs(),
+        }) else {
+            return;
+        };
+        let saved: Result<(), AppError> = redis
+            .query(
+                redis::cmd("SET")
+                    .arg(self.key(redis, chain, address))
+                    .arg(body)
+                    .arg("EX")
+                    .arg(ttl.as_secs().max(1)),
+            )
+            .await;
+        if saved.is_err() {
+            tracing::warn!(chain = chain.name(), "goplus verdict not copied to redis");
+        }
+    }
+
+    /// Reserves one GoPlus call of today's (UTC) budget: the warm-up's when
+    /// `background`, else the overall cap. With Redis the count is shared by every
+    /// replica and survives deploys; without it (or when Redis fails) it is this
+    /// process's own.
+    async fn spend(&self, background: bool) -> bool {
+        let limit = if background {
+            self.budget.0.min(self.budget.1)
+        } else {
+            self.budget.1
+        };
+        let day = unix_now() / 86_400;
+        if let Some(redis) = self.redis.get() {
+            // The warm-up counts against both budgets; other calls against the cap.
+            let mut ok = true;
+            let budgets: &[(&str, u64)] = if background {
+                &[("warm", limit), ("all", self.budget.1)]
+            } else {
+                &[("all", limit)]
+            };
+            for (name, limit) in budgets {
+                let reserved: Result<i64, AppError> = redis
+                    .query(
+                        redis::cmd("EVAL")
+                            .arg(SPEND)
+                            .arg(1)
+                            .arg(redis.key("dex-goplus-budget", &format!("{name}:{day}")))
+                            .arg(*limit)
+                            .arg(2 * 86_400),
+                    )
+                    .await;
+                match reserved {
+                    Ok(1) => {}
+                    Ok(_) => ok = false,
+                    Err(_) => return self.spend_local(background, day),
+                }
+                if !ok {
+                    break;
+                }
+            }
+            if !ok {
+                tracing::info!(background, "goplus daily budget spent");
+            }
+            return ok;
+        }
+        self.spend_local(background, day)
+    }
+
+    fn spend_local(&self, background: bool, day: u64) -> bool {
+        // (day, warm-up calls, all calls) of this process.
+        let mut spent = self.spent.lock().unwrap_or_else(|p| p.into_inner());
+        if spent.0 != day {
+            *spent = (day, 0, 0);
+        }
+        let ok = if background {
+            spent.1 < self.budget.0 && spent.2 < self.budget.1
+        } else {
+            spent.2 < self.budget.1
+        };
+        if ok {
+            spent.2 += 1;
+            if background {
+                spent.1 += 1;
+            }
+        }
+        ok
     }
 
     /// Seeds a verdict (tests, and offline fixtures).
@@ -321,13 +542,21 @@ impl Safety {
         );
     }
 
+    // fn remember(&self, chain: DexChain, address: &str, verdict: Verdict) {
+    //     bounded_insert(.., verdict, MAX_VERDICTS, verdict_ttl);
+    // }
     fn remember(&self, chain: DexChain, address: &str, verdict: Verdict) {
+        let ttl = verdict_ttl(&verdict);
+        self.remember_for(chain, address, verdict, ttl);
+    }
+
+    fn remember_for(&self, chain: DexChain, address: &str, verdict: Verdict, ttl: Duration) {
         bounded_insert(
             &mut self.cache.lock().unwrap_or_else(|p| p.into_inner()),
             (chain, address.to_string()),
-            verdict,
+            (verdict, ttl),
             MAX_VERDICTS,
-            verdict_ttl,
+            |(_, ttl)| *ttl,
         );
     }
 
@@ -344,6 +573,11 @@ impl Safety {
         if let Some(v) = self.cached(chain, address) {
             return v;
         }
+        // After a deploy: Redis's copy before GoPlus (15 Nov).
+        self.load_many(chain, &[address.to_string()]).await;
+        if let Some(v) = self.cached(chain, address) {
+            return v;
+        }
         self.fetch(chain, address, false)
             .await
             .unwrap_or_else(|_| unchecked())
@@ -352,7 +586,8 @@ impl Safety {
     /// One paced GoPlus call, cached. `Busy` when the queue is full (nothing asked).
     /// `background` (the list warm-up) takes a slot only when one is free now (15 Nov):
     /// with thousands of tokens and a warm-up per chain, queued warm-up calls used to
-    /// push a quote's own check past its 5 s bound.
+    /// push a quote's own check past its 5 s bound. Past the day's budget (15 Nov) the
+    /// warm-up gets `TooManyRequests` (it stops) and anything else `unchecked`.
     async fn fetch(
         &self,
         chain: DexChain,
@@ -374,6 +609,13 @@ impl Safety {
             && age < self.interval
         {
             return Ok(v);
+        }
+        if !self.spend(background).await {
+            return if background {
+                Err(AppError::TooManyRequests)
+            } else {
+                Ok(unchecked)
+            };
         }
         let path = if chain == DexChain::Solana {
             "/api/v1/solana/token_security".to_string()
@@ -407,7 +649,8 @@ impl Safety {
                 .find(|(k, _)| k.eq_ignore_ascii_case(address))
                 .map(|(_, v)| v.clone())
         });
-        let verdict = match (body["code"].as_i64(), result) {
+        let code = body["code"].as_i64();
+        let verdict = match (code, result) {
             (Some(1), Some(r)) if r.is_object() && !r.as_object().is_some_and(|o| o.is_empty()) => {
                 let mut flags = if chain == DexChain::Solana {
                     solana_flags(&r)
@@ -433,7 +676,15 @@ impl Safety {
             }
             _ => unchecked,
         };
-        self.remember(chain, address, verdict.clone());
+        // self.remember(chain, address, verdict.clone());
+        // 15 Nov: "no data" (code 1) waits a day; an error code only ten minutes.
+        let ttl = if verdict.checked || code == Some(1) {
+            verdict_ttl(&verdict)
+        } else {
+            RETRY_ERROR
+        };
+        self.remember_for(chain, address, verdict.clone(), ttl);
+        self.save(chain, address, &verdict, ttl).await;
         Ok(verdict)
     }
 
@@ -453,7 +704,10 @@ impl Safety {
     }
 
     /// Checks `addresses` one by one in the background (one warm-up at a time), so the
-    /// token list fills in without a request ever waiting on GoPlus.
+    /// token list fills in without a request ever waiting on GoPlus. Verdicts Redis
+    /// still holds are read back first (15 Nov); the warm-up stops for the day when its
+    /// budget is spent. Callers pass only the tokens worth checking now (the list's top
+    /// [`super::WARM_TOP`]).
     pub fn warm(self: &std::sync::Arc<Self>, chain: DexChain, addresses: Vec<String>) {
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
             return;
@@ -474,13 +728,23 @@ impl Safety {
         }
         let me = std::sync::Arc::clone(self);
         runtime.spawn(async move {
-            for address in todo {
+            me.load_many(chain, &todo).await;
+            // for address in todo {
+            'tokens: for address in todo {
                 if me.quiet() {
                     break;
                 }
+                if me.cached(chain, &address).is_some() {
+                    continue;
+                }
                 // In the background: when quotes hold the queue, try again a little later.
-                while matches!(me.fetch(chain, &address, true).await, Err(AppError::Busy)) {
-                    tokio::time::sleep(me.interval).await;
+                // while matches!(me.fetch(chain, &address, true).await, Err(AppError::Busy)) {
+                loop {
+                    match me.fetch(chain, &address, true).await {
+                        Err(AppError::Busy) => tokio::time::sleep(me.interval).await,
+                        Err(AppError::TooManyRequests) => break 'tokens,
+                        _ => break,
+                    }
                 }
             }
             // me.warming.store(false, Ordering::Release);

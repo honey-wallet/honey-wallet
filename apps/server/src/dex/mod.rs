@@ -116,6 +116,15 @@ const MAX_CACHED: usize = 5_000;
 /// `DEX_SPONSOR_MIN_ACCOUNT_DAYS` default.
 pub const DEFAULT_SPONSOR_MIN_ACCOUNT_DAYS: i64 = 7;
 const COIN_LIST_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+/// The coin index's and market rows' Redis copies are kept this long past their TTL, so
+/// a restart while CoinGecko is limiting us still has them (stale).
+const COINGECKO_KEEP: Duration = Duration::from_secs(3 * 24 * 60 * 60);
+/// How often a request path may look in Redis for a coin index it doesn't hold.
+const COIN_INDEX_RETRY: Duration = Duration::from_secs(60);
+/// GoPlus is asked in the background about each chain's top tokens only (15 Nov): the
+/// floor-passing ones with the most liquidity (then volume). The rest are checked when
+/// someone looks one up, quotes it, or it rises into the top.
+pub const WARM_TOP: usize = 300;
 const COINGECKO: &str = "https://api.coingecko.com/api/v3";
 const GECKOTERMINAL: &str = "https://api.geckoterminal.com/api/v2";
 const DEXSCREENER: &str = "https://api.dexscreener.com";
@@ -523,6 +532,26 @@ impl SponsorGate for PgGate {
 }
 
 type Cached<T> = tokio::sync::RwLock<Option<(Instant, Arc<T>)>>;
+/// One request per key at a time (15 Nov): concurrent misses wait for the first.
+type Flights<K> = Mutex<HashMap<K, Arc<tokio::sync::Mutex<()>>>>;
+
+/// The lock for `key` in `flights`; finished flights are dropped as new ones start.
+fn flight<K: std::hash::Hash + Eq + Clone>(
+    flights: &Flights<K>,
+    key: &K,
+) -> Arc<tokio::sync::Mutex<()>> {
+    let mut f = flights.lock().unwrap_or_else(|p| p.into_inner());
+    f.retain(|_, lock| Arc::strong_count(lock) > 1);
+    f.entry(key.clone()).or_default().clone()
+}
+
+/// A CoinGecko answer as copied to Redis (15 Nov).
+#[derive(Serialize, Deserialize)]
+struct SavedCoinGecko<T> {
+    /// Unix seconds.
+    at: u64,
+    value: T,
+}
 type TokenLists = Arc<Vec<HashMap<String, universe::ListEntry>>>;
 type Universe = tokio::sync::RwLock<HashMap<DexChain, (Instant, Arc<Vec<DexToken>>)>>;
 
@@ -548,7 +577,15 @@ pub struct DexService {
     /// When each chain's last build failed.
     failed: Mutex<HashMap<DexChain, Instant>>,
     coin_markets: Cached<Value>,
-    coin_list: Cached<Value>,
+    // coin_list: Cached<Value>,
+    /// CoinGecko's coin list reduced to each chain's (id, contract) pairs (15 Nov).
+    coin_index: Cached<universe::CoinIndex>,
+    /// When a request path last looked in Redis for a missing coin index.
+    coin_index_tried: Mutex<Option<Instant>>,
+    /// DexScreener price reads in flight, by token.
+    price_flights: Flights<(DexChain, String)>,
+    /// `GET /dex/token` without a chain: the chain each address resolved to.
+    resolved: Mutex<HashMap<String, (Instant, Option<DexChain>)>>,
     /// One CoinGecko fetch at a time (every chain's build shares its answer).
     coingecko_flight: tokio::sync::Mutex<()>,
     coingecko: Pacer,
@@ -624,7 +661,11 @@ impl DexService {
                 .collect(),
             failed: Mutex::default(),
             coin_markets: tokio::sync::RwLock::default(),
-            coin_list: tokio::sync::RwLock::default(),
+            // coin_list: tokio::sync::RwLock::default(),
+            coin_index: tokio::sync::RwLock::default(),
+            coin_index_tried: Mutex::default(),
+            price_flights: Mutex::default(),
+            resolved: Mutex::default(),
             coingecko_flight: tokio::sync::Mutex::new(()),
             coingecko: Pacer::new(
                 "coingecko-dex",
@@ -686,10 +727,12 @@ impl DexService {
                 &self.gecko,
                 &self.dexscreener,
                 &self.lookup,
-                self.safety.pacer(),
+                // self.safety.pacer(),
             ] {
                 pacer.share(redis.clone());
             }
+            // GoPlus's pace, its verdicts and its daily budget (15 Nov).
+            self.safety.share(redis.clone());
             self.redis = Some(redis.clone());
             self.store = QuoteStore::Redis(redis);
         }
@@ -866,42 +909,197 @@ impl DexService {
             .unwrap_or_default()
     }
 
-    async fn cached_json(
+    // Replaced 15 Nov: the whole coin list (tens of MB) held as JSON, fetched again after
+    // every restart. Now `coin_index` (each chain's id and contract pairs, in Redis).
+    // async fn cached_json(
+    //     &self,
+    //     slot: &Cached<Value>,
+    //     ttl: Duration,
+    //     path: &str,
+    //     query: &[(&str, String)],
+    // ) -> Result<Arc<Value>, AppError> {
+    //     if let Some((at, v)) = slot.read().await.as_ref()
+    //         && at.elapsed() < ttl
+    //     {
+    //         return Ok(v.clone());
+    //     }
+    //     let _flight = self.coingecko_flight.lock().await;
+    //     if let Some((at, v)) = slot.read().await.as_ref()
+    //         && at.elapsed() < ttl
+    //     {
+    //         return Ok(v.clone());
+    //     }
+    //     self.slot(&self.coingecko).await?;
+    //     let url = format!("{}{path}", self.config.coingecko);
+    //     // match self.get(&url, query, &self.coingecko_headers()).await {
+    //     // The coin list with platforms is tens of MB: more than the client's 25 s on a
+    //     // slow link.
+    //     match self.get_slow(&url, query, &self.coingecko_headers()).await {
+    //         Ok(v) if v.is_array() => {
+    //             let v = Arc::new(v);
+    //             *slot.write().await = Some((Instant::now(), v.clone()));
+    //             Ok(v)
+    //         }
+    //         _ => slot
+    //             .read()
+    //             .await
+    //             .as_ref()
+    //             .map(|(_, v)| v.clone())
+    //             .ok_or(AppError::Busy),
+    //     }
+    // }
+
+    /// A CoinGecko answer copied to Redis: (age, value) when there is one under `keep`.
+    async fn load_coingecko<T: serde::de::DeserializeOwned>(
         &self,
-        slot: &Cached<Value>,
-        ttl: Duration,
-        path: &str,
-        query: &[(&str, String)],
-    ) -> Result<Arc<Value>, AppError> {
-        if let Some((at, v)) = slot.read().await.as_ref()
-            && at.elapsed() < ttl
+        name: &str,
+        keep: Duration,
+    ) -> Option<(Duration, T)> {
+        let redis = self.redis.as_ref()?;
+        let body: Option<String> = redis
+            .query(redis::cmd("GET").arg(redis.key("dex-coingecko", name)))
+            .await
+            .ok()?;
+        let saved: SavedCoinGecko<T> = serde_json::from_str(&body?).ok()?;
+        let age = Duration::from_secs(unix_now().saturating_sub(saved.at));
+        (age < keep).then_some((age, saved.value))
+    }
+
+    /// Copies a CoinGecko answer to Redis for `keep` (best effort).
+    async fn save_coingecko<T: Serialize>(&self, name: &str, value: &T, keep: Duration) {
+        let Some(redis) = &self.redis else {
+            return;
+        };
+        let Ok(body) = serde_json::to_string(&SavedCoinGecko {
+            at: unix_now(),
+            value,
+        }) else {
+            return;
+        };
+        let saved: Result<(), AppError> = redis
+            .query(
+                redis::cmd("SET")
+                    .arg(redis.key("dex-coingecko", name))
+                    .arg(body)
+                    .arg("EX")
+                    .arg(keep.as_secs()),
+            )
+            .await;
+        if saved.is_err() {
+            tracing::warn!(name, "coingecko copy not saved to redis");
+        }
+    }
+
+    /// CoinGecko's coin list as each chain's (id, contract) pairs, refreshed daily: memory,
+    /// else Redis's copy (a restart), else one paced download. A failed download serves
+    /// the last index however old; none at all is `Busy`.
+    async fn coin_index(&self) -> Result<Arc<universe::CoinIndex>, AppError> {
+        if let Some((at, v)) = self.coin_index.read().await.as_ref()
+            && at.elapsed() < COIN_LIST_TTL
         {
             return Ok(v.clone());
         }
         let _flight = self.coingecko_flight.lock().await;
-        if let Some((at, v)) = slot.read().await.as_ref()
-            && at.elapsed() < ttl
+        if let Some((at, v)) = self.coin_index.read().await.as_ref()
+            && at.elapsed() < COIN_LIST_TTL
         {
             return Ok(v.clone());
         }
-        self.slot(&self.coingecko).await?;
-        let url = format!("{}{path}", self.config.coingecko);
-        // match self.get(&url, query, &self.coingecko_headers()).await {
-        // The coin list with platforms is tens of MB: more than the client's 25 s on a
-        // slow link.
-        match self.get_slow(&url, query, &self.coingecko_headers()).await {
-            Ok(v) if v.is_array() => {
-                let v = Arc::new(v);
-                *slot.write().await = Some((Instant::now(), v.clone()));
-                Ok(v)
-            }
-            _ => slot
+        if self.restore_coin_index().await
+            && let Some((at, v)) = self.coin_index.read().await.as_ref()
+            && at.elapsed() < COIN_LIST_TTL
+        {
+            return Ok(v.clone());
+        }
+        let stale = || async {
+            self.coin_index
                 .read()
                 .await
                 .as_ref()
                 .map(|(_, v)| v.clone())
-                .ok_or(AppError::Busy),
+                .ok_or(AppError::Busy)
+        };
+        if self.slot(&self.coingecko).await.is_err() {
+            return stale().await;
         }
+        let url = format!("{}/coins/list", self.config.coingecko);
+        // The coin list with platforms is tens of MB: more than the client's 25 s on a
+        // slow link.
+        match self
+            .get_slow(
+                &url,
+                &[("include_platform", "true".into())],
+                &self.coingecko_headers(),
+            )
+            .await
+        {
+            Ok(list) if list.is_array() => {
+                let index = universe::CoinIndex::from_list(&list);
+                drop(list);
+                if index.is_empty() {
+                    return stale().await;
+                }
+                self.save_coingecko("coin-index", &index, COIN_LIST_TTL + COINGECKO_KEEP)
+                    .await;
+                let index = Arc::new(index);
+                *self.coin_index.write().await = Some((Instant::now(), index.clone()));
+                Ok(index)
+            }
+            _ => stale().await,
+        }
+    }
+
+    /// Puts Redis's coin index in memory when it is newer than what is there.
+    async fn restore_coin_index(&self) -> bool {
+        let Some((age, index)) = self
+            .load_coingecko::<universe::CoinIndex>("coin-index", COIN_LIST_TTL + COINGECKO_KEEP)
+            .await
+        else {
+            return false;
+        };
+        let Some(at) = Instant::now().checked_sub(age) else {
+            return false;
+        };
+        let mut held = self.coin_index.write().await;
+        if held.as_ref().is_none_or(|(h, _)| *h < at) {
+            *held = Some((at, Arc::new(index)));
+        }
+        true
+    }
+
+    /// The coin index for request paths (15 Nov): memory however old, else Redis's copy
+    /// (looked for at most once a minute), else None while a download starts in the
+    /// background. Never waits on CoinGecko.
+    async fn coin_index_now(&self) -> Option<Arc<universe::CoinIndex>> {
+        if let Some((_, v)) = self.coin_index.read().await.as_ref() {
+            return Some(v.clone());
+        }
+        let due = {
+            let mut tried = self
+                .coin_index_tried
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            let due = tried.is_none_or(|at| at.elapsed() >= COIN_INDEX_RETRY);
+            if due {
+                *tried = Some(Instant::now());
+            }
+            due
+        };
+        if !due {
+            return None;
+        }
+        if self.restore_coin_index().await
+            && let Some((_, v)) = self.coin_index.read().await.as_ref()
+        {
+            return Some(v.clone());
+        }
+        if let (Some(me), Ok(runtime)) = (self.me.upgrade(), tokio::runtime::Handle::try_current())
+        {
+            runtime.spawn(async move {
+                let _ = me.coin_index().await;
+            });
+        }
+        None
     }
 
     // The universe
@@ -939,14 +1137,10 @@ impl DexService {
             Ok(tokens) => {
                 let tokens = Arc::new(tokens);
                 // Check the floor-passing tokens with GoPlus in the background.
-                self.safety.warm(
-                    chain,
-                    tokens
-                        .iter()
-                        .filter(|t| t.flags.is_empty())
-                        .map(|t| t.address.clone())
-                        .collect(),
-                );
+                // self.safety.warm(chain, tokens.iter().filter(|t| t.flags.is_empty())
+                //     .map(|t| t.address.clone()).collect());
+                // 15 Nov: the top `WARM_TOP` of them; the rest lazily.
+                self.safety.warm(chain, warm_candidates(&tokens, WARM_TOP));
                 self.universe
                     .write()
                     .await
@@ -1075,10 +1269,21 @@ impl DexService {
         if saved.tokens.iter().any(|t| t.chain != chain) {
             return;
         }
-        let mut lists = self.universe.write().await;
-        if lists.get(&chain).is_none_or(|(held, _)| *held < at) {
-            lists.insert(chain, (at, Arc::new(saved.tokens)));
+        let addresses: Vec<String> = saved
+            .tokens
+            .iter()
+            .filter(|t| t.flags.is_empty())
+            .map(|t| t.address.clone())
+            .collect();
+        {
+            let mut lists = self.universe.write().await;
+            if lists.get(&chain).is_none_or(|(held, _)| *held < at) {
+                lists.insert(chain, (at, Arc::new(saved.tokens)));
+            }
         }
+        // And GoPlus's verdicts for it (15 Nov), so the restored list shows its tokens at
+        // once instead of hiding them until GoPlus is asked again.
+        self.safety.load_many(chain, &addresses).await;
     }
 
     async fn fresh_universe(&self, chain: DexChain) -> Option<Arc<Vec<DexToken>>> {
@@ -1137,6 +1342,21 @@ impl DexService {
         {
             return Ok(v.clone());
         }
+        // After a restart: Redis's copy (15 Nov), when it is fresh, instead of 20 pages.
+        if let Some((age, rows)) = self
+            .load_coingecko::<Value>("markets", UNIVERSE_TTL + COINGECKO_KEEP)
+            .await
+            && let Some(at) = Instant::now().checked_sub(age)
+        {
+            let rows = Arc::new(rows);
+            let mut held = self.coin_markets.write().await;
+            if held.as_ref().is_none_or(|(h, _)| *h < at) {
+                *held = Some((at, rows.clone()));
+            }
+            if age < UNIVERSE_TTL {
+                return Ok(rows);
+            }
+        }
         let mut pages: Vec<(&str, u32)> = (1..=MARKET_CAP_PAGES)
             .map(|p| ("market_cap_desc", p))
             .collect();
@@ -1173,7 +1393,12 @@ impl DexService {
                 .map(|(_, v)| v.clone())
                 .ok_or(AppError::Busy);
         }
-        let v = Arc::new(Value::Array(all));
+        // let v = Arc::new(Value::Array(all));
+        // Only the fields the candidates read (15 Nov), also copied to Redis.
+        let v = Value::Array(universe::compact_markets(&all));
+        self.save_coingecko("markets", &v, UNIVERSE_TTL + COINGECKO_KEEP)
+            .await;
+        let v = Arc::new(v);
         *self.coin_markets.write().await = Some((Instant::now(), v.clone()));
         Ok(v)
     }
@@ -1189,18 +1414,15 @@ impl DexService {
     async fn build_evm(&self, chain: DexChain) -> Result<Vec<DexToken>, AppError> {
         // The coin list first: without it no coin can be placed on a chain, while a
         // missing markets page only shortens the candidates.
-        let list = self
-            .cached_json(
-                &self.coin_list,
-                COIN_LIST_TTL,
-                "/coins/list",
-                &[("include_platform", "true".into())],
-            )
-            .await?;
+        // let list = self.cached_json(&self.coin_list, COIN_LIST_TTL, "/coins/list",
+        //     &[("include_platform", "true".into())]).await?;
+        let index = self.coin_index().await?;
         let markets = self.coin_markets().await?;
-        let mut candidates = universe::evm_candidates(&markets, &list, chain);
+        // let mut candidates = universe::evm_candidates(&markets, &list, chain);
+        let mut candidates = index.evm_candidates(&markets, chain);
         // DEX-native tokens: the base tokens of the chain's busiest pools.
-        let ids = universe::ids_by_address(&list, chain);
+        // let ids = universe::ids_by_address(&list, chain);
+        let ids = index.ids_by_address(chain);
         let mut pools = Vec::new();
         for page in 1..=universe::POOL_PAGES {
             self.slot(&self.gecko).await?;
@@ -1275,8 +1497,40 @@ impl DexService {
         // never taken from an indexer alone).
         let lists = self.token_lists(chain).await;
         universe::apply_lists(&mut tokens, &lists);
+        // 15 Nov: what the chain already answered for the previous list (memory, or the
+        // Redis copy `universe` restored before this build) carries over; only new tokens
+        // are read on chain. Decimals don't change (upgradeable tokens are blocked).
+        let known: HashMap<String, (u8, String, String)> = self
+            .universe
+            .read()
+            .await
+            .get(&chain)
+            .map(|(_, previous)| {
+                previous
+                    .iter()
+                    .filter(|t| t.metadata == "chain")
+                    .map(|t| {
+                        (
+                            t.address.clone(),
+                            (t.decimals, t.symbol.clone(), t.name.clone()),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         let mut reads = 0;
         for t in tokens.iter_mut().filter(|t| t.metadata == "geckoterminal") {
+            if t.flags.is_empty()
+                && let Some((decimals, symbol, name)) = known.get(&t.address)
+            {
+                universe::confirm_onchain(
+                    t,
+                    Some(*decimals),
+                    Some(symbol.clone()),
+                    Some(name.clone()),
+                );
+                continue;
+            }
             // Only tokens that can be shown are worth the calls; the rest stay blocked.
             if !t.flags.is_empty() || reads >= MAX_CHAIN_READS {
                 if !t.flags.iter().any(|f| f == "no_decimals") {
@@ -1358,16 +1612,10 @@ impl DexService {
             return Err(AppError::Busy);
         }
         // CoinGecko's ids by mint, when the coin list can be had (best effort).
-        let ids = match self
-            .cached_json(
-                &self.coin_list,
-                COIN_LIST_TTL,
-                "/coins/list",
-                &[("include_platform", "true".into())],
-            )
-            .await
-        {
-            Ok(list) => universe::ids_by_address(&list, DexChain::Solana),
+        // let ids = match self.cached_json(&self.coin_list, ...).await {
+        //     Ok(list) => universe::ids_by_address(&list, DexChain::Solana), ...
+        let ids = match self.coin_index().await {
+            Ok(index) => index.ids_by_address(DexChain::Solana),
             Err(_) => HashMap::new(),
         };
         // Ok(universe::solana_tokens(&list, unix_now() as i64))
@@ -1423,15 +1671,12 @@ impl DexService {
     /// current verdict for. Before 2026-11-14 this ran only when a chain's list was built,
     /// and only for the first chain built at a time, so most of production's lists stayed
     /// `unchecked` (hidden) for six hours at a stretch.
+    /// 15 Nov: only the chain's top [`WARM_TOP`] floor-passing tokens by liquidity (then
+    /// volume), so GoPlus isn't asked about thousands of tokens nobody looks at.
     fn warm_unchecked(&self, chain: DexChain, tokens: &[DexToken]) {
-        self.safety.warm(
-            chain,
-            tokens
-                .iter()
-                .filter(|t| t.flags.is_empty())
-                .map(|t| t.address.clone())
-                .collect(),
-        );
+        // self.safety.warm(chain, tokens.iter().filter(|t| t.flags.is_empty())
+        //     .map(|t| t.address.clone()).collect());
+        self.safety.warm(chain, warm_candidates(tokens, WARM_TOP));
     }
 
     /// The tokens the thesis registry may merge as `route: dex`: safe ones only.
@@ -1451,11 +1696,15 @@ impl DexService {
         let Some(address) = chain.normalize(address) else {
             return Vec::new();
         };
-        let list = match self.coin_list.read().await.as_ref() {
-            Some((_, list)) => list.clone(),
-            None => return Vec::new(),
+        // let list = match self.coin_list.read().await.as_ref() { .. None => return Vec::new() };
+        // let Some(id) = universe::id_of(&list, chain, &address) else { .. };
+        // 15 Nov: the coin list was in memory only, so after a restart that restored the
+        // lists from Redis this answered nothing for hours. The index comes back from
+        // Redis (or loads in the background), never waiting on CoinGecko.
+        let Some(index) = self.coin_index_now().await else {
+            return Vec::new();
         };
-        let Some(id) = universe::id_of(&list, chain, &address) else {
+        let Some(id) = index.id_of(chain, &address) else {
             return Vec::new();
         };
         let lists = self.universe.read().await;
@@ -1722,6 +1971,17 @@ impl DexService {
     /// quotes, dry quotes and the thesis registry accept it like a listed token.
     /// `NotFound` when it trades nowhere; `Busy` when the providers' budget is spent.
     pub async fn lookup(&self, chain: DexChain, address: &str) -> Result<TokenView, AppError> {
+        self.lookup_with(chain, address, None).await
+    }
+
+    /// [`DexService::lookup`] with DexScreener's pairs for the token on `chain` already
+    /// read (`lookup_any`), so they aren't asked for again.
+    async fn lookup_with(
+        &self,
+        chain: DexChain,
+        address: &str,
+        pairs: Option<Vec<Value>>,
+    ) -> Result<TokenView, AppError> {
         if !self.enabled() {
             return Err(off());
         }
@@ -1745,7 +2005,7 @@ impl DexService {
             None => match self.registered(chain, &address) {
                 Some(found) => found.ok_or(AppError::NotFound)?,
                 None => {
-                    let found = self.fetch_token(chain, &address).await?;
+                    let found = self.fetch_token(chain, &address, pairs).await?;
                     self.remember_lookup(chain, &address, found.clone());
                     found.ok_or(AppError::NotFound)?
                 }
@@ -1756,6 +2016,92 @@ impl DexService {
             None => self.safety.check(chain, &address).await,
         };
         Ok(self.view(&token, Some(verdict)))
+    }
+
+    /// `GET /dex/token` without `chain` (15 Nov): an EVM contract on whichever Honey EVM
+    /// chain trades it deepest. A chain whose list (or an earlier lookup) has it answers
+    /// from memory; otherwise one DexScreener call (`/latest/dex/tokens/{address}`, every
+    /// chain at once) finds where its pairs are, and only that chain is looked up, with
+    /// those pairs (so DexScreener isn't asked again). The app used to look up all five
+    /// chains in parallel, and the shared lookup pace refused four of them. Where it
+    /// resolved is remembered like a lookup. Solana mints need `chain=solana`.
+    pub async fn lookup_any(&self, address: &str) -> Result<TokenView, AppError> {
+        if !self.enabled() {
+            return Err(off());
+        }
+        let address = DexChain::Base
+            .normalize(address)
+            .ok_or_else(|| bad("pass chain for anything but an EVM contract"))?;
+        // Already known on a chain: the deepest of those, no call.
+        let mut known: Vec<(DexChain, f64)> = Vec::new();
+        {
+            let lists = self.universe.read().await;
+            for chain in chains::ALL.into_iter().filter(|c| c.is_evm()) {
+                if let Some(t) = lists
+                    .get(&chain)
+                    .and_then(|(_, tokens)| tokens.iter().find(|t| t.address == address))
+                {
+                    known.push((chain, t.liquidity_usd.unwrap_or(0.0)));
+                }
+            }
+        }
+        for chain in chains::ALL.into_iter().filter(|c| c.is_evm()) {
+            if let Some(Some(t)) = self.registered(chain, &address)
+                && !known.iter().any(|(c, _)| *c == chain)
+            {
+                known.push((chain, t.liquidity_usd.unwrap_or(0.0)));
+            }
+        }
+        if let Some((chain, _)) = known.into_iter().max_by(|a, b| a.1.total_cmp(&b.1)) {
+            return self.lookup(chain, &address).await;
+        }
+        let resolved = self
+            .resolved
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(&address)
+            .filter(|(at, c)| {
+                at.elapsed()
+                    < if c.is_some() {
+                        LOOKUP_TTL
+                    } else {
+                        LOOKUP_MISS_TTL
+                    }
+            })
+            .map(|(_, c)| *c);
+        if let Some(chain) = resolved {
+            let chain = chain.ok_or(AppError::NotFound)?;
+            return self.lookup(chain, &address).await;
+        }
+        self.dexscreener.wait().await?;
+        let body = self
+            .get(
+                &format!("{}/latest/dex/tokens/{address}", self.config.dexscreener),
+                &[],
+                &[],
+            )
+            .await?;
+        let pairs: Vec<Value> = body["pairs"].as_array().cloned().unwrap_or_default();
+        let chain = deepest_chain(&pairs, &address);
+        safety::bounded_insert(
+            &mut self.resolved.lock().unwrap_or_else(|p| p.into_inner()),
+            address.clone(),
+            chain,
+            LOOKUP_MAX_CACHED,
+            |c| {
+                if c.is_some() {
+                    LOOKUP_TTL
+                } else {
+                    LOOKUP_MISS_TTL
+                }
+            },
+        );
+        let chain = chain.ok_or(AppError::NotFound)?;
+        let on_chain: Vec<Value> = pairs
+            .into_iter()
+            .filter(|p| p["chainId"].as_str() == Some(chain.dexscreener()))
+            .collect();
+        self.lookup_with(chain, &address, Some(on_chain)).await
     }
 
     /// A lookup's cached answer while fresh: Some(Some(token)), Some(None) for "no
@@ -1801,6 +2147,7 @@ impl DexService {
         &self,
         chain: DexChain,
         address: &str,
+        known_pairs: Option<Vec<Value>>,
     ) -> Result<Option<DexToken>, AppError> {
         self.lookup.wait().await?;
         let now = unix_now() as i64;
@@ -1840,7 +2187,11 @@ impl DexService {
                 address: address.to_string(),
                 ..universe::Candidate::default()
             };
-            let pairs = self.dexscreener_pairs(chain, address).await?;
+            // let pairs = self.dexscreener_pairs(chain, address).await?;
+            let pairs = match known_pairs {
+                Some(pairs) => pairs,
+                None => self.dexscreener_pairs(chain, address).await?,
+            };
             let mut tokens = universe::evm_tokens(
                 chain,
                 &[candidate],
@@ -1911,19 +2262,12 @@ impl DexService {
         })
     }
 
-    /// CoinGecko's id for a contract from the coin list already read (never fetches it).
+    /// CoinGecko's id for a contract from the coin index (memory or Redis; never fetches
+    /// the list).
     async fn cached_coingecko_id(&self, chain: DexChain, address: &str) -> Option<String> {
-        let list = self
-            .coin_list
-            .read()
-            .await
-            .as_ref()
-            .map(|(_, v)| v.clone())?;
-        let platform = chain.coingecko_platform();
-        list.as_array()?.iter().find_map(|c| {
-            let a = chain.normalize(c["platforms"][platform].as_str()?)?;
-            (a == address).then(|| c["id"].as_str().map(String::from))?
-        })
+        // let list = self.coin_list.read().await.as_ref().map(|(_, v)| v.clone())?;
+        // list.as_array()?.iter().find_map(|c| .. c["platforms"][platform] == address ..)
+        self.coin_index_now().await?.id_of(chain, address)
     }
 
     /// Fills the caches a quote of `token` needs (the universe, GoPlus's verdict, its
@@ -1959,6 +2303,18 @@ impl DexService {
     /// has it as base token. Fails closed (`Busy`) without one.
     async fn fresh_price(&self, chain: DexChain, address: &str) -> Result<f64, AppError> {
         let key = (chain, address.to_string());
+        if let Some((at, price)) = self
+            .prices
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(&key)
+            && at.elapsed() < PRICE_TTL
+        {
+            return Ok(*price);
+        }
+        // One read per token at a time (15 Nov): concurrent misses share its answer.
+        let turn = flight(&self.price_flights, &key);
+        let _turn = turn.lock().await;
         if let Some((at, price)) = self
             .prices
             .lock()
@@ -2522,6 +2878,45 @@ impl DexService {
             .ok_or(AppError::Busy)?;
         Ok(RouteResponse { legs, expires_at })
     }
+}
+
+/// The Honey EVM chain whose DexScreener pair with `address` as base token is deepest
+/// (15 Nov, `lookup_any`); None when it has no such pair on any of them.
+pub fn deepest_chain(pairs: &[Value], address: &str) -> Option<DexChain> {
+    pairs
+        .iter()
+        .filter_map(|p| {
+            let chain = chains::ALL
+                .into_iter()
+                .find(|c| c.is_evm() && p["chainId"].as_str() == Some(c.dexscreener()))?;
+            let base = p["baseToken"]["address"]
+                .as_str()
+                .and_then(|a| chain.normalize(a))?;
+            (base == address).then(|| (chain, universe::num(&p["liquidity"]["usd"]).unwrap_or(0.0)))
+        })
+        .max_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(chain, _)| chain)
+}
+
+/// The floor-passing tokens GoPlus is asked about in the background (15 Nov): the `top`
+/// with the most liquidity, then 24 h volume.
+pub fn warm_candidates(tokens: &[DexToken], top: usize) -> Vec<String> {
+    let mut ranked: Vec<&DexToken> = tokens.iter().filter(|t| t.flags.is_empty()).collect();
+    ranked.sort_by(|a, b| {
+        let key = |t: &DexToken| {
+            (
+                t.liquidity_usd.unwrap_or(0.0),
+                t.volume24h_usd.unwrap_or(0.0),
+            )
+        };
+        let (a, b) = (key(a), key(b));
+        b.0.total_cmp(&a.0).then(b.1.total_cmp(&a.1))
+    });
+    ranked
+        .into_iter()
+        .take(top)
+        .map(|t| t.address.clone())
+        .collect()
 }
 
 fn lookup_ttl(token: &Option<DexToken>) -> Duration {

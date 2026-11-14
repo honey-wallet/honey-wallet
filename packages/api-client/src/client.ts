@@ -481,10 +481,16 @@ export function createApiClient({ baseUrl, fetch: fetchImpl = fetch }: ApiClient
      * Any token by contract (EVM) or mint (Solana), as one `dexTokens({ all: true })`
      * row with its safety verdict. One whose `safety.ok` is true can then be quoted.
      * 404 when it trades nowhere, 400 for a bad chain or address.
+     *
+     * Pass `undefined` as `chain` for an EVM contract (15 Nov): the server asks
+     * DexScreener once where it trades and looks it up only on the Honey EVM chain with
+     * the deepest pool (the row's `chain` says which). Prefer that over one call per
+     * chain, which the server's shared lookup pace mostly answers `busy`. Solana mints
+     * still need `'solana'`.
      */
-    dexToken: (chain: DexChain, address: string, init?: RequestInit) =>
+    dexToken: (chain: DexChain | undefined, address: string, init?: RequestInit) =>
       request<DexToken>(
-        `/api/v1/dex/token?chain=${encodeURIComponent(chain)}&address=${encodeURIComponent(address)}`,
+        `/api/v1/dex/token?${chain ? `chain=${encodeURIComponent(chain)}&` : ''}address=${encodeURIComponent(address)}`,
         init,
       ),
     /** A stored, executable DEX quote (KyberSwap on EVM, Jupiter on Solana). */

@@ -25,9 +25,14 @@ const DEFILLAMA_COINS: &str = "https://coins.llama.fi";
 /// Descriptions and links barely change; caps on the page may be this old.
 const INFO_TTL: Duration = Duration::from_secs(30 * 60);
 /// Names, logos, caps, 24h volume and change for every token 1Click lists: one CoinGecko
-/// `/coins/markets` call (≤250 ids a page) every five minutes; older copies serve while a
-/// refresh runs or CoinGecko is down.
-const COINS_TTL: Duration = Duration::from_secs(5 * 60);
+/// `/coins/markets` call (≤250 ids a page) every fifteen minutes (15 Nov: was five);
+/// older copies serve while a refresh runs or CoinGecko is down.
+// const COINS_TTL: Duration = Duration::from_secs(5 * 60);
+const COINS_TTL: Duration = Duration::from_secs(15 * 60);
+/// CoinGecko's keyless pace, shared with the DEX universe build (`dex::DexService`'s
+/// `coingecko-dex` pacer): one schedule in Redis for every CoinGecko call (15 Nov).
+const COINGECKO_INTERVAL: Duration = Duration::from_secs(12);
+const COINGECKO_KEY_INTERVAL: Duration = Duration::from_millis(2_100);
 /// After CoinGecko says "too many requests" without a usable Retry-After, ask nothing for
 /// this long (stale answers serve). A Retry-After is honoured between 1s and 10 minutes.
 const COINGECKO_COOLDOWN: Duration = Duration::from_secs(60);
@@ -505,6 +510,10 @@ pub struct MarketData {
     gecko_flights: std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     /// Set while a background refresh of the coin list runs, so requests start at most one.
     coins_refreshing: std::sync::atomic::AtomicBool,
+    /// Spaces CoinGecko calls (15 Nov): the same Redis schedule as the DEX build's, so
+    /// the two never spend one keyless limit twice. A call that would wait more than a
+    /// few seconds is refused and the cached copy serves.
+    coingecko_pacer: crate::dex::pacer::Pacer,
 }
 
 #[derive(Debug)]
@@ -528,6 +537,9 @@ impl MarketData {
             .ok()
             .map(|k| k.trim().to_string())
             .filter(|k| !k.is_empty());
+        if market.coingecko_key.is_some() {
+            market.coingecko_pacer = coingecko_pacer(COINGECKO_KEY_INTERVAL);
+        }
         Ok(Arc::new(market))
     }
 
@@ -550,12 +562,22 @@ impl MarketData {
             gecko: RwLock::new(HashMap::new()),
             gecko_flights: std::sync::Mutex::new(HashMap::new()),
             coins_refreshing: std::sync::atomic::AtomicBool::new(false),
+            coingecko_pacer: coingecko_pacer(COINGECKO_INTERVAL),
+        }
+    }
+
+    /// Shares the CoinGecko pace with every replica and the DEX build through Redis.
+    pub fn share_pacer(&self, redis: Option<crate::redis_store::RedisStore>) {
+        if let Some(redis) = redis {
+            self.coingecko_pacer.share(redis);
         }
     }
 
     /// Points CoinGecko calls somewhere else (tests).
     pub fn with_coingecko(mut self, base: String) -> Self {
         self.coingecko = base;
+        // A local double needs no pace.
+        self.coingecko_pacer = coingecko_pacer(Duration::from_millis(1));
         self
     }
 
@@ -603,6 +625,17 @@ impl MarketData {
     }
 
     async fn coingecko_get(&self, path: &str) -> Result<Value, Unavailable> {
+        self.coingecko_get_within(path, crate::dex::pacer::DEFAULT_MAX_WAIT)
+            .await
+    }
+
+    /// [`MarketData::coingecko_get`] waiting up to `max_wait` for its paced slot: the
+    /// coin list's refresh (usually in the background) may wait out a build's slot.
+    async fn coingecko_get_within(
+        &self,
+        path: &str,
+        max_wait: Duration,
+    ) -> Result<Value, Unavailable> {
         let quiet = *self
             .coingecko_quiet_until
             .lock()
@@ -610,6 +643,11 @@ impl MarketData {
         if quiet.is_some_and(|until| Instant::now() < until) {
             return Err(Unavailable);
         }
+        // 15 Nov: paced with the DEX build (it was unpaced and competed with it).
+        self.coingecko_pacer
+            .wait_up_to(max_wait)
+            .await
+            .map_err(|_| Unavailable)?;
         let mut request = self
             .client
             .get(format!("{}{path}", self.coingecko))
@@ -675,12 +713,19 @@ impl MarketData {
             .collect();
         let mut coins = HashMap::new();
         let mut failed = false;
-        for page in ids.chunks(250) {
+        for (n, page) in ids.chunks(250).enumerate() {
             let path = format!(
                 "/coins/markets?vs_currency=usd&ids={}&per_page=250&page=1&sparkline=false",
                 page.join(",")
             );
-            match self.coingecko_get(&path).await {
+            // match self.coingecko_get(&path).await {
+            // The first page waits like any call; later ones may wait out a slot or two.
+            let wait = if n == 0 {
+                crate::dex::pacer::DEFAULT_MAX_WAIT
+            } else {
+                COINGECKO_INTERVAL * 2 + Duration::from_secs(1)
+            };
+            match self.coingecko_get_within(&path, wait).await {
                 Ok(body) => coins.extend(
                     parse_coin_markets(&body)
                         .into_iter()
@@ -940,6 +985,12 @@ impl MarketData {
 
     /// The 1Click token list, cached for five minutes.
     pub async fn tokens(&self) -> Result<Arc<Vec<OneClickToken>>, Unavailable> {
+        if let Some(Cached::Tokens(t)) = self.cached("tokens", TOKENS_TTL).await {
+            return Ok(t);
+        }
+        // One 1Click read at a time (15 Nov): concurrent misses wait for it.
+        let flight = self.gecko_flight("oneclick:tokens");
+        let _turn = flight.lock().await;
         if let Some(Cached::Tokens(t)) = self.cached("tokens", TOKENS_TTL).await {
             return Ok(t);
         }
@@ -1266,6 +1317,15 @@ const COINGECKO_IDS: &[(&str, &str)] = &[
 ];
 
 /// A curated id, else the id most of the 1Click entries for this symbol carry.
+/// The CoinGecko pacer every `MarketData` and the DEX build share (by its Redis name).
+fn coingecko_pacer(interval: Duration) -> crate::dex::pacer::Pacer {
+    crate::dex::pacer::Pacer::new(
+        "coingecko-dex",
+        interval,
+        crate::dex::pacer::DEFAULT_MAX_WAIT,
+    )
+}
+
 fn coingecko_id(symbol: &str, tokens: &[OneClickToken]) -> Option<String> {
     let upper = normalize_symbol(symbol).to_ascii_uppercase();
     if let Some((_, id)) = COINGECKO_IDS.iter().find(|(s, _)| *s == upper) {

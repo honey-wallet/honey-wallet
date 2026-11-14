@@ -209,7 +209,11 @@ async fn main() -> anyhow::Result<()> {
                 // with the API's budget in Redis); off with DEX routing.
                 Ok(market) => background.push(honey_server::routes::social::start_marker(
                     pool.clone(),
-                    market,
+                    {
+                        // The same CoinGecko pace as the API's (15 Nov).
+                        market.share_pacer(infrastructure.redis().cloned());
+                        market
+                    },
                     honey_server::dex::DexService::from_env()
                         .ok()
                         .filter(|d| d.enabled())

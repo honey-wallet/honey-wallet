@@ -29,6 +29,8 @@ const FROZEN: &str = "7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr";
 const WETH_BASE: &str = "0x4200000000000000000000000000000000000006";
 /// A token NEAR Intents 1Click lists on Base (the mock's `/tokens`).
 const ONECLICK_BASE: &str = "0x5555555555555555555555555555555555555555";
+/// A contract GoPlus has no data for (15 Nov: `unchecked`, asked again a day later).
+const NODATA: &str = "0x6666666666666666666666666666666666666666";
 
 #[derive(Clone)]
 struct Mock {
@@ -55,6 +57,14 @@ struct Mock {
     /// (whether each named a payer).
     rent: Arc<Mutex<u64>>,
     orders: Arc<Mutex<Vec<bool>>>,
+    /// Calls counted (15 Nov): GoPlus, `eth_call`s, CoinGecko's coin list, DexScreener's
+    /// per-chain pairs and its all-chain `/latest/dex/tokens`.
+    goplus_calls: Arc<Mutex<u32>>,
+    goplus_asked: Arc<Mutex<Vec<String>>>,
+    eth_calls: Arc<Mutex<u32>>,
+    coin_list_calls: Arc<Mutex<u32>>,
+    pair_calls: Arc<Mutex<u32>>,
+    latest_calls: Arc<Mutex<u32>>,
 }
 
 /// Sponsored swaps for everyone (`true`) or no one.
@@ -168,6 +178,9 @@ async fn order(
 }
 
 async fn rpc(State(m): State<Mock>, Json(body): Json<Value>) -> Json<Value> {
+    if body["method"] == "eth_call" {
+        *m.eth_calls.lock().unwrap() += 1;
+    }
     let result = match body["method"].as_str().unwrap() {
         "eth_call" => match body["params"][0]["data"].as_str().unwrap() {
             "0x313ce567" => {
@@ -225,6 +238,11 @@ async fn goplus(
     Query(q): Query<std::collections::HashMap<String, String>>,
 ) -> Json<Value> {
     let address = q["contract_addresses"].clone();
+    *m.goplus_calls.lock().unwrap() += 1;
+    m.goplus_asked.lock().unwrap().push(address.clone());
+    if address == NODATA {
+        return Json(json!({ "code": 1, "message": "OK", "result": {} }));
+    }
     let aero = address == format!("{AERO:#x}");
     let honeypot = address == SCAM || address == TRAP || (aero && *m.aero_honeypot.lock().unwrap());
     let proxy = aero && *m.aero_proxy.lock().unwrap();
@@ -238,6 +256,7 @@ async fn goplus(
 /// DexScreener pairs for AERO and SCAM (Base) or JUP (Solana): ages for the universe,
 /// prices now for quotes.
 async fn pairs(State(m): State<Mock>) -> Json<Value> {
+    *m.pair_calls.lock().unwrap() += 1;
     let aero = m
         .fresh
         .lock()
@@ -284,6 +303,12 @@ async fn serve() -> (String, Mock) {
         gecko_delay: Arc::default(),
         rent: Arc::default(),
         orders: Arc::default(),
+        goplus_calls: Arc::default(),
+        goplus_asked: Arc::default(),
+        eth_calls: Arc::default(),
+        coin_list_calls: Arc::default(),
+        pair_calls: Arc::default(),
+        latest_calls: Arc::default(),
     };
     let app = Router::new()
         .route("/base/api/v1/routes", get(routes))
@@ -299,7 +324,8 @@ async fn serve() -> (String, Mock) {
         )
         .route(
             "/coins/list",
-            get(|| async {
+            get(|State(m): State<Mock>| async move {
+                *m.coin_list_calls.lock().unwrap() += 1;
                 Json(json!([
                     {"id": "aerodrome-finance", "platforms": {"base": format!("{AERO:#x}")}},
                     {"id": "scam", "platforms": {"base": SCAM}}
@@ -333,6 +359,26 @@ async fn serve() -> (String, Mock) {
             }),
         )
         .route("/tokens/v1/base/{addresses}", get(pairs))
+        // Every chain at once (15 Nov, `lookup_any`): LONG trades on Base (its $40k pool)
+        // and thinly on Arbitrum; other addresses nowhere.
+        .route(
+            "/latest/dex/tokens/{address}",
+            get(
+                |State(m): State<Mock>, axum::extract::Path(address): axum::extract::Path<String>| async move {
+                    *m.latest_calls.lock().unwrap() += 1;
+                    let pair = |chain: &str, liquidity: f64| json!({
+                        "chainId": chain, "pairCreatedAt": 1_694_127_045_000i64,
+                        "priceUsd": "2.01", "liquidity": { "usd": liquidity },
+                        "baseToken": {"address": LONG}, "quoteToken": {"address": "0x00"}
+                    });
+                    Json(if address == LONG {
+                        json!({"pairs": [pair("arbitrum", 900.0), pair("base", 40_000.0)]})
+                    } else {
+                        json!({"pairs": null})
+                    })
+                },
+            ),
+        )
         .route("/tokens/v1/solana/{addresses}", get(pairs))
         .route("/api/v1/token_security/8453", get(goplus))
         .route(
@@ -1307,6 +1353,282 @@ async fn a_built_list_survives_a_restart_through_redis() {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     panic!("the stale copy was never rebuilt");
+}
+
+// Fewer provider calls (15 Nov)
+
+#[tokio::test]
+async fn goplus_no_data_is_asked_again_a_day_later_not_every_ten_minutes() {
+    let (dex, mock) = service().await;
+    let asked = |a: &str| {
+        mock.goplus_asked
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|x| x.as_str() == a)
+            .count()
+    };
+    let v = dex.safety().check(DexChain::Base, NODATA).await;
+    assert_eq!(v.flags, vec!["unchecked".to_string()]);
+    assert_eq!(asked(NODATA), 1);
+    // Eleven minutes and then 23 hours later: still the cached "no data".
+    for hours in [0, 23] {
+        dex.safety().backdate(
+            DexChain::Base,
+            NODATA,
+            Duration::from_secs(hours * 3_600 + 11 * 60),
+        );
+        assert!(!dex.safety().check(DexChain::Base, NODATA).await.checked);
+        assert_eq!(asked(NODATA), 1, "{hours} h");
+    }
+    // A day on: asked again.
+    dex.safety()
+        .backdate(DexChain::Base, NODATA, Duration::from_secs(2 * 3_600));
+    dex.safety().check(DexChain::Base, NODATA).await;
+    assert_eq!(asked(NODATA), 2);
+    // A passed verdict stands three days for the list (a quote still re-asks hourly).
+    let aero = format!("{AERO:#x}");
+    dex.safety().check(DexChain::Base, &aero).await;
+    dex.safety()
+        .backdate(DexChain::Base, &aero, Duration::from_secs(60 * 3_600));
+    assert!(dex.safety().cached(DexChain::Base, &aero).is_some());
+    dex.safety()
+        .backdate(DexChain::Base, &aero, Duration::from_secs(13 * 3_600));
+    assert!(dex.safety().cached(DexChain::Base, &aero).is_none());
+}
+
+#[test]
+fn the_warm_up_takes_each_chains_top_tokens_by_liquidity_then_volume() {
+    let token = |i: usize, liquidity: f64, volume: f64, flagged: bool| DexToken {
+        chain: DexChain::Base,
+        address: format!("0x{i:040x}"),
+        symbol: format!("T{i}"),
+        name: format!("T{i}"),
+        decimals: 18,
+        logo_url: None,
+        price_usd: 1.0,
+        liquidity_usd: Some(liquidity),
+        volume24h_usd: Some(volume),
+        coingecko_id: None,
+        market_cap_usd: None,
+        change24h_pct: None,
+        first_pool_at: None,
+        metadata: "chain",
+        flags: if flagged {
+            vec!["low_volume".into()]
+        } else {
+            Vec::new()
+        },
+    };
+    // 400 tokens; the deepest one is flagged (never checked), two tie on liquidity.
+    let mut tokens: Vec<DexToken> = (1..=400)
+        .map(|i| token(i, i as f64 * 1_000.0, 10.0, false))
+        .collect();
+    tokens.push(token(1_000, 1e12, 1e9, true));
+    tokens.push(token(1_001, 400_000.0, 99.0, false));
+    let warm = warm_candidates(&tokens, WARM_TOP);
+    assert_eq!(warm.len(), 300);
+    assert!(!warm.contains(&format!("0x{:040x}", 1_000)));
+    // The tie goes to the busier one; then by liquidity down to the 300th.
+    assert_eq!(warm[0], format!("0x{:040x}", 1_001));
+    assert_eq!(warm[1], format!("0x{:040x}", 400));
+    assert_eq!(warm[299], format!("0x{:040x}", 102));
+}
+
+#[tokio::test]
+async fn the_warm_up_stops_at_its_daily_budget_and_everything_at_the_cap() {
+    let (_, mock) = serve().await;
+    let safety = Arc::new(
+        safety::Safety::new(
+            reqwest::Client::new(),
+            mock.base.clone(),
+            Duration::from_millis(1),
+            Vec::new(),
+        )
+        .with_budget(2, 3),
+    );
+    let addresses: Vec<String> = (0..5).map(|i| format!("0x{:040x}", 0x7000 + i)).collect();
+    safety.warm(DexChain::Base, addresses.clone());
+    for _ in 0..100 {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(
+        *mock.goplus_calls.lock().unwrap(),
+        2,
+        "the warm-up's budget"
+    );
+    // A lookup or quote still gets the cap's last call, then nothing: unchecked
+    // (blocked), never a call past the cap.
+    assert!(safety.check(DexChain::Base, &addresses[3]).await.checked);
+    let past = safety.check(DexChain::Base, &addresses[4]).await;
+    assert_eq!(
+        (past.checked, past.flags),
+        (false, vec!["unchecked".to_string()])
+    );
+    assert_eq!(*mock.goplus_calls.lock().unwrap(), 3);
+    // Unchecked for the cap isn't remembered: tomorrow it is asked.
+    assert!(safety.cached(DexChain::Base, &addresses[4]).is_none());
+}
+
+#[tokio::test]
+async fn metadata_read_on_chain_carries_over_to_the_next_build() {
+    let (dex, mock) = service().await;
+    let reads = *mock.eth_calls.lock().unwrap();
+    assert!(reads > 0, "SCAM's metadata was read on chain");
+    // The next build reads nothing again for tokens the last list confirmed.
+    let rebuilt = dex.build_evm(DexChain::Base).await.unwrap();
+    assert_eq!(*mock.eth_calls.lock().unwrap(), reads);
+    let scam = rebuilt.iter().find(|t| t.address == SCAM).unwrap();
+    assert_eq!(
+        (scam.metadata, scam.symbol.as_str(), scam.decimals),
+        ("chain", "SCAM", 18)
+    );
+    assert!(!scam.flags.iter().any(|f| f == "no_decimals"));
+}
+
+#[tokio::test]
+async fn a_lookup_without_a_chain_asks_dexscreener_once_then_looks_up_one_chain() {
+    let (dex, mock) = service().await;
+    let (pairs, gecko) = (
+        *mock.pair_calls.lock().unwrap(),
+        *mock.gecko_calls.lock().unwrap(),
+    );
+    let row = dex.lookup_any(LONG).await.unwrap();
+    assert_eq!((row.chain, row.symbol.as_str()), (DexChain::Base, "SCAM"));
+    assert!(row.safety.ok, "{:?}", row.safety);
+    // One DexScreener call (all chains), its pairs reused: no per-chain pairs call, and
+    // one GeckoTerminal lookup on the deepest chain only.
+    assert_eq!(*mock.latest_calls.lock().unwrap(), 1);
+    assert_eq!(*mock.pair_calls.lock().unwrap(), pairs);
+    assert_eq!(*mock.gecko_calls.lock().unwrap(), gecko + 1);
+    // Asked again: from memory, no call; a token on a built list too.
+    assert_eq!(dex.lookup_any(LONG).await.unwrap(), row);
+    let aero = dex.lookup_any(&AERO.to_string()).await.unwrap();
+    assert_eq!(aero.chain, DexChain::Base);
+    assert_eq!(*mock.latest_calls.lock().unwrap(), 1);
+    // Traded nowhere: 404, remembered.
+    let none = "0x7777777777777777777777777777777777777777";
+    assert!(matches!(
+        dex.lookup_any(none).await,
+        Err(AppError::NotFound)
+    ));
+    assert!(matches!(
+        dex.lookup_any(none).await,
+        Err(AppError::NotFound)
+    ));
+    assert_eq!(*mock.latest_calls.lock().unwrap(), 2);
+    // A Solana mint needs its chain.
+    assert!(matches!(
+        dex.lookup_any(BONK).await,
+        Err(AppError::BadRequest(_))
+    ));
+    // And the route: `chain` is optional.
+    let app = crate::routes::dex::lookup_router(Arc::new(dex));
+    let response = tower::ServiceExt::oneshot(
+        app,
+        axum::http::Request::get(format!("/dex/token?address={LONG}"))
+            .body(axum::body::Body::empty())
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+}
+
+#[tokio::test]
+#[ignore = "requires isolated TEST_REDIS_URL"]
+async fn goplus_verdicts_come_back_from_redis_after_a_restart() {
+    let namespace = format!("dex-goplus-test:{}", Uuid::new_v4().simple());
+    let aero = format!("{AERO:#x}");
+    let (first, first_mock) = service_cold(|_| {}).await;
+    let first = first.with_redis(Some(test_redis(&namespace)));
+    first.universe(DexChain::Base).await.unwrap();
+    for t in [aero.as_str(), SCAM, NODATA] {
+        first.safety().check(DexChain::Base, t).await;
+    }
+    // (The build's own warm-up asks too; let it finish.)
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(*first_mock.goplus_calls.lock().unwrap() >= 3);
+    // A deploy: nothing in memory. The list and its verdicts come back from Redis.
+    let (second, mock) = service_cold(|_| {}).await;
+    let second = second.with_redis(Some(test_redis(&namespace))).shared();
+    let safe = second.tokens(DexChain::Base, false).await.unwrap();
+    assert_eq!(
+        safe.iter().map(|t| t.symbol.as_str()).collect::<Vec<_>>(),
+        vec!["AERO"]
+    );
+    assert!(!second.safety().check(DexChain::Base, NODATA).await.checked);
+    // A quote within the hour takes the restored verdict too.
+    assert!(
+        second
+            .safety()
+            .check_fresh(DexChain::Base, &aero)
+            .await
+            .unwrap()
+            .flags
+            .is_empty()
+    );
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(
+        *mock.goplus_calls.lock().unwrap(),
+        0,
+        "GoPlus not asked again"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires isolated TEST_REDIS_URL"]
+async fn same_coin_works_after_a_restart_from_redis() {
+    let namespace = format!("dex-same-coin-test:{}", Uuid::new_v4().simple());
+    let aero = format!("{AERO:#x}");
+    let aero_arb = "0x8888888888888888888888888888888888888888";
+    let (first, _) = service_cold(|_| {}).await;
+    let first = first.with_redis(Some(test_redis(&namespace)));
+    first.universe(DexChain::Base).await.unwrap();
+    first.safety().check(DexChain::Base, &aero).await;
+    // CoinGecko's index as the build saved it, plus AERO's (made-up) Arbitrum contract.
+    let redis = test_redis(&namespace);
+    let index = universe::CoinIndex {
+        chains: [
+            (
+                DexChain::Base,
+                vec![("aerodrome-finance".to_string(), aero.clone())],
+            ),
+            (
+                DexChain::Arbitrum,
+                vec![("aerodrome-finance".to_string(), aero_arb.to_string())],
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    };
+    let body = serde_json::to_string(&SavedCoinGecko {
+        at: unix_now(),
+        value: &index,
+    })
+    .unwrap();
+    let _: () = redis
+        .query(
+            redis::cmd("SET")
+                .arg(redis.key("dex-coingecko", "coin-index"))
+                .arg(body),
+        )
+        .await
+        .unwrap();
+    // A restart: the refresher restores the lists; nothing reads CoinGecko's list.
+    let (second, mock) = service_cold(|_| {}).await;
+    let second = second.with_redis(Some(test_redis(&namespace))).shared();
+    second.universe(DexChain::Base).await.unwrap();
+    let found = second.same_coin(DexChain::Arbitrum, aero_arb).await;
+    assert_eq!(
+        found
+            .iter()
+            .map(|t| (t.chain, t.address.as_str()))
+            .collect::<Vec<_>>(),
+        vec![(DexChain::Base, aero.as_str())]
+    );
+    assert_eq!(*mock.coin_list_calls.lock().unwrap(), 0);
+    assert_eq!(*mock.gecko_calls.lock().unwrap(), 0, "no build");
 }
 
 /// Read-only quotes against the real providers (no signing, nothing sent):

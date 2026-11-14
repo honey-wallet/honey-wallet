@@ -1994,7 +1994,8 @@ export interface DexSafety {
 
 /**
  * `GET /api/v1/dex/tokens?chain=…[&all=1]`: one token of the DEX universe. Also the whole
- * answer of `GET /api/v1/dex/token?chain=…&address=…` (a lookup by contract).
+ * answer of `GET /api/v1/dex/token?[chain=…&]address=…` (a lookup by contract; without
+ * `chain`, an EVM contract on the chain that trades it deepest).
  */
 export interface DexToken {
   chain: DexChain;
