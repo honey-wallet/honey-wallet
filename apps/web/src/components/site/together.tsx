@@ -15,7 +15,7 @@ import styles from './together.module.css';
  * Better with friends: the deck's slide 8 (deck/src/components/Together.tsx), the app's launch
  * screen in three steps, drawn as tiles in the features grid's style: a grey tile, its words, and a
  * honey panel. "Choose who sees it" and "Earn when others copy" are real controls: Liquid Glass tabs
- * (Liquid UI's LiquidTabs, tinted honey) for who sees it, and a 1–50% slider for the cut. Copy is
+ * (Liquid UI's LiquidTabs, tinted honey) for who sees it, and a 1–30% slider for the cut. Copy is
  * the app's own (apps/mobile/src/app/(jars)/thesis-new.tsx); faces are its DiceBear avatars.
  */
 
@@ -56,9 +56,9 @@ const VISIBILITY = [
     hint: 'The idea and holdings are public; anyone can copy',
   },
 ] as const;
-/** The cut runs 1–50% of copiers' profit, picked on a slider. */
+/** Matches CopyCutSlider in the native app: 1–30%. */
 const FEE_MIN = 1;
-const FEE_MAX = 50;
+const FEE_MAX = 30;
 const EXAMPLE_PROFIT = 1000; // an illustrative copiers' profit, in dollars
 
 const ICON: Record<string, ReactNode> = {

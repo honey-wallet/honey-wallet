@@ -1,0 +1,56 @@
+.phone {
+  position: relative;
+  width: 100%;
+  padding: 2.1%;
+  border: 1px solid #737373;
+  border-radius: 15.5% / 7.2%;
+  background: linear-gradient(130deg, #c4c4c4, #343434 12%, #111 48%, #666 78%, #242424);
+  box-shadow:
+    0 0 0 1px #242424,
+    0 3px 0 2px #111,
+    0 30px 60px -18px rgb(0 0 0 / 28%);
+}
+.phone::before,
+.phone::after {
+  content: "";
+  position: absolute;
+  width: 3px;
+  border-radius: 2px;
+  background: linear-gradient(#737373, #242424);
+}
+.phone::before {
+  top: 19%;
+  left: -3px;
+  height: 13%;
+}
+.phone::after {
+  top: 23%;
+  right: -3px;
+  height: 10%;
+}
+.display {
+  overflow: hidden;
+  aspect-ratio: 1206 / 2622;
+  border-radius: 13.8% / 6.35%;
+  background: #fff;
+}
+.display img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.dark {
+  display: none;
+}
+:global(.dark) .light {
+  display: none;
+}
+:global(.dark) .dark {
+  display: block;
+}
+:global(.dark) .phone {
+  box-shadow:
+    0 0 0 1px #555,
+    0 3px 0 2px #111,
+    0 32px 70px -18px rgb(0 0 0 / 60%);
+}

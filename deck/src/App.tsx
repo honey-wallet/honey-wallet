@@ -4,7 +4,8 @@ import { cite } from './components/Cite';
 import Clip from './components/Clip';
 import Contacts from './components/Contacts';
 import Friends from './components/Friends';
-import { Brand, LogoStack } from './components/Logo';
+import { Brand, LogoStack, OnChain } from './components/Logo';
+import ProductShowcase from './components/ProductShowcase';
 import RoutePlan, { ChainMarks } from './components/RoutePlan';
 import Together from './components/Together';
 import { agentStages, samplePicks, sampleRoutes, sources } from './data/sources';
@@ -30,7 +31,6 @@ const CHAINS = [
   'Gnosis',
   'Linea',
   'Scroll',
-  'Injective',
   'Solana',
   'NEAR',
 ];
@@ -72,7 +72,7 @@ export default function App() {
       <ChartSlide
         nav="The problem"
         notes="Today a market view means researching tokens one by one, finding the chain each trades on, bridging and placing several swaps with different slippage. Most people give up, or buy one token and hope."
-        title="1. One idea, eight steps."
+        title="One idea, eight steps."
         source={
           <>
             <b>Figure 1.</b> Today vs Honey {cite(4)}.
@@ -88,7 +88,7 @@ export default function App() {
       <ChartSlide
         nav="The market"
         notes="Crypto.com estimates 741 million owners at the end of 2025, up from 659 million. Reown and Nansen surveyed 1,038 active users in the US and UK: 62% use two or more wallets, and the top reason, at 48%, is reaching different chains. NEAR Intents is the rail that already moves this money across chains."
-        title="2. 741M own crypto on many chains. They need one easy app."
+        title="741M own crypto on many chains. They need one easy app."
         source={
           <>
             <b>Figure 2.</b> End of 2025 {cite(1)} · 1,038 active users {cite(2)} · 9 Nov 2026{' '}
@@ -140,7 +140,7 @@ export default function App() {
       <ChartSlide
         nav="Jars"
         notes="The real app, in test mode. Write an idea, or paste a post. The agent proposes a jar with picks, weights and fees, ready to edit. One approval buys every pick on every chain, and the jar goes live."
-        title="3. Meet Jars."
+        title="Meet Jars."
         source={
           <>
             <b>Figure 3.</b> Honey app, test mode.
@@ -153,7 +153,7 @@ export default function App() {
       <ChartSlide
         nav="The agent"
         notes="These are the six steps the app shows while the agent works on NEAR AI Cloud. The proposal names each pick, its chain, its weight and why. A critic agent writes the strongest objection, so the user sees the case against before buying."
-        title="4. The agent picks tokens from your thesis."
+        title="The agent picks tokens from your thesis."
         source={
           <>
             <b>Figure 4.</b> Honey app, test mode, $500.
@@ -172,7 +172,7 @@ export default function App() {
       <ChartSlide
         nav="Routes"
         notes="The route planner spreads each buy across the venues and chains where it trades, cheapest first, within the user's max slippage. Here a $5,000 jar starting as USDC on Base fills on four chains: TAO splits across Uniswap on Ethereum and Aerodrome on Base. These are the planner's real outputs on test-mode prices and pool depths."
-        title="5. One approval, every chain. Easy to use."
+        title="One approval, every chain. Easy to use."
         source={
           <>
             <b>Figure 5.</b> Route planner, $5,000 jar, test-mode prices.
@@ -192,7 +192,7 @@ export default function App() {
           routes={sampleRoutes}
           from={
             <>
-              <LogoStack ids={['base', 'usdc']} size="24px" />
+              <OnChain id="USDC" chain="Base" ring="var(--surface-2)" size="30px" />
               USDC on Base · $5,000
             </>
           }
@@ -202,7 +202,7 @@ export default function App() {
       <ChartSlide
         nav="NEAR"
         notes="NEAR AI Cloud runs the agent (apps/server/src/thesis/near_ai.rs). NEAR Intents 1Click quotes and settles every buy and bridge (providers/near_intents.rs, api-client/src/near-intents.ts); its token list is the only place a token address can come from (thesis/registry.rs). Native NEAR accounts live in packages/keyring. Quotes use dry runs until the user confirms."
-        title="6. How it works."
+        title="How it works."
         source={
           <>
             <b>Figure 6.</b> Route planner amounts, test-mode prices {cite(4)}.
@@ -216,47 +216,30 @@ export default function App() {
       </ChartSlide>
 
       <ChartSlide
-        nav="Safety"
-        notes="Giving an agent money is the risk. Honey's agent never gets it. Links are wrapped as quoted material the model is told not to obey. Every answer is checked against a strict schema and retried once if wrong. Tokens come only from the NEAR Intents list. The user approves once, with a max slippage, and Intents fills within it."
-        title="7. One click. Secure investing with agents."
-        source={
-          <>
-            <b>Figure 7.</b> Safeguards in the server code {cite(4)}.
-          </>
-        }
-      >
-        <Clip
-          name="safety"
-          label="Paste any post; hidden commands are ignored; the answer is checked; only real tokens; only you sign, because the agent holds no keys"
-        />
-      </ChartSlide>
-
-      <ChartSlide
         nav="Friends"
-        notes="The real launch screen. Each friend gets an invite to put in their share, and trades need a majority to sign. A jar can be private, show only its returns, or be fully public. Creators pick their cut of copiers' profit, never of a loss; Honey keeps 1.5%."
-        title="8. Better with friends."
+        notes="The real launch screen. Each friend gets an invite to put in their share, and trades need a majority to sign. A jar can be private, show only its returns, or be fully public. Creator copy-fee controls are part of the prototype; this slide does not claim collected revenue."
+        title="Better with friends."
         source={
           <>
-            <b>Figure 8.</b> Honey app, test mode.
+            <b>Figure 7.</b> Honey app, test mode.
           </>
         }
       >
         <Together />
       </ChartSlide>
 
-      <Slide center nav="Close" notes="Close on the line, then the repo.">
-        <Reveal>
-          <Lockup big />
-        </Reveal>
-        <Reveal delay={0.08}>
-          <h2 className="display" style={{ marginTop: 28, maxWidth: '14ch', marginInline: 'auto' }}>
-            One idea. One jar.
-          </h2>
-        </Reveal>
-        <Reveal delay={0.16}>
-          <Contacts />
-        </Reveal>
-      </Slide>
+      <ChartSlide
+        nav="The wallet"
+        notes="The current Wallet screen lives beside Feed. Tokens, jars, NFTs and activity share one home. These are sample balances from the native app."
+        title="A social app. A wallet that’s yours."
+        source={
+          <>
+            <b>Product preview.</b> Current native wallet · sample balances.
+          </>
+        }
+      >
+        <ProductShowcase screen="wallet" />
+      </ChartSlide>
 
       <Slide nav="References" notes="Every outside number in this deck links here.">
         <Reveal>

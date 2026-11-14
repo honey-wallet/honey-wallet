@@ -14,10 +14,11 @@ import styles from './film.module.css';
  * Each cut opens and closes on an empty screen (so the loop joins cleanly), and its poster is a
  * frame from the middle. Played from 0, the card went poster, then blank, then the film: a flash
  * every time it came on screen. So the first play starts on the poster's own frame, where the film
- * holds still for a beat, and the hand-off is invisible. Measured against the posters with ffmpeg:
- * the hold runs 8.6-10.9s in the wide cuts and 4.7-6.1s in the portrait ones.
+ * holds still for a beat, and the hand-off is invisible. The current flow opens on the centred
+ * review card, held between 4.5 and 8.3 seconds, before the approval and holdings arrive.
  */
-const POSTER_AT = { wide: 8.7, tall: 4.8 } as const;
+const VERSION = '2026-11-14-inset-frames-2';
+const POSTER_AT = { wide: 6.5, tall: 4.8 } as const;
 export function Film({
   name,
   label,
@@ -84,9 +85,9 @@ export function Film({
               loop
               muted
               playsInline
-              poster={`${file}.jpg`}
+              poster={`${file}.jpg?v=${VERSION}`}
               preload="none"
-              src={`${file}.mp4`}
+              src={`${file}.mp4?v=${VERSION}`}
             />
           );
         }),

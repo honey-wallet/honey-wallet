@@ -332,9 +332,10 @@
   gap: 12px;
 }
 .rp-pill {
-  padding: 8px 14px;
+  padding: 8px 18px 8px 10px;
   border-radius: 999px;
   background: var(--surface-2);
+  box-shadow: 0 0 0 1px var(--hair-2);
   font-size: clamp(14px, 1.2vw, 17px);
   font-weight: 600;
 }
@@ -871,7 +872,17 @@
   width: var(--lo-size);
   height: var(--lo-size);
   margin: 3px;
-  box-shadow: 0 0 0 2.5px #131313;
+  box-shadow: 0 0 0 2.5px rgb(0 0 0 / 55%);
+}
+/* As the landing page: the pick's coin bare, its chain badge at its own size and ring. */
+.rp .rp-sym .lo-on > .lo,
+.rp .rp-pill .lo-on > .lo {
+  box-shadow: none;
+}
+.rp .lo-on .lo-badge .lo {
+  width: var(--lo-size);
+  height: var(--lo-size);
+  box-shadow: 0 0 0 2px var(--lo-ring);
 }
 .rp .rp-leg .rp-venue {
   min-width: 0;
@@ -928,21 +939,21 @@
 /* Contacts on the close and thank-you slides: icon, small label, the address. */
 .ct {
   list-style: none;
-  margin: 36px auto 0;
+  margin: 44px auto 0;
   padding: 0;
   display: grid;
   grid-template-columns: repeat(3, minmax(0, max-content));
   justify-content: center;
-  gap: 22px 44px;
+  gap: 14px 32px;
   text-align: left;
 }
 .ct-compact {
-  margin-top: 28px;
+  margin-top: 36px;
 }
 .ct a {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 10px;
   color: var(--fg);
   text-decoration: none;
 }
@@ -950,27 +961,27 @@
   display: grid;
   place-items: center;
   flex: none;
-  width: 46px;
-  height: 46px;
+  width: 34px;
+  height: 34px;
   border-radius: 50%;
   background: rgb(255 255 255 / 6%);
   border: 1px solid rgb(255 255 255 / 10%);
   color: var(--primary);
 }
 .ct-icon svg {
-  width: 20px;
-  height: 20px;
+  width: 15px;
+  height: 15px;
 }
 .ct-text {
   display: grid;
   gap: 2px;
 }
 .ct-text small {
-  font-size: 13px;
+  font-size: 11px;
   color: var(--muted, #9a9a9a);
 }
 .ct-text b {
-  font-size: 18px;
+  font-size: 14px;
   font-weight: 600;
   white-space: nowrap;
 }

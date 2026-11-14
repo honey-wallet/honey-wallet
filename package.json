@@ -12,6 +12,7 @@
     "dev:server": "turbo run dev --filter=@honey-wallet/server",
     "dev:web": "turbo run dev --filter=@honey-wallet/web --filter=@honey-wallet/server",
     "dev:mobile": "turbo run dev --filter=@honey-wallet/mobile --filter=@honey-wallet/server",
+    "judge:server": "bash scripts/judge-server.sh",
     "build": "turbo run build",
     "test": "turbo run test",
     "typecheck": "turbo run typecheck",

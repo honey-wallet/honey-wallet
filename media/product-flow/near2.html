@@ -1,0 +1,114 @@
+<!doctype html><meta charset="utf-8">
+<style>html,body{margin:0;background:#131313}canvas{display:block}</style>
+<canvas id="c"></canvas>
+<script src="motion.js"></script>
+<script src="inco.js"></script>
+<script>
+// What NEAR does, as one pipeline that builds left to right. 13 s loop, 2000×800. Flat: no glow.
+// Your idea → NEAR AI Cloud (six agent stages fill a ring) → the jar → NEAR Intents (one approval) → every chain.
+// Stages: thesis.ts STAGES. Jar and routes: the app's test-mode sample and route planner.
+const DUR = 13; setupFilm(DUR);
+let CN;
+const CY = 440;                                         // the pipeline's centre line
+const X = { idea: 170, ai: 480, basket: 890, intents: 1275, chains: 1590 };
+const PICKS = [['tao', 'TAO', 45, '#9AA3AE'], ['render', 'RENDER', 30, '#E5484D'], ['near', 'NEAR', 25, '#00C08B']];
+const ROUTES = [['eth', 'uni', '$1,890'], ['base', 'aero', '$360'], ['sol', 'jup', '$1,500'], ['near', 'ref', '$1,250']];
+const RYS = [280, 390, 500, 610];
+const CAP = CY + 172;                                  // one baseline for every node label
+
+function tile(x, y, size, s = 1, opts = {}) { g.save(); g.translate(x, y); g.scale(s, s); card(-size / 2, -size / 2, size, size, { r: size * 0.24, ...opts }); g.restore(); }
+function caption(s, x, y, a = 1, color = HC.muted) { text(s, x, y, { size: 26, weight: 600, font: HEAD, color, align: 'center', a }); }
+// A line that draws itself from (x1,y1) to (x2,y2) along an S-curve; u = 0..1 drawn.
+function link(x1, y1, x2, y2, u, color = 'rgba(246,243,235,0.28)', w = 2.5) {
+  if (u <= 0) return;
+  g.save(); g.strokeStyle = color; g.lineWidth = w; g.lineCap = 'round'; g.beginPath();
+  for (let i = 0; i <= 48 * u; i++) { const v = i / 48, x = mix(x1, x2, v), y = mix(y1, y2, v * v * (3 - 2 * v)); i ? g.lineTo(x, y) : g.moveTo(x, y); }
+  g.stroke(); g.restore();
+}
+function pointOn(x1, y1, x2, y2, v) { return [mix(x1, x2, v), mix(y1, y2, v * v * (3 - 2 * v))]; }
+
+function draw(t) {
+  fog(); grid(0.9);
+  const A = win(t, 0.2, 12.3, 0.3, 0.5);               // whole-scene fade for the loop
+  g.save(); g.globalAlpha = A;
+
+  // ── your idea
+  tile(X.idea, CY, 112, 0.8 + 0.2 * sp(t - 0.3, FEEL.snappy));
+  icon('bulb', X.idea, CY, 50, HC.honey);
+  caption('Your idea', X.idea, CAP, c01((t - 0.5) / 0.3));
+
+  // ── NEAR AI Cloud: the agent's six stages fill a ring
+  link(X.idea + 62, CY, X.ai - 130, CY, eo((t - 0.8) / 0.45), HC.honey, 3);
+  if (t > 1.1) {
+    const s = 0.7 + 0.3 * sp(t - 1.1, FEEL.playful);
+    tile(X.ai, CY, 184, s);
+    g.save(); g.translate(X.ai, CY); g.scale(s, s); coin(CN.near, 0, 0, 96); g.restore();
+    // ring: 6 segments, one per stage, ticking on in order
+    const R = 122;
+    for (let i = 0; i < 6; i++) {
+      const a0 = -Math.PI / 2 + i * (Math.PI / 3) + 0.06, a1 = a0 + Math.PI / 3 - 0.12;
+      const on = c01((t - 1.6 - i * 0.36) / 0.25);
+      g.save(); g.lineWidth = 7; g.lineCap = 'round';
+      g.strokeStyle = '#2a2a2a'; g.beginPath(); g.arc(X.ai, CY, R, a0, a1); g.stroke();
+      if (on > 0) { g.strokeStyle = HC.honey; g.beginPath(); g.arc(X.ai, CY, R, a0, mix(a0, a1, eo(on))); g.stroke(); }
+      g.restore();
+    }
+    caption('NEAR AI Cloud', X.ai, CAP, c01((t - 1.3) / 0.3), HC.text);
+  }
+
+  // ── the jar it returns
+  link(X.ai + 132, CY, X.basket - 170, CY, eo((t - 4.1) / 0.45), HC.honey, 3);
+  if (t > 4.4) {
+    const s = 0.8 + 0.2 * sp(t - 4.4, FEEL.playful), w = 320, h = 290;
+    g.save(); g.translate(X.basket, CY); g.scale(s, s);
+    card(-w / 2, -h / 2, w, h, { r: 28 });
+    PICKS.forEach(([id, sym, wgt, col], i) => {
+      const y = -h / 2 + 62 + i * 84, p = eo((t - 4.8 - i * 0.12) / 0.6);
+      coin(CN[id], -w / 2 + 52, y, 50);
+      text(sym, -w / 2 + 92, y - 14, { size: 23, weight: 650 });
+      rr(-w / 2 + 92, y + 10, 150, 8, 4); g.fillStyle = '#2a2a2a'; g.fill();
+      rr(-w / 2 + 92, y + 10, 150 * (wgt / 45) * p, 8, 4); g.fillStyle = col; g.fill();
+      text(`${wgt}%`, w / 2 - 28, y, { size: 24, weight: 600, font: MONO, align: 'right' });
+    });
+    g.restore();
+    caption('Jar', X.basket, CAP, c01((t - 4.6) / 0.3), HC.text);
+  }
+
+  // ── NEAR Intents: one approval
+  link(X.basket + 168, CY, X.intents - 100, CY, eo((t - 7.8) / 0.45), HC.honey, 3);
+  if (t > 8.1) {
+    const s = 0.7 + 0.3 * sp(t - 8.1, FEEL.playful);
+    tile(X.intents, CY, 184, s, { black: true });
+    g.save(); g.translate(X.intents, CY); g.scale(s, s); coin(CN.near, 0, 0, 96); g.restore();
+    tap(X.intents + 30, CY + 40, t - 8.7);
+    caption('NEAR Intents', X.intents, CAP, c01((t - 8.3) / 0.3), HC.text);
+    caption('One approval', X.intents, CAP + 38, c01((t - 8.8) / 0.3), HC.honey);
+  }
+
+  // ── every chain: the venue mark with a smaller chain badge, then the amount
+  ROUTES.forEach(([chain, venue, amt], i) => {
+    const t0 = 9.0 + i * 0.1, y = RYS[i], x0 = X.intents + 94, x1 = X.chains - 44;
+    link(x0, CY, x1, y, eo((t - t0) / 0.45));
+    // a honey drop rides each line once the order goes out
+    const v = (t - 9.9 - i * 0.08) / 0.9;
+    if (v > 0 && v < 1) { const [dx, dy] = pointOn(x0, CY, x1, y, v); g.save(); g.globalAlpha *= Math.sin(Math.PI * v); g.fillStyle = HC.honey; g.beginPath(); g.arc(dx, dy, 7, 0, 7); g.fill(); g.restore(); }
+    if (t > t0 + 0.35) {
+      const s = 0.6 + 0.4 * sp(t - t0 - 0.35, FEEL.playful);
+      g.save(); g.translate(X.chains, y); g.scale(s, s);
+      coin(CN[venue], 0, 0, 64);
+      // Match OnChain's hierarchy; a square badge is optically smaller.
+      const badgeSize = 64 * 0.46 * (CN[chain].square ? 0.8 : 1);
+      coin(CN[chain], 28, 24, badgeSize, '#131313');
+      g.restore();
+      text(amt, X.chains + 196, y, { size: 32, weight: 600, font: MONO, color: HC.honey, align: 'right', a: c01((t - t0 - 0.6) / 0.25) });
+    }
+  });
+  g.restore();
+
+  feather();
+  head('Your idea goes to *NEAR AI Cloud.', t, 0.2, 3.9);
+  head('It comes back as a *jar.', t, 4.3, 7.4);
+  head('*NEAR Intents fills it, on every chain.', t, 7.7, 12.1);
+}
+loadKit(COIN_FILES).then((im) => { CN = COINS(im); live(draw, DUR); });
+</script>

@@ -1,0 +1,70 @@
+<!doctype html><meta charset="utf-8">
+<style>html,body{margin:0;background:#FFFFFF}canvas{display:block}</style>
+<canvas id="c"></canvas>
+<script src="motion.js"></script>
+<script src="inco-light.js"></script>
+<script src="screen-frame.js"></script>
+<script>
+// LIGHT version of flow2.html for the landing page's light theme: same beats and timing, the app's light
+// screenshots (430×932 @2x, test mode, current app), crops measured from those screenshots.
+// Jars: write an idea, review the jar, approve once. No device frame: real app cards float on their own
+// (crops of the test-mode app at 2x). The input card is rebuilt from the app's chat bar. 14 s loop.
+const DUR = 14; setupFilm(DUR);
+let I, CN;
+const IDEA = 'AI data-centre spending keeps growing';
+// Current native screenshot crops (1206 × 2622).
+const PROPOSAL = [48, 570, 1110, 1450];
+const APPROVAL = [48, 215, 1110, 2300];          // the proposal card, through the Buy button
+// The approval tap is mapped to the actual launch button below.             // Buy $500 centre, inside that crop
+const HOLDINGS = [48, 1440, 1110, 810];         // the launched jar's holdings list
+function inputCard(t, a) {
+  if (a <= 0) return; g.save(); g.globalAlpha = a;
+  const w = 1040, h = 120, x = 1000 - w / 2, y = 380;
+  card(x, y, w, h, { r: 32 });
+  const n = Math.floor(c01((t - 0.8) / 1.6) * IDEA.length);
+  if (n === 0) text('An idea, or a link to a post', x + 44, y + h / 2, { size: 34, color: HC.faint });
+  else text(IDEA.slice(0, n), x + 44, y + h / 2, { size: 34, weight: 500 });
+  if (n > 0 && n < IDEA.length) { g.font = `500 34px ${UI}`; g.fillStyle = HC.honey; g.fillRect(x + 46 + g.measureText(IDEA.slice(0, n)).width, y + 40, 3, 40); }
+  const sx = x + w - 66, sy = y + h / 2, sent = sp(t - 2.7, FEEL.snappy);
+  g.beginPath(); g.arc(sx, sy, 36 * (1 - 0.1 * Math.sin(Math.PI * c01((t - 2.6) / 0.25))), 0, 7); g.fillStyle = n === IDEA.length ? HC.honey : '#EBEBEB'; g.fill();
+  g.strokeStyle = n === IDEA.length ? '#242329' : HC.muted; g.lineWidth = 4; g.lineCap = 'round'; g.lineJoin = 'round';
+  g.beginPath(); g.moveTo(sx, sy + 13); g.lineTo(sx, sy - 13); g.moveTo(sx - 11, sy - 2); g.lineTo(sx, sy - 13); g.lineTo(sx + 11, sy - 2); g.stroke();
+  tap(sx, sy, t - 2.6);
+  text('Honey can be wrong. You review and sign every order.', 1000, y + h + 52, { size: 21, color: HC.muted, align: 'center' });
+  // the agent's status line, the app's own words
+  const st = c01((t - 2.9) / 0.3);
+  if (st > 0) { g.save(); g.globalAlpha *= st; text('Researched your idea', 1000, y - 70, { size: 24, font: MONO, color: HC.text, align: 'center' }); g.restore(); }
+  g.restore();
+}
+function draw(t) {
+  fog(t); grid(0.9);
+  inputCard(t, win(t, 0.3, 3.9, 0.4, 0.35));
+  // the proposal: centre, then left for the approve beat
+  const pa = win(t, 4.1, 13.3, 0.4, 0.45), mv = sp(t - 8.3);
+  const ph = 590, pcx = mix(1000, 700, mv), pcy = 470;
+  const approving = t >= 8.3;
+  const crop = approving ? APPROVAL : PROPOSAL;
+  const pw = shot(approving ? I.approval : I.proposal, ...crop, pcx, pcy, ph, { a: pa, s: 1 - 0.04 * mv, blur: (1 - pa) * 12 });
+  if (pa > 0) {
+    const { inset, contentHeight } = screenFrame(crop[2], crop[3], ph);
+    const k = contentHeight / crop[3], scale = 1 - 0.04 * mv;
+    const bx = pcx + (-pw / 2 + inset + (600 - crop[0]) * k) * scale;
+    const by = pcy + (-ph / 2 + inset + (2430 - crop[1]) * k) * scale;
+    tap(bx, by, t - 9.0);
+  }
+  // the jar
+  const ja = win(t, 9.5, 13.3, 0.35, 0.45), js = 0.94 + 0.06 * sp(t - 9.5);
+  if (ja > 0) {
+    pill(1430, 260, 'In your jar', { a: ja, honey: true, coins: [CN.honey], size: 28 });
+    shot(I.jar, ...HOLDINGS, 1430, 470, 300, { a: ja, s: js });
+    g.save(); g.globalAlpha = ja * c01((t - 10.2) / 0.3);
+    pill(1430, 680, 'Bought on 3 chains', { coins: [CN.eth, CN.sol, CN.near], size: 24 });
+    g.restore();
+  }
+  feather(60); // narrower than the dark cut: on white a 140 px fade washes the Buy button out
+  head('Write an *idea.', t, 0.2, 3.7);
+  head('Review the *jar.', t, 4.2, 8.1);
+  head('Approve *once.', t, 8.4, 13.1);
+}
+loadKit({ ...COIN_FILES, proposal: 'assets/proposal-light.png', approval: 'assets/approval-light.png', jar: 'assets/jar-light.png' }).then((im) => { I = im; CN = COINS(I); live(draw, DUR); });
+</script>

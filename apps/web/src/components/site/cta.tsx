@@ -1,5 +1,5 @@
 import { InfoIcon } from 'lucide-react';
-import { siAndroid, siApple, siGooglechrome } from 'simple-icons';
+import { siAndroid, siApple } from 'simple-icons';
 import { CtaScene } from './art';
 import { Reveal } from './motion';
 import styles from './story.module.css';
@@ -11,7 +11,6 @@ import { WaitlistForm } from './waitlist-form';
 const PLATFORMS = [
   { name: 'iPhone', icon: siApple, color: 'var(--fg)' },
   { name: 'Android', icon: siAndroid, color: `#${siAndroid.hex}` },
-  { name: 'Chrome', icon: siGooglechrome, color: `#${siGooglechrome.hex}` },
 ];
 
 /** The close: one headline and the waitlist. Every "Join the waitlist" on the page lands here. */

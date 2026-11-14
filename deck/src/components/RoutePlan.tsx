@@ -2,7 +2,7 @@ import { motion, useReducedMotion } from 'framer-motion';
 import type { ReactNode } from 'react';
 import { useDeck } from '../deck/DeckContext';
 import Reveal from '../deck/Reveal';
-import Logo, { logoFor } from './Logo';
+import Logo, { logoFor, OnChain } from './Logo';
 import './honey.css';
 
 /* Each pick's buy split across the chains and venues it trades on, as stacked bars. */
@@ -22,7 +22,6 @@ const CHAIN: Record<string, string> = {
   Gnosis: '#3E6957',
   Linea: '#61DFFF',
   Scroll: '#EB7106',
-  Injective: '#4D3DFF',
 };
 const usd = (n: number) => `$${n.toLocaleString('en-US')}`;
 
@@ -65,7 +64,8 @@ export default function RoutePlan({ routes, from }: { routes: Route[]; from: Rea
         {routes.map((r, i) => (
           <Reveal key={r.symbol} delay={0.1 + i * 0.1} className="rp-row">
             <div className="rp-sym">
-              {logoFor(r.symbol) && <Logo id={logoFor(r.symbol)!} size="clamp(30px, 3vw, 44px)" />}
+              {/* Bought as a token on its first leg's chain (TAO on Ethereum, RENDER on Solana). */}
+              <OnChain id={r.symbol} chain={r.legs[0].chain} size="clamp(30px, 3vw, 44px)" />
               <div>
                 <b>{r.symbol}</b>
                 <span>{usd(r.usd)}</span>
@@ -90,13 +90,13 @@ export default function RoutePlan({ routes, from }: { routes: Route[]; from: Rea
                     title={`${l.venue} on ${l.chain}`}
                     style={{ flex: l.usd, background: CHAIN[l.chain] ?? 'var(--fg)' }}
                   >
-                    {logoFor(l.venue) && (
-                      <Logo
-                        id={logoFor(l.venue)!}
-                        className="rp-venue-logo"
-                        size="clamp(32px, 3vw, 48px)"
-                      />
-                    )}
+                    <OnChain
+                      id={l.venue}
+                      chain={l.chain}
+                      className="rp-venue-logo"
+                      ring="#fff"
+                      size="clamp(32px, 3vw, 48px)"
+                    />
                     {l.usd / r.usd >= 0.25 && <b className="rp-venue">{l.venue}</b>}
                     <span className="rp-amt">{usd(l.usd)}</span>
                   </span>
