@@ -673,7 +673,14 @@ function JarBody({
         : undefined,
     };
   });
-  const period = active === 'All' ? 'since launch' : RANGE_LABEL[active];
+  // const period = active === 'All' ? 'since launch' : RANGE_LABEL[active];
+  // Your own jar (bought or copied, not a group's or a shared wallet's): on All it's your
+  // profit since you bought, in dollars and %, from what you paid (history[0], the cost
+  // basis), as a broker shows a position.
+  const bought = jar.mine && !jar.groupId && !jar.sharedWallet && active === 'All';
+  const profit = jarValue(jar) - (jar.history[0] ?? jarValue(jar));
+  const period =
+    active === 'All' ? (bought ? 'since you bought' : 'since launch') : RANGE_LABEL[active];
   // The date under the finger: the line's points are spread evenly up to now.
   const dateAt = (i: number) =>
     new Date(Date.now() - (1 - i / Math.max(data.length - 1, 1)) * spanMs).toLocaleDateString(
@@ -724,7 +731,12 @@ function JarBody({
             />
           )}
           <View style={styles.changeRow}>
-            {jar.mine ? <Change value={change * 100} /> : null}
+            {/* {jar.mine ? <Change value={change * 100} /> : null} */}
+            {bought && scrub === null ? (
+              <ProfitChange usd={profit} pct={change * 100} />
+            ) : jar.mine ? (
+              <Change value={change * 100} />
+            ) : null}
             <TextSwap
               text={
                 noReturns
@@ -1109,6 +1121,21 @@ function Message({ text, action, onPress }: { text: string; action: string; onPr
           onPress();
         }}
       />
+    </View>
+  );
+}
+
+/** "▲ $154.09 (15.41%)": your jar's profit since you bought, the coin page's Change with dollars. */
+function ProfitChange({ usd, pct }: { usd: number; pct: number }) {
+  const c = useTheme();
+  const down = usd < 0 || (usd === 0 && pct < 0);
+  const color = down ? c.error : c.success;
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
+      <Icon name={down ? 'down' : 'up'} size={9} color={color} />
+      <Text style={{ color, fontSize: 15, fontWeight: '600', fontVariant: ['tabular-nums'] }}>
+        {`${formatUsd(Math.abs(usd))} (${Math.abs(pct).toFixed(2)}%)`}
+      </Text>
     </View>
   );
 }

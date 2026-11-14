@@ -1002,7 +1002,9 @@ function openToken(symbol: string) {
  * (only where copy fees are charged, lib/surface COPY_FEES). */
 function jarMeta(jar: SocialJar) {
   const copies = jar.copies > 0 ? `${jar.copies} ${jar.copies === 1 ? 'copy' : 'copies'}` : '';
-  const fee = COPY_FEES ? `${jar.copyFee}% fee` : '';
+  // const fee = COPY_FEES ? `${jar.copyFee}% fee` : '';
+  // A free jar (Honey's own) says nothing rather than "0% fee".
+  const fee = COPY_FEES && jar.copyFee > 0 ? `${jar.copyFee}% fee` : '';
   return [copies, fee].filter(Boolean).join(' · ');
 }
 

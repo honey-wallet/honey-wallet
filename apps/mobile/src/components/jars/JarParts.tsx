@@ -783,7 +783,9 @@ export function JarRow({ jar, gutter, rank }: { jar: ThesisJar; gutter: number; 
         // Someone else's jar leads with how it did; its fee is the small print.
         <View style={styles.end}>
           <Text style={[styles.value, ret < 0 ? styles.down : styles.up]}>{signedPct(ret)}</Text>
-          {COPY_FEES ? <Text style={styles.fee}>{jar.copyFee}% fee</Text> : null}
+          {/* {COPY_FEES ? <Text style={styles.fee}>{jar.copyFee}% fee</Text> : null} */}
+          {/* A free jar (Honey's own) says nothing rather than "0% fee". */}
+          {COPY_FEES && jar.copyFee > 0 ? <Text style={styles.fee}>{jar.copyFee}% fee</Text> : null}
         </View>
       )}
     </PressableRow>
