@@ -11,7 +11,9 @@ use sqlx_core::migrate::{Migration, MigrationSource, MigrationType, Migrator};
 // pub const LATEST_SCHEMA_VERSION: i64 = 202611140002;
 // pub const LATEST_SCHEMA_VERSION: i64 = 202611140003; (copy fee lots)
 // Replaced (audit #7): bumped for the account deletion cascades.
-pub const LATEST_SCHEMA_VERSION: i64 = 202611140004;
+// pub const LATEST_SCHEMA_VERSION: i64 = 202611140004;
+// Bumped for Honey's copy fee (copy_sale_fees.recipient).
+pub const LATEST_SCHEMA_VERSION: i64 = 202611140005;
 const AUTH_CLEANUP_LOCK: i64 = 0x484f_4e45_5941_5554;
 
 #[derive(Debug)]
@@ -208,11 +210,18 @@ impl MigrationSource<'static> for EmbeddedMigrations {
                 // 202611140003 is copy_fee_lots (feat/copy-fees); this one is independent
                 // of it, so either can be applied first.
                 migration(
-                    LATEST_SCHEMA_VERSION,
+                    // LATEST_SCHEMA_VERSION,
+                    202611140004,
                     "account deletion cascades",
                     include_str!("../migrations/202611140004_account_deletion_cascades.sql"),
                     // Its own BEGIN/COMMIT steps, so each lock is short (see the file).
                     true,
+                ),
+                migration(
+                    LATEST_SCHEMA_VERSION,
+                    "honey copy fee",
+                    include_str!("../migrations/202611140005_honey_copy_fee.sql"),
+                    false,
                 ),
             ])
         })

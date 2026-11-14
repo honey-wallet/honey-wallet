@@ -1,3 +1,17 @@
+//! Honey's copy fee (since 2026-11-14, the owner's decision): Honey keeps the fee on a
+//! copier's profit instead of paying it to the jar's creator.
+//!
+//! - the recipient is Honey's own NEAR Intents account, `HONEY_COPY_FEE_ACCOUNT`; unset,
+//!   no copy fee is charged at all (the lot accounting below still runs);
+//! - the percentage is one rate for every jar, `HONEY_COPY_FEE_PCT` (default 10, at most
+//!   `MAX_FEE_PCT`), and never more than it was when the copy was bought
+//!   (`copy_buy_lots.fee_pct`);
+//! - a sell carries one `appFees` entry for Honey: every copied lot's fee merged, capped
+//!   at `ABS_CAP_BPS` of the sale. `copy_sale_fees` keeps what Honey received per jar
+//!   (`recipient` = Honey's account), for accounting; creators earn nothing from copies.
+//!
+//! Before (creators' copy fees), kept for the record:
+//!
 //! Creators' copy fees (2026-11-14): "x% of your profit", collected through NEAR Intents
 //! 1Click `appFees` on the copier's sell. The server is the only authority on the fee:
 //!
@@ -29,8 +43,11 @@ pub const ABS_CAP_BPS: u16 = 475;
 pub const ONE_CLICK_EXTRA_BPS: u64 = 25;
 /// 1Click's ceiling on all fees on one swap.
 const ONE_CLICK_MAX_TOTAL_BPS: u64 = 500;
-/// The highest copy fee a creator can set (`social_jars.copy_fee`).
+/// The highest copy fee a creator can set (`social_jars.copy_fee`), and since Honey keeps
+/// the fee, the highest `HONEY_COPY_FEE_PCT` can be.
 pub const MAX_FEE_PCT: u8 = 30;
+/// Honey's copy fee when `HONEY_COPY_FEE_PCT` is unset: 10% of profit.
+pub const DEFAULT_FEE_PCT: u8 = 10;
 /// Unsettled copy buys looked up with 1Click per sale, newest first.
 pub const MAX_LOOKUPS: usize = 8;
 /// Copy buys a copier may have quoted and not yet settled; past it, new copy quotes are
@@ -41,15 +58,67 @@ pub const MAX_SALE_LOOKUPS: i64 = 8;
 /// Settled lots read per page while covering a sale, oldest first.
 const LOT_PAGE: i64 = 200;
 
-/// The creator's cut on one sell leg, as the server asked 1Click for it.
+/// Honey's copy fee terms, from the environment (`from_env`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HoneyFee {
+    /// Honey's NEAR Intents account the fee is paid to (`HONEY_COPY_FEE_ACCOUNT`). None:
+    /// no copy fee is charged.
+    pub account: Option<String>,
+    /// Percent of profit (`HONEY_COPY_FEE_PCT`), recorded on every new copy buy.
+    pub pct: u8,
+}
+
+impl Default for HoneyFee {
+    /// No account: nothing charged.
+    fn default() -> Self {
+        Self {
+            account: None,
+            pct: DEFAULT_FEE_PCT,
+        }
+    }
+}
+
+impl HoneyFee {
+    /// `HONEY_COPY_FEE_ACCOUNT` and `HONEY_COPY_FEE_PCT`; anything set but invalid is an
+    /// error (it fails at startup, like `JAR_BUY_CAP_USD`).
+    pub fn from_env() -> anyhow::Result<Self> {
+        let var = |k: &str| std::env::var(k).ok().filter(|v| !v.trim().is_empty());
+        Self::parse(
+            var("HONEY_COPY_FEE_ACCOUNT").as_deref(),
+            var("HONEY_COPY_FEE_PCT").as_deref(),
+        )
+    }
+
+    /// The account must be a NEAR account id (named or implicit, lowercase); the
+    /// percentage a whole number, clamped to 0..=`MAX_FEE_PCT`, `DEFAULT_FEE_PCT` unset.
+    pub fn parse(account: Option<&str>, pct: Option<&str>) -> anyhow::Result<Self> {
+        let account = match account.map(str::trim).filter(|a| !a.is_empty()) {
+            Some(a) if crate::jar_dao::is_account(a) => Some(a.to_string()),
+            Some(_) => anyhow::bail!("HONEY_COPY_FEE_ACCOUNT must be a NEAR account id"),
+            None => None,
+        };
+        let pct = match pct.map(str::trim).filter(|p| !p.is_empty()) {
+            Some(p) => p
+                .parse::<i64>()
+                .map_err(|_| anyhow::anyhow!("HONEY_COPY_FEE_PCT must be a whole number"))?
+                .clamp(0, i64::from(MAX_FEE_PCT)) as u8,
+            None => DEFAULT_FEE_PCT,
+        };
+        Ok(Self { account, pct })
+    }
+}
+
+/// Honey's cut on one sell leg, as the server asked 1Click for it.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CopyFee {
-    /// The creator's NEAR Intents account (their signed-in EVM address, lowercase).
+    // /// The creator's NEAR Intents account (their signed-in EVM address, lowercase).
+    /// Honey's NEAR Intents account (`HONEY_COPY_FEE_ACCOUNT`).
     pub recipient: String,
     /// Basis points of the sale, as sent in `appFees`.
     pub bps: u16,
-    /// The jar's fee, percent of profit.
+    // /// The jar's fee, percent of profit.
+    /// Honey's fee, percent of profit (the highest of the lots sold).
     pub pct: u8,
     /// `bps` of the sale, in dollars at 1Click's price.
     pub usd: f64,
@@ -119,6 +188,125 @@ pub fn fee_bps(pct: u8, sale_micro_usd: u128, basis_micro_usd: u128) -> u16 {
     let bps = fee_micro.saturating_mul(10_000) / sale_micro_usd;
     bps.min(u128::from(ABS_CAP_BPS)) as u16
 }
+
+/// The percentage a copied lot pays Honey: the lower of Honey's fee now and when the copy
+/// was bought, never past `MAX_FEE_PCT`.
+pub fn lot_pct(lot: &OpenLot, honey_pct: u8) -> u8 {
+    lot.fee_pct.min(honey_pct).min(MAX_FEE_PCT)
+}
+
+/// Honey's fee (micro-USD) on selling `units` of `lot`, part of a sell of `units_sold`
+/// worth `sale_micro_usd`: `pct` of that part's profit, nothing on a loss.
+fn part_fee(lot: &OpenLot, units: u128, units_sold: u128, sale_micro_usd: u128, pct: u8) -> u128 {
+    let basis = mul_div(units, lot.cost_micro_usd, lot.units);
+    let sale = mul_div(units, sale_micro_usd, units_sold);
+    sale.saturating_sub(basis) * u128::from(pct) / 100
+}
+
+/// Honey's fee on one sell of `units_sold` units worth `sale_micro_usd`, from its `parts`
+/// of the lots: per lot, `lot_pct` of that part's profit; every lot's fee merged into one
+/// entry for Honey, as bps of the whole sale, rounded down, at most `ABS_CAP_BPS`. Empty
+/// without Honey's account (`HONEY_COPY_FEE_ACCOUNT` unset) or without profit.
+pub fn leg_fees(
+    lots: &[OpenLot],
+    parts: &[(usize, u128)],
+    units_sold: u128,
+    sale_micro_usd: u128,
+    honey: &HoneyFee,
+) -> Vec<CopyFee> {
+    let Some(account) = &honey.account else {
+        return Vec::new();
+    };
+    if units_sold == 0 || sale_micro_usd == 0 {
+        return Vec::new();
+    }
+    let (mut fee, mut pct) = (0u128, 0u8);
+    for &(i, units) in parts {
+        let Some(lot) = lots.get(i) else { continue };
+        let lot_pct = lot_pct(lot, honey.pct);
+        fee += part_fee(lot, units, units_sold, sale_micro_usd, lot_pct);
+        pct = pct.max(lot_pct);
+    }
+    let bps = (fee.saturating_mul(10_000) / sale_micro_usd).min(u128::from(ABS_CAP_BPS));
+    if bps == 0 {
+        return Vec::new();
+    }
+    vec![CopyFee {
+        recipient: account.clone(),
+        bps: bps as u16,
+        pct,
+        usd: (sale_micro_usd * bps / 10_000) as f64 / 1e6,
+    }]
+}
+
+/// Each (creator, jar)'s share of Honey's fee on a sell, before the cap: the fee each
+/// copied lot earns at `honey_pct`, summed per jar. Splits what Honey received across the
+/// jars whose copies paid it (`copy_sale_fees`, for accounting).
+pub fn jar_shares(
+    lots: &[OpenLot],
+    parts: &[(usize, u128)],
+    units_sold: u128,
+    sale_micro_usd: u128,
+    honey_pct: u8,
+) -> Vec<(Uuid, Uuid, u128)> {
+    let mut out: Vec<(Uuid, Uuid, u128)> = Vec::new();
+    if units_sold == 0 {
+        return out;
+    }
+    for &(i, units) in parts {
+        let Some(lot) = lots.get(i) else { continue };
+        let fee = part_fee(
+            lot,
+            units,
+            units_sold,
+            sale_micro_usd,
+            lot_pct(lot, honey_pct),
+        );
+        match out
+            .iter_mut()
+            .find(|(c, j, _)| *c == lot.creator && *j == lot.jar)
+        {
+            Some(entry) => entry.2 += fee,
+            None => out.push((lot.creator, lot.jar, fee)),
+        }
+    }
+    out
+}
+
+/// Splits what Honey received on a sell (micro-USD) across the jars by `shares`, rounded
+/// down; jars with nothing are left out.
+pub fn split_received(
+    shares: &[(Uuid, Uuid, u128)],
+    received_micro: u128,
+) -> Vec<(Uuid, Uuid, u128)> {
+    let total: u128 = shares.iter().map(|s| s.2).sum();
+    shares
+        .iter()
+        .map(|&(creator, jar, share)| (creator, jar, mul_div(received_micro, share, total)))
+        .filter(|s| s.2 > 0)
+        .collect()
+}
+
+/// What 1Click echoed for each recipient asked: (recipient, bps they receive).
+pub fn received(echoed: Option<&Value>, asked: &[(String, u64)]) -> Vec<(String, u64)> {
+    let entries = echoed.and_then(Value::as_array);
+    asked
+        .iter()
+        .filter_map(|(recipient, _)| {
+            let bps = entries?.iter().find_map(|e| {
+                e["recipient"]
+                    .as_str()
+                    .filter(|to| to.eq_ignore_ascii_case(recipient))
+                    .and(e["fee"].as_u64())
+            })?;
+            Some((recipient.clone(), bps))
+        })
+        .collect()
+}
+
+/*
+Superseded 2026-11-14 (Honey keeps the copy fee): one `appFees` entry per creator, paid to
+their signed-in wallet at their jar's fee, and what each received split across their jars.
 
 /// The fees on one sell of `units_sold` units worth `sale_micro_usd`, from its `parts` of
 /// the lots: per lot, the lower of the jar's fee now and at copy time on that part's
@@ -242,13 +430,15 @@ pub fn received_by_jar(
         .filter(|s| s.2 > 0)
         .collect()
 }
+*/
 
 /// A wallet address as a NEAR Intents account id: `0x` and 40 lowercase hex characters.
 pub fn intents_account(address: &[u8]) -> Option<String> {
     (address.len() == 20).then(|| format!("0x{}", hex::encode(address)))
 }
 
-/// The `appFees` field Honey sends 1Click: one entry per creator (1Click takes several).
+// /// The `appFees` field Honey sends 1Click: one entry per creator (1Click takes several).
+/// The `appFees` field Honey sends 1Click: its one entry for Honey (`leg_fees`).
 pub fn app_fees_for(fees: &[CopyFee]) -> Value {
     Value::Array(
         fees.iter()
@@ -257,14 +447,20 @@ pub fn app_fees_for(fees: &[CopyFee]) -> Value {
     )
 }
 
-/// The copy fees a quote request asked for (`appFees` as `app_fees_for` builds it).
+/// The copy fee a quote request asked for (`appFees` as `app_fees_for` builds it): one
+/// entry, for Honey.
 pub fn asked_fees(payload: &Value) -> Result<Vec<(String, u64)>, AppError> {
     let Some(fees) = payload.get("appFees") else {
         return Ok(Vec::new());
     };
+    // let list = fees
+    //     .as_array()
+    //     .filter(|l| !l.is_empty())
+    //     .ok_or(AppError::Busy)?;
+    // One entry per sale since Honey keeps the fee (2026-11-14), never one per creator.
     let list = fees
         .as_array()
-        .filter(|l| !l.is_empty())
+        .filter(|l| l.len() == 1)
         .ok_or(AppError::Busy)?;
     let mut out: Vec<(String, u64)> = Vec::new();
     for one in list {
@@ -467,19 +663,21 @@ pub fn is_pick(picks: &[(String, String)], token: &OneClickToken) -> bool {
     })
 }
 
-/// Where a creator's fees go: the NEAR Intents account of the first wallet they signed in
-/// with. None when they have no such wallet; they're charged nothing then.
-pub async fn payout_account(pool: &PgPool, user: Uuid) -> Result<Option<String>, AppError> {
-    let address: Option<Vec<u8>> = sqlx::query_scalar(
-        "SELECT address FROM wallet_memberships WHERE user_id = $1
-         ORDER BY created_at, id LIMIT 1",
-    )
-    .bind(user)
-    .fetch_optional(pool)
-    .await
-    .map_err(unavailable)?;
-    Ok(address.as_deref().and_then(intents_account))
-}
+// Superseded 2026-11-14 (Honey keeps the copy fee): creators are paid nothing, so no
+// creator's payout account is looked up.
+// /// Where a creator's fees go: the NEAR Intents account of the first wallet they signed in
+// /// with. None when they have no such wallet; they're charged nothing then.
+// pub async fn payout_account(pool: &PgPool, user: Uuid) -> Result<Option<String>, AppError> {
+//     let address: Option<Vec<u8>> = sqlx::query_scalar(
+//         "SELECT address FROM wallet_memberships WHERE user_id = $1
+//          ORDER BY created_at, id LIMIT 1",
+//     )
+//     .bind(user)
+//     .fetch_optional(pool)
+//     .await
+//     .map_err(unavailable)?;
+//     Ok(address.as_deref().and_then(intents_account))
+// }
 
 /// One quoted copy buy leg: its deposit address, the asset it buys, what it costs, when
 /// its quote lapses (Honey's deadline plus a margin, RFC 3339), the address it delivers
@@ -852,8 +1050,11 @@ pub async fn record_sale(
     deposit_address: &str,
     expires_at: Option<&str>,
     parts: &[(String, u128)],
-    // What each creator receives, per jar: (creator, jar, micro-USD).
+    // // What each creator receives, per jar: (creator, jar, micro-USD).
+    // What Honey received, per jar whose copies paid it: (jar's creator, jar, micro-USD).
     fees: &[(Uuid, Uuid, u128)],
+    // Who was paid: Honey's account (`HONEY_COPY_FEE_ACCOUNT`).
+    recipient: Option<&str>,
 ) -> Result<(), AppError> {
     let inserted = sqlx::query(
         "INSERT INTO copy_sales (deposit_address, copier, asset, seller, expires_at)
@@ -882,13 +1083,16 @@ pub async fn record_sale(
         }
         for (creator, jar, micro) in fees {
             sqlx::query(
-                "INSERT INTO copy_sale_fees (sale, jar_id, creator, received_micro_usd)
-                 VALUES ($1, $2, $3, $4)",
+                // "INSERT INTO copy_sale_fees (sale, jar_id, creator, received_micro_usd)
+                //  VALUES ($1, $2, $3, $4)",
+                "INSERT INTO copy_sale_fees (sale, jar_id, creator, received_micro_usd, recipient)
+                 VALUES ($1, $2, $3, $4, $5)",
             )
             .bind(deposit_address)
             .bind(jar)
             .bind(creator)
             .bind(i64::try_from(*micro).unwrap_or(i64::MAX))
+            .bind(recipient)
             .execute(&mut *conn)
             .await
             .map_err(unavailable)?;
@@ -897,15 +1101,30 @@ pub async fn record_sale(
     Ok(())
 }
 
-/// A creator's published jars with what their copies earned them from settled sells
-/// (micro-USD received) and how many people copied each (`social_jar_copies`).
-pub async fn earnings(pool: &PgPool, creator: Uuid) -> Result<Vec<(Uuid, i64, i64)>, AppError> {
+// Superseded 2026-11-14 (Honey keeps the copy fee): creators earn nothing from copies,
+// so nothing is summed for them (`jar_copies` keeps the copy counts).
+// /// A creator's published jars with what their copies earned them from settled sells
+// /// (micro-USD received) and how many people copied each (`social_jar_copies`).
+// pub async fn earnings(pool: &PgPool, creator: Uuid) -> Result<Vec<(Uuid, i64, i64)>, AppError> {
+//     sqlx::query_as(
+//         "SELECT j.id,
+//                 coalesce((SELECT sum(f.received_micro_usd)::bigint FROM copy_sale_fees f
+//                           JOIN copy_sales s ON s.deposit_address = f.sale
+//                           WHERE f.jar_id = j.id AND f.creator = $1 AND s.state = 'settled'), 0),
+//                 (SELECT count(*) FROM social_jar_copies c WHERE c.jar_id = j.id)
+//          FROM social_jars j WHERE j.owner = $1
+//          ORDER BY j.published_at DESC LIMIT 200",
+//     )
+//     .bind(creator)
+//     .fetch_all(pool)
+//     .await
+//     .map_err(unavailable)
+// }
+
+/// A creator's published jars and how many people copied each (`social_jar_copies`).
+pub async fn jar_copies(pool: &PgPool, creator: Uuid) -> Result<Vec<(Uuid, i64)>, AppError> {
     sqlx::query_as(
-        "SELECT j.id,
-                coalesce((SELECT sum(f.received_micro_usd)::bigint FROM copy_sale_fees f
-                          JOIN copy_sales s ON s.deposit_address = f.sale
-                          WHERE f.jar_id = j.id AND f.creator = $1 AND s.state = 'settled'), 0),
-                (SELECT count(*) FROM social_jar_copies c WHERE c.jar_id = j.id)
+        "SELECT j.id, (SELECT count(*) FROM social_jar_copies c WHERE c.jar_id = j.id)
          FROM social_jars j WHERE j.owner = $1
          ORDER BY j.published_at DESC LIMIT 200",
     )
@@ -1537,13 +1756,31 @@ mod tests {
         }
     }
 
-    fn account(creator: Uuid) -> Option<String> {
-        Some(format!("0x{:040x}", creator.as_u128()))
+    // fn account(creator: Uuid) -> Option<String> {
+    //     Some(format!("0x{:040x}", creator.as_u128()))
+    // }
+    /// Honey's NEAR Intents account in these tests.
+    const HONEY: &str = "honey-fees.near";
+
+    /// Honey's fee at `pct`, paid to `HONEY`.
+    fn honey_at(pct: u8) -> HoneyFee {
+        HoneyFee {
+            account: Some(HONEY.into()),
+            pct,
+        }
     }
 
-    /// Fees on selling `units` of `lots` (from the start) for `sale_usd` in all.
+    /// Fees on selling `units` of `lots` (from the start) for `sale_usd` in all, at
+    /// Honey's 30% (each lot's own percentage governs).
     fn fees(lots: &[OpenLot], units: u128, sale_micro: u128) -> Vec<CopyFee> {
-        leg_fees(lots, &allocate(lots, 0, units), units, sale_micro, account)
+        // leg_fees(lots, &allocate(lots, 0, units), units, sale_micro, account)
+        leg_fees(
+            lots,
+            &allocate(lots, 0, units),
+            units,
+            sale_micro,
+            &honey_at(30),
+        )
     }
 
     #[test]
@@ -1554,7 +1791,9 @@ mod tests {
         assert_eq!(got.len(), 1);
         assert_eq!((got[0].bps, got[0].pct), (333, 10));
         assert!((got[0].usd - 4.995).abs() < 1e-9, "{}", got[0].usd);
-        assert_eq!(Some(got[0].recipient.clone()), account(ANA));
+        // assert_eq!(Some(got[0].recipient.clone()), account(ANA));
+        // Paid to Honey, not the jar's creator.
+        assert_eq!(got[0].recipient, HONEY);
     }
 
     #[test]
@@ -1591,6 +1830,207 @@ mod tests {
         assert!(fees(&[gone], 100, 150 * USD).is_empty());
         assert!(fees(&[], 100, 150 * USD).is_empty());
     }
+
+    #[test]
+    fn every_lots_fee_is_merged_into_one_entry_for_honey() {
+        // Ana's copy (older): 100 units for $100. Ben's: 100 units for $200. Both at 10%.
+        // Selling 150 at $1.80 ($270): Ana's 100 made $80 → $8 (296 bps of $270); Ben's
+        // 50 sold for $90 cost $100: a loss, nothing.
+        let lots = [lot(100, 100, 10, ANA), lot(100, 200, 10, BEN)];
+        let honey = honey_at(10);
+        let at = |units, sale| leg_fees(&lots, &allocate(&lots, 0, units), units, sale, &honey);
+        let got = at(150, 270 * USD);
+        assert_eq!(got.len(), 1);
+        assert_eq!((got[0].recipient.as_str(), got[0].bps), (HONEY, 296));
+        // At $2.50 a unit both made money: Ana $250 − $100 = $150 → $15, Ben $250 − $200 =
+        // $50 → $5. One entry for Honey: $20 of $500 = 400 bps, never one per creator.
+        let got = at(200, 500 * USD);
+        let named: Vec<_> = got.iter().map(|f| (f.recipient.as_str(), f.bps)).collect();
+        assert_eq!(named, vec![(HONEY, 400)]);
+        assert_eq!(
+            app_fees_for(&got),
+            json!([{ "recipient": HONEY, "fee": 400 }])
+        );
+        // At $3 it would be $30 of $600 = 500 bps: capped at 475 all together.
+        assert_eq!(at(200, 600 * USD)[0].bps, ABS_CAP_BPS);
+        // A later leg of the same quote picks up where the first stopped.
+        assert_eq!(allocate(&lots, 150, 100), vec![(1, 50)]);
+        assert_eq!(allocate(&lots, 50, 100), vec![(0, 50), (1, 50)]);
+    }
+
+    #[test]
+    fn one_rate_for_every_jar_whatever_its_creator_set() {
+        // Two jars whose creators set 30% and 0%: their copies pay Honey's 10% alike
+        // (each lot records Honey's rate when bought).
+        let mut a = lot(100, 100, 10, ANA);
+        a.jar_pct = 30;
+        let mut b = lot(100, 100, 10, BEN);
+        b.jar_pct = 0;
+        let lots = [a, b];
+        let got = leg_fees(
+            &lots,
+            &allocate(&lots, 0, 200),
+            200,
+            300 * USD,
+            &honey_at(10),
+        );
+        // $100 profit × 10% = $10 of $300 = 333 bps.
+        assert_eq!(
+            got.iter().map(|f| (f.bps, f.pct)).collect::<Vec<_>>(),
+            vec![(333, 10)]
+        );
+    }
+
+    #[test]
+    fn what_honey_received_is_split_across_the_jars_copied() {
+        // Two of Ana's jars and one of Ben's copied, 100 units at $1 each; lots bought at
+        // 10%, 20% and 10%. Selling all 300 for $345 ($115 each): $15 profit each, so
+        // $1.50, $3.00 and $1.50 of fee.
+        let (one, two, three) = (
+            Uuid::from_u128(11),
+            Uuid::from_u128(12),
+            Uuid::from_u128(13),
+        );
+        let mut a = lot(100, 100, 10, ANA);
+        a.jar = one;
+        let mut b = lot(100, 100, 20, ANA);
+        b.jar = two;
+        let mut c = lot(100, 100, 10, BEN);
+        c.jar = three;
+        let lots = [a, b, c];
+        let parts = allocate(&lots, 0, 300);
+        let shares = jar_shares(&lots, &parts, 300, 345 * USD, 30);
+        assert_eq!(
+            shares,
+            vec![
+                (ANA, one, 1_500_000),
+                (ANA, two, 3_000_000),
+                (BEN, three, 1_500_000)
+            ]
+        );
+        // 1Click paid Honey $3 (its half): a quarter, a half and a quarter.
+        let split = split_received(&shares, 3_000_000);
+        assert_eq!(
+            split,
+            vec![
+                (ANA, one, 750_000),
+                (ANA, two, 1_500_000),
+                (BEN, three, 750_000)
+            ]
+        );
+        // Honey's rate now below a lot's: the lower one counts.
+        let shares = jar_shares(&lots, &parts, 300, 345 * USD, 10);
+        assert_eq!(shares[1], (ANA, two, 1_500_000));
+        // What 1Click echoed for Honey.
+        let echoed = json!([{ "recipient": "HONEY-FEES.near", "fee": 98 }, { "recipient": ONE_CLICK, "fee": 98 }]);
+        assert_eq!(
+            received(Some(&echoed), &[(HONEY.into(), 195)]),
+            vec![(HONEY.to_string(), 98)]
+        );
+        assert!(received(None, &[(HONEY.into(), 195)]).is_empty());
+        assert!(split_received(&[], 3_000_000).is_empty());
+    }
+
+    #[test]
+    fn caps_hold_at_the_fee_when_bought_and_the_absolute_ceiling() {
+        assert_eq!(fee_bps(30, 100 * USD, 0), ABS_CAP_BPS);
+        assert_eq!(
+            fee_bps(99, 100 * USD, 99 * USD),
+            fee_bps(30, 100 * USD, 99 * USD)
+        );
+        // The lower of Honey's fee now and when the copy was bought.
+        let bought_at_5 = lot(100, 100, 5, ANA);
+        let got = leg_fees(
+            std::slice::from_ref(&bought_at_5),
+            &[(0, 100)],
+            100,
+            110 * USD,
+            &honey_at(30),
+        );
+        assert_eq!(got[0].pct, 5);
+        let got = leg_fees(
+            &[lot(100, 100, 20, ANA)],
+            &[(0, 100)],
+            100,
+            110 * USD,
+            &honey_at(2),
+        );
+        assert_eq!(got[0].pct, 2);
+        assert!(leg_fees(&[bought_at_5], &[(0, 100)], 100, 200 * USD, &honey_at(0)).is_empty());
+        // The jar's own setting no longer counts.
+        let mut zero_jar = lot(100, 100, 10, ANA);
+        zero_jar.jar_pct = 0;
+        assert_eq!(fees(&[zero_jar], 100, 110 * USD)[0].pct, 10);
+    }
+
+    #[test]
+    fn rounding_is_always_down() {
+        // $10.000001 profit on a $101.000001 sale at 10%: $1 → 99.0099 bps → 99.
+        assert_eq!(fee_bps(10, 101 * USD + 1, 91 * USD), 99);
+        // A profit too small for one basis point charges nothing.
+        assert_eq!(fee_bps(10, 100 * USD, 100 * USD - 999), 0);
+        assert!(fees(&[lot(100, 100, 10, ANA)], 100, 100 * USD + 9_999).is_empty());
+        assert_eq!(mul_div(1, USD, 3), 333_333);
+    }
+
+    #[test]
+    fn without_honeys_account_no_fee_is_charged() {
+        // HONEY_COPY_FEE_ACCOUNT unset: nothing, however much profit.
+        let lots = [lot(100, 100, 10, ANA), lot(100, 100, 10, BEN)];
+        let parts = allocate(&lots, 0, 200);
+        assert!(leg_fees(&lots, &parts, 200, 400 * USD, &HoneyFee::default()).is_empty());
+        let unset = HoneyFee::parse(None, Some("20")).unwrap();
+        assert_eq!(unset.account, None);
+        assert!(leg_fees(&lots, &parts, 200, 400 * USD, &unset).is_empty());
+        assert_eq!(
+            leg_fees(&lots, &parts, 200, 400 * USD, &honey_at(10)).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn honeys_account_and_rate_come_from_the_environment() {
+        let parse = |a: Option<&str>, p: Option<&str>| HoneyFee::parse(a, p);
+        assert_eq!(parse(None, None).unwrap(), HoneyFee::default());
+        assert_eq!(HoneyFee::default().pct, DEFAULT_FEE_PCT);
+        assert_eq!(parse(Some("  "), None).unwrap().account, None);
+        // Named and implicit NEAR accounts, and an EVM address as an Intents account.
+        for ok in [
+            "honey.near",
+            "fees.honey-wallet.near",
+            "5880ad2b362620fadf759cbceb1cd5737ce8c6ed7fb8e9942881e6731f9247dd",
+            "0x97a5c31bfbfa1809cf20454f2aaefa05932ab18e",
+        ] {
+            assert_eq!(
+                parse(Some(ok), None).unwrap().account.as_deref(),
+                Some(ok),
+                "{ok}"
+            );
+        }
+        for bad in [
+            "Honey.near",
+            "a",
+            "honey..near",
+            ".honey.near",
+            "honey.near.",
+            "honey near",
+            "honey@near",
+            &"a".repeat(65),
+        ] {
+            assert!(parse(Some(bad), None).is_err(), "{bad} accepted");
+        }
+        // The rate: a whole number, clamped to the existing max; 10 unset.
+        assert_eq!(parse(None, Some("15")).unwrap().pct, 15);
+        assert_eq!(parse(None, Some("0")).unwrap().pct, 0);
+        assert_eq!(parse(None, Some("99")).unwrap().pct, MAX_FEE_PCT);
+        assert_eq!(parse(None, Some("-5")).unwrap().pct, 0);
+        assert!(parse(None, Some("10.5")).is_err());
+        assert!(parse(None, Some("ten")).is_err());
+    }
+
+    /*
+    Superseded 2026-11-14 (Honey keeps the copy fee): tests of one entry per creator, paid
+    to their own account, and what each creator received split across their jars.
 
     #[test]
     fn several_creators_are_charged_oldest_copy_first() {
@@ -1681,6 +2121,7 @@ mod tests {
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].recipient, "0xben");
     }
+    */
 
     #[test]
     fn only_final_statuses_settle_and_every_final_failure_voids() {
@@ -1789,6 +2230,69 @@ mod tests {
     }
 
     #[test]
+    fn the_echo_must_pay_honey_what_was_asked() {
+        // Honey's one entry, split 50/50 (as live quotes echo it), or whole with 1Click's 25.
+        let one = asked(&[fee(HONEY, 100)]);
+        let split =
+            json!([{ "recipient": HONEY, "fee": 50 }, { "recipient": ONE_CLICK, "fee": 50 }]);
+        assert!(check_echoed(Some(&split), &one).is_ok());
+        let whole =
+            json!([{ "recipient": HONEY, "fee": 100 }, { "recipient": ONE_CLICK, "fee": 25 }]);
+        assert!(check_echoed(Some(&whole), &one).is_ok());
+        // Small fees: half rounded up, 1Click's 20 minimum.
+        let small = asked(&[fee(HONEY, 30)]);
+        let echoed =
+            json!([{ "recipient": HONEY, "fee": 15 }, { "recipient": ONE_CLICK, "fee": 20 }]);
+        assert!(check_echoed(Some(&echoed), &small).is_ok());
+    }
+
+    #[test]
+    fn a_changed_missing_or_redirected_fee_is_refused() {
+        let one = asked(&[fee(HONEY, 100)]);
+        for echoed in [
+            Value::Null,
+            json!([]),
+            // Dropped.
+            json!([{ "recipient": ONE_CLICK, "fee": 20 }]),
+            // Paid to someone else (a creator, say).
+            json!([{ "recipient": "0xana", "fee": 50 }, { "recipient": ONE_CLICK, "fee": 50 }]),
+            // More than asked.
+            json!([{ "recipient": HONEY, "fee": 101 }]),
+            // Named twice.
+            json!([{ "recipient": HONEY, "fee": 50 }, { "recipient": HONEY, "fee": 50 }]),
+            // A third party riding along: over asked + 1Click's share.
+            json!([{ "recipient": HONEY, "fee": 100 }, { "recipient": ONE_CLICK, "fee": 25 },
+                   { "recipient": "mallory.near", "fee": 1 }]),
+            json!([{ "recipient": HONEY, "fee": "100" }]),
+        ] {
+            assert!(
+                check_echoed(Some(&echoed), &one).is_err(),
+                "accepted {echoed}"
+            );
+        }
+        // Without copy fees, 1Click's own fee is none of this check's business.
+        assert!(check_echoed(Some(&json!([{ "recipient": ONE_CLICK, "fee": 20 }])), &[]).is_ok());
+        assert!(check_echoed(None, &[]).is_ok());
+    }
+
+    #[test]
+    fn only_the_shape_honey_builds_counts_as_asking() {
+        assert!(asked_fees(&json!({})).unwrap().is_empty());
+        assert!(asked_fees(&json!({ "appFees": [] })).is_err());
+        assert!(asked_fees(&json!({ "appFees": [{ "recipient": "a", "fee": 0 }] })).is_err());
+        // One entry per sale: never two, whoever they name, nor more than the cap.
+        assert!(
+            asked_fees(&json!({ "appFees": app_fees_for(&[fee("a", 1), fee("b", 1)]) })).is_err()
+        );
+        assert!(asked_fees(&json!({ "appFees": app_fees_for(&[fee("a", 476)]) })).is_err());
+        assert_eq!(asked(&[fee("a", 1)]), vec![("a".to_string(), 1)]);
+    }
+
+    /*
+    Superseded 2026-11-14 (Honey keeps the copy fee): echo and shape tests with one
+    `appFees` entry per creator.
+
+    #[test]
     fn the_echo_must_pay_each_creator_what_was_asked() {
         let (ana, ben) = ("0xana", "0xben");
         // One creator, split 50/50 (as live quotes echo it), or whole with 1Click's 25.
@@ -1858,6 +2362,7 @@ mod tests {
         );
         assert_eq!(asked(&[fee("a", 1)]), vec![("a".to_string(), 1)]);
     }
+    */
 
     /*
     Superseded 2026-11-14 (security review): tests of the single-jar, averaged fee.
