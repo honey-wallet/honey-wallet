@@ -36,6 +36,10 @@ pub enum AppError {
     /// Temporarily out of room (e.g. the pairing mailbox is full); retry later.
     #[error("server busy, try again shortly")]
     Busy,
+    /// A list built in the background isn't ready yet (15 Nov: the DEX token list after a
+    /// restart). A 503 with the `busy` code, so clients retry it like `Busy`.
+    #[error("{0} is warming up, try again shortly")]
+    WarmingUp(&'static str),
     #[error("request body too large")]
     PayloadTooLarge,
     #[error("request deadline exceeded; check operation status before retrying a submission")]
@@ -75,6 +79,7 @@ impl IntoResponse for AppError {
             Self::TooManyRequests => (StatusCode::TOO_MANY_REQUESTS, "too_many_requests"),
             Self::GasNotCovered => (StatusCode::PAYMENT_REQUIRED, "gas_not_covered"),
             Self::Busy => (StatusCode::SERVICE_UNAVAILABLE, "busy"),
+            Self::WarmingUp(_) => (StatusCode::SERVICE_UNAVAILABLE, "busy"),
             Self::PayloadTooLarge => (StatusCode::PAYLOAD_TOO_LARGE, "payload_too_large"),
             Self::Timeout => (StatusCode::GATEWAY_TIMEOUT, "timeout"),
             Self::Unsupported(_) => (StatusCode::UNPROCESSABLE_ENTITY, "unsupported"),
@@ -115,7 +120,10 @@ impl IntoResponse for AppError {
                 axum::http::HeaderValue::from_static("Bearer"),
             );
         }
-        if matches!(self, Self::Busy | Self::TooManyRequests) {
+        if matches!(
+            self,
+            Self::Busy | Self::TooManyRequests | Self::WarmingUp(_)
+        ) {
             response.headers_mut().insert(
                 axum::http::header::RETRY_AFTER,
                 axum::http::HeaderValue::from_static("1"),

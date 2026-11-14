@@ -618,12 +618,14 @@ fn dex_service(
                     min_account_days,
                 }) as std::sync::Arc<dyn dex::SponsorGate>
             });
-            Some(std::sync::Arc::new(
+            // Shared so a request that finds no list starts its build in the background.
+            Some(
                 dex.with_redis(redis)
                     .with_intents(buys, market)
                     .with_solana_payer(solana_payer)
-                    .with_gate(gate),
-            ))
+                    .with_gate(gate)
+                    .shared(),
+            )
         }
         Err(error) => {
             tracing::error!(%error, "DEX routing disabled");
