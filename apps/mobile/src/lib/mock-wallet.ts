@@ -133,6 +133,15 @@ export type MarketToken = {
   logo?: string | null;
   /** Wrapped copies shown as this row (cbBTC and WBTC under BTC), for search and saved tokens. */
   aliases?: string[];
+  /** A DEX token's `dex:` asset id (lib/dex-tokens). */
+  assetId?: string;
+  /** A DEX token's contract or mint: Search finds it by address. */
+  address?: string;
+  /**
+   * Another row shares its symbol, or it was found by address (15 Nov): it wears its
+   * network on its logo and opens by its own asset, never by the symbol.
+   */
+  exact?: boolean;
 };
 
 /** Sample market rows for test mode; outside it their names and order seed the live list. */

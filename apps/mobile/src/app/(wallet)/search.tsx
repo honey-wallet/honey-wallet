@@ -31,11 +31,13 @@ import { api } from '@/lib/api';
 import { hostOfUrl, toUrl } from '@/lib/browser';
 import { POSITIONS } from '@/lib/collectibles';
 import { tap } from '@/lib/haptics';
+import { loadSwapTokens, swapTokenList } from '@/lib/intents-swap';
 import { LOADS } from '@/lib/loads';
 import {
   findMarketToken,
   isDollar,
   matchesQuery,
+  useAddressSearch,
   useMarketList,
   useMarketListStatus,
   useMarketSettled,
@@ -64,6 +66,7 @@ import {
   useSocial,
 } from '@/lib/social';
 import { SOCIAL } from '@/lib/surface';
+import { updateSwap } from '@/lib/swap';
 import { TEST_MODE } from '@/lib/test-mode';
 import { useThesisJars } from '@/lib/thesis';
 import { showErrorToast } from '@/lib/toast';
@@ -112,6 +115,21 @@ const CHAIN_ORDER: (Chain | 'All')[] = ['All', ...CHAINS.map((ch) => ch.name)];
 function openToken(symbol: string) {
   tap();
   router.push({ pathname: '/token/[symbol]', params: { symbol } });
+}
+
+/**
+ * A DEX token that shares its symbol, or was found by address (15 Nov): straight to Swap
+ * buying exactly it with USDC on its network, never the token page, which goes by symbol.
+ */
+function openExact(token: MarketToken) {
+  tap();
+  updateSwap({
+    sell: { symbol: 'USDC', chain: token.chain },
+    buy: { symbol: token.symbol, chain: token.chain, assetId: token.assetId },
+    buyChosen: true,
+    presetAmount: null,
+  });
+  router.navigate('/trade');
 }
 
 const removeOut = lazy(() =>
@@ -227,14 +245,23 @@ export default function SearchScreen() {
   // A wallet that's never had money in it isn't earning yet.
   const { empty } = useWalletView();
 
+  // A contract or mint (15 Nov): the listed tokens at it, else Honey's DEX universe.
+  const { tokens: oneClick } = swapTokenList.useValue();
+  const byAddress = useAddressSearch(query, marketList, oneClick);
+  const addressSearch = !!byAddress;
+  useEffect(() => {
+    if (addressSearch) loadSwapTokens();
+  }, [addressSearch]);
   // By name, symbol, or a wrapped copy's symbol ("cbBTC" finds Bitcoin); exact symbols first.
-  const results = marketList
-    .filter((t) => matchesQuery(t, q))
-    .sort(
-      (a, b) =>
-        Number(b.symbol.toLowerCase() === q) - Number(a.symbol.toLowerCase() === q) ||
-        Number(b.name.toLowerCase().startsWith(q)) - Number(a.name.toLowerCase().startsWith(q)),
-    );
+  const results = byAddress
+    ? byAddress.rows
+    : marketList
+        .filter((t) => matchesQuery(t, q))
+        .sort(
+          (a, b) =>
+            Number(b.symbol.toLowerCase() === q) - Number(a.symbol.toLowerCase() === q) ||
+            Number(b.name.toLowerCase().startsWith(q)) - Number(a.name.toLowerCase().startsWith(q)),
+        );
   const jarResults =
     q && SOCIAL
       ? publicJars.filter(
@@ -294,11 +321,15 @@ export default function SearchScreen() {
           </View>
         ) : q ? (
           <View style={styles.section}>
-            <SkeletonReveal loading={loading} skeleton={<MarketRowsSkeleton count={4} />}>
+            <SkeletonReveal
+              loading={loading || !!byAddress?.searching}
+              skeleton={<MarketRowsSkeleton count={4} />}
+            >
               {site && <SiteRow url={site} />}
               {results.length ? <Text style={styles.group}>Tokens</Text> : null}
               {results.map((token) => (
-                <MarketRow key={token.symbol} token={token} />
+                // <MarketRow key={token.symbol} token={token} />
+                <MarketRow key={token.assetId ?? token.symbol} token={token} />
               ))}
               {personFound ? <Text style={styles.group}>People</Text> : null}
               {SOCIAL ? (
@@ -319,7 +350,17 @@ export default function SearchScreen() {
               ) : null}
               {jarResults.length ? <Text style={styles.group}>Jars</Text> : null}
               {jarResults.length ? <JarList jars={jarResults.slice(0, 8)} /> : null}
+              {/* Found by address but blocked by Honey's safety checks: the server's reason. */}
+              {results.length === 0 && byAddress?.blocked.length ? (
+                <EmptyState
+                  icon="search"
+                  title="Can’t be swapped"
+                  hint={byAddress.blocked.join(' ')}
+                  action={{ label: 'Clear search', onPress: () => setQuery('') }}
+                />
+              ) : null}
               {results.length === 0 &&
+                !byAddress?.blocked.length &&
                 !site &&
                 !personFound &&
                 !(SOCIAL && peopleSearching) &&
@@ -514,7 +555,8 @@ export default function SearchScreen() {
                 >
                   <ContentSwap id={`${chain}-${sort}`} index={CHAIN_ORDER.indexOf(chain)}>
                     {top.map((token, i) => (
-                      <MarketRow key={token.symbol} token={token} rank={i + 1} />
+                      // <MarketRow key={token.symbol} token={token} rank={i + 1} />
+                      <MarketRow key={token.assetId ?? token.symbol} token={token} rank={i + 1} />
                     ))}
                     {top.length === 0 && (
                       <EmptyState
@@ -566,10 +608,24 @@ function SiteRow({ url }: { url: string }) {
 
 function MarketRow({ token, rank }: { token: MarketToken; rank?: number }) {
   const styles = useStyles();
+  const c = useTheme();
   return (
-    <PressableRow onPress={() => openToken(token.symbol)} style={styles.row}>
+    // <PressableRow onPress={() => openToken(token.symbol)} style={styles.row}>
+    <PressableRow
+      onPress={() => (token.exact && token.assetId ? openExact(token) : openToken(token.symbol))}
+      style={styles.row}
+    >
       {rank ? <Text style={styles.rank}>{rank}</Text> : null}
-      <TokenIcon symbol={token.symbol} size={40} uri={token.logo} />
+      {/* <TokenIcon symbol={token.symbol} size={40} uri={token.logo} /> */}
+      {/* A DEX token wears only its own logo; one sharing a symbol, its network too. */}
+      <TokenIcon
+        symbol={token.symbol}
+        size={40}
+        uri={token.logo}
+        assetId={token.assetId}
+        chain={token.exact ? token.chain : undefined}
+        ring={c.canvas}
+      />
       <View style={styles.flex}>
         <Text style={styles.rowTitle} numberOfLines={1}>
           {token.name}

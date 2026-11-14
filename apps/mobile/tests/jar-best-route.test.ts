@@ -102,6 +102,12 @@ const intents = (): PlannedRoute =>
 
 const refused = (message: string) => Object.assign(new Error(message), { status: 400 });
 
+/** 1Click's entry for a pick, at `price` (the app reads it from 1Click itself). */
+const prices = {
+  BTC: (price: number) => ({ assetId: PICKS.BTC.assetId, decimals: 8, price }),
+  ETH: (price: number) => ({ assetId: PICKS.ETH.assetId, decimals: 18, price }),
+};
+
 describe('jar legs take the planner’s route (privacy first)', () => {
   it('pays from USDC on Arbitrum and Polygon, which 1Click takes', () => {
     expect(PAY_CHAINS).toContain('Arbitrum');
@@ -113,7 +119,7 @@ describe('jar legs take the planner’s route (privacy first)', () => {
 
   it('a leg 1Click can’t do is bought where the money is, as WBTC or WETH on Arbitrum', async () => {
     const quote = vi.fn();
-    const dexPrices = vi.fn(async () => ({}));
+    // const dexPrices = vi.fn(async () => ({}));
     const routeFor = vi.fn(async (ask: { toToken: string; amount: bigint }) =>
       ask.toToken === PICKS.BTC.assetId ? wrapped('BTC', ask.amount) : wrapped('ETH', ask.amount),
     );
@@ -121,7 +127,9 @@ describe('jar legs take the planner’s route (privacy first)', () => {
       balances: async () => ({ Arbitrum: 340_000n }),
       route: routeFor as never,
       quote: quote as never,
-      dexPrices,
+      // dexPrices,
+      // Valued at each pick's own NEAR Intents price (the fixture's quote pays 1.683 WBTC).
+      tokens: async () => [prices.BTC(0.1), prices.ETH(1e9)],
     });
     // Asked with the paying chain's USDC, wrapped versions allowed, refunds to the wallet.
     expect(routeFor).toHaveBeenCalledWith(
@@ -163,7 +171,7 @@ describe('jar legs take the planner’s route (privacy first)', () => {
         route: (async () => elsewhere) as never,
         quote: quote as never,
         usdcAsset: (async () => BASE_USDC) as never,
-        dexPrices: vi.fn(async () => ({})),
+        // dexPrices: vi.fn(async () => ({})),
       }),
     ).rejects.toBeInstanceOf(JarBuyError);
     // One 1Click quote from Arbitrum's USDC: the leg's USDC to Base, for the DEX there.
@@ -174,6 +182,46 @@ describe('jar legs take the planner’s route (privacy first)', () => {
         originAsset: USDC_ORIGINS.Arbitrum,
         legs: [expect.objectContaining({ destinationAsset: BASE_USDC, amount: '170000' })],
       }),
+    );
+  });
+
+  // The planner says the leg keeps 98% (`minOutUsd`); only 1Click's own price counts (15 Nov).
+  it('a leg bought as WBTC is refused when BTC’s own price says it loses most of it', async () => {
+    const error = await quoteJarBuy([route('BTC', 0.17)], 0.01, {
+      balances: async () => ({ Arbitrum: 170_000n }),
+      route: (async (ask: { amount: bigint }) => wrapped('BTC', ask.amount)) as never,
+      tokens: async () => [prices.BTC(0.01)],
+    }).catch((e) => e);
+    expect(error).toBeInstanceOf(JarBuyError);
+    expect(error.legs).toEqual([
+      {
+        symbol: 'BTC',
+        reason: 'Fees would take more than half of this swap. Buy more or pick another token.',
+      },
+    ]);
+  });
+
+  it('a leg bought as WBTC is refused when 1Click has no BTC price', async () => {
+    const error = await quoteJarBuy([route('BTC', 0.17)], 0.01, {
+      balances: async () => ({ Arbitrum: 170_000n }),
+      route: (async (ask: { amount: bigint }) => wrapped('BTC', ask.amount)) as never,
+      tokens: async () => [],
+    }).catch((e) => e);
+    expect(error.legs).toEqual([{ symbol: 'BTC', reason: 'Couldn’t price BTC right now.' }]);
+  });
+
+  it('a leg bought as WBTC never takes the server’s decimals', async () => {
+    // The server says WBTC has 6 decimals (the quote's 1.683 WBTC would read as 168.3).
+    const error = await quoteJarBuy([route('BTC', 0.17)], 0.01, {
+      balances: async () => ({ Arbitrum: 170_000n }),
+      route: (async (ask: { amount: bigint }) => {
+        const r = wrapped('BTC', ask.amount);
+        return { ...r, best: { ...r.best, buyDecimals: 6 } };
+      }) as never,
+      tokens: async () => [prices.BTC(0.01)],
+    }).catch((e) => e);
+    expect(error.legs?.[0]?.reason).toBe(
+      'Fees would take more than half of this swap. Buy more or pick another token.',
     );
   });
 

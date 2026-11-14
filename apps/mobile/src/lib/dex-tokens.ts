@@ -186,6 +186,8 @@ async function getTokens(chain: DexChain): Promise<unknown> {
 
 export type DexTokenDeps = {
   tokens?: (chain: DexChain) => Promise<unknown>;
+  /** `GET /dex/token` for one contract or mint; null when the server doesn't know it (404). */
+  token?: (chain: DexChain, address: string) => Promise<unknown | null>;
   /** `GET /api/v1/capabilities` (the server says whether DEX swaps are on). */
   capabilities?: () => Promise<unknown>;
   now?: () => number;
@@ -278,6 +280,116 @@ export async function fetchDexTokens(chain: DexChain, deps: DexTokenDeps = {}) {
   return tokens;
 }
 
+/**
+ * Reads `GET /api/v1/dex/token?chain=…&address=…` (public, like `/dex/tokens`, on the same
+ * server): one row of `/dex/tokens?all=1`'s shape; null when it's unknown (404). Other
+ * errors throw.
+ */
+async function getToken(chain: DexChain, address: string): Promise<unknown | null> {
+  // Loaded on demand, like `getTokens`: the API client pulls in Expo config.
+  const [{ resolveBaseUrl }, { clockedFetch }] = await Promise.all([
+    import('@/lib/api'),
+    import('@/lib/server-clock'),
+  ]);
+  const res = await clockedFetch((...args) => fetch(...args))(
+    `${resolveBaseUrl()}/api/v1/dex/token?chain=${CODE[chain]}&address=${encodeURIComponent(address)}`,
+    { headers: { accept: 'application/json' } },
+  );
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`DEX token lookup failed (${res.status})`);
+  return res.json();
+}
+
+/** What a search is, when it's a token's address: an EVM contract or a Solana mint. */
+export function addressKind(query: string): 'evm' | 'solana' | null {
+  const q = query.trim();
+  if (/^0x[0-9a-fA-F]{40}$/.test(q)) return 'evm';
+  return ADDRESS.test(q) ? 'solana' : null;
+}
+
+const byAddressCache = new Map<string, { at: number; token: DexToken | null }>();
+
+/**
+ * One token by its contract (or mint) on one chain, from the server's DEX universe,
+ * blocked ones included (their `safety` says why); null when it doesn't know it. Cached
+ * five minutes, a miss too.
+ */
+export async function fetchDexToken(
+  chain: DexChain,
+  address: string,
+  deps: DexTokenDeps = {},
+): Promise<DexToken | null> {
+  if (TEST_MODE)
+    return (
+      SAMPLE_DEX_TOKENS.find((t) => t.chain === chain && sameToken(chain, t.address, address)) ??
+      null
+    );
+  if (!validAddress(chain, address) || !(await dexEnabled(deps))) return null;
+  const key = `${chain}:${chain === 'Solana' ? address : address.toLowerCase()}`;
+  const now = (deps.now ?? Date.now)();
+  const hit = byAddressCache.get(key);
+  if (hit && now - hit.at < TOKENS_TTL_MS) return hit.token;
+  const body = await (deps.token ?? getToken)(chain, address);
+  const row = body && typeof body === 'object' && 'token' in body ? body.token : body;
+  const token =
+    parseDexTokens({ tokens: row ? [row] : [] }).find(
+      (t) => t.chain === chain && sameToken(chain, t.address, address),
+    ) ?? null;
+  byAddressCache.set(key, { at: now, token });
+  return token;
+}
+
+/**
+ * Safe tokens found by their address (Search, Swap's picker), so Swap and the jar routes
+ * can trade them like listed ones; kept until the app restarts.
+ */
+export const foundDexTokens = createStore<{ tokens: DexToken[] }>({ tokens: [] });
+
+/**
+ * The tokens at an address the lists don't have: an EVM contract asked of every EVM DEX
+ * chain at once, a mint of Solana. Blocked ones are returned too (to say why); the safe
+ * ones are kept in `foundDexTokens`. A chain that can't be asked is left out.
+ */
+export async function findDexTokensAt(query: string, deps: DexTokenDeps = {}) {
+  const kind = addressKind(query);
+  if (!kind) return [];
+  const address = query.trim();
+  const chains = DEX_CHAINS.filter((c) => (kind === 'solana') === (c === 'Solana'));
+  const found = (
+    await Promise.all(chains.map((c) => fetchDexToken(c, address, deps).catch(() => null)))
+  ).filter((t): t is DexToken => !!t);
+  const safe = found.filter((t) => t.safety.ok);
+  if (safe.length)
+    foundDexTokens.set((prev) => ({
+      tokens: [
+        ...prev.tokens.filter(
+          (p) => !safe.some((t) => t.chain === p.chain && sameToken(t.chain, t.address, p.address)),
+        ),
+        ...safe,
+      ],
+    }));
+  return found;
+}
+
+/** `list` with the safe tokens found by address that it doesn't have yet. */
+export function withFound(list: readonly DexToken[], found = foundDexTokens.get().tokens) {
+  return [
+    ...list,
+    ...found.filter(
+      (f) => !list.some((t) => t.chain === f.chain && sameToken(t.chain, t.address, f.address)),
+    ),
+  ];
+}
+
+/** Why a blocked token can't be traded, in the server's words; null for a safe one. */
+export function blockedLine(token: Pick<DexToken, 'safety' | 'symbol'>) {
+  if (token.safety.ok) return null;
+  const flags = token.safety.flags;
+  return flags.length
+    ? `${token.symbol} can’t be swapped: ${flags.join(', ').toLowerCase()}.`
+    : `${token.symbol} can’t be swapped right now.`;
+}
+
 /** Every chain's DEX tokens; a chain that can't be read is left out. */
 export async function fetchAllDexTokens(deps: DexTokenDeps = {}) {
   const lists = await Promise.all(
@@ -289,6 +401,8 @@ export async function fetchAllDexTokens(deps: DexTokenDeps = {}) {
 /** Forgets cached lists and the server's DEX switch (tests). */
 export const forgetDexTokens = () => {
   tokenCache.clear();
+  byAddressCache.clear();
+  foundDexTokens.set({ tokens: [] });
   dexSwitch = null;
 };
 
@@ -307,6 +421,15 @@ export function findDexToken(tokens: readonly DexToken[], symbol: string, chain?
   );
 }
 
+/** A DEX chain by the app's name ("Base"), the server's code ("base") or NEAR Intents' ("arb"). */
+export function dexChainNamed(chain: string): DexChain | null {
+  const c = chain.trim().toLowerCase();
+  return (
+    DEX_CHAINS.find((d) => d.toLowerCase() === c || CODE[d] === c || ONE_CLICK_CODE[d] === c) ??
+    null
+  );
+}
+
 /**
  * The DEX token at exactly (chain, address): the chain by the app's name ("Base"), the
  * server's code ("base") or NEAR Intents' ("arb"); only tokens the server marked safe.
@@ -317,10 +440,7 @@ export function findDexTokenByAddress(
   chain: string,
   address: string,
 ): DexToken | null {
-  const c = chain.trim().toLowerCase();
-  const wanted = DEX_CHAINS.find(
-    (d) => d.toLowerCase() === c || CODE[d] === c || ONE_CLICK_CODE[d] === c,
-  );
+  const wanted = dexChainNamed(chain);
   if (!wanted) return null;
   return (
     tokens.find(
@@ -405,26 +525,64 @@ export function dexLogos(tokens: readonly DexToken[]): Record<string, string> {
 }
 
 /** Search's rows for DEX tokens whose symbol the market list doesn't have yet. */
+// export function dexMarketRows(rows: readonly { symbol: string }[], tokens: readonly DexToken[]) {
+//   const seen = new Set(rows.map((r) => r.symbol.toUpperCase()));
+//   return tokens.flatMap((t) => {
+//     const key = t.symbol.toUpperCase();
+//     if (!t.safety.ok || seen.has(key)) return [];
+//     seen.add(key);
+//     return [
+//       {
+//         symbol: t.symbol,
+//         name: t.name,
+//         chain: t.chain,
+//         price: t.priceUsd,
+//         change: 0,
+//         volume: t.volume24hUsd ?? 0,
+//         marketCap: 0,
+//         logo: t.logoUrl ?? null,
+//         aliases: [],
+//       },
+//     ];
+//   });
+// }
+/**
+ * Search's rows for the safe DEX tokens, one per (chain, address) (15 Nov): long-tail
+ * tokens sharing a ticker all show. A row whose symbol another row has is `exact`: it
+ * wears its network on its logo and opens by its own asset, never by the symbol.
+ */
 export function dexMarketRows(rows: readonly { symbol: string }[], tokens: readonly DexToken[]) {
-  const seen = new Set(rows.map((r) => r.symbol.toUpperCase()));
-  return tokens.flatMap((t) => {
-    const key = t.symbol.toUpperCase();
-    if (!t.safety.ok || seen.has(key)) return [];
-    seen.add(key);
-    return [
-      {
-        symbol: t.symbol,
-        name: t.name,
-        chain: t.chain,
-        price: t.priceUsd,
-        change: 0,
-        volume: t.volume24hUsd ?? 0,
-        marketCap: 0,
-        logo: t.logoUrl ?? null,
-        aliases: [],
-      },
-    ];
+  const seen = new Set<string>();
+  const safe = tokens.filter((t) => {
+    const id = dexAssetId(t.chain, t.address);
+    if (!t.safety.ok || seen.has(id)) return false;
+    seen.add(id);
+    return true;
   });
+  const count = new Map<string, number>();
+  for (const r of [...rows, ...safe]) {
+    const key = r.symbol.toUpperCase();
+    count.set(key, (count.get(key) ?? 0) + 1);
+  }
+  return safe.map((t) => dexMarketRow(t, (count.get(t.symbol.toUpperCase()) ?? 0) > 1));
+}
+
+/** One DEX token as a market row (Search); `exact` when it must open by its own asset. */
+export function dexMarketRow(t: DexToken, exact: boolean) {
+  return {
+    symbol: t.symbol,
+    name: t.name,
+    chain: t.chain,
+    price: t.priceUsd,
+    change: 0,
+    volume: t.volume24hUsd ?? 0,
+    marketCap: 0,
+    logo: t.logoUrl ?? null,
+    aliases: [],
+    assetId: dexAssetId(t.chain, t.address),
+    address: t.address,
+    ...(exact ? { exact: true } : {}),
+  };
 }
 
 /** `DexQuote.unsponsoredReason` (packages/api-client): why the wallet pays a swap's gas. */
