@@ -71,7 +71,12 @@ import { tokenColor } from '@/lib/token-colors';
 import { wallets } from '@/lib/wallets';
 
 /** Every group this phone has read, by id (test mode starts with its sample groups). */
-export const groups = createStore<Record<string, SocialGroup>>(TEST_MODE ? demoGroups() : {});
+// export const groups = createStore<Record<string, SocialGroup>>(TEST_MODE ? demoGroups() : {});
+// Kept across restarts (14 Nov): a group you made, still waiting for friends, stays on
+// Home's Jars instead of vanishing with the screen that made it.
+export const groups = createStore<Record<string, SocialGroup>>(TEST_MODE ? demoGroups() : {}, {
+  persist: 'group-jars.groups',
+});
 export const useGroup = (id: string): SocialGroup | undefined => groups.useValue()[id];
 const put = (g: SocialGroup) => {
   groups.set((all) => ({ ...all, [g.id]: g }));
@@ -165,6 +170,25 @@ export function groupError(error: unknown) {
 export async function loadGroup(id: string) {
   if (isDemoGroup(id)) return demo(id);
   return put(await api.socialGroup(token(), id));
+}
+
+/**
+ * Every group you made or were invited to, from Honey (newest 50), for Home's Jars. The
+ * list replaces what this phone had (so a group from another account doesn't linger);
+ * test mode's sample groups stay. A group bought while you were away becomes its jar.
+ */
+export async function loadMyGroups() {
+  const t = backendSessionToken();
+  if (!t) return;
+  const list = await api.socialMyGroups(t);
+  groups.set((all) => ({
+    ...Object.fromEntries(Object.entries(all).filter(([id]) => isDemoGroup(id))),
+    ...Object.fromEntries(list.map((g) => [g.id, g])),
+  }));
+  const jars = thesisJars.get();
+  for (const g of list)
+    if (g.status === 'active' && g.myState === 'accepted' && !jars.some((j) => j.groupId === g.id))
+      upsertGroupJar(g);
 }
 
 /** Re-reads the group, and its votes on NEAR once it has a DAO you're in. */
