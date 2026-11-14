@@ -48,6 +48,7 @@ export type Chain =
   | 'Ethereum'
   | 'Base'
   | 'Arbitrum'
+  | 'Optimism'
   | 'Polygon'
   | 'Solana'
   | 'NEAR'
@@ -55,16 +56,20 @@ export type Chain =
   | 'XRP Ledger';
 
 /**
- * The chains Honey supports, each shown with its network's logo. The first four fill
- * the "All networks" grid (components/wallet/parts.tsx `NetworkGrid`).
+ * The chains Honey supports, each shown with its network's logo: the one list every
+ * screen that names networks reads (Receive, Send, Swap's picker, Search, Supported
+ * networks). Keep in step with the server's `portfolio::SHOWN_ONECLICK`, the chains
+ * whose balances it reads. The first four fill the "All networks" grid
+ * (components/wallet/parts.tsx `NetworkGrid`). `blockchain` is NEAR Intents' code.
  */
-export const CHAINS: { name: Chain; symbol: string }[] = [
-  { name: 'Ethereum', symbol: 'ETH' },
-  { name: 'Base', symbol: 'BASE' },
-  { name: 'Solana', symbol: 'SOL' },
-  { name: 'NEAR', symbol: 'NEAR' },
-  { name: 'Arbitrum', symbol: 'ARB' },
-  { name: 'Polygon', symbol: 'POL' },
+export const CHAINS: { name: Chain; symbol: string; blockchain: string }[] = [
+  { name: 'Ethereum', symbol: 'ETH', blockchain: 'eth' },
+  { name: 'Base', symbol: 'BASE', blockchain: 'base' },
+  { name: 'Solana', symbol: 'SOL', blockchain: 'sol' },
+  { name: 'NEAR', symbol: 'NEAR', blockchain: 'near' },
+  { name: 'Arbitrum', symbol: 'ARB', blockchain: 'arb' },
+  { name: 'Optimism', symbol: 'OP', blockchain: 'op' },
+  { name: 'Polygon', symbol: 'POL', blockchain: 'pol' },
   // review: Tron and the XRP Ledger aren't supported for now (receive.ts ORDER).
   // { name: 'Tron', symbol: 'TRX' },
   // { name: 'XRP Ledger', symbol: 'XRP' },
@@ -78,14 +83,32 @@ export const EVM_CHAIN_IDS: Partial<Record<Chain, number>> = {
   Ethereum: 1,
   Base: 8453,
   Arbitrum: 42161,
+  Optimism: 10,
   Polygon: 137,
 };
+
+/** Every supported network's name, in `CHAINS` order. */
+export const SUPPORTED_CHAINS: Chain[] = CHAINS.map((c) => c.name);
+/** The supported EVM networks (one address for all of them), in `CHAINS` order. */
+export const EVM_CHAINS: Chain[] = SUPPORTED_CHAINS.filter((c) => EVM_CHAIN_IDS[c] !== undefined);
+/** NEAR Intents' codes for the supported networks, in `CHAINS` order. */
+export const SUPPORTED_BLOCKCHAINS: string[] = CHAINS.map((c) => c.blockchain);
+/** Whether a NEAR Intents chain code is a network Honey supports (shows balances on). */
+export const isSupportedBlockchain = (blockchain: string) =>
+  SUPPORTED_BLOCKCHAINS.includes(blockchain);
+
+/** Names as a sentence lists them: "Ethereum, Base and Polygon" (or "… or Polygon"). */
+export function listNames(names: readonly string[], last: 'and' | 'or' = 'and') {
+  if (names.length < 2) return names.join('');
+  return `${names.slice(0, -1).join(', ')} ${last} ${names[names.length - 1]}`;
+}
 
 /** Each chain's own coin, which pays its network fees. */
 export const NATIVE_COIN: Record<Chain, string> = {
   Ethereum: 'ETH',
   Base: 'ETH',
   Arbitrum: 'ETH',
+  Optimism: 'ETH',
   Polygon: 'POL',
   Solana: 'SOL',
   NEAR: 'NEAR',
@@ -530,13 +553,14 @@ const CHAIN_SYMBOLS: Record<string, string> = {
   Ethereum: 'ETH',
   Base: 'BASE',
   Arbitrum: 'ARB',
+  Optimism: 'OP',
   Polygon: 'POL',
   Solana: 'SOL',
   NEAR: 'NEAR',
   Tron: 'TRX',
   'XRP Ledger': 'XRP',
   // Networks only swaps reach (NEAR Intents), for their badges.
-  Optimism: 'OP',
+  // Optimism: 'OP',
   'BNB Chain': 'BNB',
   Avalanche: 'AVAX',
   Gnosis: 'GNO',

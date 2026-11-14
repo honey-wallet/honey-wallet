@@ -88,7 +88,15 @@ export const USDC_BASE_ASSET = 'nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bd
 const USDC_DECIMALS = 6;
 
 /** Networks a jar can be paid from: the ones lib/send.ts pays USDC on. */
-export type PayChain = 'Base' | 'Arbitrum' | 'Polygon' | 'Ethereum' | 'Solana' | 'NEAR';
+// export type PayChain = 'Base' | 'Arbitrum' | 'Polygon' | 'Ethereum' | 'Solana' | 'NEAR';
+export type PayChain =
+  | 'Base'
+  | 'Arbitrum'
+  | 'Optimism'
+  | 'Polygon'
+  | 'Ethereum'
+  | 'Solana'
+  | 'NEAR';
 /**
  * NEAR Intents' asset for the USDC lib/send.ts pays on each network (its canonical
  * contract: Circle's native USDC on Ethereum, Base, Arbitrum and Polygon, the Solana mint,
@@ -99,6 +107,9 @@ export const USDC_ORIGINS: Record<PayChain, string> = {
   // From 1Click's /v0/tokens on 2026-11-14 (Polygon's is an `omdep` asset, not `omft`).
   Arbitrum: 'nep141:arb-0xaf88d065e77c8cc2239327c5edb3a432268e5831.omft.near',
   Polygon: 'nep141:pol-0x3c499c542cef5e3811e1192ce70d8cc03d5c3359.omdep.near',
+  // 1Click's /v0/tokens on 2026-11-14: Optimism's native USDC (0x0b2c…ff85) is a HOT
+  // Omni asset (`nep245`), not `omft`.
+  Optimism: 'nep245:v2_1.omni.hot.tg:10_A2ewyUyDp6qsue1jqZsGypkCxRJ',
   Ethereum: 'nep141:eth-0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48.omft.near',
   Solana: 'nep141:sol-5ce3bf3a31af18be40ba30f721101b4341690186.omft.near',
   NEAR: 'nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1',
@@ -110,6 +121,8 @@ export const PAY_CHAINS: readonly PayChain[] = [
   'Polygon',
   'Solana',
   'NEAR',
+  // Honey doesn't pay gas on Optimism (nor Ethereum): after the free-gas networks.
+  'Optimism',
   'Ethereum',
 ];
 export const isPayChain = (c: string): c is PayChain =>
@@ -969,7 +982,12 @@ export function checkQuote(
 const depositValid = (origin: PayChain, a: unknown) =>
   typeof a === 'string' &&
   a.trim() === a &&
-  (origin === 'Base' || origin === 'Arbitrum' || origin === 'Polygon' || origin === 'Ethereum'
+  // (origin === 'Base' || origin === 'Arbitrum' || origin === 'Polygon' || origin === 'Ethereum'
+  (origin === 'Base' ||
+  origin === 'Arbitrum' ||
+  origin === 'Optimism' ||
+  origin === 'Polygon' ||
+  origin === 'Ethereum'
     ? isAddress(a)
     : origin === 'Solana'
       ? isSolanaAddress(a)

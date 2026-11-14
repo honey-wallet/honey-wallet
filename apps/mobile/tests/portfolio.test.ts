@@ -39,8 +39,11 @@ it('sums tokens across chains and keeps per-chain send choices', () => {
       assetId: 'nep141:arb-0x912ce59144191c1204e64559fe8253a0e49e6548.omft.near',
     },
     // Optimism isn't read: never offered to Send.
-    h('Optimism', 'ETH', 1, 3000),
+    // h('Optimism', 'ETH', 1, 3000),
+    // Replaced (14 Nov): Optimism is read now; a chain Honey doesn't support never is.
+    h('BNB Chain', 'ETH', 1, 3000),
   ];
+  const withOptimism = [...holdings, h('Optimism', 'ETH', 0.5, 1500), h('Optimism', 'USDC', 6, 6)];
   expect(toTokens(holdings).map((t) => [t.symbol, t.amount])).toEqual([
     ['ETH', 2],
     ['USDC', 9],
@@ -59,6 +62,12 @@ it('sums tokens across chains and keeps per-chain send choices', () => {
     contract: '0x912ce59144191c1204e64559fe8253a0e49e6548',
     decimals: 18,
   });
+  // Optimism's ETH and USDC are send choices like Arbitrum's.
+  expect(
+    toHoldings(withOptimism)
+      .filter((x) => x.chain === 'Optimism')
+      .map((x) => `${x.symbol}@${x.chain}`),
+  ).toEqual(['ETH@Optimism', 'USDC@Optimism']);
 });
 
 it('names the fee coin of a bare Polygon call POL', () => {

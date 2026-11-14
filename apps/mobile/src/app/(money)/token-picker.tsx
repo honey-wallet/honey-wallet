@@ -39,6 +39,7 @@ import { TEST_MODE } from '@/lib/test-mode';
 import {
   clearRecentPicks,
   coinName,
+  onSupportedNetworks,
   pickerLists,
   quickPicks,
   recentPicks,
@@ -200,7 +201,9 @@ function LiveTokens({
       t.name ?? (known !== t.symbol ? known : (marketName.get(t.symbol.toUpperCase()) ?? known));
     return coinName(t, name, chainName);
   };
-  const listed = (tokens ?? [])
+  // const listed = (tokens ?? [])
+  // Networks Honey supports only (lib/mock-wallet CHAINS), on both sides.
+  const listed = onSupportedNetworks(tokens ?? [])
     .filter((t) => side === 'buy' || canSell(t))
     .filter((t) => !jar || (t.symbol !== 'USDC' && (heldOf(t)?.amount ?? 0) > 0));
   const q = query.trim().toLowerCase();

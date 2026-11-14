@@ -1,4 +1,5 @@
 import type { Portfolio } from '@honey-wallet/api-client';
+import { EVM_CHAINS } from '@/lib/mock-wallet';
 import { formatAmount } from '@/lib/portfolio';
 
 /**
@@ -23,7 +24,8 @@ const SPAM = /https?:|www\.|\.(com|io|xyz)\b|claim|visit|reward|airdrop/i;
 /** The chains the server reads for these addresses (`PortfolioService::chains`). */
 export function chainsFor(addresses: { evm?: string; solana?: string; near?: string }) {
   return [
-    ...(addresses.evm ? ['Ethereum', 'Base', 'Arbitrum', 'Polygon'] : []),
+    // ...(addresses.evm ? ['Ethereum', 'Base', 'Arbitrum', 'Polygon'] : []),
+    ...(addresses.evm ? EVM_CHAINS : []),
     ...(addresses.solana ? ['Solana'] : []),
     ...(addresses.near ? ['NEAR'] : []),
   ];

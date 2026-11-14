@@ -6,7 +6,13 @@ import type {
 } from '@honey-wallet/api-client';
 import { useEffect } from 'react';
 import { api } from '@/lib/api';
-import { type Activity, type Chain, nativeCoinOf, type Token } from '@/lib/mock-wallet';
+import {
+  type Activity,
+  type Chain,
+  nativeCoinOf,
+  SUPPORTED_CHAINS,
+  type Token,
+} from '@/lib/mock-wallet';
 import { createStore } from '@/lib/store';
 import type { AddedWallet } from '@/lib/wallets';
 
@@ -261,12 +267,14 @@ export function toTokens(holdings: PortfolioHolding[]): Token[] {
     .sort((a, b) => b.usd - a.usd || b.amount - a.amount);
 }
 
-const CHAINS: Chain[] = ['Ethereum', 'Base', 'Arbitrum', 'Polygon', 'Solana', 'NEAR'];
+// const CHAINS: Chain[] = ['Ethereum', 'Base', 'Arbitrum', 'Polygon', 'Solana', 'NEAR'];
+const CHAINS: Chain[] = SUPPORTED_CHAINS;
 /** What lib/send pays by name on each network; anything else needs its contract. */
 const BY_NAME: Partial<Record<Chain, string[]>> = {
   Ethereum: ['ETH', 'USDC'],
   Base: ['ETH', 'USDC'],
   Arbitrum: ['ETH', 'USDC'],
+  Optimism: ['ETH', 'USDC'],
   Polygon: ['POL', 'USDC'],
   Solana: ['SOL', 'USDC'],
   NEAR: ['NEAR', 'USDC'],

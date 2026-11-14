@@ -48,9 +48,14 @@ it('shares each chain’s explorer link with one line about the transaction', ()
     'Base transaction',
   );
   // A chain with no explorer here: no link, so the hash is what's passed on.
-  const unknown = chainTxShare(item('Optimism', '0xo'));
+  // Replaced (14 Nov): Optimism has its explorer now; BNB Chain still doesn't.
+  // const unknown = chainTxShare(item('Optimism', '0xo'));
+  // expect(unknown.url).toBeNull();
+  // expect(shareContent(unknown, 'android')).toEqual({ message: 'Sent 5 USDC on Optimism\n0xo' });
+  const unknown = chainTxShare(item('BNB Chain', '0xo'));
   expect(unknown.url).toBeNull();
-  expect(shareContent(unknown, 'android')).toEqual({ message: 'Sent 5 USDC on Optimism\n0xo' });
+  expect(shareContent(unknown, 'android')).toEqual({ message: 'Sent 5 USDC on BNB Chain\n0xo' });
+  expect(chainTxShare(item('Optimism', '0xo')).url).toBe('https://optimistic.etherscan.io/tx/0xo');
 });
 
 it('shares a swap’s deposit, or 1Click’s page before it has one', () => {
@@ -72,7 +77,8 @@ it('shares a swap’s deposit, or 1Click’s page before it has one', () => {
   });
   // Sold from a chain with no explorer here: 1Click's page still finds it.
   expect(
-    swapShare({ ...swap, sell: { ...swap.sell, chain: 'Optimism' }, txHash: '0xo' }, '5', '0.03')
+    // swapShare({ ...swap, sell: { ...swap.sell, chain: 'Optimism' }, txHash: '0xo' }, '5', '0.03')
+    swapShare({ ...swap, sell: { ...swap.sell, chain: 'BNB Chain' }, txHash: '0xo' }, '5', '0.03')
       .url,
   ).toBe('https://explorer.near-intents.org/transactions/0xdeposit');
 });

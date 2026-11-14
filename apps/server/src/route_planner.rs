@@ -83,7 +83,7 @@ pub const SOLANA_RENT_LAMPORTS: u128 = 2_039_280;
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BestRouteRequest {
-    /// base, arbitrum, polygon, ethereum or solana.
+    /// base, arbitrum, optimism, polygon, ethereum or solana.
     pub from_chain: String,
     /// The token's address (mint on Solana), `native`, or a 1Click asset id.
     pub from_token: String,
@@ -397,6 +397,7 @@ fn chain_label(chain: DexChain) -> &'static str {
     match chain {
         DexChain::Base => "Base",
         DexChain::Arbitrum => "Arbitrum",
+        DexChain::Optimism => "Optimism",
         DexChain::Polygon => "Polygon",
         DexChain::Ethereum => "Ethereum",
         DexChain::Solana => "Solana",
@@ -1179,6 +1180,7 @@ fn default_gas_price(chain: DexChain) -> u128 {
     match chain {
         DexChain::Base => 10_000_000,
         DexChain::Arbitrum => 20_000_000,
+        DexChain::Optimism => 10_000_000,
         DexChain::Polygon => 300_000_000_000,
         DexChain::Ethereum => 1_000_000_000,
         DexChain::Solana => 0,

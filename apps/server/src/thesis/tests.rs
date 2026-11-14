@@ -15,7 +15,10 @@ fn assets() -> Vec<RegistryAsset> {
         {"assetId":"nep141:wbtc","blockchain":"eth","symbol":"WBTC","decimals":8,"price":68000.0,"coingeckoId":"wrapped-bitcoin"},
         {"assetId":"nep141:cbbtc","blockchain":"base","symbol":"cbBTC","decimals":8,"price":68000.0,"coingeckoId":"coinbase-wrapped-btc"},
         {"assetId":"nep141:tiny","blockchain":"sol","symbol":"TINY","decimals":6,"price":0.01,"coingeckoId":"tiny"},
-        {"assetId":"nep141:doge","blockchain":"bsc","symbol":"DOGE","decimals":8,"price":0.1,"coingeckoId":"dogecoin"},
+        // Replaced (14 Nov): picks land only on chains Honey shows, so the sample DOGE is on Solana.
+        // {"assetId":"nep141:doge","blockchain":"bsc","symbol":"DOGE","decimals":8,"price":0.1,"coingeckoId":"dogecoin"},
+        {"assetId":"nep141:doge","blockchain":"sol","symbol":"DOGE","decimals":8,"price":0.1,"coingeckoId":"dogecoin"},
+        {"assetId":"nep141:doge-bsc","blockchain":"bsc","symbol":"DOGE","decimals":8,"price":0.1,"coingeckoId":"dogecoin"},
         {"assetId":"nep141:xaut","blockchain":"eth","symbol":"XAUT","decimals":6,"price":3900.0,"coingeckoId":"tether-gold"},
         {"assetId":"nep141:old","blockchain":"eth","symbol":"USDC(DEPRECATED)","decimals":6,"price":1.0,"coingeckoId":"usd-coin"}
     ]))
@@ -64,6 +67,17 @@ fn universe_folds_wrappers_and_drops_junk() {
     assert!(usdc.liquid());
     let nvda = u.iter().find(|c| c.ticker == "NVDAON").unwrap();
     assert!(nvda.liquid(), "tokenized stocks pass without market cap");
+}
+
+#[test]
+fn picks_land_only_on_chains_honey_shows() {
+    for chain in ["eth", "base", "arb", "op", "pol", "sol", "near"] {
+        assert!(shortlist::honey_chain(chain), "{chain}");
+    }
+    // EVM, so the wallet holds the key, but Home doesn't show their balances.
+    for chain in ["bsc", "avax", "gnosis", "btc"] {
+        assert!(!shortlist::honey_chain(chain), "{chain}");
+    }
 }
 
 #[test]

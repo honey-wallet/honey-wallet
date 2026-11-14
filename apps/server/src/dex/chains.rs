@@ -8,17 +8,18 @@ use alloy_primitives::{Address, address};
 use serde::{Deserialize, Serialize};
 
 /// KyberSwap `MetaAggregationRouterV2`, the same CREATE2 address on Ethereum, Base,
-/// Arbitrum and Polygon. Source: KyberSwap docs, "Contracts" / "Aggregator Contract
+/// Arbitrum, Optimism and Polygon. Source: KyberSwap docs, "Contracts" / "Aggregator Contract
 /// Addresses" (docs.kyberswap.com/developer-guide/aggregator-api/contracts; verified
 /// `MetaAggregationRouterV2` on Etherscan),
 /// and the `routerAddress` the Aggregator API returned for all four chains on 2026-11-13
-/// (docs/routing/LIVE-CHECK.md). Sell tokens are approved to it for the exact amount.
+/// (docs/routing/LIVE-CHECK.md), and for Optimism (`/optimism/api/v1/routes` and
+/// `route/build`) on 2026-11-14. Sell tokens are approved to it for the exact amount.
 pub const KYBER_ROUTER: Address = address!("6131B5fae19EA4f9D964eAc0408E4408b66337b5");
 
 /// KyberSwap's executor (the `callTarget` its router hands the sell token to), the same
-/// address on Ethereum, Base, Arbitrum and Polygon. Seen as `callTarget` and
+/// address on Ethereum, Base, Arbitrum, Optimism and Polygon. Seen as `callTarget` and
 /// `srcReceivers[0]` in every `route/build` answer on all four chains on 2026-11-13
-/// (docs/routing/AUDIT.md finding 5). Kyber's router doesn't allowlist `callTarget`, so
+/// (docs/routing/AUDIT.md finding 5), and in Optimism's `route/build` calldata on 2026-11-14. Kyber's router doesn't allowlist `callTarget`, so
 /// Honey does: a build naming another executor is refused.
 pub const KYBER_EXECUTOR: Address = address!("8f10b468b06c6fd214b65f87778827f7d113f996");
 
@@ -38,14 +39,16 @@ pub const WRAPPED_SOL: &str = "So11111111111111111111111111111111111111112";
 pub enum DexChain {
     Base,
     Arbitrum,
+    Optimism,
     Polygon,
     Ethereum,
     Solana,
 }
 
-pub const ALL: [DexChain; 5] = [
+pub const ALL: [DexChain; 6] = [
     DexChain::Base,
     DexChain::Arbitrum,
+    DexChain::Optimism,
     DexChain::Polygon,
     DexChain::Ethereum,
     DexChain::Solana,
@@ -60,6 +63,7 @@ impl DexChain {
         match self {
             Self::Base => "base",
             Self::Arbitrum => "arbitrum",
+            Self::Optimism => "optimism",
             Self::Polygon => "polygon",
             Self::Ethereum => "ethereum",
             Self::Solana => "solana",
@@ -75,6 +79,7 @@ impl DexChain {
         match self {
             Self::Base => Some(8453),
             Self::Arbitrum => Some(42161),
+            Self::Optimism => Some(10),
             Self::Polygon => Some(137),
             Self::Ethereum => Some(1),
             Self::Solana => None,
@@ -90,6 +95,7 @@ impl DexChain {
         match self {
             Self::Base => Some("base"),
             Self::Arbitrum => Some("arbitrum"),
+            Self::Optimism => Some("optimism"),
             Self::Polygon => Some("polygon"),
             Self::Ethereum => Some("ethereum"),
             Self::Solana => None,
@@ -101,6 +107,7 @@ impl DexChain {
         match self {
             Self::Base => "8453",
             Self::Arbitrum => "42161",
+            Self::Optimism => "10",
             Self::Polygon => "137",
             Self::Ethereum => "1",
             Self::Solana => "solana",
@@ -112,6 +119,7 @@ impl DexChain {
         match self {
             Self::Base => "base",
             Self::Arbitrum => "arbitrum-one",
+            Self::Optimism => "optimistic-ethereum",
             Self::Polygon => "polygon-pos",
             Self::Ethereum => "ethereum",
             Self::Solana => "solana",
@@ -124,6 +132,7 @@ impl DexChain {
         match self {
             Self::Base => "base",
             Self::Arbitrum => "arbitrum",
+            Self::Optimism => "optimism",
             Self::Polygon => "polygon_pos",
             Self::Ethereum => "eth",
             Self::Solana => "solana",
@@ -134,6 +143,7 @@ impl DexChain {
         match self {
             Self::Base => "base",
             Self::Arbitrum => "arbitrum",
+            Self::Optimism => "optimism",
             Self::Polygon => "polygon",
             Self::Ethereum => "ethereum",
             Self::Solana => "solana",
@@ -145,6 +155,7 @@ impl DexChain {
         match self {
             Self::Base => "base",
             Self::Arbitrum => "arb",
+            Self::Optimism => "op",
             Self::Polygon => "pol",
             Self::Ethereum => "eth",
             Self::Solana => "sol",
@@ -156,6 +167,7 @@ impl DexChain {
         match self {
             Self::Base => "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
             Self::Arbitrum => "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
+            Self::Optimism => "0x0b2c639c533813f4aa9d7837caf62653d097ff85",
             Self::Polygon => "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359",
             Self::Ethereum => "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
             Self::Solana => USDC_SOLANA,
@@ -233,6 +245,25 @@ mod tests {
             DexChain::Solana.normalize(JUPITER_V6).as_deref(),
             Some(JUPITER_V6)
         );
+    }
+
+    #[test]
+    fn optimism_is_kyberswap_on_chain_10() {
+        let op = DexChain::parse("optimism").unwrap();
+        assert_eq!(op, DexChain::Optimism);
+        assert_eq!(DexChain::from_chain_id(10), Some(op));
+        assert_eq!(op.kyber(), Some("optimism"));
+        assert_eq!(op.oneclick(), "op");
+        assert_eq!(op.coingecko_platform(), "optimistic-ethereum");
+        assert!(op.is_usdc("0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85"));
+        assert!(op.router_allowed(KYBER_ROUTER) && op.executor_allowed(KYBER_EXECUTOR));
+        assert_eq!(
+            serde_json::to_string(&op).unwrap(),
+            "\"optimism\"",
+            "the wire name the app sends"
+        );
+        // Honey doesn't pay gas on Optimism (no 7702 sponsor there).
+        assert!(crate::evm_sponsor::chain(10).is_none());
     }
 
     #[test]

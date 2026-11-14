@@ -59,6 +59,14 @@ pub const CANONICAL: &[Canonical] = &[
         symbol: "WBTC",
         decimals: 8,
     },
+    // Optimism's two were read on chain on 2026-11-14 (mainnet.optimism.io).
+    Canonical {
+        family: Family::Btc,
+        chain: DexChain::Optimism,
+        address: "0x68f180fcce6836688e9084f035309e29bf0a2095",
+        symbol: "WBTC",
+        decimals: 8,
+    },
     Canonical {
         family: Family::Btc,
         chain: DexChain::Ethereum,
@@ -84,6 +92,13 @@ pub const CANONICAL: &[Canonical] = &[
         family: Family::Eth,
         chain: DexChain::Arbitrum,
         address: "0x82af49447d8a07e3bd95bd0d56f35241523fbab1",
+        symbol: "WETH",
+        decimals: 18,
+    },
+    Canonical {
+        family: Family::Eth,
+        chain: DexChain::Optimism,
+        address: "0x4200000000000000000000000000000000000006",
         symbol: "WETH",
         decimals: 18,
     },

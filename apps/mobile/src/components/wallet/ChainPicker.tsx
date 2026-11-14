@@ -4,7 +4,7 @@ import { Icon } from '@/components/Icon';
 import { PressableRow } from '@/components/motion/PressableRow';
 import { TokenIcon } from '@/components/wallet/parts';
 import { tap } from '@/lib/haptics';
-import { shortAddress } from '@/lib/mock-wallet';
+import { EVM_CHAINS, listNames, shortAddress } from '@/lib/mock-wallet';
 import { isWeb } from '@/lib/platform';
 import { EVM_LOGOS, type ReceiveAddress } from '@/lib/receive';
 import { makeStyles, radius, useTheme } from '@/theme';
@@ -66,10 +66,15 @@ export function ChainPicker({
               <Text style={styles.subtitle}>
                 {/* review: say how many EVM chains the one address covers. */}
                 {/* {evm ? 'Ethereum, Base and more' : SUBTITLES[entry.family]} */}
-                {showAddress
+                {/* {showAddress
                   ? shortAddress(entry.address)
                   : evm
                     ? 'Ethereum, Base, Arbitrum and Polygon'
+                    : SUBTITLES[entry.family]} */}
+                {showAddress
+                  ? shortAddress(entry.address)
+                  : evm
+                    ? listNames(EVM_CHAINS)
                     : SUBTITLES[entry.family]}
               </Text>
             </View>

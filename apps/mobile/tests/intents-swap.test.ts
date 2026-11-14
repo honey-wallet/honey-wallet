@@ -15,6 +15,7 @@ vi.mock('@/lib/profile', () => ({
 
 const {
   assetFor,
+  canBuyRef,
   canSell,
   canSellRef,
   checkSwapQuote,
@@ -158,8 +159,15 @@ describe('asset mapping', () => {
       unsupportedReason({ symbol: 'ETH', chain: 'Base' }, { symbol: 'TRX', chain: 'Tron' }, TOKENS),
     ).toMatch(/Getting TRX on Tron/);
     // Before NEAR Intents' list loads, any destination is assumed; the source must be payable.
+    // expect(
+    //   unsupportedReason({ symbol: 'ETH', chain: 'Base' }, { symbol: 'TRX', chain: 'Tron' }),
+    // ).toBeNull();
+    // …on a network Honey supports: Tron is refused even before the list loads.
     expect(
       unsupportedReason({ symbol: 'ETH', chain: 'Base' }, { symbol: 'TRX', chain: 'Tron' }),
+    ).toMatch(/Getting TRX on Tron/);
+    expect(
+      unsupportedReason({ symbol: 'ETH', chain: 'Base' }, { symbol: 'ETH', chain: 'Optimism' }),
     ).toBeNull();
     expect(
       unsupportedReason({ symbol: 'BTC', chain: 'Bitcoin' }, { symbol: 'ETH', chain: 'Base' }),
@@ -203,7 +211,8 @@ describe('every NEAR Intents token', () => {
   ]);
   const byId = (id: string) => MORE.find((t) => t.assetId === id) as (typeof MORE)[number];
 
-  it('sells any token on the networks this wallet pays from, buys any token', () => {
+  // it('sells any token on the networks this wallet pays from, buys any token', () => {
+  it('sells and buys any token on the networks Honey supports, nothing elsewhere', () => {
     expect(canSell(byId('nep141:eth-0xdac17f958d2ee523a2206206994597c13d831ec7.omft.near'))).toBe(
       true,
     );
@@ -217,7 +226,12 @@ describe('every NEAR Intents token', () => {
     const btc = tokenRef(byId('nep141:btc.omft.near'));
     expect(btc).toEqual({ symbol: 'BTC', chain: 'Bitcoin', assetId: 'nep141:btc.omft.near' });
     expect(canSellRef(btc, MORE)).toBe(false);
-    expect(unsupportedReason({ symbol: 'ETH', chain: 'Base' }, btc, MORE)).toBeNull();
+    // expect(unsupportedReason({ symbol: 'ETH', chain: 'Base' }, btc, MORE)).toBeNull();
+    // Bitcoin isn't a network Honey shows: BTC there is never a swap target.
+    expect(canBuyRef(btc, MORE)).toBe(false);
+    expect(unsupportedReason({ symbol: 'ETH', chain: 'Base' }, btc, MORE)).toMatch(
+      /Getting BTC on Bitcoin/,
+    );
     expect(assetFor(MORE, btc).decimals).toBe(8);
   });
 
@@ -233,7 +247,9 @@ describe('every NEAR Intents token', () => {
     expect(swapRefForSymbol(MORE, 'USDT', 'Solana')?.chain).toBe('Solana');
     // Native NEAR is bought as wNEAR; a symbol only elsewhere is still found.
     expect(swapRefForSymbol(MORE, 'NEAR')?.assetId).toBe('nep141:wrap.near');
-    expect(swapRefForSymbol(MORE, 'btc')?.assetId).toBe('nep141:btc.omft.near');
+    // expect(swapRefForSymbol(MORE, 'btc')?.assetId).toBe('nep141:btc.omft.near');
+    // …but only on a network Honey supports: BTC on Bitcoin alone isn't offered.
+    expect(swapRefForSymbol(MORE, 'btc')).toBeNull();
     expect(swapRefForSymbol(MORE, 'NOPE')).toBeNull();
   });
 
@@ -623,7 +639,42 @@ describe('quote → pay', () => {
       ).rejects.toThrow('The quote changed');
   });
 
-  it('pays out on a network without a key here only to the address entered', async () => {
+  // Replaced (14 Nov): payouts land only on networks Honey supports, so a swap to BTC on
+  // Bitcoin (an address typed in) is refused before any quote is asked for.
+  // it('pays out on a network without a key here only to the address entered', async () => {
+  //   const btc = { symbol: 'BTC', chain: 'Bitcoin', assetId: BTC };
+  //   const input = { sell: { symbol: 'ETH', chain: 'Base' }, buy: btc, amount: '0.002' };
+  //   const ask = vi.fn(async () => quote([leg({ destinationAsset: BTC, recipient: MY_BTC })]));
+  //   const deps = {
+  //     fetcher: oneClick({ destinationAsset: BTC, recipient: MY_BTC }),
+  //     quote: ask,
+  //     now: () => NOW,
+  //   };
+  //   await expect(quoteSwap(input, deps)).rejects.toThrow('Enter your Bitcoin address');
+  //   await expect(quoteSwap({ ...input, recipient: 'bc1 q' }, deps)).rejects.toThrow(
+  //     'isn’t a Bitcoin address',
+  //   );
+  //   expect(ask).not.toHaveBeenCalled();
+  //   const result = await quoteSwap({ ...input, recipient: ` ${MY_BTC} ` }, deps);
+  //   expect(ask).toHaveBeenCalledWith('session', {
+  //     originAsset: BASE_ETH,
+  //     refundTo: ME,
+  //     slippageBps: 100,
+  //     legs: [{ destinationAsset: BTC, amount: '2000000000000000', recipient: MY_BTC }],
+  //   });
+  //   expect(result).toMatchObject({ recipient: MY_BTC, externalRecipient: true, buy: btc });
+  //   // On a network this wallet has keys for, a typed address is ignored: it pays you.
+  //   const own = vi.fn(async () => quote());
+  //   await quoteSwap(
+  //     { ...input, buy: { symbol: 'SOL', chain: 'Solana' }, recipient: OTHER_SOL },
+  //     { ...deps, fetcher: oneClick(), quote: own },
+  //   );
+  //   expect(own).toHaveBeenCalledWith(
+  //     'session',
+  //     expect.objectContaining({ legs: [expect.objectContaining({ recipient: MY_SOL })] }),
+  //   );
+  // });
+  it('refuses a payout on a network Honey doesn’t support, before asking for a quote', async () => {
     const btc = { symbol: 'BTC', chain: 'Bitcoin', assetId: BTC };
     const input = { sell: { symbol: 'ETH', chain: 'Base' }, buy: btc, amount: '0.002' };
     const ask = vi.fn(async () => quote([leg({ destinationAsset: BTC, recipient: MY_BTC })]));
@@ -632,29 +683,10 @@ describe('quote → pay', () => {
       quote: ask,
       now: () => NOW,
     };
-    await expect(quoteSwap(input, deps)).rejects.toThrow('Enter your Bitcoin address');
-    await expect(quoteSwap({ ...input, recipient: 'bc1 q' }, deps)).rejects.toThrow(
-      'isn’t a Bitcoin address',
+    await expect(quoteSwap({ ...input, recipient: MY_BTC }, deps)).rejects.toThrow(
+      'Getting BTC on Bitcoin isn’t supported yet.',
     );
     expect(ask).not.toHaveBeenCalled();
-    const result = await quoteSwap({ ...input, recipient: ` ${MY_BTC} ` }, deps);
-    expect(ask).toHaveBeenCalledWith('session', {
-      originAsset: BASE_ETH,
-      refundTo: ME,
-      slippageBps: 100,
-      legs: [{ destinationAsset: BTC, amount: '2000000000000000', recipient: MY_BTC }],
-    });
-    expect(result).toMatchObject({ recipient: MY_BTC, externalRecipient: true, buy: btc });
-    // On a network this wallet has keys for, a typed address is ignored: it pays you.
-    const own = vi.fn(async () => quote());
-    await quoteSwap(
-      { ...input, buy: { symbol: 'SOL', chain: 'Solana' }, recipient: OTHER_SOL },
-      { ...deps, fetcher: oneClick(), quote: own },
-    );
-    expect(own).toHaveBeenCalledWith(
-      'session',
-      expect.objectContaining({ legs: [expect.objectContaining({ recipient: MY_SOL })] }),
-    );
   });
 
   it('never pays a quote whose payout left this wallet on a network it has keys for', async () => {
@@ -919,15 +951,18 @@ describe('payout wording', () => {
     expect(shownInWallet('BNB Chain')).toBe(false);
     expect(shownInWallet('Arbitrum')).toBe(true);
     expect(shownInWallet('Polygon')).toBe(true);
-    expect(shownInWallet('Optimism')).toBe(false);
+    // expect(shownInWallet('Optimism')).toBe(false);
+    expect(shownInWallet('Optimism')).toBe(true);
   });
 
   it('warns on the review, before Confirm, when the payout lands on a chain Honey doesn’t show (money audit 4)', () => {
     const on = (chain: string, externalRecipient = false) =>
       hiddenPayoutWarning({ buy: { symbol: 'USDT', chain }, externalRecipient });
-    for (const chain of ['BNB Chain', 'Avalanche', 'Optimism', 'Gnosis'])
+    // for (const chain of ['BNB Chain', 'Avalanche', 'Optimism', 'Gnosis'])
+    for (const chain of ['BNB Chain', 'Avalanche', 'Gnosis'])
       expect(on(chain)).toContain(`Honey doesn’t show ${chain} balances`);
     expect(on('Base')).toBeNull();
+    expect(on('Optimism')).toBeNull();
     expect(on('Solana')).toBeNull();
     // An address you typed has its own warning.
     expect(on('BNB Chain', true)).toBeNull();

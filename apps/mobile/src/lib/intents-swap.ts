@@ -48,7 +48,14 @@ import {
   sameAddress,
 } from '@/lib/intents-quote';
 import { viewStorageRegistered } from '@/lib/jar-dao-core';
-import { type Chain, EVM_CHAIN_IDS, NATIVE_COIN } from '@/lib/mock-wallet';
+import {
+  CHAINS,
+  type Chain,
+  EVM_CHAIN_IDS,
+  isSupportedBlockchain,
+  NATIVE_COIN,
+  SUPPORTED_BLOCKCHAINS,
+} from '@/lib/mock-wallet';
 import { prepareSend, type SendPlan, validRecipient } from '@/lib/send';
 import { serverNow } from '@/lib/server-clock';
 import { createStore } from '@/lib/store';
@@ -112,14 +119,18 @@ const blockchainOf = (chain: string) =>
   Object.keys(BLOCKCHAINS).find((code) => BLOCKCHAINS[code] === chain) ?? chain.toLowerCase();
 
 /** Chains this wallet can pay from: lib/send.ts signs on these. */
-const PAYABLE: Record<string, Chain> = {
-  eth: 'Ethereum',
-  base: 'Base',
-  arb: 'Arbitrum',
-  pol: 'Polygon',
-  sol: 'Solana',
-  near: 'NEAR',
-};
+// const PAYABLE: Record<string, Chain> = {
+//   eth: 'Ethereum',
+//   base: 'Base',
+//   arb: 'Arbitrum',
+//   pol: 'Polygon',
+//   sol: 'Solana',
+//   near: 'NEAR',
+// };
+// Every supported network (lib/mock-wallet CHAINS), so a new one is payable here too.
+const PAYABLE: Record<string, Chain> = Object.fromEntries(
+  CHAINS.map((c) => [c.blockchain, c.name]),
+);
 
 /**
  * EVM chains, where the wallet's one EVM address (same key) receives. Payouts on any
@@ -158,7 +169,7 @@ export const shownInWallet = (chain: string) => Object.values(PAYABLE).includes(
 
 /**
  * What the review says before Confirm when the payout lands at this wallet's own address
- * on a chain Honey doesn't show (BNB Chain, Avalanche, Optimism, Gnosis…): the funds are
+ * on a chain Honey doesn't show (BNB Chain, Avalanche, Gnosis…): the funds are
  * yours, but Home won't list them. Null when the chain is shown or the address was typed.
  */
 export function hiddenPayoutWarning(
@@ -225,14 +236,16 @@ export const tokenRef = (t: OneClickToken): TokenRef => ({
 });
 
 /** Where a symbol named without a network is looked for first: the networks this wallet pays from. */
-const HOME_BLOCKCHAINS = ['eth', 'base', 'sol', 'near', 'arb', 'pol'];
+// const HOME_BLOCKCHAINS = ['eth', 'base', 'sol', 'near', 'arb', 'pol'];
+const HOME_BLOCKCHAINS = SUPPORTED_BLOCKCHAINS;
 
 /**
  * The swap token for a symbol named without an asset (a token page's Buy): 1Click's entry
  * with that symbol on `chain` when given and listed, else on Ethereum, Base, Solana,
- * NEAR, Arbitrum or Polygon (in that order), else on any network. Native NEAR is bought
- * as wNEAR on NEAR, the way 1Click trades it. Tokens the app names itself (ETH, POL, SOL,
- * USDC) keep the plain ref the pickers use. Null when 1Click doesn't list the symbol.
+ * NEAR, Arbitrum, Optimism or Polygon (in that order); never on a network Honey doesn't
+ * support. Native NEAR is bought as wNEAR on NEAR, the way 1Click trades it. Tokens the
+ * app names itself (ETH, POL, SOL, USDC) keep the plain ref the pickers use. Null when
+ * 1Click doesn't list the symbol on a supported network.
  */
 export function swapRefForSymbol(
   tokens: OneClickToken[],
@@ -240,10 +253,13 @@ export function swapRefForSymbol(
   chain?: string,
 ): TokenRef | null {
   const wanted = symbol === 'NEAR' ? 'wNEAR' : symbol;
-  const exact = tokens.filter((t) => t.symbol === wanted);
+  // Only networks Honey shows: a buy never lands where Home can't list it.
+  const shown = tokens.filter((t) => isSupportedBlockchain(t.blockchain));
+  // const exact = tokens.filter((t) => t.symbol === wanted);
+  const exact = shown.filter((t) => t.symbol === wanted);
   const matches = exact.length
     ? exact
-    : tokens.filter((t) => t.symbol.toUpperCase() === wanted.toUpperCase());
+    : shown.filter((t) => t.symbol.toUpperCase() === wanted.toUpperCase());
   const order = [...(chain ? [blockchainOf(chain)] : []), ...HOME_BLOCKCHAINS];
   const rank = (t: OneClickToken) => {
     const i = order.indexOf(t.blockchain);
@@ -312,8 +328,13 @@ export function bestPayWith(
 }
 
 /** Whether `ref` can be bought: listed by NEAR Intents (assumed until the list loads). */
+// export const canBuyRef = (ref: TokenRef, tokens?: OneClickToken[] | null) =>
+//   !isNativeNear(ref) && (!tokens?.length || !!findAsset(tokens, ref));
+/** …and on a network Honey supports: payouts never land where Home can't show them. */
 export const canBuyRef = (ref: TokenRef, tokens?: OneClickToken[] | null) =>
-  !isNativeNear(ref) && (!tokens?.length || !!findAsset(tokens, ref));
+  !isNativeNear(ref) &&
+  isSupportedBlockchain(blockchainOf(ref.chain)) &&
+  (!tokens?.length || !!findAsset(tokens, ref));
 
 /** Why this pair can't be swapped, in words for the user; null when it can. */
 export function unsupportedReason(

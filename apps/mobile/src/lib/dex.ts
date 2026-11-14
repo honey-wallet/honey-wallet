@@ -1,7 +1,7 @@
 /**
  * DEX routing (2026-11-13, docs/routing/MORE-TOKENS.md): tokens NEAR Intents 1Click
- * doesn't list, bought and sold through an aggregator on Base, Arbitrum, Polygon,
- * Ethereum and Solana. 1Click stays the route for everything it lists and for moving
+ * doesn't list, bought and sold through an aggregator on Base, Arbitrum, Optimism,
+ * Polygon, Ethereum and Solana. 1Click stays the route for everything it lists and for moving
  * USDC between chains; this is only the last mile on the token's own chain.
  *
  * Honey's server picks the aggregator and builds the swap (`/dex/quote`); the device
@@ -10,8 +10,8 @@
  * calls only approve exactly what is sold, to the router that sells it). On Base,
  * Arbitrum and Polygon the calls go out as one EIP-7702 batch Honey pays the gas of
  * (lib/evm-gas, with the quote id so the sponsor can bind the batch to the quote); on
- * Ethereum the wallet pays its own gas; on Solana the wallet signs the swap and Honey's
- * fee payer sends it. A quote that ran out is asked for again before signing.
+ * Ethereum and Optimism the wallet pays its own gas; on Solana the wallet signs the swap
+ * and Honey's fee payer sends it. A quote that ran out is asked for again before signing.
  */
 import {
   type DexChain as ApiDexChain,
@@ -375,6 +375,8 @@ export const KYBER_ROUTER = getAddress('0x6131B5fae19EA4f9D964eAc0408E4408b66337
 export const KYBER_ROUTERS: Record<Exclude<DexChain, 'Solana'>, Address> = {
   Base: KYBER_ROUTER,
   Arbitrum: KYBER_ROUTER,
+  // The same router in Optimism's live quotes and builds (14 Nov).
+  Optimism: KYBER_ROUTER,
   Polygon: KYBER_ROUTER,
   Ethereum: KYBER_ROUTER,
 };
@@ -382,6 +384,7 @@ export const KYBER_ROUTERS: Record<Exclude<DexChain, 'Solana'>, Address> = {
 export const KYBER_EXECUTORS: Record<Exclude<DexChain, 'Solana'>, readonly Address[]> = {
   Base: [getAddress('0x8f10b468b06c6fd214b65f87778827f7d113f996')],
   Arbitrum: [getAddress('0x8f10b468b06c6fd214b65f87778827f7d113f996')],
+  Optimism: [getAddress('0x8f10b468b06c6fd214b65f87778827f7d113f996')],
   Polygon: [getAddress('0x8f10b468b06c6fd214b65f87778827f7d113f996')],
   Ethereum: [getAddress('0x8f10b468b06c6fd214b65f87778827f7d113f996')],
 };
@@ -866,7 +869,9 @@ function sampleQuote(ask: DexAsk, now: number): DexQuote {
     minBuyAmount: ((units * BigInt(10_000 - ask.slippageBps)) / 10_000n).toString(),
     priceImpactPct: 0.4,
     expiresAt: now + 30_000,
-    sponsored: ask.chain !== 'Ethereum',
+    // sponsored: ask.chain !== 'Ethereum',
+    // Honey pays gas where its 7702 sponsor runs (not Ethereum, not Optimism).
+    sponsored: ask.chain !== 'Ethereum' && ask.chain !== 'Optimism',
     warnings: [],
   };
 }

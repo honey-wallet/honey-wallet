@@ -49,12 +49,16 @@ it('lists every 1Click token on a Honey chain, with live numbers where loaded', 
       { symbol: 'POL', priceUsd: 0.09, chains: ['Polygon'] },
       { symbol: 'USDT0', priceUsd: 1, chains: ['Arbitrum', 'Optimism'] },
       // Optimism isn't a Honey chain: dropped.
+      // Replaced (14 Nov): Optimism is a Honey chain now; BNB Chain still isn't.
       { symbol: 'OP', priceUsd: 0.4, chains: ['Optimism'] },
+      { symbol: 'CAKE', priceUsd: 2, chains: ['BNB Chain'] },
       { symbol: 'NEAR', priceUsd: 3.5, chains: ['Ethereum', 'NEAR'] },
     ],
     { ETH: m(-2, 3000) },
   );
-  expect(list.map((t) => t.symbol)).toEqual(['ETH', 'NEAR', 'ARB', 'POL', 'USDT0', 'ZEC']);
+  // expect(list.map((t) => t.symbol)).toEqual(['ETH', 'NEAR', 'ARB', 'POL', 'USDT0', 'ZEC']);
+  expect(list.map((t) => t.symbol)).toEqual(['ETH', 'NEAR', 'ARB', 'OP', 'POL', 'USDT0', 'ZEC']);
+  expect(list.find((t) => t.symbol === 'OP')).toMatchObject({ chain: 'Optimism' });
   expect(list.find((t) => t.symbol === 'POL')).toMatchObject({ chain: 'Polygon', price: 0.09 });
   expect(list.find((t) => t.symbol === 'USDT0')).toMatchObject({ chain: 'Arbitrum' });
   expect(list[1]).toMatchObject({ chain: 'NEAR', name: 'NEAR' });
@@ -67,7 +71,8 @@ it('lists every 1Click token on a Honey chain, with live numbers where loaded', 
     volume: 10,
     marketCap: 99,
   });
-  expect(list[5]).toMatchObject({
+  // expect(list[5]).toMatchObject({
+  expect(list[6]).toMatchObject({
     symbol: 'ZEC',
     name: 'ZEC',
     chain: 'NEAR',
@@ -113,12 +118,14 @@ const ranked = [
     aliases: [],
   },
   { symbol: 'cNEAR', name: 'cNEAR', priceUsd: 3.5, rank: null, chains: ['NEAR'], aliases: [] },
-  { symbol: 'OP', name: 'Optimism', priceUsd: 0.5, rank: 60, chains: ['Optimism'] },
+  // { symbol: 'OP', name: 'Optimism', priceUsd: 0.5, rank: 60, chains: ['Optimism'] },
+  // Only on a chain Honey doesn't hold (Optimism is one of Honey's since 14 Nov).
+  { symbol: 'CAKE', name: 'PancakeSwap', priceUsd: 2, rank: 60, chains: ['BNB Chain'] },
 ];
 
 it('keeps the server’s market-cap order, with coin names, logos and 24h numbers', () => {
   const list = liveMarketList(ranked, { BTC: m(9, 69050) });
-  // OP is only on a chain Honey doesn't hold; BOME ranks by its real cap, not A-Z.
+  // CAKE is only on a chain Honey doesn't hold; BOME ranks by its real cap, not A-Z.
   expect(list.map((t) => t.symbol)).toEqual(['BTC', 'NEAR', 'BOME', 'cNEAR']);
   expect(list[0]).toMatchObject({
     name: 'Bitcoin',

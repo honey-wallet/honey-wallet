@@ -53,6 +53,7 @@ const EXPLORER_NAME: Record<string, string> = {
   Ethereum: 'Etherscan',
   Base: 'Basescan',
   Arbitrum: 'Arbiscan',
+  Optimism: 'Etherscan',
   Polygon: 'Polygonscan',
   Solana: 'Solscan',
   NEAR: 'NearBlocks',

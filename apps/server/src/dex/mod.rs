@@ -1,7 +1,7 @@
 //! DEX routing: buy and sell liquid tokens that NEAR Intents 1Click doesn't list
 //! (docs/routing/MORE-TOKENS.md). Free providers only:
 //!
-//! - EVM (Base, Arbitrum, Polygon, Ethereum): KyberSwap's Aggregator API, keyless
+//! - EVM (Base, Arbitrum, Optimism, Polygon, Ethereum): KyberSwap's Aggregator API, keyless
 //!   ([`kyber`]). Odos, the planned keyless fallback, shut down on 2026-07-30.
 //! - Solana: Jupiter Swap V2 `/order`, keyless or with a free `JUPITER_API_KEY`
 //!   ([`jupiter`]).
@@ -274,6 +274,7 @@ fn default_rpc(chain: DexChain) -> &'static str {
     match chain {
         DexChain::Base => "https://mainnet.base.org",
         DexChain::Arbitrum => "https://arb1.arbitrum.io/rpc",
+        DexChain::Optimism => "https://mainnet.optimism.io",
         DexChain::Polygon => "https://polygon-bor-rpc.publicnode.com",
         DexChain::Ethereum => "https://ethereum-rpc.publicnode.com",
         DexChain::Solana => "https://api.mainnet-beta.solana.com",
