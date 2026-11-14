@@ -12,12 +12,21 @@ import {
 
 /**
  * Plain transfers the app sends itself: the native coin and ERC-20s on EVM networks, SOL
- * and classic SPL tokens (USDC and others) on Solana. Each chain has a `prepare` (reads the chain: nonce, fees, blockhash; checks
+ * and SPL tokens (USDC and others; Token-2022 mints since 15 Nov) on Solana. Each chain has a `prepare` (reads the chain: nonce, fees, blockhash; checks
  * the balance covers amount + fee), a pure builder/signer, and a broadcast + confirm.
  * Every network call goes through an injected `Rpc`, so tests never touch a chain.
  */
 
 import { jsonRpc, type Rpc } from './rpc';
+import {
+  associatedAccountSize,
+  mintTransferBlock,
+  parseSolanaMint,
+  type SolanaMint,
+  TOKEN_2022_PROGRAM_ID,
+  TOKEN_PROGRAM_ID,
+  type TokenProgramId,
+} from './token2022';
 
 export { jsonRpc, type Rpc };
 
@@ -222,9 +231,20 @@ export function findProgramAddress(seeds: Uint8Array[], programId: string): stri
   throw new Error('No program address');
 }
 
-/** The associated token account of `owner` for `mint`. */
-export const associatedTokenAddress = (owner: string, mint: string) =>
-  findProgramAddress([key32(owner), key32(TOKEN_PROGRAM), key32(mint)], ATA_PROGRAM);
+// /** The associated token account of `owner` for `mint`. */
+// export const associatedTokenAddress = (owner: string, mint: string) =>
+//   findProgramAddress([key32(owner), key32(TOKEN_PROGRAM), key32(mint)], ATA_PROGRAM);
+// 15 Nov: seeded with the mint's own token program (Token-2022 mints' accounts differ).
+/** The associated token account of `owner` for `mint`, under the mint's token program. */
+export const associatedTokenAddress = (
+  owner: string,
+  mint: string,
+  tokenProgram: TokenProgramId = TOKEN_PROGRAM_ID,
+) => {
+  if (tokenProgram !== TOKEN_PROGRAM && tokenProgram !== TOKEN_2022_PROGRAM_ID)
+    throw new Error('Unknown token program');
+  return findProgramAddress([key32(owner), key32(tokenProgram), key32(mint)], ATA_PROGRAM);
+};
 
 function shortVec(n: number) {
   const out: number[] = [];
@@ -305,34 +325,78 @@ export type SolanaTransferPlan = Readonly<{
   lastValidBlockHeight?: number;
 }>;
 
-/** An SPL token on the classic Token program: its mint and the decimals it must have. */
+// /** An SPL token on the classic Token program: its mint and the decimals it must have. */
+/** An SPL token (classic or Token-2022, 15 Nov): its mint and the decimals it must have. */
 export type SplToken = { mint: string; decimals: number };
 
 /** Byte offset of `decimals` in a classic SPL mint account (after authority and supply). */
 const MINT_DECIMALS_OFFSET = 44;
 const MINT_SIZE = 82;
 
+// /**
+//  * Throws unless `mint` is a classic SPL mint (owned by the Token program, so the
+//  * associated account and TransferChecked below are right for it) with `decimals`.
+//  * Token-2022 mints are refused: they can carry transfer fees and hooks.
+//  */
+// Replaced 15 Nov by `checkTokenMint` (Token-2022 mints too), which keeps its checks:
+// async function checkSplMint(rpc: Rpc, token: SplToken) {
+//   const info = (await rpc('getAccountInfo', [
+//     token.mint,
+//     { encoding: 'base64', commitment: 'confirmed' },
+//   ])) as { value?: { owner?: string; data?: [string, string] } | null };
+//   const value = info?.value;
+//   if (!value) throw new Error('That token doesn’t exist on Solana');
+//   if (value.owner !== TOKEN_PROGRAM)
+//     throw new Error('Sending this Solana token isn’t supported yet');
+//   const data = base64.decode(value.data?.[0] ?? '');
+//   if (data.length !== MINT_SIZE || data[MINT_DECIMALS_OFFSET] !== token.decimals)
+//     throw new Error('Token decimals don’t match');
+// }
+
 /**
- * Throws unless `mint` is a classic SPL mint (owned by the Token program, so the
- * associated account and TransferChecked below are right for it) with `decimals`.
- * Token-2022 mints are refused: they can carry transfer fees and hooks.
+ * The mint's token program and its new-account size, or throws (15 Nov). A classic SPL
+ * mint is held to exactly the checks `checkSplMint` made. A Token-2022 mint must have
+ * `decimals` too, and is refused when a transfer hook program is set, it is paused, or
+ * it charges a transfer fee (or can't be moved, or accrues interest): see
+ * `mintTransferBlock`. Permanent delegates and freeze authorities are allowed.
  */
-async function checkSplMint(rpc: Rpc, token: SplToken) {
+async function checkTokenMint(
+  rpc: Rpc,
+  token: SplToken,
+): Promise<{ program: TokenProgramId; accountSize: number; frozenByDefault: boolean }> {
   const info = (await rpc('getAccountInfo', [
     token.mint,
     { encoding: 'base64', commitment: 'confirmed' },
   ])) as { value?: { owner?: string; data?: [string, string] } | null };
   const value = info?.value;
   if (!value) throw new Error('That token doesn’t exist on Solana');
-  if (value.owner !== TOKEN_PROGRAM)
-    throw new Error('Sending this Solana token isn’t supported yet');
   const data = base64.decode(value.data?.[0] ?? '');
-  if (data.length !== MINT_SIZE || data[MINT_DECIMALS_OFFSET] !== token.decimals)
-    throw new Error('Token decimals don’t match');
+  if (value.owner === TOKEN_PROGRAM) {
+    // `checkSplMint`'s checks, unchanged.
+    if (data.length !== MINT_SIZE || data[MINT_DECIMALS_OFFSET] !== token.decimals)
+      throw new Error('Token decimals don’t match');
+    return { program: TOKEN_PROGRAM_ID, accountSize: 165, frozenByDefault: false };
+  }
+  if (value.owner !== TOKEN_2022_PROGRAM_ID)
+    throw new Error('Sending this Solana token isn’t supported yet');
+  let mint: SolanaMint;
+  try {
+    mint = parseSolanaMint(data, value.owner);
+  } catch {
+    throw new Error('Sending this Solana token isn’t supported yet');
+  }
+  if (mint.decimals !== token.decimals) throw new Error('Token decimals don’t match');
+  if (mintTransferBlock(mint)) throw new Error('Sending this Solana token isn’t supported yet');
+  return {
+    program: mint.program,
+    accountSize: associatedAccountSize(mint),
+    // DefaultAccountState frozen: a new recipient account couldn't receive.
+    frozenByDefault: mint.defaultAccountState === 2,
+  };
 }
 
 /**
- * A SOL, USDC or classic SPL token payment. With `feePayer` (Honey's fee payer, from
+ * A SOL, USDC, classic SPL or Token-2022 token payment (`amount` in raw base units). With `feePayer` (Honey's fee payer, from
  * the server), the message has two signers: the fee payer pays the fee and opens the
  * recipient's token account; the sender signs only the payment.
  */
@@ -400,9 +464,17 @@ export async function prepareSolanaTransfer(
   key32(mint);
   if (!Number.isInteger(decimals) || decimals < 0 || decimals > 18)
     throw new Error('Invalid token decimals');
-  if (mint !== SOLANA_USDC_MINT) await checkSplMint(rpc, token);
-  const source = associatedTokenAddress(from, mint);
-  const destination = associatedTokenAddress(to, mint);
+  // if (mint !== SOLANA_USDC_MINT) await checkSplMint(rpc, token);
+  // const source = associatedTokenAddress(from, mint);
+  // const destination = associatedTokenAddress(to, mint);
+  // 15 Nov: Token-2022 mints too, with their own program, account size and checks.
+  const checked: { program: TokenProgramId; accountSize: number; frozenByDefault: boolean } =
+    mint === SOLANA_USDC_MINT
+      ? { program: TOKEN_PROGRAM_ID, accountSize: 165, frozenByDefault: false }
+      : await checkTokenMint(rpc, token);
+  const program = checked.program;
+  const source = associatedTokenAddress(from, mint, program);
+  const destination = associatedTokenAddress(to, mint, program);
   const [sourceBalance, destinationInfo, rent] = await Promise.all([
     rpc('getTokenAccountBalance', [source, { commitment: 'confirmed' }]) as Promise<{
       value?: { amount?: string };
@@ -413,11 +485,14 @@ export async function prepareSolanaTransfer(
     ]) as Promise<{
       value?: unknown;
     }>,
-    rpc('getMinimumBalanceForRentExemption', [165]),
+    // rpc('getMinimumBalanceForRentExemption', [165]),
+    rpc('getMinimumBalanceForRentExemption', [checked.accountSize]),
   ]);
   if (BigInt(sourceBalance?.value?.amount ?? '0') < amount)
     throw new Error(mint === SOLANA_USDC_MINT ? 'Not enough USDC' : 'Not enough tokens');
   const creates = !destinationInfo?.value;
+  if (creates && checked.frozenByDefault)
+    throw new Error('Sending this Solana token isn’t supported yet');
   const cost = networkFee + (creates ? BigInt(Number(rent) || 0) : 0n);
   const feeLamports = feePayer ? 0n : cost;
   if (lamports < feeLamports) throw new Error('Not enough SOL to pay the network fee');
@@ -429,12 +504,14 @@ export async function prepareSolanaTransfer(
       // funded by whoever pays the fee.
       {
         program: ATA_PROGRAM,
-        accounts: [feePayer ?? from, destination, to, mint, SYSTEM_PROGRAM, TOKEN_PROGRAM],
+        // accounts: [feePayer ?? from, destination, to, mint, SYSTEM_PROGRAM, TOKEN_PROGRAM],
+        accounts: [feePayer ?? from, destination, to, mint, SYSTEM_PROGRAM, program],
         data: Uint8Array.of(1),
       },
       // TransferChecked: amount and decimals are checked against the mint.
       {
-        program: TOKEN_PROGRAM,
+        // program: TOKEN_PROGRAM,
+        program,
         accounts: [source, mint, destination, from],
         data: concatBytes(Uint8Array.of(12), u64(amount), Uint8Array.of(decimals)),
       },

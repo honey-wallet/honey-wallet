@@ -283,8 +283,10 @@ const BY_NAME: Partial<Record<Chain, string[]>> = {
 /**
  * Holdings as send choices: one per token per network, the shape of HOLDINGS. A token
  * beyond the network's coin and USDC (an ERC-20, SPL or NEP-141 token) carries its
- * contract and decimals, so Send can pay it; one without (a Token-2022 mint) is left
- * out, since nothing here can pay it. `assetId` lets Swap match its token exactly.
+ * contract and decimals, so Send can pay it; one without is left out, since nothing
+ * here can pay it. `assetId` lets Swap match its token exactly. (15 Nov: Token-2022
+ * mints such as tokenized stocks are paid too once the server sends their contract and
+ * decimals; their `amount` is the shown amount, raw × multiplier.)
  */
 export function toHoldings(holdings: PortfolioHolding[]): SendHolding[] {
   return holdings
@@ -298,6 +300,8 @@ export function toHoldings(holdings: PortfolioHolding[]): SendHolding[] {
       amount: h.amount,
       usd: h.usd,
       ...(h.assetId ? { assetId: h.assetId } : {}),
+      // The exact raw balance when the server sends it (15 Nov), for sending all of it.
+      ...(rawAmountOf(h) ? { rawAmount: rawAmountOf(h) } : {}),
       token:
         h.contract && h.decimals != null
           ? { contract: h.contract, decimals: h.decimals }
@@ -305,11 +309,19 @@ export function toHoldings(holdings: PortfolioHolding[]): SendHolding[] {
     }));
 }
 
+/** A holding's exact raw balance (base units), when the server sent one (15 Nov). */
+const rawAmountOf = (h: PortfolioHolding) => {
+  const raw = (h as { rawAmount?: unknown }).rawAmount;
+  return typeof raw === 'string' && /^\d{1,30}$/.test(raw) ? raw : undefined;
+};
+
 export type SendHolding = {
   symbol: string;
   chain: Chain;
   amount: number;
   usd: number;
+  /** The exact raw balance in base units, when the server sent it (15 Nov). */
+  rawAmount?: string;
   /** NEAR Intents' asset id, when the server matched the token in its list. */
   assetId?: string;
   /** A token paid by contract (lib/send's SendToken); none for a chain's coin or USDC. */

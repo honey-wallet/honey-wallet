@@ -23,6 +23,7 @@ import {
   type BestRouteRequest,
   type RouteOption,
 } from '@honey-wallet/api-client';
+import type { SolanaMint } from '@honey-wallet/keyring';
 import { isAddress } from 'viem';
 import {
   checkDexQuote,
@@ -33,10 +34,12 @@ import {
   dexChainCode,
   parseDexQuote,
   sameToken,
+  solanaProgramsOf,
 } from '@/lib/dex';
 import { dexChainOf } from '@/lib/dex-tokens';
 import type { SameCoinAsk } from '@/lib/same-coin';
 import { serverNow } from '@/lib/server-clock';
+import { solanaMintOf } from '@/lib/solana-mint';
 import { createStore } from '@/lib/store';
 
 /** Settings → Swaps: "Private routes only (NEAR Intents)". Off: fallback allowed. */
@@ -172,6 +175,8 @@ export type RouteDeps = {
   privateOnly: () => boolean;
   /** The device's own check that a route's `sameCoin` contract is the pick's coin. */
   sameCoin: (ask: SameCoinAsk) => Promise<boolean>;
+  /** A Solana mint read from the device's RPC, for its token program (15 Nov). */
+  solanaMint: (mint: string) => Promise<SolanaMint>;
 };
 
 const defaults: RouteDeps = {
@@ -188,6 +193,7 @@ const defaults: RouteDeps = {
   now: serverNow,
   privateOnly: () => privateRoutes.get().on,
   sameCoin: async (ask) => (await import('@/lib/same-coin')).verifySameCoin(ask),
+  solanaMint: (mint) => solanaMintOf(mint),
 };
 
 const KINDS: readonly RouteOption['kind'][] = [
@@ -346,7 +352,9 @@ export async function planRoute(
       walletId: ask.walletId,
     };
     if (!wrapped && !sameToken(quote.chain, quote.buyToken, ask.toToken)) throw changed();
-    checkDexQuote(quote, dexAsk, d.now());
+    // checkDexQuote(quote, dexAsk, d.now());
+    // 15 Nov: with the Solana mints' token programs, read on chain.
+    checkDexQuote(quote, dexAsk, d.now(), await solanaProgramsOf(dexAsk, d.solanaMint));
     dex = { ask: dexAsk, quote };
   }
   // A jar leg's wrapped version on another chain (1Click USDC there, then the DEX):
@@ -479,7 +487,8 @@ export async function planRouteMemo(
       const at = d.now();
       try {
         if (quote.expiresAt - ROUTE_MEMO_QUOTE_LEFT_MS <= at) throw new Error('expiring');
-        checkDexQuote(quote, dexAsk, at);
+        // checkDexQuote(quote, dexAsk, at);
+        checkDexQuote(quote, dexAsk, at, await solanaProgramsOf(dexAsk, d.solanaMint));
         return reused.route;
       } catch {
         // Expired or about to: asked afresh below.

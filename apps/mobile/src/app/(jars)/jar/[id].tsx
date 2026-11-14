@@ -66,7 +66,8 @@ import {
 import { useDaoJar } from '@/lib/jar-dao';
 import { dexLegText } from '@/lib/jar-dex';
 // import { useJarValues } from '@/lib/jar-holdings';
-import { jarHoldings, pricer, useJarValues } from '@/lib/jar-holdings';
+// import { jarHoldings, pricer, useJarValues } from '@/lib/jar-holdings';
+import { jarHoldings, jarTokens, pricer, useJarValues } from '@/lib/jar-holdings';
 import { livePrices, useLivePrices, useTokenChart } from '@/lib/market';
 import { formatUsd, RANGE_LABEL } from '@/lib/mock-wallet';
 import { approvalsLeft, useMultisig, useProposal } from '@/lib/multisig';
@@ -99,6 +100,7 @@ import {
   usePostJar,
   useSocial,
 } from '@/lib/social';
+import { useMintsVersion, warmScales } from '@/lib/solana-mint';
 import { COPY_FEES, SOCIAL, SOON, SOON_OPACITY } from '@/lib/surface';
 import { TEST_MODE } from '@/lib/test-mode';
 // import { jarReturn, jarValue, ME, type ThesisJar, updateJarBuy, useThesisJars } from '@/lib/thesis';
@@ -663,6 +665,12 @@ function JarBody({
   const basketMove = basket ? (basket.at(-1) ?? 1) / (basket[0] || 1) : 1;
   const indexStart = basketMove > 0 ? indexNow / basketMove : 100;
   const prices = useLivePrices();
+  // Tokenized stocks' multipliers (15 Nov): their rows redraw once each mint is read.
+  useMintsVersion();
+  const tokensKey = jar.mine ? JSON.stringify(jarTokens([jar])) : '';
+  useEffect(() => {
+    if (tokensKey) void warmScales(JSON.parse(tokensKey));
+  }, [tokensKey]);
   // What it holds, slice by slice with its USDC (2026-11-14). Your real jar's rows are its
   // swaps' tokens at live prices and the USDC it keeps; otherwise the slice of its value.
   const held = jar.mine && jar.buy?.length ? jarHoldings(jar, pricer(null, prices)) : null;

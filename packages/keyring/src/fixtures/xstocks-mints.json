@@ -1,0 +1,157 @@
+{
+  "source": "Solana mainnet getAccountInfo (base64 and jsonParsed), read 15 Nov 2026",
+  "mints": {
+    "AAPLx": {
+      "mint": "XsbEhLAtcf6HdfpFZ5xEMdqW8nfAvcsP5bdudRLJzJp",
+      "slot": 469447468,
+      "owner": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+      "data": "AQAAAGVqQkIv6okUBqQZ0dHeCPQqhHlBtaGulevOYZrDFyk05g/ZBPwNAAAIAQEAAAD/3+wbzSzTg5PITaoIyRzA041nf/jQq3tdAz8A9zLMMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAARIAQABD+fHuLje4B+pFy3TmAJcivsAJKWAm5ORVi0NeJKXpxgfooHtWzpJmuZKqX9ZEXDx3mLLrtzM8Hn7eBixrhgflDAAgAEP58e4uN7gH6kXLdOYAlyK+wAkpYCbk5FWLQ14kpenGBgABAAEZADgABm9ZIlHMR3R4JaWa0UIupDVz9SjaXe4q94ErMU+ZReMFLt/OYw3wP5gW9WoAAAAAuJf0AJMP8D8aACEA/9/sG80s04OTyE2qCMkcwNONZ3/40Kt7XQM/APcyzDAABABBAEP58e4uN7gH6kXLdOYAlyK+wAkpYCbk5FWLQ14kpenGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADgBAAEP58e4uN7gH6kXLdOYAlyK+wAkpYCbk5FWLQ14kpenGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAATAKUAQ/nx7i43uAfqRct05gCXIr7ACSlgJuTkVYtDXiSl6cYH6KB7Vs6SZrmSql/WRFw8d5iy67czPB5+3gYsa4YH5QwAAABBcHBsZSB4U3RvY2sFAAAAQUFQTHhEAAAAaHR0cHM6Ly94c3RvY2tzLW1ldGFkYXRhLmJhY2tlZC5maS90b2tlbnMvU29sYW5hL0FBUEx4L21ldGFkYXRhLmpzb24AAAAA",
+      "parsed": {
+        "decimals": 8,
+        "extensions": [
+          {
+            "extension": "metadataPointer",
+            "state": {
+              "authority": "5aMNNLQJwAEeoemTEMkv5NVjqKwvvefRYCQ5Z67HFvEq",
+              "metadataAddress": "XsbEhLAtcf6HdfpFZ5xEMdqW8nfAvcsP5bdudRLJzJp"
+            }
+          },
+          {
+            "extension": "permanentDelegate",
+            "state": {
+              "delegate": "5aMNNLQJwAEeoemTEMkv5NVjqKwvvefRYCQ5Z67HFvEq"
+            }
+          },
+          {
+            "extension": "defaultAccountState",
+            "state": {
+              "accountState": "initialized"
+            }
+          },
+          {
+            "extension": "scaledUiAmountConfig",
+            "state": {
+              "authority": "S7vYFFWH6BjJyEsdrPQpqpYTqLTrPRK6KW3VwsJuRaS",
+              "multiplier": "1.0032690125398187",
+              "newMultiplier": "1.0038023030588032",
+              "newMultiplierEffectiveTimestamp": 1794447000
+            }
+          },
+          {
+            "extension": "pausableConfig",
+            "state": {
+              "authority": "JDq14BWvqCRFNu1krb12bcRpbGtJZ1FLEakMw6FdxJNs",
+              "paused": false
+            }
+          },
+          {
+            "extension": "confidentialTransferMint",
+            "state": {
+              "auditorElgamalPubkey": null,
+              "authority": "5aMNNLQJwAEeoemTEMkv5NVjqKwvvefRYCQ5Z67HFvEq",
+              "autoApproveNewAccounts": false
+            }
+          },
+          {
+            "extension": "transferHook",
+            "state": {
+              "authority": "5aMNNLQJwAEeoemTEMkv5NVjqKwvvefRYCQ5Z67HFvEq",
+              "programId": null
+            }
+          },
+          {
+            "extension": "tokenMetadata",
+            "state": {
+              "additionalMetadata": [],
+              "mint": "XsbEhLAtcf6HdfpFZ5xEMdqW8nfAvcsP5bdudRLJzJp",
+              "name": "Apple xStock",
+              "symbol": "AAPLx",
+              "updateAuthority": "5aMNNLQJwAEeoemTEMkv5NVjqKwvvefRYCQ5Z67HFvEq",
+              "uri": "https://xstocks-metadata.backed.fi/tokens/Solana/AAPLx/metadata.json"
+            }
+          }
+        ],
+        "freezeAuthority": "JDq14BWvqCRFNu1krb12bcRpbGtJZ1FLEakMw6FdxJNs",
+        "isInitialized": true,
+        "mintAuthority": "7pt9tkctJPK7PPNQJ77GKg8ZffSF6QxoMiCFYHxrtaCj",
+        "supply": "15376064264846"
+      }
+    },
+    "SPYx": {
+      "mint": "XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W",
+      "slot": 469447471,
+      "owner": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+      "data": "AQAAAGVqQkIv6okUBqQZ0dHeCPQqhHlBtaGulevOYZrDFyk0CjIgQakIAAAIAQEAAAD/3+wbzSzTg5PITaoIyRzA041nf/jQq3tdAz8A9zLMMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAARIAQABD+fHuLje4B+pFy3TmAJcivsAJKWAm5ORVi0NeJKXpxgfo3CzeeyOg10P48SdrZX2KnuoGlQumeo0wM8U8TN5PDAAgAEP58e4uN7gH6kXLdOYAlyK+wAkpYCbk5FWLQ14kpenGBgABAAEZADgABm9ZIlHMR3R4JaWa0UIupDVz9SjaXe4q94ErMU+ZReOkc+WZehfwP9zw5WoAAAAAigyZMJ0e8D8aACEA/9/sG80s04OTyE2qCMkcwNONZ3/40Kt7XQM/APcyzDAABABBAEP58e4uN7gH6kXLdOYAlyK+wAkpYCbk5FWLQ14kpenGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADgBAAEP58e4uN7gH6kXLdOYAlyK+wAkpYCbk5FWLQ14kpenGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAATAKMAQ/nx7i43uAfqRct05gCXIr7ACSlgJuTkVYtDXiSl6cYH6Nws3nsjoNdD+PEna2V9ip7qBpULpnqNMDPFPEzeTwwAAABTUDUwMCB4U3RvY2sEAAAAU1BZeEMAAABodHRwczovL3hzdG9ja3MtbWV0YWRhdGEuYmFja2VkLmZpL3Rva2Vucy9Tb2xhbmEvU1BZeC9tZXRhZGF0YS5qc29uAAAAAA==",
+      "parsed": {
+        "decimals": 8,
+        "extensions": [
+          {
+            "extension": "metadataPointer",
+            "state": {
+              "authority": "5aMNNLQJwAEeoemTEMkv5NVjqKwvvefRYCQ5Z67HFvEq",
+              "metadataAddress": "XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W"
+            }
+          },
+          {
+            "extension": "permanentDelegate",
+            "state": {
+              "delegate": "5aMNNLQJwAEeoemTEMkv5NVjqKwvvefRYCQ5Z67HFvEq"
+            }
+          },
+          {
+            "extension": "defaultAccountState",
+            "state": {
+              "accountState": "initialized"
+            }
+          },
+          {
+            "extension": "scaledUiAmountConfig",
+            "state": {
+              "authority": "S7vYFFWH6BjJyEsdrPQpqpYTqLTrPRK6KW3VwsJuRaS",
+              "multiplier": "1.0057321559499792",
+              "newMultiplier": "1.007474126658766",
+              "newMultiplierEffectiveTimestamp": 1793454300
+            }
+          },
+          {
+            "extension": "pausableConfig",
+            "state": {
+              "authority": "JDq14BWvqCRFNu1krb12bcRpbGtJZ1FLEakMw6FdxJNs",
+              "paused": false
+            }
+          },
+          {
+            "extension": "confidentialTransferMint",
+            "state": {
+              "auditorElgamalPubkey": null,
+              "authority": "5aMNNLQJwAEeoemTEMkv5NVjqKwvvefRYCQ5Z67HFvEq",
+              "autoApproveNewAccounts": false
+            }
+          },
+          {
+            "extension": "transferHook",
+            "state": {
+              "authority": "5aMNNLQJwAEeoemTEMkv5NVjqKwvvefRYCQ5Z67HFvEq",
+              "programId": null
+            }
+          },
+          {
+            "extension": "tokenMetadata",
+            "state": {
+              "additionalMetadata": [],
+              "mint": "XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W",
+              "name": "SP500 xStock",
+              "symbol": "SPYx",
+              "updateAuthority": "5aMNNLQJwAEeoemTEMkv5NVjqKwvvefRYCQ5Z67HFvEq",
+              "uri": "https://xstocks-metadata.backed.fi/tokens/Solana/SPYx/metadata.json"
+            }
+          }
+        ],
+        "freezeAuthority": "JDq14BWvqCRFNu1krb12bcRpbGtJZ1FLEakMw6FdxJNs",
+        "isInitialized": true,
+        "mintAuthority": "7pt9tkctJPK7PPNQJ77GKg8ZffSF6QxoMiCFYHxrtaCj",
+        "supply": "9523035129390"
+      }
+    }
+  }
+}

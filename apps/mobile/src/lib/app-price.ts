@@ -12,8 +12,22 @@
  *   token is the base of), and its decimals read on chain from the device's own RPC.
  *
  * No price, no trade: callers refuse the leg and nothing is paid.
+ *
+ * Tokenized stocks (15 Nov; Solana Token-2022 mints with ScaledUiAmount): every price
+ * here is per raw unit (raw / 10^decimals), as the amounts it values are (quotes and
+ * floors are raw). DexScreener prices a pool from its raw reserves: on 15 Nov SPYx read
+ * 753.42 there against Jupiter's per-raw `usdPricePrescaled` 752.73 and per-shown
+ * `usdPrice` 747.15 (multiplier 1.00747); AAPLx 356.67 against 357.12 and 355.77. A
+ * Solana token whose multiplier changes within the hour (a dividend or split) has no
+ * price: raw and shown amounts may be on different sides of it.
  */
-import { jsonRpc, type Rpc, SOLANA_MAINNET } from '@honey-wallet/keyring';
+import {
+  jsonRpc,
+  nearMultiplierChange,
+  type Rpc,
+  SOLANA_MAINNET,
+  type SolanaMint,
+} from '@honey-wallet/keyring';
 import { canonicalOf, type Family } from '@/lib/best-route';
 import {
   DEX_CHAIN_IDS,
@@ -26,6 +40,7 @@ import {
 } from '@/lib/dex';
 import { evmRpc } from '@/lib/evm-gas';
 import { MIN_VALUE_KEPT } from '@/lib/intents-quote';
+import { solanaMintOf } from '@/lib/solana-mint';
 import { TEST_MODE } from '@/lib/test-mode';
 
 /** How far a same coin's own price may be from its pick's NEAR Intents price. */
@@ -63,6 +78,8 @@ export type AppPriceDeps = {
   oneClick: () => Promise<ListedToken[]>;
   /** A token's decimals read on chain (the device's own RPC); null when unreadable. */
   decimals: (chain: DexChain, address: string) => Promise<number | null>;
+  /** A Solana mint read from the device's RPC, for its multiplier change (15 Nov). */
+  solanaMint: (mint: string) => Promise<SolanaMint>;
   now: () => number;
 };
 
@@ -367,6 +384,7 @@ const defaults: AppPriceDeps = {
   // Loaded on demand: Swap's module keeps the cached list.
   oneClick: async () => (await import('@/lib/intents-swap')).fetchSwapTokens(),
   decimals: (chain, address) => onChainDecimals(chain, address),
+  solanaMint: (mint) => solanaMintOf(mint),
   now: () => Date.now(),
 };
 
@@ -393,6 +411,14 @@ export async function appPriceOf(
       (t) => t.chain === chain && sameToken(chain, t.address, address),
     );
     if (sample) return { price: sample.priceUsd, decimals: sample.decimals };
+  }
+  // A Solana token whose multiplier changes within the hour: no price (15 Nov).
+  if (chain === 'Solana') {
+    const near = await d
+      .solanaMint(address)
+      .then((mint) => nearMultiplierChange(mint, Math.floor(d.now() / 1000)))
+      .catch(() => true);
+    if (near) return null;
   }
   const held = canonicalOf(chain, address);
   if (held) {

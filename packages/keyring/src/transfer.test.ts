@@ -4,6 +4,7 @@ import { base58, base64 } from '@scure/base';
 import { decodeFunctionData, erc20Abi, parseTransaction } from 'viem';
 import { describe, expect, it } from 'vitest';
 import sponsoredFixture from './fixtures/solana-sponsored.json';
+import xstocks from './fixtures/xstocks-mints.json';
 import { signEvmTransaction } from './sign';
 import {
   associatedTokenAddress,
@@ -20,6 +21,26 @@ import {
   waitForEvmReceipt,
   waitForSolana,
 } from './transfer';
+
+/** Where extension `type`'s value starts in a Token-2022 mint's bytes. */
+function tlvValue(data: Uint8Array, type: number) {
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  for (let at = 166; at + 4 <= data.length; ) {
+    const t = view.getUint16(at, true);
+    if (t === type) return at + 4;
+    at += 4 + view.getUint16(at + 2, true);
+  }
+  throw new Error(`no extension ${type}`);
+}
+
+/** Bytes after the last TLV entry (none for these mints). */
+function tlvTail(data: Uint8Array) {
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  let at = 166;
+  while (at + 4 <= data.length && view.getUint16(at, true) !== 0)
+    at += 4 + view.getUint16(at + 2, true);
+  return data.length - at;
+}
 
 const fake =
   (answers: Record<string, unknown>, calls: [string, unknown][] = []): Rpc =>
@@ -252,7 +273,9 @@ describe('Solana', () => {
     ).rejects.toThrow('network fee');
   });
 
-  it('sends any classic SPL token with its own decimals, and refuses Token-2022 mints', async () => {
+  // it('sends any classic SPL token with its own decimals, and refuses Token-2022 mints', async () => {
+  // 15 Nov: Token-2022 mints are sent too (see below); a plain 82-byte one now is.
+  it('sends any classic SPL token with its own decimals', async () => {
     const mint = base58.encode(new Uint8Array(32).fill(8));
     const mintData = (decimals: number) => {
       const d = new Uint8Array(82);
@@ -282,8 +305,17 @@ describe('Solana', () => {
       base58.encode(plan.message.slice(4 + i * 32, 36 + i * 32)),
     );
     expect(keys).toContain(associatedTokenAddress(from, mint));
+    // await expect(
+    //   prepareSolanaTransfer(fake(answers('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb')), {
+    //     from,
+    //     to,
+    //     amount: 1n,
+    //     token: { mint, decimals: 5 },
+    //   }),
+    // ).rejects.toThrow('isn’t supported yet');
+    // Any other owner is still refused.
     await expect(
-      prepareSolanaTransfer(fake(answers('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb')), {
+      prepareSolanaTransfer(fake(answers(base58.encode(new Uint8Array(32).fill(4)))), {
         from,
         to,
         amount: 1n,
@@ -306,6 +338,88 @@ describe('Solana', () => {
         token: { mint, decimals: 5 },
       }),
     ).rejects.toThrow('Not enough tokens');
+  });
+
+  describe('Token-2022 (tokenized stocks, 15 Nov)', () => {
+    const T22 = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
+    const aapl = xstocks.mints.AAPLx;
+    const answers = (data: string, destination: unknown = null, calls: [string, unknown][] = []) =>
+      fake(
+        {
+          getLatestBlockhash: { value: { blockhash } },
+          getBalance: { value: 10_000_000 },
+          getTokenAccountBalance: { value: { amount: '900000' } },
+          getAccountInfo: (params: unknown) =>
+            (params as string[])[0] === aapl.mint
+              ? { value: { owner: T22, data: [data, 'base64'] } }
+              : { value: destination },
+          getMinimumBalanceForRentExemption: ([size]: number[]) => (size === 179 ? 2_136_720 : 0),
+        },
+        calls,
+      );
+    const keysOf = (m: Uint8Array) =>
+      Array.from({ length: m[3] ?? 0 }, (_, i) => base58.encode(m.slice(4 + i * 32, 36 + i * 32)));
+
+    it('sends AAPLx with TransferChecked under Token-2022, from and to Token-2022 accounts', async () => {
+      const calls: [string, unknown][] = [];
+      const plan = await prepareSolanaTransfer(answers(aapl.data, null, calls), {
+        from,
+        to,
+        amount: 12_345n,
+        token: { mint: aapl.mint, decimals: 8 },
+      });
+      const keys = keysOf(plan.message);
+      const source = associatedTokenAddress(from, aapl.mint, T22);
+      const destination = associatedTokenAddress(to, aapl.mint, T22);
+      expect(keys.slice(0, 3)).toEqual([from, source, destination]);
+      expect(keys).toContain(T22);
+      expect(keys).not.toContain('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
+      // The balance is read from the Token-2022 account; rent for its 179 bytes.
+      expect(calls.find(([m]) => m === 'getTokenAccountBalance')?.[1]).toEqual([
+        source,
+        { commitment: 'confirmed' },
+      ]);
+      expect(plan.feeLamports).toBe(5_000n + 2_136_720n);
+      expect([...plan.message.slice(-10)]).toEqual([12, 0x39, 0x30, 0, 0, 0, 0, 0, 0, 8]);
+      // Both instructions run under Token-2022: TransferChecked's program, and the ATA
+      // create's token program account (last of its six).
+      const at = (k: string) => keys.indexOf(k);
+      const transfer = plan.message.slice(-(1 + 1 + 4 + 1 + 10));
+      expect(transfer[0]).toBe(at(T22));
+      expect([...transfer.slice(2, 6)]).toEqual([
+        at(source),
+        at(aapl.mint),
+        at(destination),
+        at(from),
+      ]);
+    });
+
+    it('refuses a wrong decimals, a transfer hook, a paused mint and a transfer fee', async () => {
+      const send = (data: string, decimals = 8) =>
+        prepareSolanaTransfer(answers(data), {
+          from,
+          to,
+          amount: 1n,
+          token: { mint: aapl.mint, decimals },
+        });
+      await expect(send(aapl.data, 6)).rejects.toThrow('decimals');
+      const bytes = base64.decode(aapl.data);
+      // Set the TransferHook program id (extension 14: authority, then program_id).
+      const hooked = bytes.slice();
+      hooked.set(new Uint8Array(32).fill(7), tlvValue(hooked, 14) + 32);
+      await expect(send(base64.encode(hooked))).rejects.toThrow('isn’t supported yet');
+      // Pausable (26): authority, then paused.
+      const paused = bytes.slice();
+      paused[tlvValue(paused, 26) + 32] = 1;
+      await expect(send(base64.encode(paused))).rejects.toThrow('isn’t supported yet');
+      // A TransferFeeConfig (1) entry.
+      const fee = new Uint8Array(bytes.length + 4 + 108);
+      fee.set(bytes);
+      fee.set([1, 0, 108, 0], bytes.length - tlvTail(bytes));
+      await expect(send(base64.encode(fee))).rejects.toThrow('isn’t supported yet');
+      // A malformed Token-2022 mint.
+      await expect(send(base64.encode(bytes.slice(0, 190)))).rejects.toThrow('isn’t supported yet');
+    });
   });
 
   it('waits for confirmation', async () => {

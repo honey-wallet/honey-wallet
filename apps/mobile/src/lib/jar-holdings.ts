@@ -23,6 +23,7 @@ import { type BuyLeg, refreshJarBuy } from '@/lib/jar-buy';
 import { heldUsdc, isDexLeg } from '@/lib/jar-dex';
 import { livePrices } from '@/lib/market';
 import { usePolling } from '@/lib/polling';
+import { shownAmount, warmScales } from '@/lib/solana-mint';
 import { TEST_MODE } from '@/lib/test-mode';
 import { type JarSell, jarCash, type ThesisJar, thesisJars } from '@/lib/thesis';
 
@@ -76,6 +77,23 @@ export const buyMoving = (jar: Pick<ThesisJar, 'buy'>) =>
     (l) => l.status !== 'SUCCESS' && l.status !== 'HOLDING_USDC' && !LEG_RETURNED.has(l.status),
   );
 
+/**
+ * A leg's raw units as people see them (15 Nov): a DEX leg's token through
+ * lib/solana-mint `shownAmount` (a tokenized stock's raw × multiplier); others as raw.
+ */
+const legShown = (leg: BuyLeg, raw: bigint, decimals: number) =>
+  isDexLeg(leg)
+    ? shownAmount({ chain: leg.dex.chain, address: leg.dex.token }, raw, decimals)
+    : Number(raw) / 10 ** decimals;
+
+/** The DEX legs' tokens of these jars, for lib/solana-mint `warmScales`. */
+export const jarTokens = (jars: Pick<ThesisJar, 'buy'>[]) =>
+  jars.flatMap((j) =>
+    (j.buy ?? []).flatMap((l) =>
+      isDexLeg(l) ? [{ chain: l.dex.chain as string, address: l.dex.token }] : [],
+    ),
+  );
+
 /** A token's price and decimals, or null when it can't be priced right now. */
 export type PriceOf = (leg: BuyLeg) => { price: number; decimals: number } | null;
 
@@ -117,7 +135,9 @@ export function valueJar(
     cost += leg.usd * (Number(held) / Number(got));
     const p = priceOf(leg);
     if (!p) return null;
-    value += (Number(held) / 10 ** p.decimals) * p.price;
+    // value += (Number(held) / 10 ** p.decimals) * p.price;
+    // 15 Nov: in shown units (a tokenized stock's raw × multiplier), as it's priced.
+    value += legShown(leg, held, p.decimals) * p.price;
   }
   return { value, cost };
 }
@@ -200,7 +220,8 @@ export function jarHoldings(
     const p = priceOf(leg);
     const decimals = p?.decimals ?? leg.decimals;
     if (decimals === undefined) continue;
-    const units = Number(held) / 10 ** decimals;
+    // const units = Number(held) / 10 ** decimals;
+    const units = legShown(leg, held, decimals);
     add(leg.symbol, units, p ? units * p.price : null);
   }
   return out;
@@ -267,6 +288,8 @@ export function refreshJarValues(
     dexPrices?: () => Promise<Record<string, number>>;
     refresh?: typeof refreshJarBuy;
     now?: () => number;
+    /** A Solana mint read from the device's RPC (15 Nov, tokenized stocks' multipliers). */
+    solanaMint?: Parameters<typeof warmScales>[1];
   } = {},
 ): Promise<void> {
   if (TEST_MODE) return Promise.resolve();
@@ -294,6 +317,8 @@ export function refreshJarValues(
     const tokens = await tokensOf().catch(() => null);
     const anyDex = jars.some((j) => j.buy?.some(isDexLeg));
     const byAsset = anyDex ? await (deps.dexPrices ?? dexPriceMap)().catch(() => ({})) : {};
+    // Tokenized stocks' multipliers, so their units show as people see them (15 Nov).
+    if (anyDex) await warmScales(jarTokens(jars), deps.solanaMint);
     const priceOf = pricer(tokens, pricesOf(), byAsset);
     const swaps = intentsSwaps.get();
     thesisJars.set((list) =>

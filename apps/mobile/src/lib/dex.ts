@@ -24,14 +24,21 @@ import {
   associatedTokenAddress,
   broadcastSolana,
   evmAddressOfKey,
+  isTokenProgram,
   jsonRpc,
+  mintTransferBlock,
+  nearMultiplierChange,
   type Rpc,
   readSolanaTransaction,
   SOLANA_MAINNET,
+  type SolanaMint,
   type SponsorCall,
   signEvmTransaction,
   signSolanaTransaction,
   solanaAddressOfKey,
+  TOKEN_2022_PROGRAM_ID,
+  TOKEN_PROGRAM_ID,
+  type TokenProgramId,
 } from '@honey-wallet/keyring';
 import { base64 } from '@scure/base';
 import {
@@ -61,6 +68,7 @@ import { evmRpc, type GasDeps, SPONSORED_FEE, sendSponsored, sponsorEvm } from '
 import { assertNoSponsoredInFlight, liveBatch } from '@/lib/evm-in-flight';
 import { atomic, MAX_SLIPPAGE_BPS, quoteChanged } from '@/lib/intents-quote';
 import { serverNow } from '@/lib/server-clock';
+import { solanaMintOf } from '@/lib/solana-mint';
 import { createStore } from '@/lib/store';
 import { TEST_MODE } from '@/lib/test-mode';
 
@@ -307,6 +315,8 @@ export type DexDeps = {
   gas: Partial<GasDeps>;
   evmRpc: (chainId: number) => Rpc;
   solanaRpc: () => Rpc;
+  /** A Solana mint read from the device's RPC: its token program and extensions (15 Nov). */
+  solanaMint: (mint: string) => Promise<SolanaMint>;
   /** Sends one EVM call the wallet pays the gas of (Ethereum); resolves with its hash. */
   sendOwnGas: (key: Uint8Array, chainId: number, from: string, call: SponsorCall) => Promise<Hex>;
   sleep: (ms: number) => Promise<void>;
@@ -330,6 +340,7 @@ const defaults: DexDeps = {
   gas: {},
   evmRpc,
   solanaRpc: () => jsonRpc(SOLANA_MAINNET.rpc),
+  solanaMint: (mint) => solanaMintOf(mint),
   sendOwnGas: async (key, chainId, from, call) => {
     const { prepareEvmSend } = await import('@/lib/dapp-sign');
     const prepared = await prepareEvmSend(
@@ -363,7 +374,17 @@ export type DexAsk = {
   walletId: string;
 };
 
-export type DexQuoted = { ask: DexAsk; quote: DexQuote };
+// export type DexQuoted = { ask: DexAsk; quote: DexQuote };
+export type DexQuoted = {
+  ask: DexAsk;
+  quote: DexQuote;
+  /**
+   * Shown units per raw unit of what's sold and bought (15 Nov): a Solana token's
+   * ScaledUiAmount multiplier, read on chain (lib/solana-mint); 1 or absent otherwise.
+   * Only for what people see: the ask, quote and checks stay in raw units.
+   */
+  scale?: { sell: number; buy: number };
+};
 
 /** A quote must leave this long to sign and send; otherwise it's asked for again. */
 export const QUOTE_MARGIN_MS = 10_000;
@@ -440,7 +461,14 @@ export const KYBER_SWAP_ABI = [
  */
 // export function checkDexQuote(q: DexQuote, ask: DexAsk, now = Date.now()): void {
 // Replaced 14 Nov (money audit 6): expiries are set on the server's clock (lib/server-clock).
-export function checkDexQuote(q: DexQuote, ask: DexAsk, now = serverNow()): void {
+// export function checkDexQuote(q: DexQuote, ask: DexAsk, now = serverNow()): void {
+// 15 Nov: with the Solana mints' token programs, read on chain (`solanaProgramsOf`).
+export function checkDexQuote(
+  q: DexQuote,
+  ask: DexAsk,
+  now = serverNow(),
+  programs: SolanaPrograms = CLASSIC_PROGRAMS,
+): void {
   if (
     q.chain !== ask.chain ||
     !sameToken(ask.chain, q.sellToken, ask.sellToken) ||
@@ -453,8 +481,43 @@ export function checkDexQuote(q: DexQuote, ask: DexAsk, now = serverNow()): void
     throw quoteChanged();
   if (q.expiresAt <= now || q.expiresAt > now + MAX_QUOTE_MS)
     throw new Error('The quote expired. Review again.');
-  if (ask.chain === 'Solana') checkSolanaSwap(q, ask);
+  // if (ask.chain === 'Solana') checkSolanaSwap(q, ask);
+  if (ask.chain === 'Solana') checkSolanaSwap(q, ask, programs);
   else evmCalls(q, ask);
+}
+
+/** The token programs of a Solana swap's two mints (15 Nov): classic SPL or Token-2022. */
+export type SolanaPrograms = { sell: TokenProgramId; buy: TokenProgramId };
+const CLASSIC_PROGRAMS: SolanaPrograms = { sell: TOKEN_PROGRAM_ID, buy: TOKEN_PROGRAM_ID };
+
+/**
+ * The token programs of a Solana ask's mints, read from the device's RPC (never the
+ * quote's word); undefined off Solana. A Token-2022 mint the wallet can't move as asked
+ * (a transfer hook program, paused, a transfer fee: keyring `mintTransferBlock`) is
+ * refused, as is one whose multiplier changes within the hour (`nearMultiplierChange`),
+ * when `nowMs` is given.
+ */
+export async function solanaProgramsOf(
+  ask: Pick<DexAsk, 'chain' | 'sellToken' | 'buyToken'>,
+  mintOf: (mint: string) => Promise<SolanaMint> = (m) => solanaMintOf(m),
+  nowMs?: number,
+): Promise<SolanaPrograms | undefined> {
+  if (ask.chain !== 'Solana') return undefined;
+  const one = async (address: string): Promise<TokenProgramId> => {
+    let mint: SolanaMint;
+    try {
+      mint = await mintOf(address);
+    } catch {
+      throw new Error('Couldn’t get a quote. Try again in a moment.');
+    }
+    if (!isTokenProgram(mint.program) || mintTransferBlock(mint))
+      throw new Error('No route for this token right now.');
+    if (nowMs !== undefined && nearMultiplierChange(mint, Math.floor(nowMs / 1000)))
+      throw new Error('The quote expired. Review again.');
+    return mint.program;
+  };
+  const [sell, buy] = await Promise.all([one(ask.sellToken), one(ask.buyToken)]);
+  return { sell, buy };
 }
 
 /**
@@ -616,12 +679,15 @@ const JUPITER_ROUTES: Record<
     /** Where the route names the mints it sells and buys, when it does. */
     sourceMint?: number;
     destinationMint?: number;
+    /** Where a v2 route names the token programs of what it sells and buys (15 Nov). */
+    sourceProgram?: number;
+    destinationProgram?: number;
   }
 > = {
   // Account orders from Jupiter v6's on-chain IDL (read 2026-11-14).
   // shared_accounts_route_v2: [program_authority, user_transfer_authority, source_token_account,
   // program_source, program_destination, destination_token_account (5), source_mint,
-  // destination_mint, …] (live 2026-11-13).
+  // destination_mint, source_token_program, destination_token_program, …] (live 2026-11-13).
   d19853937cfed8e9: {
     v2: true,
     at: 9,
@@ -630,6 +696,8 @@ const JUPITER_ROUTES: Record<
     source: 2,
     sourceMint: 6,
     destinationMint: 7,
+    sourceProgram: 8,
+    destinationProgram: 9,
   },
   // route_v2: [user_transfer_authority, user_source_token_account,
   // user_destination_token_account (2), source_mint, destination_mint, source_token_program,
@@ -643,6 +711,8 @@ const JUPITER_ROUTES: Record<
     source: 1,
     sourceMint: 3,
     destinationMint: 4,
+    sourceProgram: 5,
+    destinationProgram: 6,
   },
   // route: [token_program, user_transfer_authority, user_source_token_account,
   // user_destination_token_account (3), optional destination_token_account (4), destination_mint, …].
@@ -708,11 +778,18 @@ export function readJupiterRoute(data: Uint8Array) {
  * fee, idempotent creation of the wallet's own token accounts paid by the wallet, and
  * classic SPL `SyncNative` / `CloseAccount` back into the wallet. No transfer, approve,
  * System, Token-2022 or anything else.
+ *
+ * 15 Nov: the wallet's token accounts are derived under each mint's own token program
+ * (`programs`, read on chain by `solanaProgramsOf`; classic when not given), so Token-2022
+ * mints (tokenized stocks) pass; a v2 route naming another program for either mint, or an
+ * account creation under a program that isn't SPL Token or Token-2022, is refused.
+ * Token-2022 still never runs as an instruction of its own here.
  */
 export function checkSolanaSwap(
   q: DexQuote,
   // ask: Pick<DexAsk, 'taker' | 'sellAmount' | 'buyToken'>,
   ask: Pick<DexAsk, 'taker' | 'sellAmount' | 'buyToken' | 'sellToken'>,
+  programs: SolanaPrograms = CLASSIC_PROGRAMS,
 ) {
   if (!q.solana || q.evm) throw quoteChanged();
   let read: ReturnType<typeof readSolanaTransaction>;
@@ -737,8 +814,10 @@ export function checkSolanaSwap(
   // The wallet's own token account for what it sells: the route may take only from it.
   let input: string;
   try {
-    output = associatedTokenAddress(taker, ask.buyToken);
-    input = associatedTokenAddress(taker, ask.sellToken);
+    // output = associatedTokenAddress(taker, ask.buyToken);
+    // input = associatedTokenAddress(taker, ask.sellToken);
+    output = associatedTokenAddress(taker, ask.buyToken, programs.buy);
+    input = associatedTokenAddress(taker, ask.sellToken, programs.sell);
   } catch {
     throw quoteChanged();
   }
@@ -789,7 +868,10 @@ export function checkSolanaSwap(
         named(route.authority) !== taker ||
         named(route.source) !== input ||
         !mintOk(route.sourceMint, ask.sellToken) ||
-        !mintOk(route.destinationMint, ask.buyToken)
+        !mintOk(route.destinationMint, ask.buyToken) ||
+        // The token programs it names for them, when static, are theirs (15 Nov).
+        !mintOk(route.sourceProgram, programs.sell) ||
+        !mintOk(route.destinationProgram, programs.buy)
       )
         throw quoteChanged();
       if (route.optional !== undefined) {
@@ -805,6 +887,14 @@ export function checkSolanaSwap(
         ix.accountIndexes.length !== 6 ||
         ix.accountIndexes[0] !== me ||
         ix.accountIndexes[2] !== me
+      )
+        throw quoteChanged();
+      // Under SPL Token or Token-2022 only, when the program is a static key (15 Nov).
+      const tokenProgram = keys[ix.accountIndexes[5] ?? -1];
+      if (
+        tokenProgram !== undefined &&
+        tokenProgram !== TOKEN_PROGRAM &&
+        tokenProgram !== TOKEN_2022_PROGRAM_ID
       )
         throw quoteChanged();
     } else if (program === TOKEN_PROGRAM) {
@@ -829,6 +919,8 @@ export async function quoteDex(ask: DexAsk, deps: Partial<DexDeps> = {}): Promis
   const token = await d.token();
   if (!token) throw new Error('Sign in to swap.');
   if (ask.sellAmount <= 0n) throw new Error('Enter an amount.');
+  // Each Solana mint's token program, from the device's RPC (15 Nov).
+  const programs = await solanaProgramsOf(ask, d.solanaMint);
   const body = await d.api
     .quote(token, {
       chain: ask.chain,
@@ -845,7 +937,8 @@ export async function quoteDex(ask: DexAsk, deps: Partial<DexDeps> = {}): Promis
     });
   const quote = parseDexQuote(body);
   if (!quote) throw quoteChanged();
-  checkDexQuote(quote, ask, d.now());
+  // checkDexQuote(quote, ask, d.now());
+  checkDexQuote(quote, ask, d.now(), programs);
   return { ask, quote };
 }
 
@@ -959,10 +1052,16 @@ export async function executeDex(
   const floor = opts.floor === undefined ? BigInt(quoted.quote.minBuyAmount) : opts.floor;
   const { ask, quote } = await freshDexQuote(quoted, floor, d);
   if (TEST_MODE) return { hash: `0x${'0'.repeat(63)}1`, quote };
-  checkDexQuote(quote, ask, d.now());
+  // checkDexQuote(quote, ask, d.now());
+  // 15 Nov: the mints' programs read again, and no swap of a token whose multiplier
+  // changes within the hour.
+  const programs = await solanaProgramsOf(ask, d.solanaMint, d.now());
+  checkDexQuote(quote, ask, d.now(), programs);
   const session = await d.token();
   if (!session) throw new Error('Sign in again to swap.');
-  if (ask.chain === 'Solana') return { hash: await sendSolana(ask, quote, session, d), quote };
+  // if (ask.chain === 'Solana') return { hash: await sendSolana(ask, quote, session, d), quote };
+  if (ask.chain === 'Solana')
+    return { hash: await sendSolana(ask, quote, session, d, programs), quote };
   const chainId = DEX_CHAIN_IDS[ask.chain];
   const calls = evmCalls(quote, ask);
   const key = await d.keyOf(ask.walletId, 'evm');
@@ -996,8 +1095,16 @@ export async function executeDex(
   }
 }
 
-async function sendSolana(ask: DexAsk, quote: DexQuote, session: string, d: DexDeps) {
-  checkSolanaSwap(quote, ask);
+// async function sendSolana(ask: DexAsk, quote: DexQuote, session: string, d: DexDeps) {
+//   checkSolanaSwap(quote, ask);
+async function sendSolana(
+  ask: DexAsk,
+  quote: DexQuote,
+  session: string,
+  d: DexDeps,
+  programs: SolanaPrograms | undefined,
+) {
+  checkSolanaSwap(quote, ask, programs);
   const key = await d.keyOf(ask.walletId, 'solana');
   let wire: string;
   try {
