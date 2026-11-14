@@ -146,9 +146,9 @@ Creators get paid when their picks make money for others.
 
 - NEAR Intents has no testnet, so live flows spend mainnet funds.
 - iOS only (TestFlight public beta). Android is not on a store yet.
-- The DEX fallback is a server switch, off by default. Solana and NEAR gas sponsorship
-  are supported by the server and off by default. EVM sponsorship (Base, Arbitrum,
-  Polygon, Optimism) is on.
+- The DEX fallback (`DEX_ENABLED`) is on in production; with it off, only 1Click is quoted.
+  Solana and NEAR gas sponsorship are supported by the server and off by default. EVM
+  sponsorship (Base, Arbitrum, Polygon, Optimism) is on.
 - Private jars (Confidential Intents) are experimental and off by default.
 - No card on-ramp or cash off-ramp. Earn shows rates only.
 - Test mode receipts and sample screens are not proof of settlement.

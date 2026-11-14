@@ -276,8 +276,8 @@ Report vulnerabilities privately: [SECURITY.md](SECURITY.md).
 
 - iOS only for now (TestFlight public beta). Android is not on a store yet.
 - Buying crypto with a card and selling for cash are not connected. Earn shows rates only.
-- The DEX fallback is a server switch, off by default. Solana and NEAR gas sponsorship
-  are supported by the server and off by default.
+- The DEX fallback (`DEX_ENABLED`) is on in production; with it off, only 1Click is quoted.
+  Solana and NEAR gas sponsorship are supported by the server and off by default.
 - Private jars (Confidential Intents) are experimental and off by default.
 - Test mode is a demonstration, not proof of a settled trade. The captures above use
   sample data.
