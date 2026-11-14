@@ -139,11 +139,7 @@ const ONE_CLICK_EXTRA_BPS = 25;
 export const ONE_CLICK_FEE_RECIPIENT =
   '5880ad2b362620fadf759cbceb1cd5737ce8c6ed7fb8e9942881e6731f9247dd';
 
-/**
- * A copy fee the server declared on a quote: who's paid, and how much of the sale. Since
- * 2026-11-14 Honey keeps the copy fee: one entry per sale, to Honey's own NEAR Intents
- * account (the server's `HONEY_COPY_FEE_ACCOUNT`), never one per creator.
- */
+/** A copy fee the server declared on a quote: who's paid, and how much of the sale. */
 export type DeclaredCopyFee = { recipient: string; bps: number; pct: number; usd: number };
 
 /** The server's copy fee on a leg, checked for shape; null when there's none. */
@@ -167,18 +163,13 @@ export function declaredCopyFee(fee: unknown): DeclaredCopyFee | null {
   return f as DeclaredCopyFee;
 }
 
-// /**
-//  * The server's copy fees on a leg (one per creator, oldest copy first), checked for shape:
-//  * each well formed, creators distinct, at most `MAX_COPY_FEE_BPS` together.
-//  */
 /**
- * The server's copy fee on a leg, checked for shape: at most one entry (Honey's), well
- * formed, at most `MAX_COPY_FEE_BPS`. More than one is refused.
+ * The server's copy fees on a leg (one per creator, oldest copy first), checked for shape:
+ * each well formed, creators distinct, at most `MAX_COPY_FEE_BPS` together.
  */
 export function declaredCopyFees(fees: unknown): DeclaredCopyFee[] {
   if (fees === undefined || fees === null) return [];
-  // if (!Array.isArray(fees)) throw quoteChanged();
-  if (!Array.isArray(fees) || fees.length > 1) throw quoteChanged();
+  if (!Array.isArray(fees)) throw quoteChanged();
   const out = fees.map((f) => {
     const fee = declaredCopyFee(f);
     if (!fee) throw quoteChanged();
@@ -191,24 +182,11 @@ export function declaredCopyFees(fees: unknown): DeclaredCopyFee[] {
 }
 
 /**
- * 1Click's own record must take exactly the copy fee shown (`checkOneClickFees`): since
- * Honey keeps the copy fee (2026-11-14) a sale declares at most one, Honey's, so more
- * than one is refused. Without a declared fee, only 1Click's own small fee may be there.
- */
-export function checkOneClickCopyFees(record: OneClickStatus, fees: DeclaredCopyFee[]) {
-  if (fees.length > 1) throw quoteChanged();
-  return checkOneClickFees(record, fees[0] ?? null);
-}
-
-/*
-Superseded 2026-11-14 (Honey keeps the copy fee): one declared fee per creator.
-
-/**
  * 1Click's own record must take exactly the copy fees shown, and nothing more: each
  * creator named once and paid their fee (or the half 1Click's 50/50 split leaves them),
  * and every fee on the swap together at most those plus 1Click's own share. Without
  * declared fees, only 1Click's own small fee may be there (`checkOneClickFees`).
- *\/
+ */
 export function checkOneClickCopyFees(record: OneClickStatus, fees: DeclaredCopyFee[]) {
   // if (!fees.length) return;
   // No fee declared: the money audit's rule (`checkOneClickFees` with none): at most
@@ -230,13 +208,10 @@ export function checkOneClickCopyFees(record: OneClickStatus, fees: DeclaredCopy
   const total = entries.reduce((s, e) => s + e.bps, 0);
   if (total > fees.reduce((s, f) => s + f.bps, 0) + ONE_CLICK_EXTRA_BPS) throw quoteChanged();
 }
-*/
 
 /**
  * Superseded 2026-11-14 (security review) for copy fees by `checkOneClickCopyFees`
- * (several creators); still the rule for a swap with no fee declared. Since Honey keeps
- * the copy fee (2026-11-14) it is again the rule for every swap: `checkOneClickCopyFees`
- * passes it the one declared fee, Honey's.
+ * (several creators); still the rule for a swap with no fee declared.
  */
 /**
  * 1Click's own record must take exactly the fees shown, and nothing more. With no fee
@@ -265,8 +240,6 @@ export function checkOneClickFees(record: OneClickStatus, fee: DeclaredCopyFee |
   if (!Array.isArray(list)) throw quoteChanged();
   let total = 0;
   const mine: number[] = [];
-  // 1Click's own entries (its share of the fee).
-  let own = 0;
   for (const entry of list as { recipient?: unknown; fee?: unknown }[]) {
     if (
       typeof entry?.recipient !== 'string' ||
@@ -276,15 +249,10 @@ export function checkOneClickFees(record: OneClickStatus, fee: DeclaredCopyFee |
       throw quoteChanged();
     total += Number(entry.fee);
     if (entry.recipient.toLowerCase() === fee.recipient.toLowerCase()) mine.push(Number(entry.fee));
-    // Honey keeps the copy fee (2026-11-14): besides the declared recipient (Honey), only
-    // 1Click's own account may take a share; a fee to anyone else is refused, however small.
-    else if (entry.recipient === ONE_CLICK_FEE_RECIPIENT) own += 1;
-    else throw quoteChanged();
   }
   const [paid] = mine;
   if (
     mine.length !== 1 ||
-    own > 1 ||
     (paid !== fee.bps && paid !== Math.ceil(fee.bps / 2)) ||
     total > fee.bps + ONE_CLICK_EXTRA_BPS
   )

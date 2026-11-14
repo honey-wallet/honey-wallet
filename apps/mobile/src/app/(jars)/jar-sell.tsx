@@ -307,12 +307,10 @@ function JarSellSheet() {
                   {/* A copied jar: the creator's cut of your profit, set by the server. */}
                   {/* {real && copiedJarId(jar) ? ( */}
                   {/* Any sell of copied tokens pays it, so it shows whenever there's one. */}
-                  {/* Honey keeps the copy fee (2026-11-14): it's Honey's, not the creator's. */}
-                  {/* Only when a fee is actually charged (none since 14 Nov: no fees for users). */}
-                  {real && quote?.copyFee ? (
+                  {/* Creators' copy fee again (14 Nov, owner): shown on a copied jar's sell. */}
+                  {real && (copiedJarId(jar) || quote?.copyFee) ? (
                     <StatRow
-                      // label="Creator's fee"
-                      label="Honey fee"
+                      label="Creator's fee"
                       value={quote ? copyFeeText(quote.copyFee) : '…'}
                     />
                   ) : null}

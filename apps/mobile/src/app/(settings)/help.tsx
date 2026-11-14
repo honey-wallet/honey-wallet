@@ -71,7 +71,11 @@ const JAR_FAQ: { q: string; a: string }[] = [
     //   ? 'The creator’s fee is a share of your profit, and nothing on a loss. Network and route fees show before you approve.'
     //   : 'The Honey fee is a share of your profit, and nothing on a loss. Network and route fees show before you approve.',
     // No fees for users (14 Nov, owner): only the network and route fees.
-    a: 'Only the network and route fees, and they show before you approve.',
+    // a: 'Only the network and route fees, and they show before you approve.',
+    // Creators' copy fee again (14 Nov, owner).
+    a: COPY_FEES
+      ? 'The creator’s fee is a share of your profit, and nothing on a loss. Network and route fees show before you approve.'
+      : 'Only the network and route fees, and they show before you approve.',
   },
   ...(warningOn('jarGuideSmallBuys')
     ? [

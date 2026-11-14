@@ -59,14 +59,7 @@ export const SOON = {
  * creator's cut to a copier's sell as NEAR Intents 1Click `appFees` (lib/copy-fees), so
  * every build offers, sets and shows them.
  */
-// export const COPY_FEES = true;
-/**
- * Since 2026-11-14 (the owner's decision) Honey keeps the copy fee and creators earn
- * nothing from copies: no screen offers, sets or promises a creator's cut. The fee a
- * copier pays shows on their sell, Swap and jar-buy reviews as the "Honey fee"
- * (lib/copy-fees), whatever this says.
- */
-export const COPY_FEES = false;
+export const COPY_FEES = true;
 
 /**
  * Settings that change nothing yet, hidden outside test mode until they're wired:

@@ -1151,11 +1151,8 @@ function ReviewStep({
         <Row label="Amount" value={pay} />
         <Row label="Network cost" value={plan ? plan.fee : null} />
         {/* Selling tokens copied from someone's jar: their creator's cut (lib/copy-fees). */}
-        {/* Since 2026-11-14 Honey keeps that cut: the Honey fee. */}
         {swap.copyFees?.length ? (
-          // <Row label="Creator's fee" value={copyFeeText(sellCopyFee(swap.copyFees))} />
-          // Honey keeps the copy fee (2026-11-14).
-          <Row label="Honey fee" value={copyFeeText(sellCopyFee(swap.copyFees))} />
+          <Row label="Creator's fee" value={copyFeeText(sellCopyFee(swap.copyFees))} />
         ) : null}
         <Row label="Arrives" value={arrivesIn(swap.timeEstimate)} />
         <Row label="Max slippage" value={`${swap.slippageBps / 100}%`} />

@@ -556,12 +556,8 @@ export default function NewThesisSheet() {
           setBuyLines(routeLines);
           setBuyStage('Confirm to pay…');
           // return payJarBuy(quoted.legs, (legs) => {
-          // const reason = copyFee
-          //   ? `Buy ${usdText.format(proposal.amount)}, with a creator's fee of ${copyFeeText(copyFee)}`
-          //   : undefined;
-          // Honey keeps the copy fee (2026-11-14).
           const reason = copyFee
-            ? `Buy ${usdText.format(proposal.amount)}, with a Honey fee of ${copyFeeText(copyFee)}`
+            ? `Buy ${usdText.format(proposal.amount)}, with a creator's fee of ${copyFeeText(copyFee)}`
             : undefined;
           return payJarBuy(
             quoted.legs,

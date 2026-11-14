@@ -116,22 +116,17 @@ describe('audit fixes in the app', () => {
     expect(copyFeeText({ usd: 0.12, pct: 10 })).toBe('$0.12 (10% of profit)');
   });
 
-  // it('shows the creator’s fee on a jar buy paid with copied tokens before Face ID', async () => {
-  // Honey keeps the copy fee (2026-11-14): the line names it the Honey fee.
-  it('shows the Honey fee on a jar buy paid with copied tokens before Face ID', async () => {
+  it('shows the creator’s fee on a jar buy paid with copied tokens before Face ID', async () => {
     const { buyCopyFeeLine, sellCopyFee } = await import('@/lib/copy-fees');
     const { declaredCopyFees } = await import('@/lib/intents-quote');
     const legs = [
-      // { copyFees: [{ recipient: '0xana', bps: 120, pct: 10, usd: 0.05 }] },
-      // { copyFees: [{ recipient: '0xana', bps: 120, pct: 10, usd: 0.07 }] },
-      { copyFees: [{ recipient: 'honey-fees.near', bps: 120, pct: 10, usd: 0.05 }] },
-      { copyFees: [{ recipient: 'honey-fees.near', bps: 120, pct: 10, usd: 0.07 }] },
+      { copyFees: [{ recipient: '0xana', bps: 120, pct: 10, usd: 0.05 }] },
+      { copyFees: [{ recipient: '0xana', bps: 120, pct: 10, usd: 0.07 }] },
       { copyFees: [] },
     ];
     const fee = sellCopyFee(legs.flatMap((l) => declaredCopyFees(l.copyFees)));
     expect(buyCopyFeeLine(fee)).toBe(
-      // "Creator's fee: $0.12 (10% of profit), on the copied tokens paying for this",
-      'Honey fee: $0.12 (10% of profit), on the copied tokens paying for this',
+      "Creator's fee: $0.12 (10% of profit), on the copied tokens paying for this",
     );
     expect(buyCopyFeeLine(null)).toBe('');
   });
