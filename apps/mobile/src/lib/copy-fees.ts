@@ -1,4 +1,12 @@
 /**
+ * Honey's copy fee (since 2026-11-14, the owner's decision): Honey keeps the cut of a
+ * copier's profit instead of paying it to the jar's creator. The server adds one 1Click
+ * `appFees` entry for Honey's own account to the copier's sell; the phone shows it as the
+ * "Honey fee" and checks 1Click's record takes exactly that (lib/intents-quote). The
+ * creator-side helpers below (payout, earnings, withdraw) are no longer shown.
+ *
+ * Before, kept for the record:
+ *
  * Creators' copy fees (2026-11-14): a cut of a copier's profit, taken by NEAR Intents
  * 1Click (`appFees`) from the copier's sell. The server works out every fee from its own
  * records (the jar's fee, what the copy cost, the creator's signed-in wallet); the phone
@@ -44,7 +52,9 @@ export function copyFeeText(fee: SellCopyFee | null) {
  * Face ID, or '' when there's none (audit H3).
  */
 export function buyCopyFeeLine(fee: SellCopyFee | null) {
-  return fee ? `Creator's fee: ${copyFeeText(fee)}, on the copied tokens paying for this` : '';
+  // return fee ? `Creator's fee: ${copyFeeText(fee)}, on the copied tokens paying for this` : '';
+  // Honey keeps the copy fee (2026-11-14).
+  return fee ? `Honey fee: ${copyFeeText(fee)}, on the copied tokens paying for this` : '';
 }
 
 const short = (account: string) =>

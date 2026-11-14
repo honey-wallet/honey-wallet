@@ -1064,13 +1064,18 @@ describe('a quote kept fresh at Confirm', () => {
   });
 });
 
-describe('copy sales (creator fees)', () => {
+// describe('copy sales (creator fees)', () => {
+// Honey keeps the copy fee (2026-11-14): one entry, to Honey's account.
+describe('copy sales (Honey fee)', () => {
   beforeEach(() => {
     wallets.set({ activeId: 'seed-0', added: [wallet] });
     intentsSwaps.set({});
   });
 
-  const CREATOR = '0x97a5c31bfbfa1809cf20454f2aaefa05932ab18e';
+  // const CREATOR = '0x97a5c31bfbfa1809cf20454f2aaefa05932ab18e';
+  /** Honey's NEAR Intents account (the server's HONEY_COPY_FEE_ACCOUNT). */
+  const HONEY = 'honey-fees.near';
+  const CREATOR = HONEY;
   const BEN = '0x3333333333333333333333333333333333333333';
   const ONE_CLICK_FEES = '5880ad2b362620fadf759cbceb1cd5737ce8c6ed7fb8e9942881e6731f9247dd';
   const fee = { recipient: CREATOR, bps: 120, pct: 10, usd: 0.05 };
@@ -1109,20 +1114,36 @@ describe('copy sales (creator fees)', () => {
     });
     expect(result.copySaleOf).toBeUndefined();
     expect(result.copyFees).toEqual([fee]);
-    // Two creators, oldest copy first: one entry each in 1Click's record.
+    // // Two creators, oldest copy first: one entry each in 1Click's record.
+    // const ben = { recipient: BEN, bps: 300, pct: 20, usd: 0.12 };
+    // const both = await quoteSwap(input, {
+    //   fetcher: oneClick({
+    //     appFees: [
+    //       { recipient: CREATOR, fee: 60 },
+    //       { recipient: BEN, fee: 150 },
+    //       { recipient: ONE_CLICK_FEES, fee: 210 },
+    //     ],
+    //   }),
+    //   quote: async () => quote([leg({ copyFees: [fee, ben] })]),
+    //   now: () => NOW,
+    // });
+    // expect(both.copyFees).toEqual([fee, ben]);
+    // Since Honey keeps the fee, a sale declares one entry: two (one per creator, as before)
+    // are refused, even when 1Click's record matches them.
     const ben = { recipient: BEN, bps: 300, pct: 20, usd: 0.12 };
-    const both = await quoteSwap(input, {
-      fetcher: oneClick({
-        appFees: [
-          { recipient: CREATOR, fee: 60 },
-          { recipient: BEN, fee: 150 },
-          { recipient: ONE_CLICK_FEES, fee: 210 },
-        ],
+    await expect(
+      quoteSwap(input, {
+        fetcher: oneClick({
+          appFees: [
+            { recipient: CREATOR, fee: 60 },
+            { recipient: BEN, fee: 150 },
+            { recipient: ONE_CLICK_FEES, fee: 210 },
+          ],
+        }),
+        quote: async () => quote([leg({ copyFees: [fee, ben] })]),
+        now: () => NOW,
       }),
-      quote: async () => quote([leg({ copyFees: [fee, ben] })]),
-      now: () => NOW,
-    });
-    expect(both.copyFees).toEqual([fee, ben]);
+    ).rejects.toThrow('The quote changed');
   });
 
   it('refuses a fee 1Click doesn’t take as shown', async () => {
@@ -1138,6 +1159,12 @@ describe('copy sales (creator fees)', () => {
         { recipient: CREATOR, fee: 120 },
         { recipient: ONE_CLICK_FEES, fee: 25 },
         { recipient: OTHER, fee: 5 },
+      ],
+      // A share to anyone but Honey and 1Click, even within the total, is refused.
+      [
+        { recipient: CREATOR, fee: 60 },
+        { recipient: ONE_CLICK_FEES, fee: 40 },
+        { recipient: OTHER, fee: 20 },
       ],
     ])
       await expect(
