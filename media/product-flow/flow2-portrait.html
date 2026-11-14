@@ -7,7 +7,13 @@
 <script>
 // PORTRAIT cut of flow2 (dark) for the landing page on phones: 1000 x 1250, same 14 s loop
 // and beats; the input, the proposal and the jar take the whole width one after another.
-const DUR = 14; setupFilm(DUR);
+// Held beats are cut short (14 Nov: the review card sat still for 3.8 s and read as stuck).
+// Nothing moves inside a hold, not even the background, so cutting held time is invisible:
+// 2.0 s of the review hold and 1.4 s of the closing hold. The story times below are unchanged.
+// const DUR = 14;
+const DUR = 10.6;
+const warp = (rt) => (rt < 5.6 ? rt : rt < 9.2 ? rt + 2.0 : rt + 3.4);
+setupFilm(DUR);
 let I, CN;
 const IDEA = 'AI data-centre spending keeps growing';
 const PROPOSAL = [48, 570, 1110, 1450];
@@ -41,15 +47,21 @@ function inputCard(t, a) {
   if (st > 0) { g.save(); g.globalAlpha *= st; text('Researched your idea', W / 2, y - 86, { size: 36, font: MONO, color: HC.text, align: 'center' }); g.restore(); }
   g.restore();
 }
-function draw(t) {
+function draw(rt) {
+  const t = warp(rt);
   fog(t); grid(0.9);
   inputCard(t, win(t, 0.3, 3.9, 0.4, 0.35));
   // the proposal, full width; it lifts away after Buy is tapped
   const pa = win(t, 4.1, 9.7, 0.4, 0.4), lift = sp(t - 9.3);
   const ph = 900, pcx = W / 2, pcy = 690 - 120 * lift;
-  const approving = t >= 8.3;
-  const crop = approving ? APPROVAL : PROPOSAL;
-  const pw = shot(approving ? I.approval : I.proposal, ...crop, pcx, pcy, ph, { a: pa, s: 1 - 0.05 * lift, blur: (1 - pa) * 12 });
+  // const approving = t >= 8.3;
+  // const crop = approving ? APPROVAL : PROPOSAL;
+  // The review card hands over to the taller approval screen: out, then in (it was a hard cut,
+  // and the card jumped narrower).
+  const out = c01((t - 8.15) / 0.2), inn = c01((t - 8.35) / 0.25);
+  const crop = APPROVAL;
+  if (out < 1) shot(I.proposal, ...PROPOSAL, pcx, pcy, ph, { a: pa * (1 - out), s: (1 - 0.05 * lift) * (1 - 0.03 * out), blur: (1 - pa) * 12 });
+  const pw = shot(I.approval, ...APPROVAL, pcx, pcy, ph, { a: pa * inn, s: (1 - 0.05 * lift) * (0.97 + 0.03 * inn), blur: (1 - pa) * 12 });
   if (pa > 0) {
     const { inset, contentHeight } = screenFrame(crop[2], crop[3], ph);
     const k = contentHeight / crop[3], scale = 1 - 0.05 * lift;

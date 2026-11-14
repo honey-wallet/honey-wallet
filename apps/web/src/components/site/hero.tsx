@@ -35,6 +35,8 @@ export function Hero() {
           </JoinWaitlist>
         </div>
       </div>
+      {/* 14 Nov: the two phones flank the headline, tilted outward (the owner's sketch):
+          Following on the left, everyone's jars on the right. Was below it, with captions:
       <div className={styles.product}>
         <div aria-hidden="true" className={styles.halo} />
         <figure className={styles.feedPhone}>
@@ -45,6 +47,13 @@ export function Hero() {
           <ProductPhone eager screen="wallet" />
           <figcaption>Your wallet. Always in your hands.</figcaption>
         </figure>
+      </div> */}
+      <div aria-hidden="true" className={styles.halo} />
+      <div className={`${styles.side} ${styles.left}`}>
+        <ProductPhone eager screen="feed" />
+      </div>
+      <div className={`${styles.side} ${styles.right}`}>
+        <ProductPhone eager screen="everyone" />
       </div>
     </section>
   );

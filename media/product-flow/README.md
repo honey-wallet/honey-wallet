@@ -12,7 +12,10 @@ result reveal and loop timings remain. The native screen crops have been refresh
 
 Four compositions match the original outputs: `flow2.html` (dark/wide),
 `flow2-light.html`, `flow2-portrait.html`, `flow2-light-portrait.html`.
-Wide: 2000 × 800. Portrait: 1000 × 1250. All are 14 seconds at 60 fps, silent.
+Wide: 2000 × 800. Portrait: 1000 × 1250. All are 10.6 seconds at 60 fps, silent
+(14 Nov: the review and closing holds were cut short with `warp`, so the review card no
+longer sits still for 3.8 s; the review card now hands over to the approval screen with
+a quick out-and-in instead of a hard cut).
 The screenshots are unedited; crop coordinates live in the composition code.
 `screen-frame.js` provides the shared inset mockup for the review, approval and
 holdings crops: 16–32 px of internal space, an app-matched background and a
@@ -40,11 +43,11 @@ node media/product-flow/render.mjs media/product-flow/flow2-light.html \
   --fps 60 --out /tmp/flow-light.mp4
 ```
 
-Use `--still 6.5 --out /tmp/review.png` to inspect the review beat; check 2.0,
-6.5 and 10.8 seconds for the three original stages before replacing a film.
+Use `--still 5.0 --out /tmp/review.png` to inspect the review beat; check 2.0,
+5.0 and 8.0 seconds for the three original stages before replacing a film.
 
 The landing page uses `apps/web/public/video/flow-{light,dark}[-portrait].mp4`.
 The deck uses the dark wide cut at `deck/public/video/flow2.mp4`.
-Poster times are 6.5 seconds (wide) and 4.8 seconds (portrait), matching Film's
+Poster times are 5.0 seconds (wide) and 4.8 seconds (portrait), matching Film's
 playback start on the centred review card. Refresh all posters and bump the Film/Clip cache versions after
 publishing a new render. This source contains no private hackathon notes or keys.

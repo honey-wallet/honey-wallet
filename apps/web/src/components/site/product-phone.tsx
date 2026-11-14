@@ -1,9 +1,11 @@
 import Image from 'next/image';
 import styles from './product-phone.module.css';
 
-export type ProductScreen = 'feed' | 'wallet' | 'jar';
+// export type ProductScreen = 'feed' | 'wallet' | 'jar';
+export type ProductScreen = 'feed' | 'everyone' | 'wallet' | 'jar';
 const LABELS: Record<ProductScreen, string> = {
   feed: 'Honey social feed with friends’ trades and copyable jars',
+  everyone: 'Honey feed of jars anyone can copy',
   wallet: 'Honey wallet with token balances, holdings and money actions',
   jar: 'Honey jar with its performance chart and token allocations',
 };

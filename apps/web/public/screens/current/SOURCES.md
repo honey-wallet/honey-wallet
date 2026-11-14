@@ -13,3 +13,7 @@ Matching files are copied to `deck/public/screens/current/` so the deck can also
 build independently. Refresh both copies when changing a capture. The current wallet replaces only the screen inside the original hand-held mockup.
 The Jars film retains its original composition and is refreshed separately in
 `media/product-flow/`.
+
+`feed-*` is the Following tab and `everyone-*` the Everyone tab, captured 14 November
+2026 in test mode with its sample people (lib/group-demo.ts) and Honey's live strategy
+jars. No fees are shown: users pay none.
