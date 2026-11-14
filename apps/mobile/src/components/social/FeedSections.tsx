@@ -14,7 +14,7 @@ import { SegmentedTabs } from '@/components/motion/SegmentedTabs';
 import { SkeletonBar, SkeletonReveal } from '@/components/motion/Skeleton';
 import { UnderlineTabs } from '@/components/motion/UnderlineTabs';
 import { BoardMap, BoardMapSkeleton } from '@/components/social/BoardMap';
-import { FollowingEmpty } from '@/components/social/FindPeople';
+import { FollowingEmpty, SuggestedPosts } from '@/components/social/FindPeople';
 import {
   // cardEntering: unused since 14 Nov (cleanup), only the commented-out Invite used it.
   FeedCard,
@@ -160,7 +160,15 @@ function FeedBody({ scope }: { scope: SocialFeedScope }) {
         )}
       </View>
     );
-  if (scope === 'following') return <FollowingEmpty signedIn={signedIn} />;
+  // if (scope === 'following') return <FollowingEmpty signedIn={signedIn} />;
+  // Nobody followed: who to follow, then what they've posted lately (14 Nov).
+  if (scope === 'following')
+    return (
+      <View>
+        <FollowingEmpty signedIn={signedIn} />
+        <SuggestedPosts />
+      </View>
+    );
   // Signed out there are no jars to open yet: no button until the tab bar's Sign in.
   return (
     // Centred in the space under the tabs, in plain words (2026-11-13).

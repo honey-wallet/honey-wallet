@@ -17,6 +17,7 @@ import { PressableRow } from '@/components/motion/PressableRow';
 import { PressableScale } from '@/components/motion/PressableScale';
 import { SkeletonBar, SkeletonReveal } from '@/components/motion/Skeleton';
 import {
+  FeedCard,
   FollowButton,
   HoneyBadge,
   openProfile,
@@ -27,13 +28,14 @@ import { Sparkline } from '@/components/wallet/parts';
 import { tap } from '@/lib/haptics';
 import { type Creator as SuggestedCreator, suggestedCreators } from '@/lib/honey-strategies';
 import {
-  // social: unused since 14 Nov (cleanup), only the commented-out TopPeople used it.
-  loadSuggestions,
+  loadFeed,
   // loadLeaderboard: unused since 14 Nov (cleanup), only the commented-out TopPeople used it.
+  loadSuggestions,
   openSocialJar,
   pct,
   // type SocialJar: unused since 14 Nov (Honey strategies), Creator comes from lib/honey-strategies.
   type SocialProfileCard,
+  social,
   socialError,
   toggleFollow,
   useSocial,
@@ -105,6 +107,36 @@ export function FollowingEmpty({ signedIn: _signedIn }: { signedIn: boolean }) {
         ) : null}
       </View>
     </SkeletonReveal>
+  );
+}
+
+/** How many of the suggested people's posts show under Who to follow. */
+const SUGGESTED_POSTS = 10;
+
+/**
+ * Following with nobody followed, under Who to follow: the suggested people's own recent
+ * posts from Everyone (real ones, nothing sample), so the tab shows what following them
+ * brings. Hidden when none of them has posted lately.
+ */
+export function SuggestedPosts() {
+  const styles = useStyles();
+  const creators = useCreators(8);
+  const everyone = useSocial().feeds.everyone;
+  useEffect(() => {
+    if (!social.get().feeds.everyone.loaded) void loadFeed('everyone');
+  }, []);
+  const items = useMemo(() => {
+    const handles = new Set(creators.map((p) => p.who.handle));
+    return everyone.items.filter((i) => handles.has(i.actor.handle)).slice(0, SUGGESTED_POSTS);
+  }, [creators, everyone.items]);
+  if (!items.length) return null;
+  return (
+    <View style={styles.posts}>
+      <Text style={styles.label}>Recent posts</Text>
+      {items.map((item, i) => (
+        <FeedCard key={item.id} item={item} index={i} last={i === items.length - 1} />
+      ))}
+    </View>
   );
 }
 
@@ -476,6 +508,7 @@ const useStyles = makeStyles((c) => ({
   },
   headlineSkeleton: { marginTop: 16, alignItems: 'center', gap: 6 },
   list: { marginTop: 24 },
+  posts: { marginTop: 28 },
   // The coin page's section heading.
   label: { marginBottom: 10, color: c.textSecondary, fontSize: 15 },
   // X's rows: the hairline starts at the text, not under the avatar.
