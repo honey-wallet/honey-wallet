@@ -1,76 +1,204 @@
 # Honey Wallet
 
-**Turn a market idea into a reviewed basket of tokens, then follow and share the result.**
-Honey is a mobile wallet for EVM, Solana and NEAR. It opens on a social feed. Its Jars
-flow turns an idea into token allocations using NEAR AI Cloud, obtains cross-chain
-quotes through NEAR Intents, and asks the wallet owner to approve funding. Group jars
-add invitations, equal contributions and majority approvals using Sputnik DAO.
-
-Built for [NEAR HACKATHON](https://nearhackathon.com/).
+**Invest with friends.** Honey is a mobile wallet where you build a jar (a basket of
+tokens), share it, let friends copy it, or buy one together from a shared treasury on NEAR.
 
 [![CI](https://github.com/honey-wallet/honey-wallet/actions/workflows/ci.yml/badge.svg)](https://github.com/honey-wallet/honey-wallet/actions/workflows/ci.yml)
-[![License: PolyForm Noncommercial](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-blue.svg)](LICENSE)
+[![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-blue.svg)](LICENSE)
+[![iOS: TestFlight public beta](https://img.shields.io/badge/iOS-TestFlight%20public%20beta-black.svg)](https://testflight.apple.com/join/5krzqTCR)
+[![Android: coming soon](https://img.shields.io/badge/Android-coming%20soon-lightgrey.svg)](#limitations)
 
-- **Proposed tracks:** Social Money (`social`) and Unstoppable DeFi (`defi`), pending team selection.
-- **Demo/X post:** not yet supplied by the team. This is a submission blocker.
-- **Product site:** [honeywallet.org](https://honeywallet.org). The site is not the mobile app.
-- **License:** [PolyForm Noncommercial 1.0.0](LICENSE); third-party notices are preserved.
+<p>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="apps/web/public/screens/current/everyone-dark.png">
+    <img src="apps/web/public/screens/current/everyone-light.png" width="190" alt="Feed, Everyone tab: jars people posted, each with a Copy button">
+  </picture>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="apps/web/public/screens/current/jar-dark.png">
+    <img src="apps/web/public/screens/current/jar-light.png" width="190" alt="A jar: value since launch, what it holds, Sell">
+  </picture>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="apps/web/public/screens/current/group-dark.png">
+    <img src="apps/web/public/screens/current/group-light.png" width="190" alt="A group jar: three members, your share, changes need 2 of 3">
+  </picture>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="apps/web/public/screens/current/wallet-dark.png">
+    <img src="apps/web/public/screens/current/wallet-light.png" width="190" alt="Wallet: balance and tokens across chains">
+  </picture>
+</p>
 
-## What is implemented, and what is simulated?
+<sub>Native iPhone simulator captures of `apps/mobile`, 14 Nov 2026, in test mode with
+sample people and balances. They are not usage or return figures.
+[How they were taken](apps/web/public/screens/current/SOURCES.md).</sub>
 
-| Capability | Implementation and limits | Source |
+Built at [NEAR HACKATHON](https://nearhackathon.com/) (1 to 14 Nov 2026). Honey existed
+before as an EVM wallet; the hackathon work is the diff from the baseline commit:
+[f20e914...main](https://github.com/honey-wallet/honey-wallet/compare/f20e914...main).
+Tracks, a dated list of what was built and the demo script are in [HACKATHON.md](HACKATHON.md).
+
+## Try it
+
+1. On an iPhone, join the public beta: [testflight.apple.com/join/5krzqTCR](https://testflight.apple.com/join/5krzqTCR).
+   Android is coming soon.
+2. Open Honey → **Create a new wallet**. The keys are made on the phone.
+3. Feed → **Everyone** → tap **Copy** on a jar. Or tap the jar button → **Create a jar →
+   Describe an idea**, type a market view, and review the jar the agent proposes.
+
+The TestFlight build uses real money on mainnet. Use small amounts.
+Website: [honeywallet.org](https://honeywallet.org). Pitch deck: [honeywallet.org/deck](https://honeywallet.org/deck).
+To try it locally without funds, see [Run it locally](#run-it-locally).
+
+## The problem
+
+People pick crypto with friends: in group chats, by copying someone they trust, by
+splitting a bet. Wallets are built for one person. Acting on one market idea means
+researching tokens, finding the chain each trades on, bridging and placing several swaps.
+Doing it together means screenshots, spreadsheets and trusting whoever holds the money.
+
+## What Honey does
+
+- **Jars.** A jar is a basket of tokens across chains, bought in one approval.
+- **Social money.** Post a jar to the Feed. Friends copy it from there, and you earn a cut
+  of their profit that you set. Or invite up to four friends to buy a jar together: the
+  money sits in a Sputnik DAO on NEAR, and changes need a majority vote.
+- **NEAR Intents first.** Every swap and jar buy goes through NEAR Intents 1Click unless
+  1Click can't do the trade.
+- **An AI jar builder.** Describe an idea; an agent on NEAR AI Cloud proposes tokens,
+  weights and the case against.
+- **Keys on the phone.** The server never holds keys or user funds.
+
+## Features
+
+### Social money
+
+| Feature | What it does | Code |
 | --- | --- | --- |
-| Feed, profiles, follows, public jars and privacy | Native UI and PostgreSQL-backed API. Fresh local databases have no public content. | [social API](apps/server/src/routes/social.rs), [feed UI](apps/mobile/src/app/(wallet)/feed.tsx) |
-| Idea → proposed basket | Live mode calls the server thesis agent. `NEAR_AI_API_KEY` enables NEAR AI Cloud; without it the server uses a disclosed `DRY_RUN` fixture. Client test mode uses a separate sample proposal. | [agent](apps/server/src/thesis), [client](apps/mobile/src/lib/thesis.ts) |
-| Cross-chain jar buys and swaps | 1Click quote/deposit/status integration and device-side funding code. Quotes and asset catalogs require network access. No funded mainnet acceptance evidence is claimed by this README. | [jar API](apps/server/src/jar_buys.rs), [jar funding](apps/mobile/src/lib/jar-buy.ts), [swap](apps/mobile/src/lib/intents-swap.ts) |
-| Group jars | Invitations and accounting API plus Sputnik DAO transaction/voting integration. Test mode simulates group actions. Real chain lifecycle is covered with mocked RPC tests; a funded deployment still needs separate evidence. | [groups API](apps/server/src/routes/social/groups.rs), [device DAO](apps/mobile/src/lib/jar-dao.ts) |
-| Native NEAR | Shared key derivation, balance reads, signing and pending-transfer recovery. Read the documented scope before assuming every asset/flow is supported. | [NEAR support](docs/NEAR.md), [keyring](packages/keyring) |
-| Jar selling, limit orders and copy fees | Prototype restrictions apply. Jar selling is test-mode only; do not interpret simulated receipts or displayed fees as proof of live settlement or fee collection. | [sell flow](apps/mobile/src/app/(jars)/jar-sell.tsx), [jar flow](apps/mobile/src/app/(jars)/thesis-new.tsx) |
+| Jars | Pick tokens and weights yourself, or let the agent propose them. One approval buys every pick through 1Click. | [jar_buys.rs](apps/server/src/jar_buys.rs), [jar-buy.ts](apps/mobile/src/lib/jar-buy.ts) |
+| Feed, follows, leaderboard | Everyone, Following and Leaderboard tabs. Returns are computed on the server from 1Click prices. Nothing is public until you claim a handle; sharing trades is off by default. | [social.rs](apps/server/src/routes/social.rs), [feed.tsx](apps/mobile/src/app/(wallet)/feed.tsx) |
+| Copy a jar | Buy the same picks and weights as a published jar. | [social.rs](apps/server/src/routes/social.rs) (`/social/jars/{id}/copies`), [thesis-new.tsx](apps/mobile/src/app/(jars)/thesis-new.tsx) |
+| Creator copy fees | The creator sets 0 to 30% of copiers' profit (default 10%), never charged on a loss. The server adds it to the copier's sell as a 1Click `appFees` entry paid to the creator's NEAR Intents account, capped at 4.75% of the sale. The phone checks that 1Click's record takes exactly that fee. | [copy_fees.rs](apps/server/src/copy_fees.rs), [copy-fees.ts](apps/mobile/src/lib/copy-fees.ts), [intents-quote.ts](apps/mobile/src/lib/intents-quote.ts) |
+| Group jars | 2 to 5 people, equal shares, each owns 1/N. Votes pass by majority (2 of 2, 2 of 3, 3 of 4, 3 of 5). One Sputnik DAO per group holds the money as NEAR Intents balances on `intents.near`. Every member signs on their own phone. | [groups.rs](apps/server/src/routes/social/groups.rs), [jar_dao.rs](apps/server/src/jar_dao.rs), [sputnik.ts](packages/keyring/src/sputnik.ts), [group-jars.ts](apps/mobile/src/lib/group-jars.ts) |
+| Honey strategies | Five accounts Honey runs, each with one real jar and a Honey badge, so a new Feed is not empty. | [strategies.rs](apps/server/src/routes/social/strategies.rs) |
 
-`EXPO_PUBLIC_TEST_MODE=1` supplies sample money and simulates financial actions. It
-is a UI demonstration, not proof of NEAR AI inference, an on-chain deposit, or a
-successful cross-chain settlement. Prices and some discovery/feed requests can
-still use live network services. Test mode is not an offline mode.
+### Private-first trading
 
-## Prerequisites
+| Feature | What it does | Code |
+| --- | --- | --- |
+| NEAR Intents first | 1Click pays through one-time deposit addresses. A DEX (KyberSwap, Jupiter) is used only when 1Click doesn't list a token, refuses the amount, would keep less than half the value after fees, or fails twice. A cheaper DEX is not a reason. | [route_planner.rs](apps/server/src/route_planner.rs), [BEST-ROUTE.md](docs/routing/BEST-ROUTE.md) |
+| Private routes only | Settings → Swaps. Never falls back to a DEX; shows 1Click's error instead. | [best-route.ts](apps/mobile/src/lib/best-route.ts), [swap-settings.tsx](apps/mobile/src/app/(trade)/swap-settings.tsx) |
+| Checks on the phone | Before signing, the app checks that each quote matches what it asked for (chain, tokens, amount, payout floor, expiry) and decodes DEX transaction bytes itself. | [intents-quote.ts](apps/mobile/src/lib/intents-quote.ts), [dex.ts](apps/mobile/src/lib/dex.ts) |
 
-- **Node 24**, as pinned in [.nvmrc](.nvmrc), and **pnpm 10.26.0**.
-- **Rust**, installed with rustup; [rust-toolchain.toml](rust-toolchain.toml) pins the toolchain.
-- **Docker Desktop / Docker Compose** running for local PostgreSQL and Redis.
-- **iOS:** macOS, Xcode, an installed iOS simulator runtime, and CocoaPods.
-- **Android:** Android Studio, Android SDK/JDK, and a running emulator or connected device.
+### AI jar builder
 
-Use a native debug build for the product demo. Expo Go does not contain all of
-Honey's native dependencies. **Do not use `expo start --web` to evaluate Jars:** the
-browser build is the extension surface and intentionally hides Feed/Jars.
+An agent on NEAR AI Cloud turns a sentence into a jar: Intake → Understand (model) →
+Shortlist (code) → Pick (model, from a closed list) → Critic (model, can only remove) →
+Size for three risk levels (code) → dry 1Click quotes → Proposal. Models only name tickers
+from lists the code builds; every address, weight and amount comes from code. The last
+recorded eval ran 35 cases: all hard gates passed and the median run took 31 s
+([EVAL.md](docs/thesis-agent/EVAL.md)).
+Code: [thesis/](apps/server/src/thesis), [near_ai.rs](apps/server/src/thesis/near_ai.rs),
+[thesis-new.tsx](apps/mobile/src/app/(jars)/thesis-new.tsx).
 
-## Getting started
+### Free gas, keys on the phone
 
-Clone and install from the repository root:
+| Feature | What it does | Code |
+| --- | --- | --- |
+| Gas paid by Honey | EVM (Base, Arbitrum, Polygon, Optimism) through EIP-7702 and Uniswap's Calibur contract; Solana as fee payer; NEAR as a NEP-366 relayer. One shared allowance: $1 per person per 30 days, with daily caps per chain. Each sponsor is a server switch, off by default. | [evm_sponsor.rs](apps/server/src/evm_sponsor.rs), [solana_relayer.rs](apps/server/src/solana_relayer.rs), [near_relayer.rs](apps/server/src/near_relayer.rs), [gas_allowance.rs](apps/server/src/gas_allowance.rs) |
+| Multichain wallet | One recovery phrase for EVM chains, Solana and NEAR implicit accounts. | [packages/keyring](packages/keyring), [NEAR.md](docs/NEAR.md) |
+| Keys on the phone | Keys live in the iOS Keychain or Android Keystore, on this device only. Signing happens on the phone. | [secure-store.ts](apps/mobile/src/lib/secure-store.ts), [sign.ts](packages/keyring/src/sign.ts) |
+
+## How Honey uses NEAR
+
+| NEAR component | What Honey uses it for | Code |
+| --- | --- | --- |
+| NEAR Intents 1Click | Default route for swaps, jar buys, jar sells and group jar buys: quotes, deposit addresses, status. Creator copy fees through `appFees`. | [route_planner.rs](apps/server/src/route_planner.rs), [jar_buys.rs](apps/server/src/jar_buys.rs), [copy_fees.rs](apps/server/src/copy_fees.rs), [intents-swap.ts](apps/mobile/src/lib/intents-swap.ts) |
+| `intents.near` | Where a group jar's money sits: NEAR Intents balances owned by the group's DAO. | [sputnik.ts](packages/keyring/src/sputnik.ts), [jar_dao.rs](apps/server/src/jar_dao.rs) |
+| Sputnik DAO v2 (`sputnik-dao.near`) | One DAO per group jar: members, majority threshold, proposals to buy or sell, votes. The server reads the DAO and checks its code and policy; it never signs for the jar. | [jar_dao.rs](apps/server/src/jar_dao.rs), [routes/jar_dao.rs](apps/server/src/routes/jar_dao.rs), [jar-dao.ts](apps/mobile/src/lib/jar-dao.ts) |
+| Meta transactions (NEP-366) | Honey's relayer pays gas for members' own DAO calls, and pays the factory deposit to create a group's DAO. It only carries calls a group jar makes. | [near_relayer.rs](apps/server/src/near_relayer.rs) |
+| NEAR accounts | Implicit accounts derived from the phrase (`m/44'/397'/n'`). Transfers signed on the phone. | [near.ts](packages/keyring/src/near.ts), [NEAR.md](docs/NEAR.md) |
+| NEAR AI Cloud | Every model call in the thesis agent (DeepSeek V4.1 Flash): JSON-schema replies, one retry, a call budget per run. | [near_ai.rs](apps/server/src/thesis/near_ai.rs) |
+| Confidential Intents (experimental) | Server proxy for private jars. The app screen is behind `EXPO_PUBLIC_STEALTH_JARS=1`, off by default. | [confidential_intents.rs](apps/server/src/routes/confidential_intents.rs), [stealth-jar.ts](packages/keyring/src/stealth-jar.ts) |
+
+Honey does not use Chain Signatures.
+
+## Architecture
+
+```mermaid
+flowchart LR
+  subgraph Phone["Honey app: Expo, iOS and Android"]
+    Keys["Keyring: keys stay on the phone"]
+  end
+  subgraph Cloud["Google Cloud"]
+    API["Rust API, axum, on Cloud Run"]
+    PG[("PostgreSQL, Cloud SQL")]
+    RD[("Redis, Memorystore")]
+  end
+  Phone -->|"feed, jars, groups, quotes"| API
+  API --> PG
+  API --> RD
+  API -->|"quotes, deposit addresses, appFees"| OneClick["NEAR Intents 1Click"]
+  API -->|"thesis agent"| NearAI["NEAR AI Cloud"]
+  API -->|"fallback quotes"| Dex["KyberSwap, Jupiter"]
+  API -->|"DAO reads, relayed NEP-366 calls"| Near["NEAR: Sputnik DAO, intents.near"]
+  API -->|"sponsored gas"| Chains["EVM and Solana"]
+  Phone -->|"signed deposits"| Chains
+  Phone -->|"signed proposals and votes"| Near
+  Phone -->|"swap status"| OneClick
+```
+
+The phone signs everything that moves user money. The server prepares quotes, checks
+chain state, keeps the social data and runs the agent. Postgres holds profiles, jars,
+groups and the gas ledger; Redis holds agent runs, rate limits and caches. Firebase
+Authentication (Apple, Google) gives identity; a server-issued wallet challenge proves
+wallet ownership. Deployment notes: [GOOGLE-CLOUD-SETUP.md](docs/launch/GOOGLE-CLOUD-SETUP.md).
+
+## Tech stack
+
+| Layer | Tools |
+| --- | --- |
+| Mobile | Expo SDK 57, React Native 0.86, Expo Router, Reanimated 4, viem |
+| Keys | `@scure/bip39`, `@scure/bip32`, `@noble/curves`, expo-secure-store |
+| Server | Rust, axum 0.8, tokio, sqlx (PostgreSQL), Redis |
+| NEAR | NEAR Intents 1Click, Sputnik DAO v2, NEAR AI Cloud, NEP-366 relayer |
+| Other providers | KyberSwap, Jupiter, Linkup (news for the agent), CoinGecko (token pages) |
+| Website | Next.js 16 on Vercel: landing page, public profile, jar and post pages, the deck |
+| Hosting | Cloud Run, Cloud SQL, Memorystore, Secret Manager, Firebase Authentication |
+| Tooling | pnpm, Turborepo, Biome, rustfmt, clippy, Vitest |
+
+| Path | What it is |
+| --- | --- |
+| [apps/mobile](apps/mobile) | The product: Feed, Jars, Wallet, Swap |
+| [apps/server](apps/server) | Rust API: auth, social, jars, groups, agent, routing, gas |
+| [apps/web](apps/web) | Website and public share pages |
+| [apps/extension](apps/extension) | Chrome wallet build; no Feed or Jars |
+| [apps/console](apps/console) | Internal backend console |
+| [packages/keyring](packages/keyring) | Phrases, address derivation, signing, Sputnik and NEAR transactions |
+| [packages/api-client](packages/api-client) | Typed API client and response types |
+| [deck](deck) | The hackathon pitch deck |
+
+## Run it locally
+
+You need Node 24 ([.nvmrc](.nvmrc)), pnpm 10.26.0, Rust via rustup
+([rust-toolchain.toml](rust-toolchain.toml)), Docker, and Xcode with an iOS simulator
+(or Android Studio with an emulator). Expo Go and `expo start --web` don't show Jars.
 
 ```sh
 git clone https://github.com/honey-wallet/honey-wallet.git
 cd honey-wallet
-nvm use                  # or select Node 24 with your preferred version manager
 corepack enable
 pnpm install --frozen-lockfile
 ```
 
-Terminal 1, from the root:
+Terminal 1, the API with throwaway Postgres and Redis (ports 35432 and 36379):
 
 ```sh
 pnpm judge:server
 ```
 
-This starts isolated, disposable PostgreSQL/Redis containers on **35432 / 36379**,
-builds the API, applies migrations and runs it on **127.0.0.1:8080**. No provider key
-is required for the local fixture path. Existing `apps/server/.env` provider keys
-are still loaded if present; keep them out of Git. Leave this terminal running.
-If port 8080 is occupied, use `PORT=18080 pnpm judge:server` and set the mobile
-API URL to `http://127.0.0.1:18080` (Android Emulator: `http://10.0.2.2:18080`).
-Keep the auth origin and chain unchanged.
+It builds the server, runs migrations and serves on `127.0.0.1:8080`. No provider keys
+are needed. If 8080 is taken, run `PORT=18080 pnpm judge:server` and change the API URL below.
 
-Terminal 2, for an iOS simulator:
+Terminal 2, the iOS app in test mode (sample money, simulated transactions):
 
 ```sh
 cd apps/mobile
@@ -81,141 +209,85 @@ EXPO_PUBLIC_TEST_MODE=1 \
 pnpm exec expo run:ios --port 8082
 ```
 
-Expo generates the ignored native project, installs pods, compiles and opens the
-app. The first build takes several minutes. If prompted, select an iPhone simulator.
-Keep Metro running. After changing only JS/TS, restart with the same variables and
-`pnpm exec expo start --clear --port 8082`, then open the installed app.
+For Android, use `run:android` and `http://10.0.2.2:8080` as the API URL. The first
+build takes several minutes.
 
-For Android Emulator, replace `127.0.0.1` in **EXPO_PUBLIC_API_URL only** with
-`10.0.2.2`, and replace `run:ios` with `run:android`. Keep the auth origin identical
-to the server. Physical phones need a reachable LAN API host; the default reviewer
-script binds to loopback and is intended for simulators/emulators.
+### Do this, see this
 
-### Do this → see this
+1. Launch Honey → the Feed with Everyone, Following and Leaderboard. A new local
+   database has no posts; that is expected.
+2. Tap **Join / Sign in** → create a throwaway wallet → approve the sign-in message.
+   Never import a wallet holding real funds.
+3. Tap the jar button → **Create a jar → Describe an idea** → type "AI data-centre
+   spending keeps growing" → the agent's stages, then a proposal with picks, weights
+   and a caution.
+4. Continue → **Launch your jar** → confirm the sample buy → the jar's page with its
+   holdings.
+5. On the jar, tap **Sell** → pick an amount → a review, then a receipt.
 
-1. Launch Honey → **Feed**, with Everyone / Following / Leaderboard. An empty
-   state on a new local database is expected, not an installation failure.
-2. Tap **Join / Sign in** if offered → create a disposable wallet if asked, then
-   review the wallet sign-in message and approve it. Follow any handle/profile
-   setup prompts. Never import a wallet holding real funds for this demo.
-3. The honey jar button → **Create a jar → Describe an idea**. Enter
-   “AI data-centre spending keeps growing”, an amount and risk if requested →
-   staged research and a proposal containing token picks, weights and a caution.
-4. Review/edit the proposal and continue → the launch review. In test mode,
-   confirm a sample buy → the jar's page, with its simulated value and holdings.
-5. Open **Wallet → Jars** → inspect the created jar. Browse another public jar to
-   inspect copying when content is available; a fresh database has no other creators.
-6. In the jar's Sell flow, try 25%, 50% or all → a review and simulated receipt.
-   This step is explicitly a test-mode demonstration.
-
-If the simulator needs Face ID, use **Simulator → Features → Face ID → Enrolled**,
-then **Matching Face** when the app asks for authentication. A device confirmation
-is not a substitute for checking the displayed sign-in or transaction terms.
-
-### Verify the API without a phone
+Check the API without a phone:
 
 ```sh
 curl --fail http://127.0.0.1:8080/health
-curl --fail http://127.0.0.1:8080/ready
-curl --fail http://127.0.0.1:8080/api/v1/auth/config
 curl --fail http://127.0.0.1:8080/api/v1/social/feed
 ```
 
-Expect HTTP 200, PostgreSQL/Redis `up`, auth enabled with
-`http://localhost:5173` / `eip155:1`, and a feed object with `items` (initially empty).
-“Wallet sign-in is not configured” means Metro did not receive the two auth values.
-“Couldn't reach Honey” means the API URL/server is unavailable. Restart Metro after
-environment changes. A 200 empty feed is different from a failed request.
+Stop with Ctrl+C. Remove the throwaway services with
+`docker compose -p honey-judge -f compose.backend.yaml down`.
 
-Stop the API/Metro with Ctrl+C. To remove the disposable reviewer services:
+### Real integrations
+
+Test mode moves no money. To use the real paths, set `EXPO_PUBLIC_TEST_MODE=0` and
+restart Metro. Set `NEAR_AI_API_KEY` on the server for real agent runs; without it the
+agent answers with a fixed `DRY_RUN` proposal. NEAR Intents has no testnet: a live buy
+spends real funds and needs your approval on the phone. Server variables are documented
+in [apps/server/.env.example](apps/server/.env.example).
+
+Checks, as CI runs them:
 
 ```sh
-docker compose -p honey-judge -f compose.backend.yaml down
+pnpm lint && pnpm typecheck && pnpm test
 ```
 
-## Verify the real NEAR integrations
+More setup: [CONTRIBUTING.md](CONTRIBUTING.md).
 
-Turn client test mode off (`EXPO_PUBLIC_TEST_MODE=0`) and restart Metro with the
-same API/auth settings. The wallet can sign in without owning funds. Configure
-server-only `NEAR_AI_API_KEY` for actual inference and optionally `LINKUP_API_KEY`
-for external news research. See [server environment examples](apps/server/.env.example)
-and [agent requirements](docs/thesis-agent/REQUIREMENTS.md).
+## Security and privacy
 
-Without an AI key, server output is a fixture. With a key, a failed model call must
-not silently become a successful sample proposal. The 1Click partner JWT
-`NEAR_INTENTS_API_KEY` is optional for the separate jar-buy flow, but required by
-some authenticated provider/private-intent adapters; consult each route's docs.
-The older bridge preview adapter and executable jar-buy API are different paths.
+- **Keys stay on the phone.** Recovery phrases and keys are stored in the iOS Keychain or
+  Android Keystore, on this device only. Every transaction that moves user money is signed
+  on the phone. Neither Firebase nor the server sees keys.
+- **The server never holds user funds.** Jar buys pay 1Click deposit addresses straight
+  from the wallet. A group jar's money is owned by its Sputnik DAO.
+- **Relayers pay gas, nothing else.** Honey's relayers only sign their own fee-paying
+  transactions, only for calls the app makes, within per-person and per-chain budgets.
+- **What the server sees:** your wallet addresses, your Apple or Google sign-in if you
+  use one, the quotes it fetches for you, and your profile and jars once you publish them.
+  Trades reach the Feed only if you turn on sharing. Avatars are drawn on the phone, so
+  viewing a profile loads no third-party image.
+- **Not private:** a DEX fallback is a public on-chain swap from your address. The
+  review screen says so.
 
-NEAR Intents is mainnet-only. A dry quote does not execute a trade. Funding a live
-buy spends real assets and gas and requires the owner's explicit approval; the
-reviewer path above never requires funding. Capture provider status and explorer
-receipts separately before claiming a successful live settlement. Neither tests
-with mock RPC nor test-mode receipts establish that evidence.
+Report vulnerabilities privately: [SECURITY.md](SECURITY.md).
 
-## Hackathon development history
+## Limitations
 
-The public repository's earliest commit is
-[`f20e914`](https://github.com/honey-wallet/honey-wallet/commit/f20e914), dated
-20 October 2026. It already contains substantial wallet/server infrastructure.
-Treat that imported snapshot as **baseline**, not proof that every included file
-was written during the event. Original authorship dates before that snapshot
-cannot be established from this repository alone.
+- iOS only for now (TestFlight public beta). Android is not on a store yet.
+- Buying crypto with a card and selling for cash are not connected. Earn shows rates only.
+- Gas sponsorship and the DEX fallback are server switches, off by default.
+- Private jars (Confidential Intents) are experimental and off by default.
+- Test mode is a demonstration, not proof of a settled trade. The captures above use
+  sample data.
 
-The reviewable development delta is
-[baseline → current main](https://github.com/honey-wallet/honey-wallet/compare/f20e914...main).
-Examples include the [thesis/Jars addition](https://github.com/honey-wallet/honey-wallet/commit/a88b684),
-[NEAR Intents jar buys](https://github.com/honey-wallet/honey-wallet/commit/af04547),
-[live swaps](https://github.com/honey-wallet/honey-wallet/commit/c5007d1),
-and [group jars](https://github.com/honey-wallet/honey-wallet/commit/675f97c).
-Freeze the final reviewed commit before submission; `main` is a moving comparison.
-No team member is entering another project, as confirmed by the team on 13 November.
+## Team, license, acknowledgements
 
-## Libraries and attribution
+Team: TODO(owner): names and roles.
 
-Honey uses Expo/React Native, Next.js, Rust/axum/tokio, viem, WalletConnect/Reown,
-Firebase, Noble/Scure cryptography, Reanimated and other packages recorded in
-[package manifests](package.json), [pnpm-lock.yaml](pnpm-lock.yaml) and
-[Cargo.lock](Cargo.lock). AI-assisted development is used; no particular assistant
-or model is claimed to have certified the implementation.
+Honey's code is source-available under [PolyForm Noncommercial 1.0.0](LICENSE).
+Noncommercial use is permitted; commercial use needs separate permission. Contributions
+follow [CLA.md](CLA.md).
 
-Third-party source includes the MIT-licensed [deck scaffold](deck/LICENSE) and
+Third-party code keeps its own license: the MIT [deck scaffold](deck/LICENSE) and
 [liquid UI components](apps/web/src/components/liquid/LICENSE). See
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). These retain their own licenses.
-We do not claim that this repository contains no templates or borrowed code.
-
-## Checks and repository map
-
-```sh
-pnpm lint
-pnpm typecheck
-pnpm test
-```
-
-Use Node 24 for tests. CI additionally builds JS apps, checks Expo dependencies,
-and runs explicitly selected PostgreSQL/Redis integration tests. Some integration
-and live-provider tests are skipped by default; inspect the test output and CI
-workflow for their scope. A green unit test run is not a funded-chain test.
-
-| Path | Purpose |
-| --- | --- |
-| `apps/mobile` | Expo native product; Feed, Jars, Wallet and transaction flows |
-| `apps/server` | Rust API; auth, social data, thesis agent and provider adapters |
-| `apps/web` | Next.js product site/public share pages, port 3200 |
-| `apps/extension` | Chrome wallet build; does not expose the phone's full product |
-| `apps/console` | Separate backend operations/read surfaces; see its manifest |
-| `deck` | Product presentation/demo visuals |
-| `packages/api-client` | Shared typed API contracts/client |
-| `packages/keyring` | Address derivation, device-held keys, backups and signing |
-
-More setup: [CONTRIBUTING.md](CONTRIBUTING.md). Backend scope and operational
-limitations: [docs/backend/IMPLEMENTATION.md](docs/backend/IMPLEMENTATION.md).
-Report vulnerabilities privately following [SECURITY.md](SECURITY.md).
-
-## License
-
-Honey's first-party code remains source-available under
-[PolyForm Noncommercial 1.0.0](LICENSE). Commercial use requires separate permission.
-The team chose to retain this license; the hackathon does not require MIT.
-Contributions follow [CLA.md](CLA.md). Third-party MIT notices remain applicable
-to their respective components and must not be removed or relabeled as Honey's.
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Dependencies are listed in
+[package.json](package.json), [pnpm-lock.yaml](pnpm-lock.yaml) and [Cargo.lock](Cargo.lock).
+AI coding assistants were used in development.
