@@ -450,7 +450,7 @@ function Connect({
   onPick: (id: string) => void;
 }) {
   const styles = useStyles();
-  const c = useTheme();
+  // const c = useTheme(); (only the connect note used it; off since 14 Nov)
   return (
     <>
       <Text style={styles.body}>Pick the wallet this site can see.</Text>
@@ -471,12 +471,12 @@ function Connect({
           />
         ))}
       </View>
-      <View style={[styles.note, styles.connectNote]}>
+      {/* <View style={[styles.note, styles.connectNote]}>
         <Icon name="eye" size={16} color={c.textSecondary} />
         <Text style={styles.noteText}>
           It sees the address and balance. It asks before moving money.
         </Text>
-      </View>
+      </View> (off 14 Nov, owner) */}
     </>
   );
 }

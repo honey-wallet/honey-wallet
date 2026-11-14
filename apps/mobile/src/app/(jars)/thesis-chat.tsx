@@ -573,9 +573,9 @@ function Welcome({ onIdea }: { onIdea: (text: string) => void }) {
       <View style={styles.welcomeTop}>
         <HoneyLogo variant="mark" height={56} />
         <Text style={styles.welcomeTitle}>What do you believe in?</Text>
-        <Text style={styles.welcomeHint}>
+        {/* <Text style={styles.welcomeHint}>
           Say it any way, or paste a post. Honey finds what you can buy.
-        </Text>
+        </Text> (off 14 Nov, owner) */}
       </View>
       {/* The Jars page's idea cards, each starting the conversation with its idea. */}
       <IdeaGrid onPick={onIdea} />
@@ -829,6 +829,9 @@ function Part({
  * "How much?", where the amount is set. Nothing it can buy: say so, with the way to pick
  * tokens yourself.
  */
+/** The critic's "What could go wrong" under Read more: off since 14 Nov (owner). */
+const SHOW_BEAR_CASE: boolean = false;
+
 function AnswerCard({
   proposal,
   latest,
@@ -859,7 +862,8 @@ function AnswerCard({
   // Compact by default (2026-11-14, "too much slop text"): one line per pick; the
   // "Wrong if" lines, Left out and What could go wrong open behind Read more.
   const [more, setMore] = useState(false);
-  const hasMore = left.length > 0 || bear.length > 0 || shown.picks.some((p) => p.wrongIf);
+  // const hasMore = left.length > 0 || bear.length > 0 || shown.picks.some((p) => p.wrongIf);
+  const hasMore = left.length > 0;
   const riskSwitch =
     levels.length > 1 ? (
       <SegmentedTabs<Risk>
@@ -967,7 +971,7 @@ function AnswerCard({
               subtitle={
                 <View style={styles.flex}>
                   {p.reason ? <Text style={styles.rowReason}>{p.reason}</Text> : null}
-                  {p.wrongIf ? <Text style={styles.footnote}>{wrongIfLine(p.wrongIf)}</Text> : null}
+                  {/* {p.wrongIf ? <Text style={styles.footnote}>{wrongIfLine(p.wrongIf)}</Text> : null} (off 14 Nov, owner) */}
                 </View>
               }
             />
@@ -975,7 +979,8 @@ function AnswerCard({
         </ContentSwap>
       ) : null}
       {more ? leftOutBlock : null}
-      {more && bear.length ? (
+      {/* What could go wrong: off 14 Nov (owner). */}
+      {SHOW_BEAR_CASE && more && bear.length ? (
         <View style={styles.moreBlock}>
           <Text style={styles.sectionLabel}>What could go wrong</Text>
           <View style={styles.list}>
@@ -1168,6 +1173,7 @@ function Sources({ proposal }: { proposal: Proposal }) {
 }
 
 /** "Wrong if AI budgets shrink.", however the agent phrased it. */
+// biome-ignore lint/correctness/noUnusedVariables: kept for the Wrong if line, off since 14 Nov.
 function wrongIfLine(text: string) {
   const t = text.trim();
   if (/^wrong if\b/i.test(t)) return t;

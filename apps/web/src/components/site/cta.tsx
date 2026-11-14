@@ -43,7 +43,7 @@ export function Cta() {
               put in more than you&rsquo;d be fine losing.
             </span> */}
             {/* The risk line is off (14 Nov, owner); the sample-prices note stays. */}
-            <span>Examples on this page use sample prices.</span>
+            {/* <span>Examples on this page use sample prices.</span> (off 14 Nov, owner) */}
           </p>
         </div>
         <CtaScene className={styles.ctaArt} />

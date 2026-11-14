@@ -840,7 +840,7 @@ export function EmptyState({
         id={title}
         align="center"
         first={<Text style={styles.emptyTitle}>{title}</Text>}
-        second={<Text style={styles.emptyHint}>{hint}</Text>}
+        second={hint ? <Text style={styles.emptyHint}>{hint}</Text> : null}
       />
       {action && (
         <PressableScale

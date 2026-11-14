@@ -81,9 +81,9 @@ export default function AppDataScreen() {
         </PressableScale>
       }
     >
-      <Text style={styles.intro}>
+      {/* <Text style={styles.intro}>
         Clearing app data never touches your recovery phrase or keys. They stay on this device.
-      </Text>
+      </Text> (off 14 Nov, owner) */}
       {ITEMS.map((item) => {
         const done = cleared.has(item.id);
         return (

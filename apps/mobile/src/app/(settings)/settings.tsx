@@ -2,7 +2,8 @@ import type { SocialPrivacy } from '@honey-wallet/api-client';
 import Constants from 'expo-constants';
 import { type Href, router } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { Linking, Text, View } from 'react-native';
+// Linking: only the avatar credit used it (off since 14 Nov).
+import { Text, View } from 'react-native';
 import { Avatar } from '@/components/Avatar';
 import { Icon, type IconName } from '@/components/Icon';
 import { PressableRow } from '@/components/motion/PressableRow';
@@ -32,7 +33,7 @@ import { makeStyles, radius, useTheme } from '@/theme';
 
 const THEME_LABEL = { auto: 'Auto', light: 'Light', dark: 'Dark' } as const;
 
-const AVATAR_CREDIT_URL = 'https://www.figma.com/community/file/1356575240759683500';
+// const AVATAR_CREDIT_URL = 'https://www.figma.com/community/file/1356575240759683500';
 
 export default function SettingsScreen() {
   const styles = useStyles();
@@ -442,9 +443,9 @@ export default function SettingsScreen() {
         >
           <Text style={styles.signOutLabel}>Delete account</Text>
         </PressableScale>
-        <Text style={styles.credit} onPress={() => Linking.openURL(AVATAR_CREDIT_URL)}>
+        {/* <Text style={styles.credit} onPress={() => Linking.openURL(AVATAR_CREDIT_URL)}>
           Avatars: “Dylan” by Natalia Spivak, CC BY 4.0, generated with DiceBear.
-        </Text>
+        </Text> (off 14 Nov: the owner holds a licence that doesn't require it) */}
         <BuildFooter />
       </View>
     </PushedScreen>

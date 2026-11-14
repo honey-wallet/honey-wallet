@@ -9,17 +9,20 @@ const ROWS: { key: Key; title: string; hint: string }[] = [
   {
     key: 'hideSmallBalances',
     title: 'Hide small balances',
-    hint: 'Hides balances under 1 USD.',
+    // hint: 'Hides balances under 1 USD.', (off 14 Nov, owner)
+    hint: '',
   },
   {
     key: 'hideUnknownTokens',
     title: 'Hide unknown tokens',
-    hint: 'Hides likely scam tokens.',
+    // hint: 'Hides likely scam tokens.', (off 14 Nov, owner)
+    hint: '',
   },
   {
     key: 'hideReportedActivity',
     title: 'Hide reported activity',
-    hint: 'Hides transactions you reported as spam.',
+    // hint: 'Hides transactions you reported as spam.', (off 14 Nov, owner)
+    hint: '',
   },
 ];
 
@@ -38,7 +41,7 @@ export default function BalancesSheet() {
         <SheetRow
           key={r.key}
           title={r.title}
-          subtitle={r.hint}
+          subtitle={r.hint || undefined}
           accessory={
             <Toggle
               accessibilityLabel={r.title}

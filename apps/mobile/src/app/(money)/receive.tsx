@@ -5,7 +5,8 @@ import { Avatar } from '@/components/Avatar';
 import { Icon } from '@/components/Icon';
 import { IconSwap } from '@/components/motion/IconSwap';
 import { PressableScale } from '@/components/motion/PressableScale';
-import { SheetScreen, SheetText } from '@/components/sheets/Sheet';
+// SheetText: unused while the intro lines are off (14 Nov).
+import { SheetScreen } from '@/components/sheets/Sheet';
 import { ChainPicker } from '@/components/wallet/ChainPicker';
 import { offerArrivalPush } from '@/lib/arrival-watcher';
 import { useCopy } from '@/lib/copy';
@@ -63,9 +64,9 @@ function ReceiveSheet() {
       </SheetText> */}
       {/* The one-address intro is off (14 Nov: it restated the title); the network
           question stays, since each network has its own address. */}
-      {perChain ? (
+      {/* {perChain ? (
         <SheetText lead>Which network are you sending on? Each one has its own address.</SheetText>
-      ) : null}
+      ) : null} (off 14 Nov, owner) */}
 
       {perChain ? (
         // The network first, then its address and QR code (My QR), so the address you

@@ -369,9 +369,11 @@ function IntentsSwapForm() {
         }).catch(() => null);
         // An older server without the planner: the DEX quote directly.
         const quoted = planned?.dex ?? (await quoteDex(ask));
-        const why =
-          planned?.why ??
-          `Not on NEAR Intents, so this uses ${routeLabel(quoted.quote.aggregator, chain, false)}. Swaps here are public on-chain.`;
+        // const why =
+        //   planned?.why ??
+        //   `Not on NEAR Intents, so this uses ${routeLabel(quoted.quote.aggregator, chain, false)}. Swaps here are public on-chain.`;
+        // No explanation line under the route (14 Nov, owner).
+        const why = null;
         if (id === flight.current) setDexQuote({ key, quoted, why, at: Date.now() });
         return;
       }
