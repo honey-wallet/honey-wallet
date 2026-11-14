@@ -5,14 +5,57 @@ import { getProfile } from '@/lib/profile';
 // Feedback is supplementary: unsupported hardware or a rejected native request
 // must never interrupt a wallet action. Android uses its semantic system effects,
 // not the legacy Vibrator fallback. Web stays quiet rather than producing a buzz.
-function play(android: Haptics.AndroidHaptics, ios: () => Promise<void>) {
-  if (!getProfile().haptics || AppState.currentState !== 'active' || Platform.OS === 'web') return;
+// function play(android: Haptics.AndroidHaptics, ios: () => Promise<void>) {
+//   if (!getProfile().haptics || AppState.currentState !== 'active' || Platform.OS === 'web') return;
+//   try {
+//     const result = Platform.OS === 'android' ? Haptics.performAndroidHapticsAsync(android) : ios();
+//     void result.catch(() => {});
+//   } catch {
+//     // Haptics are unavailable on some devices and in some system states.
+//   }
+// }
+
+function fire(android: Haptics.AndroidHaptics, ios: () => Promise<void>) {
   try {
     const result = Platform.OS === 'android' ? Haptics.performAndroidHapticsAsync(android) : ios();
     void result.catch(() => {});
   } catch {
     // Haptics are unavailable on some devices and in some system states.
   }
+}
+
+/**
+ * How long an outcome (success, failure) stays "already said": a flow that confirms in
+ * code and then shows its success page (which plays success too) buzzes once, not twice.
+ */
+const REPEAT_MS = 450;
+let lastOutcome: { kind: string; at: number } | null = null;
+/** How long a haptic waits for a system sheet (Face ID) to leave before it's dropped. */
+const WAIT_ACTIVE_MS = 1200;
+
+function play(android: Haptics.AndroidHaptics, ios: () => Promise<void>, outcome?: string) {
+  if (!getProfile().haptics || Platform.OS === 'web') return;
+  if (outcome) {
+    const now = Date.now();
+    if (lastOutcome?.kind === outcome && now - lastOutcome.at < REPEAT_MS) return;
+    lastOutcome = { kind: outcome, at: now };
+  }
+  const state = AppState.currentState;
+  if (state === 'active') {
+    fire(android, ios);
+    return;
+  }
+  // Face ID's dialog leaves the app "inactive" until it's gone: an outcome that follows it
+  // (a failed scan, a send confirmed straight after) plays once the app is in front again
+  // instead of being lost. Selection ticks are about the moment, so they just drop.
+  if (!outcome || state !== 'inactive') return;
+  const timer = setTimeout(() => sub.remove(), WAIT_ACTIVE_MS);
+  const sub = AppState.addEventListener('change', (next) => {
+    if (next === 'inactive') return;
+    clearTimeout(timer);
+    sub.remove();
+    if (next === 'active') fire(android, ios);
+  });
 }
 
 /** A discrete selection changed: tabs, chips, switches and picker stops. */
@@ -46,14 +89,18 @@ export function limit() {
 
 /** A completed action, never the start of a request. */
 export function success() {
-  play(Haptics.AndroidHaptics.Confirm, () =>
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success),
+  play(
+    Haptics.AndroidHaptics.Confirm,
+    () => Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success),
+    'success',
   );
 }
 
 /** A rejected action, paired with visible explanation and recovery. */
 export function failure() {
-  play(Haptics.AndroidHaptics.Reject, () =>
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error),
+  play(
+    Haptics.AndroidHaptics.Reject,
+    () => Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error),
+    'failure',
   );
 }
