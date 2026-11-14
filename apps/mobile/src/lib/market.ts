@@ -578,6 +578,9 @@ export function addressMatches(
   return [...rows.filter((r) => matchesQuery(r, query)), ...listed];
 }
 
+/** Quiet time after typing before an address is looked up. */
+export const ADDRESS_DEBOUNCE_MS = 400;
+
 /**
  * Search by address (15 Nov): the listed tokens at it first; when there are none, Honey's
  * DEX universe is asked (`GET /dex/token`, each EVM chain at once). Safe tokens come back
@@ -600,21 +603,25 @@ export function useAddressSearch(
   useEffect(() => {
     if (!ask) return;
     let alive = true;
-    void findDexTokensAt(q)
-      .catch(() => [])
-      .then((tokens) => {
-        if (!alive) return;
-        setFound({
-          q,
-          rows: tokens.filter((t) => t.safety.ok).map((t) => dexMarketRow(t, true)),
-          blocked: tokens.flatMap((t) => {
-            const line = blockedLine(t);
-            return line ? [line] : [];
-          }),
+    // Asked once typing pauses (15 Nov): a mint is an address from 32 characters on.
+    const timer = setTimeout(() => {
+      void findDexTokensAt(q)
+        .catch(() => [])
+        .then((tokens) => {
+          if (!alive) return;
+          setFound({
+            q,
+            rows: tokens.filter((t) => t.safety.ok).map((t) => dexMarketRow(t, true)),
+            blocked: tokens.flatMap((t) => {
+              const line = blockedLine(t);
+              return line ? [line] : [];
+            }),
+          });
         });
-      });
+    }, ADDRESS_DEBOUNCE_MS);
     return () => {
       alive = false;
+      clearTimeout(timer);
     };
   }, [ask, q]);
   if (!kind) return null;

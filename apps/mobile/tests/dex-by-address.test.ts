@@ -124,23 +124,126 @@ describe('long-tail tokens in Search (15 Nov)', () => {
 });
 
 describe('a token nothing lists, asked of the server by address (15 Nov)', () => {
-  it('asks every EVM chain at once for a contract, and keeps the safe ones found', async () => {
+  // Replaced 15 Nov: every EVM chain was asked at once (four of five came back Busy).
+  // it('asks every EVM chain at once for a contract, and keeps the safe ones found', async () => {
+  //   const token = vi.fn(async (chain: string, address: string) =>
+  //     chain === 'Arbitrum' ? row('arbitrum', address, 'GRAIL') : null,
+  //   );
+  //   const found = await dex.findDexTokensAt(GRAIL.toLowerCase(), { token, capabilities: caps });
+  //   expect(token.mock.calls.map((c) => c[0])).toEqual([
+  //     'Base',
+  //     'Arbitrum',
+  //     'Optimism',
+  //     'Polygon',
+  //     'Ethereum',
+  //   ]);
+  //   expect(found.map((t) => [t.symbol, t.chain])).toEqual([['GRAIL', 'Arbitrum']]);
+  //   expect(dex.foundDexTokens.get().tokens.map((t) => t.address)).toEqual([GRAIL]);
+  //   // Cached: asked again, the server isn't.
+  //   await dex.findDexTokensAt(GRAIL, { token, capabilities: caps });
+  //   expect(token).toHaveBeenCalledTimes(5);
+  // });
+
+  /** DexScreener's `/latest/dex/tokens/{address}` answer: pairs on each chain. */
+  const pairs = (address: string, chains: [string, number][]) => ({
+    pairs: chains.map(([chainId, usd]) => ({
+      chainId,
+      baseToken: { address },
+      quoteToken: { address: '0x0000000000000000000000000000000000000001' },
+      liquidity: { usd },
+    })),
+  });
+
+  it('asks DexScreener once, then only the deepest chain, and keeps the safe ones found', async () => {
+    const screener = vi.fn(async (address: string) =>
+      pairs(address, [
+        ['ethereum', 50_000],
+        ['arbitrum', 3_000_000],
+        ['bsc', 9_000_000],
+        ['arbitrum', 100_000],
+      ]),
+    );
     const token = vi.fn(async (chain: string, address: string) =>
       chain === 'Arbitrum' ? row('arbitrum', address, 'GRAIL') : null,
     );
-    const found = await dex.findDexTokensAt(GRAIL.toLowerCase(), { token, capabilities: caps });
-    expect(token.mock.calls.map((c) => c[0])).toEqual([
-      'Base',
-      'Arbitrum',
-      'Optimism',
-      'Polygon',
-      'Ethereum',
-    ]);
+    const deps = { token, screener, capabilities: caps };
+    const found = await dex.findDexTokensAt(GRAIL.toLowerCase(), deps);
+    expect(screener).toHaveBeenCalledTimes(1);
+    expect(token.mock.calls.map((c) => c[0])).toEqual(['Arbitrum']);
     expect(found.map((t) => [t.symbol, t.chain])).toEqual([['GRAIL', 'Arbitrum']]);
     expect(dex.foundDexTokens.get().tokens.map((t) => t.address)).toEqual([GRAIL]);
-    // Cached: asked again, the server isn't.
-    await dex.findDexTokensAt(GRAIL, { token, capabilities: caps });
-    expect(token).toHaveBeenCalledTimes(5);
+    // Remembered: asked again (any case), nobody is.
+    await dex.findDexTokensAt(GRAIL, deps);
+    expect(screener).toHaveBeenCalledTimes(1);
+    expect(token).toHaveBeenCalledTimes(1);
+  });
+
+  it('shares a lookup in flight, tries the next chain on a miss, and remembers a miss', async () => {
+    let release = () => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const screener = vi.fn(async (address: string) => {
+      await gate;
+      return pairs(address, [
+        ['base', 2_000_000],
+        ['polygon', 10_000],
+        ['optimism', 5_000],
+      ]);
+    });
+    const token = vi.fn(async (_chain: string, _address: string) => null);
+    const deps = { token, screener, capabilities: caps };
+    const a = dex.findDexTokensAt(AERO, deps);
+    const b = dex.findDexTokensAt(AERO.toLowerCase(), deps);
+    release();
+    expect(await a).toEqual([]);
+    expect(await b).toEqual([]);
+    expect(screener).toHaveBeenCalledTimes(1);
+    // The two deepest chains, one after the other; never the third.
+    expect(token.mock.calls.map((c) => c[0])).toEqual(['Base', 'Polygon']);
+    // Found nowhere: remembered, so typing it again asks nothing.
+    await dex.findDexTokensAt(AERO, deps);
+    expect(screener).toHaveBeenCalledTimes(1);
+    expect(token).toHaveBeenCalledTimes(2);
+  });
+
+  it('asks nothing of the server when DexScreener has no pair on a Honey chain', async () => {
+    const screener = vi.fn(async (address: string) => pairs(address, [['bsc', 1_000_000]]));
+    const token = vi.fn(async () => null);
+    expect(await dex.findDexTokensAt(GRAIL, { token, screener, capabilities: caps })).toEqual([]);
+    expect(token).not.toHaveBeenCalled();
+  });
+
+  it('without DexScreener asks chains one at a time and stops at the first failure', async () => {
+    const screener = vi.fn(async () => {
+      throw new Error('offline');
+    });
+    const token = vi.fn(async (chain: string) => {
+      if (chain === 'Arbitrum') throw new Error('DEX token lookup failed (503)');
+      return null;
+    });
+    let now = 0;
+    const deps = { token, screener, capabilities: caps, now: () => now };
+    expect(await dex.findDexTokensAt(GRAIL, deps)).toEqual([]);
+    expect(token.mock.calls.map((c) => c[0])).toEqual(['Base', 'Arbitrum']);
+    // A failure is held off 15 s, then asked again.
+    await dex.findDexTokensAt(GRAIL, deps);
+    expect(screener).toHaveBeenCalledTimes(1);
+    now = 16_000;
+    await dex.findDexTokensAt(GRAIL, deps);
+    expect(screener).toHaveBeenCalledTimes(2);
+  });
+
+  it('reads the DEX switch once for a cold list of every chain', async () => {
+    const capabilities = vi.fn(caps);
+    const tokens = vi.fn(async () => ({ tokens: [] }));
+    await Promise.all([
+      dex.fetchAllDexTokens({ tokens, capabilities }),
+      dex.fetchAllDexTokens({ tokens, capabilities }),
+    ]);
+    expect(capabilities).toHaveBeenCalledTimes(1);
+    // One read per chain, shared by both screens.
+    expect(tokens).toHaveBeenCalledTimes(dex.DEX_CHAINS.length);
   });
 
   it('asks only Solana for a mint; nothing found (404) is no token', async () => {
@@ -154,7 +257,8 @@ describe('a token nothing lists, asked of the server by address (15 Nov)', () =>
     const token = vi.fn(async (chain: string, address: string) =>
       chain === 'Base' ? row('base', address, 'RUG', false, ['Honeypot', 'Owner can mint']) : null,
     );
-    const found = await dex.findDexTokensAt(AERO, { token, capabilities: caps });
+    const screener = async (address: string) => pairs(address, [['base', 500_000]]);
+    const found = await dex.findDexTokensAt(AERO, { token, screener, capabilities: caps });
     expect(found.map((t) => dex.blockedLine(t))).toEqual([
       'RUG can’t be swapped: honeypot, owner can mint.',
     ]);

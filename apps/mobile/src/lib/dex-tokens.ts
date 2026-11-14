@@ -196,6 +196,8 @@ export type DexTokenDeps = {
   token?: (chain: DexChain, address: string) => Promise<unknown | null>;
   /** `GET /api/v1/capabilities` (the server says whether DEX swaps are on). */
   capabilities?: () => Promise<unknown>;
+  /** DexScreener's pairs for a contract on every chain, asked from this device (15 Nov). */
+  screener?: (address: string) => Promise<unknown>;
   now?: () => number;
 };
 
@@ -218,6 +220,18 @@ export async function dexEnabled(deps: DexTokenDeps = {}): Promise<boolean> {
   if (TEST_MODE) return true;
   const now = (deps.now ?? Date.now)();
   if (dexSwitch && now - dexSwitch.at < dexSwitch.ttl) return dexSwitch.on;
+  // One read shared by every caller while it's out (15 Nov: a cold `fetchAllDexTokens`
+  // asked six times at once).
+  if (switchRead) return switchRead;
+  switchRead = readSwitch(deps, now).finally(() => {
+    switchRead = null;
+  });
+  return switchRead;
+}
+
+let switchRead: Promise<boolean> | null = null;
+
+async function readSwitch(deps: DexTokenDeps, now: number): Promise<boolean> {
   try {
     const caps = (await (deps.capabilities ?? getCapabilities)()) as Capabilities;
     const on = isFeatureAvailable(caps, DEX_CAPABILITIES.swaps);
@@ -280,11 +294,23 @@ export async function fetchDexTokens(chain: DexChain, deps: DexTokenDeps = {}) {
   const now = (deps.now ?? Date.now)();
   const hit = tokenCache.get(chain);
   if (hit && now - hit.at < TOKENS_TTL_MS) return hit.tokens;
-  const body = await (deps.tokens ?? getTokens)(chain);
-  const tokens = parseDexTokens(body).filter((t) => t.chain === chain);
-  tokenCache.set(chain, { at: now, tokens });
-  return tokens;
+  // const body = await (deps.tokens ?? getTokens)(chain);
+  // const tokens = parseDexTokens(body).filter((t) => t.chain === chain);
+  // tokenCache.set(chain, { at: now, tokens });
+  // return tokens;
+  // One read per chain while it's out, shared by every screen asking (15 Nov).
+  const running = tokenReads.get(chain);
+  if (running) return running;
+  const read = (async () => {
+    const body = await (deps.tokens ?? getTokens)(chain);
+    const tokens = parseDexTokens(body).filter((t) => t.chain === chain);
+    tokenCache.set(chain, { at: now, tokens });
+    return tokens;
+  })().finally(() => tokenReads.delete(chain));
+  tokenReads.set(chain, read);
+  return read;
 }
+const tokenReads = new Map<DexChain, Promise<DexToken[]>>();
 
 /**
  * Reads `GET /api/v1/dex/token?chain=…&address=…` (public, like `/dex/tokens`, on the same
@@ -351,19 +377,125 @@ export async function fetchDexToken(
  */
 export const foundDexTokens = createStore<{ tokens: DexToken[] }>({ tokens: [] });
 
+/** DexScreener's pairs for a token on every chain (public, keyless; 300 asks a minute). */
+const SCREENER_TOKENS = 'https://api.dexscreener.com/latest/dex/tokens';
+const SCREENER_TIMEOUT_MS = 8_000;
+/** DexScreener's chain ids for Honey's EVM DEX chains. */
+const SCREENER_CHAIN: Record<string, Exclude<DexChain, 'Solana'>> = {
+  base: 'Base',
+  arbitrum: 'Arbitrum',
+  optimism: 'Optimism',
+  polygon: 'Polygon',
+  ethereum: 'Ethereum',
+};
+
+async function getScreenerPairs(address: string): Promise<unknown> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), SCREENER_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${SCREENER_TOKENS}/${encodeURIComponent(address)}`, {
+      headers: { accept: 'application/json' },
+      signal: controller.signal,
+    });
+    if (!res.ok) throw new Error(`DexScreener (${res.status})`);
+    return await res.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
- * The tokens at an address the lists don't have: an EVM contract asked of every EVM DEX
- * chain at once, a mint of Solana. Blocked ones are returned too (to say why); the safe
- * ones are kept in `foundDexTokens`. A chain that can't be asked is left out.
+ * Honey's EVM DEX chains where DexScreener has a pair holding this contract, deepest
+ * liquidity first; empty when it has none there.
+ */
+export function chainsWithPairs(body: unknown, address: string): DexChain[] {
+  const pairs = (body as { pairs?: unknown } | null)?.pairs;
+  if (!Array.isArray(pairs)) return [];
+  const depth = new Map<DexChain, number>();
+  for (const raw of pairs) {
+    if (!raw || typeof raw !== 'object') continue;
+    const p = raw as {
+      chainId?: unknown;
+      baseToken?: { address?: unknown };
+      quoteToken?: { address?: unknown };
+      liquidity?: { usd?: unknown };
+    };
+    const chain = typeof p.chainId === 'string' ? SCREENER_CHAIN[p.chainId] : undefined;
+    if (!chain) continue;
+    const holds = [p.baseToken?.address, p.quoteToken?.address].some(
+      (a) => typeof a === 'string' && a.toLowerCase() === address.toLowerCase(),
+    );
+    if (!holds) continue;
+    const usd = Number(p.liquidity?.usd);
+    depth.set(chain, (depth.get(chain) ?? 0) + (Number.isFinite(usd) && usd > 0 ? usd : 0));
+  }
+  return [...depth.entries()].sort((a, b) => b[1] - a[1]).map(([c]) => c);
+}
+
+/** At most this many chains are asked of Honey's server for one contract. */
+const LOOKUP_CHAINS = 2;
+/** An address found (or found nowhere) is answered from memory this long. */
+const LOOKUP_TTL_MS = 5 * 60_000;
+/** A lookup that failed (the server busy, offline) is not asked again for this long. */
+const LOOKUP_RETRY_MS = 15_000;
+const lookups = new Map<string, { at: number; ttl: number; found: DexToken[] }>();
+const lookupsOut = new Map<string, Promise<DexToken[]>>();
+
+/**
+ * The tokens at an address the lists don't have. Since 15 Nov (Honey's server paces
+ * these lookups): an EVM contract is first asked of DexScreener from the device, once,
+ * and only the chain with the deepest pairs (then the next, if the server doesn't know it
+ * there) is looked up with `GET /dex/token`; a Solana mint asks Solana. If DexScreener
+ * can't be read, the chains are asked one at a time, stopping at the first answer.
+ * Answers (a miss too) are remembered five minutes, failures 15 s, and one lookup per
+ * address runs at a time. Blocked tokens are returned too (to say why); the safe ones
+ * are kept in `foundDexTokens`.
  */
 export async function findDexTokensAt(query: string, deps: DexTokenDeps = {}) {
   const kind = addressKind(query);
   if (!kind) return [];
   const address = query.trim();
-  const chains = DEX_CHAINS.filter((c) => (kind === 'solana') === (c === 'Solana'));
-  const found = (
-    await Promise.all(chains.map((c) => fetchDexToken(c, address, deps).catch(() => null)))
-  ).filter((t): t is DexToken => !!t);
+  const key = kind === 'solana' ? address : address.toLowerCase();
+  const now = (deps.now ?? Date.now)();
+  const hit = lookups.get(key);
+  if (hit && now - hit.at < hit.ttl) return hit.found;
+  const running = lookupsOut.get(key);
+  if (running) return running;
+  const run = lookUp(kind, address, deps)
+    .then(
+      (found) => {
+        lookups.set(key, { at: now, ttl: LOOKUP_TTL_MS, found });
+        return found;
+      },
+      () => {
+        lookups.set(key, { at: now, ttl: LOOKUP_RETRY_MS, found: [] });
+        return [] as DexToken[];
+      },
+    )
+    .finally(() => lookupsOut.delete(key));
+  lookupsOut.set(key, run);
+  return run;
+}
+
+async function lookUp(kind: 'evm' | 'solana', address: string, deps: DexTokenDeps) {
+  let chains: DexChain[];
+  if (kind === 'solana' || TEST_MODE)
+    chains = DEX_CHAINS.filter((c) => (kind === 'solana') === (c === 'Solana'));
+  else {
+    const body = await (deps.screener ?? getScreenerPairs)(address).catch(() => null);
+    if (body) chains = chainsWithPairs(body, address).slice(0, LOOKUP_CHAINS);
+    else chains = DEX_CHAINS.filter((c) => c !== 'Solana');
+  }
+  const found: DexToken[] = [];
+  // One at a time: the server paces lookups, so asking chains at once only made the
+  // rest fail. A failure ends the lookup (and is remembered briefly).
+  for (const chain of chains) {
+    const token = await fetchDexToken(chain, address, deps);
+    if (!token) continue;
+    found.push(token);
+    // Test mode's samples are asked of every chain (nothing goes out).
+    if (!TEST_MODE) break;
+  }
   const safe = found.filter((t) => t.safety.ok);
   if (safe.length)
     foundDexTokens.set((prev) => ({
@@ -376,6 +508,33 @@ export async function findDexTokensAt(query: string, deps: DexTokenDeps = {}) {
     }));
   return found;
 }
+
+// Before 15 Nov (every EVM chain asked at once; four of five came back Busy):
+// /**
+//  * The tokens at an address the lists don't have: an EVM contract asked of every EVM DEX
+//  * chain at once, a mint of Solana. Blocked ones are returned too (to say why); the safe
+//  * ones are kept in `foundDexTokens`. A chain that can't be asked is left out.
+//  */
+// export async function findDexTokensAt(query: string, deps: DexTokenDeps = {}) {
+//   const kind = addressKind(query);
+//   if (!kind) return [];
+//   const address = query.trim();
+//   const chains = DEX_CHAINS.filter((c) => (kind === 'solana') === (c === 'Solana'));
+//   const found = (
+//     await Promise.all(chains.map((c) => fetchDexToken(c, address, deps).catch(() => null)))
+//   ).filter((t): t is DexToken => !!t);
+//   const safe = found.filter((t) => t.safety.ok);
+//   if (safe.length)
+//     foundDexTokens.set((prev) => ({
+//       tokens: [
+//         ...prev.tokens.filter(
+//           (p) => !safe.some((t) => t.chain === p.chain && sameToken(t.chain, t.address, p.address)),
+//         ),
+//         ...safe,
+//       ],
+//     }));
+//   return found;
+// }
 
 /** `list` with the safe tokens found by address that it doesn't have yet. */
 export function withFound(list: readonly DexToken[], found = foundDexTokens.get().tokens) {
@@ -407,7 +566,11 @@ export async function fetchAllDexTokens(deps: DexTokenDeps = {}) {
 /** Forgets cached lists and the server's DEX switch (tests). */
 export const forgetDexTokens = () => {
   tokenCache.clear();
+  tokenReads.clear();
   byAddressCache.clear();
+  lookups.clear();
+  lookupsOut.clear();
+  switchRead = null;
   foundDexTokens.set({ tokens: [] });
   dexSwitch = null;
 };

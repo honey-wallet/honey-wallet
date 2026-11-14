@@ -38,7 +38,7 @@ import {
   tokenRef,
 } from '@/lib/intents-swap';
 import { PAY_CHAINS } from '@/lib/jar-buy';
-import { useMarketList } from '@/lib/market';
+import { ADDRESS_DEBOUNCE_MS, useMarketList } from '@/lib/market';
 import { CHAINS, chainSymbol, formatBalance, HOLDINGS, tokenName } from '@/lib/mock-wallet';
 import { isUsdc, jarPayWith, jarPayWithChosen } from '@/lib/pay-with';
 import { pickToken, type TokenRef, useSwap } from '@/lib/swap';
@@ -260,20 +260,24 @@ function LiveTokens({
   useEffect(() => {
     if (!unmatched) return;
     let alive = true;
-    void findDexTokensAt(at)
-      .catch(() => [])
-      .then((list) => {
-        if (alive)
-          setLookup({
-            at,
-            blocked: list.flatMap((t) => {
-              const line = blockedLine(t);
-              return line ? [line] : [];
-            }),
-          });
-      });
+    // Asked once typing pauses (15 Nov): a mint is an address from 32 characters on.
+    const timer = setTimeout(() => {
+      void findDexTokensAt(at)
+        .catch(() => [])
+        .then((list) => {
+          if (alive)
+            setLookup({
+              at,
+              blocked: list.flatMap((t) => {
+                const line = blockedLine(t);
+                return line ? [line] : [];
+              }),
+            });
+        });
+    }, ADDRESS_DEBOUNCE_MS);
     return () => {
       alive = false;
+      clearTimeout(timer);
     };
   }, [unmatched, at]);
   const lookingUp = unmatched && lookup?.at !== at;

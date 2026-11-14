@@ -23,8 +23,10 @@ import {
   type BestRouteRequest,
   type RouteOption,
 } from '@honey-wallet/api-client';
+import { isAddress } from 'viem';
 import {
   checkDexQuote,
+  DEX_CHAIN_IDS,
   type DexAsk,
   type DexChain,
   type DexQuoted,
@@ -355,6 +357,10 @@ export async function planRoute(
     // The pick's same coin on another chain (15 Nov): checked with CoinGecko from this
     // device, its decimals read on chain; held as "LINK (on Arbitrum)".
     if (chain && !held && chain !== ask.fromChain && typeof best.sameCoin === 'string') {
+      // Held by its EVM contract (lowercased below): a Solana mint, or any chain without
+      // an EVM id, is refused (15 Nov, security review).
+      if (chain === 'Solana' || !(chain in DEX_CHAIN_IDS) || !isAddress(best.buyToken))
+        throw changed();
       const ok = await d
         .sameCoin({
           id: best.sameCoin,
@@ -411,4 +417,87 @@ export async function planRoute(
     dex,
     alternatives: route.alternatives,
   };
+}
+
+/** A planner answer is reused for an identical ask this long (15 Nov: free API tiers). */
+export const ROUTE_MEMO_MS = 20_000;
+/** A remembered route's DEX quote must still have this long left to be reused. */
+export const ROUTE_MEMO_QUOTE_LEFT_MS = 30_000;
+const ROUTE_MEMO_MAX = 64;
+const routeMemo = new Map<string, { at: number; answer: Promise<PlannedRoute> }>();
+/** Forgets remembered routes (tests, sign-out). */
+export const forgetRoutes = () => routeMemo.clear();
+
+const memoKey = (ask: RouteAsk, privateOnly: boolean) =>
+  JSON.stringify([
+    ask.fromChain,
+    ask.fromToken,
+    ask.amount.toString(),
+    ask.toChain ?? null,
+    ask.toToken,
+    ask.taker,
+    ask.fromAddress ?? null,
+    ask.slippageBps,
+    !!ask.wrapped,
+    ask.toSymbol ?? null,
+    ask.walletId,
+    privateOnly,
+  ]);
+
+/** A refusal (too small, no route) is the same answer twice; an unreachable planner isn't. */
+const memoRefusal = (e: unknown) => {
+  const status = routeStatus(e);
+  return status !== null && status >= 400 && status < 500 && status !== 401;
+};
+
+/**
+ * `planRoute`, remembered for `ROUTE_MEMO_MS` per identical ask (15 Nov): the jar
+ * launch check and the buy after it ask the planner the same questions, so the buy
+ * reuses the check's answers when nothing changed, and asks in flight are shared. A
+ * remembered DEX quote is checked again (`checkDexQuote`) and must have
+ * `ROUTE_MEMO_QUOTE_LEFT_MS` left, else the planner is asked afresh. Refusals are
+ * remembered too; failures to reach the planner never are.
+ */
+export async function planRouteMemo(
+  ask: RouteAsk,
+  deps: Partial<RouteDeps> = {},
+): Promise<PlannedRoute> {
+  const d = { ...defaults, ...deps };
+  const key = memoKey(ask, d.privateOnly());
+  const now = d.now();
+  const hit = routeMemo.get(key);
+  if (hit && now - hit.at < ROUTE_MEMO_MS) {
+    const reused = await hit.answer.then(
+      (route) => ({ route }),
+      (error: unknown) => ({ error }),
+    );
+    if ('error' in reused) {
+      if (memoRefusal(reused.error)) throw reused.error;
+    } else if (!reused.route.dex) return reused.route;
+    else {
+      const { quote, ask: dexAsk } = reused.route.dex;
+      const at = d.now();
+      try {
+        if (quote.expiresAt - ROUTE_MEMO_QUOTE_LEFT_MS <= at) throw new Error('expiring');
+        checkDexQuote(quote, dexAsk, at);
+        return reused.route;
+      } catch {
+        // Expired or about to: asked afresh below.
+      }
+    }
+    if (routeMemo.get(key) === hit) routeMemo.delete(key);
+  }
+  for (const [k, v] of routeMemo) if (now - v.at >= ROUTE_MEMO_MS) routeMemo.delete(k);
+  while (routeMemo.size >= ROUTE_MEMO_MAX) {
+    const oldest = routeMemo.keys().next().value;
+    if (oldest === undefined) break;
+    routeMemo.delete(oldest);
+  }
+  const answer = planRoute(ask, deps);
+  const entry = { at: now, answer };
+  routeMemo.set(key, entry);
+  answer.catch((e: unknown) => {
+    if (!memoRefusal(e) && routeMemo.get(key) === entry) routeMemo.delete(key);
+  });
+  return answer;
 }
