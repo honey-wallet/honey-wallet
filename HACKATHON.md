@@ -145,19 +145,13 @@ Creators get paid when their picks make money for others.
 
 - NEAR Intents has no testnet, so live flows spend mainnet funds.
 - Not on a store yet: the iPhone beta is waiting for Apple's TestFlight review; Android is coming soon.
-- The DEX fallback (`DEX_ENABLED`) is on in production; with it off, only 1Click is quoted.
-  Solana and NEAR gas sponsorship are supported by the server and off by default. EVM
-  sponsorship (Base, Arbitrum, Polygon, Optimism) is on.
-- Private jars (Confidential Intents) are experimental and off by default.
 - No card on-ramp or cash off-ramp. Earn shows rates only.
-- Test mode receipts and sample screens are not proof of settlement.
 
 ## What's next
 
 These are marked "coming soon" or switched off in the code today.
 
 - Android release.
-- Private jars on Confidential Intents (code exists behind `EXPO_PUBLIC_STEALTH_JARS`).
 - Card on-ramp and cash off-ramp (no provider connected).
 - Earn deposits (the app shows rates only).
 

@@ -107,7 +107,7 @@ Code: [thesis/](apps/server/src/thesis), [near_ai.rs](apps/server/src/thesis/nea
 
 | Feature | What it does | Code |
 | --- | --- | --- |
-| Gas paid by Honey | Live on Base, Arbitrum, Polygon and Optimism: the wallet delegates to Uniswap's Calibur contract (EIP-7702) and Honey's relayer sends the transaction and pays the gas. Never on Ethereum mainnet. Solana (Honey as fee payer) and NEAR (NEP-366 relayer) are supported by the server and off by default. | [evm_sponsor.rs](apps/server/src/evm_sponsor.rs) (`CHAINS`), [evm-sponsor.ts](packages/keyring/src/evm-sponsor.ts) (`SPONSORED_CHAIN_IDS`), [Optimism migration](apps/server/migrations/202611140007_evm_sponsor_optimism.sql), [solana_relayer.rs](apps/server/src/solana_relayer.rs), [near_relayer.rs](apps/server/src/near_relayer.rs) |
+| Gas paid by Honey | Live on Base, Arbitrum, Polygon and Optimism: the wallet delegates to Uniswap's Calibur contract (EIP-7702) and Honey's relayer sends the transaction and pays the gas. Never on Ethereum mainnet. Also live on Solana (Honey as fee payer) and NEAR (NEP-366 relayer). | [evm_sponsor.rs](apps/server/src/evm_sponsor.rs) (`CHAINS`), [evm-sponsor.ts](packages/keyring/src/evm-sponsor.ts) (`SPONSORED_CHAIN_IDS`), [Optimism migration](apps/server/migrations/202611140007_evm_sponsor_optimism.sql), [solana_relayer.rs](apps/server/src/solana_relayer.rs), [near_relayer.rs](apps/server/src/near_relayer.rs) |
 | Gas allowance | One ledger for every chain Honey pays on. By default each signed-in person gets $1 per rolling 30 days across all chains, at most $0.10 per chain per day, and each chain has a daily total across everyone. Cost is reserved before signing and settled at the real cost. | [gas_allowance.rs](apps/server/src/gas_allowance.rs) |
 | Multichain wallet | One recovery phrase for EVM chains, Solana and NEAR implicit accounts. | [packages/keyring](packages/keyring), [NEAR.md](docs/NEAR.md) |
 | Keys on the phone | Keys live in the iOS Keychain or Android Keystore, on this device only. Signing happens on the phone. | [secure-store.ts](apps/mobile/src/lib/secure-store.ts), [sign.ts](packages/keyring/src/sign.ts) |
@@ -122,7 +122,7 @@ Code: [thesis/](apps/server/src/thesis), [near_ai.rs](apps/server/src/thesis/nea
 | Meta transactions (NEP-366) | Honey's relayer pays gas for members' own DAO calls, and pays the factory deposit to create a group's DAO. It only carries calls a group jar makes. | [near_relayer.rs](apps/server/src/near_relayer.rs) |
 | NEAR accounts | Implicit accounts derived from the phrase (`m/44'/397'/n'`). Transfers signed on the phone. | [near.ts](packages/keyring/src/near.ts), [NEAR.md](docs/NEAR.md) |
 | NEAR AI Cloud | Every model call in the thesis agent (DeepSeek V4.1 Flash): JSON-schema replies, one retry, a call budget per run. | [near_ai.rs](apps/server/src/thesis/near_ai.rs) |
-| Confidential Intents (experimental) | Server proxy for private jars. The app screen is behind `EXPO_PUBLIC_STEALTH_JARS=1`, off by default. | [confidential_intents.rs](apps/server/src/routes/confidential_intents.rs), [stealth-jar.ts](packages/keyring/src/stealth-jar.ts) |
+| Confidential Intents | Private jars: a FROST threshold key over a NEAR account, spending through NEAR Confidential Intents via Honey's server proxy. On in the app. | [confidential_intents.rs](apps/server/src/routes/confidential_intents.rs), [stealth-jar.ts](packages/keyring/src/stealth-jar.ts) |
 
 Honey does not use Chain Signatures.
 
@@ -278,11 +278,6 @@ Report vulnerabilities privately: [SECURITY.md](SECURITY.md).
 
 - Not on a store yet: the iPhone beta is waiting for Apple's TestFlight review; Android is coming soon.
 - Buying crypto with a card and selling for cash are not connected. Earn shows rates only.
-- The DEX fallback (`DEX_ENABLED`) is on in production; with it off, only 1Click is quoted.
-  Solana and NEAR gas sponsorship are supported by the server and off by default.
-- Private jars (Confidential Intents) are experimental and off by default.
-- Test mode is a demonstration, not proof of a settled trade. The captures above use
-  sample data.
 
 ## Team, license, acknowledgements
 

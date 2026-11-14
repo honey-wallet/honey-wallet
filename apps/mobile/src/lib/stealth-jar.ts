@@ -11,9 +11,10 @@ import { privateKeyOf } from '@/lib/vault';
 /**
  * Stealth jars (private group jars): a FROST threshold key over a fresh NEAR implicit
  * account, made by DKG through Honey's blind relay, spending through NEAR Confidential
- * Intents. Off unless EXPO_PUBLIC_STEALTH_JARS=1. Public jars stay on Sputnik DAO.
+ * Intents. On unless EXPO_PUBLIC_STEALTH_JARS=0. Public jars stay on Sputnik DAO.
  */
-export const stealthJarsEnabled = process.env.EXPO_PUBLIC_STEALTH_JARS === '1';
+// export const stealthJarsEnabled = process.env.EXPO_PUBLIC_STEALTH_JARS === '1';
+export const stealthJarsEnabled = process.env.EXPO_PUBLIC_STEALTH_JARS !== '0';
 
 const INDEX_KEY = 'stealth-jars';
 const jarKey = (accountId: string) => `stealth-jar.${accountId}`;

@@ -30,7 +30,7 @@ const short = (id: string) => `${id.slice(0, 6)}…${id.slice(-4)}`;
 
 /**
  * Private (stealth) jar: create or join a k-of-n jar whose account has no on-chain
- * link to its members. Behind EXPO_PUBLIC_STEALTH_JARS; reached from New Honey Jar.
+ * link to its members. On unless EXPO_PUBLIC_STEALTH_JARS=0; reached from New Honey Jar.
  */
 export default function StealthJarScreen() {
   if (!stealthJarsEnabled) return <Redirect href={LANDING} />;
