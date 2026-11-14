@@ -113,6 +113,13 @@ export function quickPicks(tokens: readonly OneClickToken[], chain: string | nul
   });
 }
 
+/** A Honey DEX token in the list (its asset id is `dex:<chain>:<address>`). */
+export const isDexEntry = (t: Pick<OneClickToken, 'assetId'>) => t.assetId.startsWith('dex:');
+
+/** Most liquid first; tokens without a liquidity figure (NEAR Intents') keep their place. */
+const byLiquidity = (a: OneClickToken, b: OneClickToken) =>
+  (b.liquidityUsd ?? 0) - (a.liquidityUsd ?? 0);
+
 /** Listed first, in this order; the rest alphabetically. */
 const FIRST = ['ETH', 'SOL', 'wNEAR', 'BTC', 'USDC', 'USDT', 'WETH', 'WBTC', 'cbBTC'];
 const rank = (symbol: string) => {
@@ -187,10 +194,16 @@ export function popularOrder(
   networkOf: (blockchain: string) => string,
 ) {
   const groups = new Map<string, OneClickToken[]>();
-  for (const t of sortTokens(tokens)) groups.set(t.symbol, [...(groups.get(t.symbol) ?? []), t]);
+  // for (const t of sortTokens(tokens)) groups.set(t.symbol, [...(groups.get(t.symbol) ?? []), t]);
+  // A DEX token is its own group: sharing a symbol never makes it a copy of another coin.
+  for (const t of sortTokens(tokens)) {
+    const key = isDexEntry(t) ? t.assetId : t.symbol;
+    groups.set(key, [...(groups.get(key) ?? []), t]);
+  }
   const firsts: OneClickToken[] = [];
   const copies: OneClickToken[] = [];
-  for (const [symbol, list] of groups) {
+  for (const list of groups.values()) {
+    const symbol = (list[0] as OneClickToken).symbol;
     const main = mainNetworkOf(symbol);
     // A coin on its own network first (BTC on Bitcoin), else where the market shows it.
     const first =
@@ -201,9 +214,14 @@ export function popularOrder(
     firsts.push(first);
     copies.push(...list.filter((t) => t !== first));
   }
-  const place = (t: OneClickToken) => rankOf(t.symbol) ?? Number.MAX_SAFE_INTEGER;
+  // const place = (t: OneClickToken) => rankOf(t.symbol) ?? Number.MAX_SAFE_INTEGER;
+  // The market list ranks symbols; a DEX token never takes another coin's rank by its
+  // symbol: DEX tokens follow, most liquid first.
+  const place = (t: OneClickToken) =>
+    isDexEntry(t) ? Number.MAX_SAFE_INTEGER : (rankOf(t.symbol) ?? Number.MAX_SAFE_INTEGER);
   const order = (a: OneClickToken, b: OneClickToken) =>
     place(a) - place(b) ||
+    byLiquidity(a, b) ||
     rank(a.symbol) - rank(b.symbol) ||
     a.symbol.localeCompare(b.symbol) ||
     chainOrder(a.blockchain) - chainOrder(b.blockchain);
@@ -268,7 +286,17 @@ export function pickerLists(
       (t.symbol.toLowerCase() === q ? 0 : 2) +
       (t.contractAddress ? 1 : 0) +
       (t.symbol.toLowerCase().startsWith(q) ? 0 : 4);
-    const results = shown.filter(matches).sort((a, b) => relevance(a) - relevance(b));
+    // const results = shown.filter(matches).sort((a, b) => relevance(a) - relevance(b));
+    // Same relevance: NEAR Intents' token before a DEX one, then the most liquid DEX
+    // token, so a look-alike "USDC" never ranks above the real one.
+    const results = shown
+      .filter(matches)
+      .sort(
+        (a, b) =>
+          relevance(a) - relevance(b) ||
+          Number(isDexEntry(a)) - Number(isDexEntry(b)) ||
+          byLiquidity(a, b),
+      );
     return { chains, yours: [], recent: [], rest: [], results };
   }
   const yours = shown

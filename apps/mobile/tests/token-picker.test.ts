@@ -25,6 +25,7 @@ const {
   withRecent,
 } = await import('@/lib/token-picker');
 const { chainName } = await import('@/lib/intents-swap');
+const { dexPickerEntries, findDexTokenByAddress, dexLogos } = await import('@/lib/dex-tokens');
 type Token = import('@/lib/intents-swap').OneClickToken;
 
 const token = (
@@ -230,5 +231,100 @@ describe('popularOrder', () => {
     expect(lists.rest.slice(0, 4).map((t) => t.symbol)).toEqual(['ETH', 'USDT', 'USDC', 'SOL']);
     const eth = pickerLists(list, { ...base, query: 'eth', popularity }).results;
     expect(eth.filter((t) => t.symbol === 'ETH')).toHaveLength(4);
+  });
+});
+
+describe('DEX tokens in the picker (2026-11-14)', () => {
+  type Dex = import('@/lib/dex-tokens').DexToken;
+  const dex = (
+    chain: Dex['chain'],
+    address: string,
+    symbol: string,
+    name: string,
+    liquidityUsd: number,
+    extra: Partial<Dex> = {},
+  ): Dex => ({
+    chain,
+    address,
+    symbol,
+    name,
+    decimals: 18,
+    priceUsd: 0.47,
+    liquidityUsd,
+    route: 'dex',
+    safety: { ok: true, flags: [] },
+    logoUrl: `https://assets.coingecko.com/${symbol}.png`,
+    metadata: 'uniswap',
+    ...extra,
+  });
+  const AERO = dex('Base', '0x940181a94A35A4569E4529A3CDfB74e38FD98631', 'AERO', 'Aerodrome', 2e7);
+  // A look-alike "USDC" that got past the floors, and an unsafe token.
+  const FAKE_USDC = dex(
+    'Base',
+    '0x1111111111111111111111111111111111111111',
+    'USDC',
+    'USD Coin',
+    3e5,
+  );
+  const RUG = dex('Base', '0x2222222222222222222222222222222222222222', 'RUG', 'Rug', 9e9, {
+    safety: { ok: false, flags: ['honeypot'] },
+  });
+  const AERO_COPY = dex(
+    'Arbitrum',
+    '0x3333333333333333333333333333333333333333',
+    'AERO',
+    'Aero Copy',
+    4e5,
+  );
+  const entries = dexPickerEntries([AERO, FAKE_USDC, RUG, AERO_COPY], ALL);
+  const list = [...ALL, ...entries];
+
+  it('lists only safe DEX tokens, with their name, logo, price and liquidity', () => {
+    expect(entries.map((e) => e.symbol)).toEqual(['AERO', 'USDC', 'AERO']);
+    expect(entries[0]).toMatchObject({
+      assetId: 'dex:base:0x940181a94a35a4569e4529a3cdfb74e38fd98631',
+      blockchain: 'base',
+      name: 'Aerodrome',
+      price: 0.47,
+      logoUrl: 'https://assets.coingecko.com/AERO.png',
+      liquidityUsd: 2e7,
+    });
+    expect(dexLogos([AERO, RUG])).toEqual({
+      'dex:base:0x940181a94a35a4569e4529a3cdfb74e38fd98631':
+        'https://assets.coingecko.com/AERO.png',
+    });
+  });
+
+  it('never ranks a look-alike above the real token, and ranks same symbols by liquidity', () => {
+    const usdc = pickerLists(list, { ...base, query: 'usdc' }).results;
+    expect(usdc.at(-1)?.assetId).toBe(entries[1]?.assetId);
+    expect(usdc.slice(0, -1).every((t) => !t.assetId.startsWith('dex:'))).toBe(true);
+    const aero = pickerLists(list, { ...base, query: 'aero' }).results;
+    expect(aero.map((t) => t.name)).toEqual(['Aerodrome', 'Aero Copy']);
+  });
+
+  it('never gives a DEX token another coin’s market rank or makes it a copy of it', () => {
+    const popularity = {
+      rankOf: (s: string) => ({ USDC: 0, AERO: 1 })[s],
+      mainNetworkOf: () => undefined,
+    };
+    const order = popularOrder(list, popularity, chainName);
+    const firstDex = order.findIndex((t) => t.assetId.startsWith('dex:'));
+    // Every 1Click token with a rank comes before any DEX token; DEX ones by liquidity.
+    expect(order.slice(0, firstDex).some((t) => t.symbol === 'USDC')).toBe(true);
+    expect(order.filter((t) => t.assetId.startsWith('dex:')).map((t) => t.name)).toEqual([
+      'Aerodrome',
+      'Aero Copy',
+      'USD Coin',
+    ]);
+  });
+
+  it('finds a jar’s DEX pick by chain and address only', () => {
+    const all = [AERO, FAKE_USDC, RUG, AERO_COPY];
+    expect(findDexTokenByAddress(all, 'base', AERO.address.toLowerCase())).toBe(AERO);
+    expect(findDexTokenByAddress(all, 'Base', AERO.address)).toBe(AERO);
+    expect(findDexTokenByAddress(all, 'arb', AERO.address)).toBeNull();
+    expect(findDexTokenByAddress(all, 'base', RUG.address)).toBeNull();
+    expect(findDexTokenByAddress(all, 'near', AERO.address)).toBeNull();
   });
 });

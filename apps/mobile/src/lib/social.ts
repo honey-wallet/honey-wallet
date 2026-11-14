@@ -366,6 +366,8 @@ export function socialPicks(picks: Pick[]) {
     symbol: p.symbol,
     chain: p.chain,
     weight: Math.round((p.weight / total) * 100 * 100) / 100,
+    // DEX picks carry their contract: the server matches them by (chain, address).
+    ...(p.address ? { address: p.address } : {}),
   }));
   // Rounding drift goes on the largest pick so the sum is exactly 100.
   const drift = 100 - scaled.reduce((sum, p) => sum + p.weight, 0);
@@ -615,6 +617,7 @@ export function toLocalJar(jar: SocialJar): ThesisJar {
       symbol: p.symbol,
       name: p.symbol,
       chain: p.chain,
+      ...(p.address ? { address: p.address } : {}),
       weight: p.weight,
       match: 'direct',
       reason: '',

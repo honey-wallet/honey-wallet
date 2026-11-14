@@ -101,6 +101,7 @@ export function TokenIcon({
   chain,
   ring,
   uri,
+  assetId,
 }: {
   symbol: string;
   size?: number;
@@ -110,15 +111,24 @@ export function TokenIcon({
   ring?: string;
   /** A logo URL (https) for tokens without a bundled logo, e.g. from the token's details. */
   uri?: string | null;
+  /**
+   * The token's asset id. A DEX token's (`dex:<chain>:<address>`) wears only its own
+   * logo, never the bundled art of whatever shares its symbol (a fake "USDC").
+   */
+  assetId?: string | null;
 }) {
   const c = useTheme();
+  const dex = !!assetId?.startsWith('dex:');
   // Wrapped and bridged copies wear their coin's logo (the network badge tells them apart).
   const art = LOGO_ALIASES[symbol] ?? symbol;
-  const xml = TOKEN_LOGOS[art] ?? NETWORK_LOGOS[art];
+  // const xml = TOKEN_LOGOS[art] ?? NETWORK_LOGOS[art];
+  const xml = dex ? undefined : (TOKEN_LOGOS[art] ?? NETWORK_LOGOS[art]);
   // A token without a logo gets its initial in a grey well, so rows still tell apart.
-  const image = TOKEN_IMAGES[art];
+  // const image = TOKEN_IMAGES[art];
+  const image = dex ? undefined : TOKEN_IMAGES[art];
   // No bundled art and no URL given: the server's logo list (CoinGecko) for the long tail.
-  const listed = useTokenLogo(art);
+  // const listed = useTokenLogo(art);
+  const listed = useTokenLogo(art, assetId);
   const given = uri ?? listed;
   // A logo that won't load tries CoinGecko's other image host once, then the letter:
   // never an empty grey circle.

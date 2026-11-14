@@ -37,6 +37,14 @@ it('sends picks with weights that sum to exactly 100', () => {
   ]);
 });
 
+it('sends a DEX pick with its contract, and NEAR Intents picks without one', () => {
+  const aero = { ...pick('AERO', 50), address: '0x940181a94a35a4569e4529a3cdfb74e38fd98631' };
+  expect(socialPicks([aero, pick('ETH', 50)])).toEqual([
+    { symbol: 'AERO', chain: 'Base', weight: 50, address: aero.address },
+    { symbol: 'ETH', chain: 'Base', weight: 50 },
+  ]);
+});
+
 it('formats feed times, returns and amounts', () => {
   const now = 1_700_000_000_000;
   expect(timeAgo(now - 10_000, now)).toBe('now');

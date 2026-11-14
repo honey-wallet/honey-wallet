@@ -363,6 +363,10 @@ export type OneClickToken = {
   price: number | null;
   /** The token's full name, when the list gives one (Honey's DEX tokens do). */
   name?: string;
+  /** An https logo, when the list gives one (Honey's DEX tokens do). */
+  logoUrl?: string;
+  /** Pool liquidity in USD (Honey's DEX tokens): ranks same-symbol tokens. */
+  liquidityUsd?: number;
 };
 
 const text = (v: unknown): v is string => typeof v === 'string' && v.length > 0 && v.length <= 256;

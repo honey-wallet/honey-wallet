@@ -34,6 +34,11 @@ export type Pick = {
   color: string;
   /** What would prove this pick wrong, in the agent's words; agent picks only. */
   wrongIf?: string;
+  /**
+   * The token's contract (mint on Solana) when it is bought on a DEX (the agent's
+   * `route: dex` picks): jar buys find it by (chain, address), never by symbol.
+   */
+  address?: string;
 };
 
 export type Proposal = {
@@ -659,7 +664,14 @@ async function explained<T>(work: () => Promise<T>, signal?: AbortSignal): Promi
 
 type LiveStrategy = {
   picks: {
-    asset: { symbol: string; chain: string };
+    // asset: { symbol: string; chain: string };
+    asset: {
+      symbol: string;
+      chain: string;
+      route?: 'intents' | 'dex' | null;
+      address?: string | null;
+      name?: string | null;
+    };
     exposure: string;
     weightPct: number;
     match: 'direct' | 'proxy';
@@ -749,8 +761,11 @@ function fromStrategy(run: LiveRun, strategy: LiveStrategy, input: ThesisInput):
     .map(
       (p, i): Pick => ({
         symbol: p.asset.symbol,
-        name: p.asset.symbol,
+        // name: p.asset.symbol,
+        name: p.asset.name?.trim() || p.asset.symbol,
         chain: p.asset.chain,
+        // A DEX pick is bought by its contract (lib/jar-routes), never by its symbol.
+        ...(p.asset.route === 'dex' && p.asset.address ? { address: p.asset.address } : {}),
         weight: Math.round(p.weightPct),
         match: p.match,
         reason: p.reason?.trim() || p.exposure,

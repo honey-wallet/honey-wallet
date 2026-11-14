@@ -3,6 +3,7 @@ import {
   type DexToken,
   fetchAllDexTokens,
   findDexToken,
+  findDexTokenByAddress,
   SAMPLE_DEX_TOKENS,
 } from '@/lib/dex-tokens';
 import { TEST_MODE } from '@/lib/test-mode';
@@ -256,10 +257,27 @@ const venueCache = new Map<string, { at: number; value: Promise<LiveAnswer> }>()
  * NEAR Intents can't deliver is looked for in Honey's DEX list (lib/dex), on the pick's
  * chain first; NEAR Intents stays the route for everything it lists.
  */
-function liveVenues(symbol: string, chain: string): Promise<LiveAnswer> {
-  const key = `${symbol}:${chain}`;
+// function liveVenues(symbol: string, chain: string): Promise<LiveAnswer> {
+//   const key = `${symbol}:${chain}`;
+/**
+ * A pick with a contract `address` (the agent's DEX picks, 2026-11-14) is looked up only
+ * on Honey's DEX list by (chain, address): its symbol is never used to find it, so a
+ * look-alike on NEAR Intents or another chain can't stand in for it.
+ */
+function liveVenues(symbol: string, chain: string, address?: string): Promise<LiveAnswer> {
+  const key = `${symbol}:${chain}:${address ?? ''}`;
   const hit = venueCache.get(key);
   if (hit && Date.now() - hit.at < 30_000) return hit.value;
+  if (address) {
+    const value = fetchAllDexTokens()
+      .then((all): LiveAnswer => {
+        const dex = findDexTokenByAddress(all, chain, address);
+        return dex ? { price: dex.priceUsd, venues: [dexVenue(dex)] } : 'none';
+      })
+      .catch((): LiveAnswer => 'error');
+    venueCache.set(key, { at: Date.now(), value });
+    return value;
+  }
   const value = import('@/lib/api')
     .then(({ api }) => api.marketVenues(symbol))
     .then((r): LiveAnswer => {
@@ -294,20 +312,23 @@ function liveVenues(symbol: string, chain: string): Promise<LiveAnswer> {
  * otherwise the sample venues, marked `live: false` so the screen can say so.
  */
 export function useRoutes(
-  picks: { symbol: string; chain: string; weight: number }[],
+  // picks: { symbol: string; chain: string; weight: number }[],
+  picks: { symbol: string; chain: string; weight: number; address?: string }[],
   amount: number,
   maxSlippage: number,
 ): { routes: Route[]; live: boolean } {
   const sample = picks.map((p) => sampleRoute(p, (amount * p.weight) / 100, maxSlippage));
   const [live, setLive] = useState<Record<string, LiveAnswer>>({});
-  const symbols = picks.map((p) => `${p.symbol}:${p.chain}`).join(',');
+  // const symbols = picks.map((p) => `${p.symbol}:${p.chain}`).join(',');
+  const symbols = picks.map((p) => `${p.symbol}:${p.chain}:${p.address ?? ''}`).join(',');
   useEffect(() => {
     if (TEST_MODE || !symbols) return;
     let alive = true;
     for (const pick of symbols.split(',')) {
-      const [symbol = '', chain = ''] = pick.split(':');
-      void liveVenues(symbol, chain).then((v) => {
-        if (alive) setLive((prev) => ({ ...prev, [symbol]: v }));
+      const [symbol = '', chain = '', address = ''] = pick.split(':');
+      // void liveVenues(symbol, chain).then((v) => {
+      void liveVenues(symbol, chain, address || undefined).then((v) => {
+        if (alive) setLive((prev) => ({ ...prev, [address || symbol]: v }));
       });
     }
     return () => {
@@ -319,7 +340,8 @@ export function useRoutes(
   // planned on live venues; only planned `ok` routes are paid (see `blockedRoutes`).
   const routes = picks.map((p): Route => {
     const usd = (amount * p.weight) / 100;
-    const v = live[p.symbol];
+    // const v = live[p.symbol];
+    const v = live[p.address || p.symbol];
     const empty = { symbol: p.symbol, usd, legs: [], slippage: 0, bridgeUsd: 0 };
     if (v === undefined) return { ...empty, status: 'loading' };
     if (v === 'none') return { ...empty, status: 'unbuyable' };

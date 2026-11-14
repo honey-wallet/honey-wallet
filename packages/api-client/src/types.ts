@@ -820,6 +820,15 @@ export interface RegistryAsset {
   issuer: string | null;
   /** CoinGecko's id for the coin, when 1Click gives one. */
   coingeckoId?: string | null;
+  /**
+   * `intents` (NEAR Intents 1Click) or `dex` (Honey's DEX list: KyberSwap or Jupiter on
+   * the token's chain). A `dex` asset's id is `dex:<chain>:<address>`. Absent: intents.
+   */
+  route?: 'intents' | 'dex';
+  /** The token's name, when its source gives one (DEX assets). */
+  name?: string;
+  /** An https logo URL, when its source gives one (DEX assets). */
+  logoUrl?: string;
 }
 
 export type ThesisConviction = 'high' | 'medium' | 'low';
@@ -1594,6 +1603,11 @@ export interface SocialPick {
   chain: string;
   /** Percent of the jar; the picks sum to 100. */
   weight: number;
+  /**
+   * The token's contract (mint on Solana) for a pick bought on a DEX: matched on (chain,
+   * address) against Honey's DEX list, never by symbol. Absent for NEAR Intents picks.
+   */
+  address?: string;
 }
 
 /** A published jar, valued by the server at live prices. */
@@ -2004,10 +2018,24 @@ export interface DexToken {
   priceUsd: number;
   liquidityUsd?: number;
   volume24hUsd?: number;
+  /** CoinGecko's, else GeckoTerminal's or Jupiter's. */
+  marketCapUsd?: number;
+  /** In percent. */
+  change24hPct?: number;
+  /** CoinGecko's id, when its coin list places the coin at this address. */
+  coingeckoId?: string;
+  /**
+   * Where symbol, name, decimals and logo came from: a curated list (`uniswap`,
+   * `coingecko`, `jupiter`) or the token contract itself (`chain`). Decimals are never
+   * taken from an indexer alone.
+   */
+  metadata?: DexTokenMetadata;
   /** Always `dex`: bought through an aggregator, not 1Click. */
   route: 'dex';
   safety: DexSafety;
 }
+
+export type DexTokenMetadata = 'uniswap' | 'coingecko' | 'jupiter' | 'chain' | 'intents';
 
 export interface DexTokens {
   tokens: DexToken[];
