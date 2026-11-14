@@ -855,7 +855,17 @@ function JarBody({
             ))}
           </>
         ) : (
-          <Mix picks={jar.picks} tappable />
+          // <Mix picks={jar.picks} tappable />
+          // Each token's share beside it, as your own jar's rows say it (15 Nov, owner).
+          <Mix
+            shares
+            tappable
+            picks={holdingRows.map(({ pick }, i) => ({
+              symbol: pick.symbol,
+              weight: pick.weight,
+              color: pick.color ?? tokenColor(pick.symbol, i),
+            }))}
+          />
         )}
       </View>
 

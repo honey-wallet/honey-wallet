@@ -928,7 +928,8 @@ export function Mix({
               <TokenIcon symbol={p.symbol} size={16} />
               <Text style={styles.mixText}>
                 {p.symbol}
-                {shares ? <Text style={styles.mixShare}> {p.weight}%</Text> : null}
+                {/* {shares ? <Text style={styles.mixShare}> {p.weight}%</Text> : null} */}
+                {shares ? <Text style={styles.mixShare}> {Math.round(p.weight)}%</Text> : null}
                 {extra ? <> {extra(p.symbol)}</> : null}
               </Text>
             </>
