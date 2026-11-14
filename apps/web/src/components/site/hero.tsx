@@ -35,9 +35,10 @@ export function Hero() {
           </JoinWaitlist>
         </div>
       </div>
+      {/* No glow either (14 Nov, owner): the hero is the headline, friends and the waitlist.
       <div className={styles.product}>
         <div aria-hidden="true" className={styles.halo} />
-        {/* No phones in the hero (14 Nov, owner): headline, friends and the waitlist only.
+        {/ * No phones in the hero (14 Nov, owner): headline, friends and the waitlist only.
         <figure className={styles.feedPhone}>
           <ProductPhone eager screen="feed" />
           <figcaption>The feed. Find your next idea.</figcaption>
@@ -45,8 +46,9 @@ export function Hero() {
         <figure className={styles.walletPhone}>
           <ProductPhone eager screen="wallet" />
           <figcaption>Your wallet. Always in your hands.</figcaption>
-        </figure> */}
+        </figure> * /}
       </div>
+      */}
     </section>
   );
 }

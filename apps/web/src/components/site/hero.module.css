@@ -2,7 +2,9 @@
   position: relative;
   isolation: isolate;
   overflow: hidden;
-  padding: 4rem 1.25rem 2rem;
+  /* padding: 4rem 1.25rem 2rem; */
+  /* As much room under the button as above the headline, now that nothing follows it. */
+  padding: 4rem 1.25rem 4.5rem;
 }
 .content {
   position: relative;
