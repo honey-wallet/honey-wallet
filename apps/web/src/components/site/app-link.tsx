@@ -81,11 +81,14 @@ export function JoinWaitlist({
       {/* Join the waitlist */}
       {/* {testflight ? 'Get it on TestFlight' : 'Join the waitlist'} */}
       {/* Android is coming soon (14 Nov): its button still leads to the waitlist. */}
+      {/* Without the TestFlight link (15 Nov), an iPhone says coming soon too. */}
       {testflight
         ? 'Get it on TestFlight'
         : device === 'android'
           ? 'Android coming soon'
-          : 'Join the waitlist'}
+          : device === 'apple'
+            ? 'iPhone coming soon'
+            : 'Join the waitlist'}
     </LiquidButton>
   );
 }

@@ -34,7 +34,9 @@ const FAQS = [
     q: 'When can I use it?',
     // a: 'Honey hasn’t launched yet. Join the waitlist and we’ll email you when it’s ready on iPhone, Android and Chrome.',
     // iPhone beta on TestFlight (14 Nov); Android coming soon.
-    a: 'On iPhone, now: Honey’s beta is on TestFlight. Android is coming soon; join the waitlist and we’ll email you when it’s ready.',
+    // a: 'On iPhone, now: Honey’s beta is on TestFlight. Android is coming soon; join the waitlist and we’ll email you when it’s ready.',
+    // Both coming soon (15 Nov), until Apple approves the public beta.
+    a: 'Honey is coming soon to iPhone and Android. Join the waitlist and we’ll email you when it’s ready.',
   },
 ] as const;
 

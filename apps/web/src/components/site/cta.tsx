@@ -13,11 +13,17 @@ import { WaitlistForm } from './waitlist-form';
 //   { name: 'iPhone', icon: siApple, color: 'var(--fg)' },
 //   { name: 'Android', icon: siAndroid, color: `#${siAndroid.hex}` },
 // ];
-/* iPhone is on TestFlight now (14 Nov), Android is coming soon. */
+// /* iPhone is on TestFlight now (14 Nov), Android is coming soon. */
+// const PLATFORMS = [
+//   { name: 'iPhone', note: 'on TestFlight', href: TESTFLIGHT_URL, icon: siApple, color: 'var(--fg)' },
+//   { name: 'Android', note: 'coming soon', href: '', icon: siAndroid, color: `#${siAndroid.hex}` },
+// ];
+/* Both coming soon (15 Nov): the public TestFlight link waits for Apple's beta review. Setting
+   NEXT_PUBLIC_TESTFLIGHT_URL links iPhone again. */
 const PLATFORMS = [
   {
     name: 'iPhone',
-    note: 'on TestFlight',
+    note: TESTFLIGHT_URL ? 'on TestFlight' : 'coming soon',
     href: TESTFLIGHT_URL,
     icon: siApple,
     color: 'var(--fg)',

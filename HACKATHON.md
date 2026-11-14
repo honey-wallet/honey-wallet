@@ -13,7 +13,7 @@ The organizers' rules live at [nearhackathon.com/HACKATHON.md](https://nearhacka
 | Team | Beekeepers (3 people), led by Abhishek Yadav |
 | Tracks | Social Money (`social`), Unstoppable DeFi (`defi`) |
 | Repository | [github.com/honey-wallet/honey-wallet](https://github.com/honey-wallet/honey-wallet) |
-| App | iOS public beta on [TestFlight](https://testflight.apple.com/join/5krzqTCR). Android coming soon. |
+| App | iPhone and Android coming soon (the TestFlight beta is waiting for Apple's review); waitlist at [honeywallet.org](https://honeywallet.org). Run it locally: [README](README.md#run-it-locally). |
 | Website and deck | [honeywallet.org](https://honeywallet.org), [honeywallet.org/deck](https://honeywallet.org/deck) |
 | API | [api.honeywallet.org](https://api.honeywallet.org/health) |
 | Demo post on X | TODO(owner): link to the published post with the demo video. |
@@ -80,7 +80,7 @@ Not used: Chain Signatures.
 
 ## Demo script (about 3 minutes)
 
-Record on the TestFlight build with small amounts, or on a local test-mode build. Say
+Record on an internal build with small amounts, or on a local test-mode build. Say
 which on screen: test-mode balances and receipts are samples.
 
 | Time | Screen | Say |
@@ -144,7 +144,7 @@ Creators get paid when their picks make money for others.
 ## Known limitations
 
 - NEAR Intents has no testnet, so live flows spend mainnet funds.
-- iOS only (TestFlight public beta). Android is not on a store yet.
+- Not on a store yet: the iPhone beta is waiting for Apple's TestFlight review; Android is coming soon.
 - The DEX fallback (`DEX_ENABLED`) is on in production; with it off, only 1Click is quoted.
   Solana and NEAR gas sponsorship are supported by the server and off by default. EVM
   sponsorship (Base, Arbitrum, Polygon, Optimism) is on.

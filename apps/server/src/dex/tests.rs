@@ -2191,7 +2191,7 @@ async fn token_2022_mints_give_their_decimals() {
 #[tokio::test]
 async fn a_quote_past_the_goplus_budget_uses_the_last_verdict_still_standing() {
     // 15 Nov (security review): lookups spent the day's budget; a quote whose verdict
-    // is over an hour old (but within the list's three days) still trades on it.
+    // is over an hour old but under QUOTE_STALE_MAX (2 h) still trades on it.
     let (_, mock) = serve().await;
     let safety = safety::Safety::new(
         reqwest::Client::new(),
@@ -2221,7 +2221,9 @@ async fn a_quote_past_the_goplus_budget_uses_the_last_verdict_still_standing() {
             .checked
     );
     assert_eq!(*mock.goplus_calls.lock().unwrap(), 2);
-    safety.backdate(DexChain::Base, &aero, Duration::from_secs(2 * 3_600));
+    // // safety.backdate(DexChain::Base, &aero, Duration::from_secs(2 * 3_600));
+    // Past the cap, a verdict under QUOTE_STALE_MAX (2 h) is reused...
+    safety.backdate(DexChain::Base, &aero, Duration::from_secs(90 * 60));
     let v = safety.check_fresh(DexChain::Base, &aero).await.unwrap();
     assert!(v.checked && v.flags.is_empty(), "{v:?}");
     assert_eq!(
@@ -2229,6 +2231,10 @@ async fn a_quote_past_the_goplus_budget_uses_the_last_verdict_still_standing() {
         2,
         "no call past the cap"
     );
+    // ...an older one is not: the trade waits (security review, 15 Nov).
+    safety.backdate(DexChain::Base, &aero, Duration::from_secs(3 * 3_600));
+    assert!(!safety.check_fresh(DexChain::Base, &aero).await.unwrap().checked);
+    assert_eq!(*mock.goplus_calls.lock().unwrap(), 2);
     // A token with no standing verdict stays unchecked (blocked).
     assert!(
         !safety

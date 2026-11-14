@@ -5,7 +5,7 @@ tokens), share it, let friends copy it, or buy one together from a shared treasu
 
 [![CI](https://github.com/honey-wallet/honey-wallet/actions/workflows/ci.yml/badge.svg)](https://github.com/honey-wallet/honey-wallet/actions/workflows/ci.yml)
 [![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-blue.svg)](LICENSE)
-[![iOS: TestFlight public beta](https://img.shields.io/badge/iOS-TestFlight%20public%20beta-black.svg)](https://testflight.apple.com/join/5krzqTCR)
+[![iOS: coming soon](https://img.shields.io/badge/iOS-coming%20soon-black.svg)](#try-it)
 [![Android: coming soon](https://img.shields.io/badge/Android-coming%20soon-lightgrey.svg)](#limitations)
 
 <p>
@@ -38,13 +38,15 @@ Tracks, a dated list of what was built and the demo script are in [HACKATHON.md]
 
 ## Try it
 
-1. On an iPhone, join the public beta: [testflight.apple.com/join/5krzqTCR](https://testflight.apple.com/join/5krzqTCR).
-   Android is coming soon.
+iPhone and Android apps are coming soon: the public TestFlight beta is waiting for Apple's
+review. Join the waitlist at [honeywallet.org](https://honeywallet.org). Until then:
+
+1. Run the app locally in test mode: [Run it locally](#run-it-locally). No funds needed.
 2. Open Honey → **Create a new wallet**. The keys are made on the phone.
 3. Feed → **Everyone** → tap **Copy** on a jar. Or tap the jar button → **Create a jar →
    Describe an idea**, type a market view, and review the jar the agent proposes.
 
-The TestFlight build uses real money on mainnet. Use small amounts.
+Builds that point at the production API use real money on mainnet. Use small amounts.
 Website: [honeywallet.org](https://honeywallet.org). Pitch deck: [honeywallet.org/deck](https://honeywallet.org/deck).
 To try it locally without funds, see [Run it locally](#run-it-locally).
 
@@ -274,7 +276,7 @@ Report vulnerabilities privately: [SECURITY.md](SECURITY.md).
 
 ## Limitations
 
-- iOS only for now (TestFlight public beta). Android is not on a store yet.
+- Not on a store yet: the iPhone beta is waiting for Apple's TestFlight review; Android is coming soon.
 - Buying crypto with a card and selling for cash are not connected. Earn shows rates only.
 - The DEX fallback (`DEX_ENABLED`) is on in production; with it off, only 1Click is quoted.
   Solana and NEAR gas sponsorship are supported by the server and off by default.

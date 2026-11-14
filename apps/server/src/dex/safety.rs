@@ -173,6 +173,8 @@ impl Budgets {
 /// A quote re-checks a verdict older than this: a token upgraded into a honeypot keeps
 /// passing for at most an hour (docs/routing/AUDIT.md finding 7).
 pub const FRESH: Duration = Duration::from_secs(60 * 60);
+/// The oldest verdict a quote may reuse when GoPlus's daily budget is spent: 2 × [`FRESH`].
+pub const QUOTE_STALE_MAX: Duration = Duration::from_secs(2 * 60 * 60);
 const QUIET_AFTER_LIMIT: Duration = Duration::from_secs(60);
 /// Verdicts kept at most (15 Nov): `GET /dex/token` can ask about any contract, so the
 /// cache is bounded; expired verdicts go first, then the oldest.
@@ -793,11 +795,18 @@ impl Safety {
             return match purpose {
                 Purpose::Warm => Err(AppError::TooManyRequests),
                 Purpose::Lookup => Ok(unchecked),
-                // The last verdict still standing for the list (memory, which
-                // `check_fresh` filled from Redis), rather than blocking the trade.
+                // // The last verdict still standing for the list (memory, which
+                // // `check_fresh` filled from Redis), rather than blocking the trade.
+                // Purpose::Quote => Ok(self
+                //     .cached(chain, address)
+                //     .filter(|v| v.checked)
+                //     .unwrap_or(unchecked)),
+                // Budget spent: a recent verdict only (at most QUOTE_STALE_MAX old), never
+                // one days old; otherwise the trade waits (security review, 15 Nov).
                 Purpose::Quote => Ok(self
-                    .cached(chain, address)
-                    .filter(|v| v.checked)
+                    .age(chain, address)
+                    .filter(|(age, v)| v.checked && *age < QUOTE_STALE_MAX)
+                    .map(|(_, v)| v)
                     .unwrap_or(unchecked)),
             };
         }
