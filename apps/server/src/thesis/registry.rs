@@ -58,6 +58,9 @@ pub struct DexMarket {
     pub market_cap_usd: Option<f64>,
     pub volume24h_usd: Option<f64>,
     pub change24h_pct: Option<f64>,
+    /// Pool liquidity on the token's DEX (GeckoTerminal's or Jupiter's figure), which
+    /// the high risk level reads for tokens without a CoinGecko market row.
+    pub liquidity_usd: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -219,6 +222,7 @@ pub fn merge_dex(mut assets: Vec<RegistryAsset>, dex: &[TokenView]) -> Vec<Regis
                 market_cap_usd: t.market_cap_usd,
                 volume24h_usd: t.volume24h_usd,
                 change24h_pct: t.change24h_pct,
+                liquidity_usd: t.liquidity_usd.filter(|l| l.is_finite() && *l >= 0.0),
             }),
         });
     }
