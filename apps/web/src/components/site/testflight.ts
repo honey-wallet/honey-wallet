@@ -8,3 +8,9 @@
 // to the waitlist. Set NEXT_PUBLIC_TESTFLIGHT_URL=https://testflight.apple.com/join/5krzqTCR
 // to turn the link back on.
 export const TESTFLIGHT_URL = process.env.NEXT_PUBLIC_TESTFLIGHT_URL ?? '';
+
+/**
+ * The Android APK attached to the latest GitHub release (15 Nov). Empty: Android says
+ * "coming soon" and leads to the waitlist.
+ */
+export const ANDROID_APK_URL = process.env.NEXT_PUBLIC_ANDROID_APK_URL ?? '';

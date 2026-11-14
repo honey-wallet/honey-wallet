@@ -3,7 +3,7 @@ import { siAndroid, siApple } from 'simple-icons';
 import { CtaScene } from './art';
 import { Reveal } from './motion';
 import styles from './story.module.css';
-import { TESTFLIGHT_URL } from './testflight';
+import { ANDROID_APK_URL, TESTFLIGHT_URL } from './testflight';
 import { Display } from './type';
 import { WaitlistForm } from './waitlist-form';
 
@@ -28,7 +28,13 @@ const PLATFORMS = [
     icon: siApple,
     color: 'var(--fg)',
   },
-  { name: 'Android', note: 'coming soon', href: '', icon: siAndroid, color: `#${siAndroid.hex}` },
+  {
+    name: 'Android',
+    note: ANDROID_APK_URL ? 'download' : 'coming soon',
+    href: ANDROID_APK_URL,
+    icon: siAndroid,
+    color: `#${siAndroid.hex}`,
+  },
 ];
 
 /** The close: one headline and the waitlist. Every "Join the waitlist" on the page lands here. */

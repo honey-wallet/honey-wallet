@@ -11,7 +11,7 @@ import { LiquidButton } from '../liquid/components/ui/liquid-button';
 // /** Beta Users' public TestFlight link (created 14 Nov); the env var overrides it. */
 // export const TESTFLIGHT_URL = process.env.NEXT_PUBLIC_TESTFLIGHT_URL ?? 'https://testflight.apple.com/join/5krzqTCR';
 // Moved to ./testflight so the closing card (a server component) can link it too.
-import { TESTFLIGHT_URL } from './testflight';
+import { ANDROID_APK_URL, TESTFLIGHT_URL } from './testflight';
 
 export { TESTFLIGHT_URL };
 
@@ -53,12 +53,18 @@ export function JoinWaitlist({
   // const testflight = useApple() && TESTFLIGHT_URL !== '';
   const device = useDevice();
   const testflight = device === 'apple' && TESTFLIGHT_URL !== '';
+  // An Android phone downloads the APK from GitHub once its link is set (15 Nov).
+  const apk = device === 'android' && ANDROID_APK_URL !== '';
   return (
     <LiquidButton
       className={`${HONEY_BUTTON} ${className ?? ''}`}
       onClick={() => {
         if (testflight) {
           window.location.href = TESTFLIGHT_URL;
+          return;
+        }
+        if (apk) {
+          window.location.href = ANDROID_APK_URL;
           return;
         }
         const form = document.getElementById('start');
@@ -84,11 +90,13 @@ export function JoinWaitlist({
       {/* Without the TestFlight link (15 Nov), an iPhone says coming soon too. */}
       {testflight
         ? 'Get it on TestFlight'
-        : device === 'android'
-          ? 'Android coming soon'
-          : device === 'apple'
-            ? 'iPhone coming soon'
-            : 'Join the waitlist'}
+        : apk
+          ? 'Download for Android'
+          : device === 'android'
+            ? 'Android coming soon'
+            : device === 'apple'
+              ? 'iPhone coming soon'
+              : 'Join the waitlist'}
     </LiquidButton>
   );
 }
