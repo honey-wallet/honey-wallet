@@ -10,7 +10,8 @@ The organizers' rules live at [nearhackathon.com/HACKATHON.md](https://nearhacka
 | | |
 | --- | --- |
 | Event | [NEAR HACKATHON](https://nearhackathon.com), 1 to 14 Nov 2026 (code from the 19 Oct announcement counts, rule Q-001) |
-| Tracks | Social Money (`social`), Unstoppable DeFi (`defi`). TODO(owner): confirm the final list. |
+| Team | Beekeepers (3 people), led by Abhishek Yadav |
+| Tracks | Social Money (`social`), Unstoppable DeFi (`defi`) |
 | Repository | [github.com/honey-wallet/honey-wallet](https://github.com/honey-wallet/honey-wallet) |
 | App | iOS public beta on [TestFlight](https://testflight.apple.com/join/5krzqTCR). Android coming soon. |
 | Website and deck | [honeywallet.org](https://honeywallet.org), [honeywallet.org/deck](https://honeywallet.org/deck) |
@@ -53,12 +54,6 @@ custodian.
 
 Not used: Chain Signatures.
 
-### Other tracks
-
-TODO(owner): decide whether to add any other track. The closest fit is Privacy & Private
-AI (`privacy`): the agent runs on NEAR AI Cloud, and a Confidential Intents proxy for
-private jars exists but is off by default. Honey does not use TEE attestation.
-
 ## What was built during the hackathon
 
 - The NEAR HACKATHON announcement was posted on 19 Oct 2026. Rule Q-001 counts code from
@@ -99,7 +94,6 @@ which on screen: test-mode balances and receipts are samples.
 | 1:55 | Settings → **Your cut on copies** | "Creators set their cut here." |
 | 2:05 | Group jar: invite friends → a friend accepts → **Your share is in** | "Up to five friends, equal shares. The money sits in a Sputnik DAO on NEAR." |
 | 2:30 | Group jar page: **Changes need 2 of 3** | "Selling is a DAO proposal. It runs when the majority approves on their own phones." |
-| 2:45 | The group's DAO on a NEAR explorer | TODO(owner): a real DAO account to show, only if one was funded. |
 
 ## Judging notes
 
@@ -176,14 +170,3 @@ These are marked "coming soon" or switched off in the code today.
   [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). AI coding assistants were used.
 - **Other projects (Q-015).** No team member is entering another project, as confirmed
   by the team on 13 November.
-
-## Before submitting (owner)
-
-- [ ] TODO(owner): publish the X demo post (tags @NEARProtocol and #NEARHackathon, video attached) and add its link above.
-- [ ] TODO(owner): confirm tracks.
-- [ ] TODO(owner): team names and roles in [README.md](README.md#team-license-acknowledgements).
-- [ ] TODO(owner): the `pre-hackathon` tag on GitHub points to `06f9ec1`, which is not in
-      `main`'s history. Move it to `f20e914` (or delete it) and add a `hackathon-submission`
-      tag on the final commit (rule Q-003).
-- [ ] Project name, team lead, email, team size, payout NEAR account and consent go in the
-      submission form only, never in this repository.

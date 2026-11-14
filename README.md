@@ -284,7 +284,7 @@ Report vulnerabilities privately: [SECURITY.md](SECURITY.md).
 
 ## Team, license, acknowledgements
 
-Team: TODO(owner): names and roles.
+Team Beekeepers (3 people), led by Abhishek Yadav.
 
 Honey's code is source-available under [PolyForm Noncommercial 1.0.0](LICENSE).
 Noncommercial use is permitted; commercial use needs separate permission. Contributions
