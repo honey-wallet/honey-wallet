@@ -126,6 +126,88 @@ export function groupStep(
   }
 }
 
+/**
+ * One short line on where the group stands, when there's something to say (the group
+ * page's "Now"; moved here from group/[id].tsx on 14 Nov so Home's Jars rows say the same).
+ */
+export function groupStatus(
+  step: GroupStep,
+  g: Pick<SocialGroup, 'isCreator' | 'creator' | 'members' | 'myState' | 'threshold'>,
+  n: { joined: number; approvals: number },
+): string | null {
+  const creator = g.isCreator ? 'you' : g.creator.displayName;
+  const inCount = membersIn(g).length;
+  switch (step) {
+    case 'goAhead':
+      return `${n.joined} of ${g.members.length - 1} joined`;
+    case 'waitInvites':
+      return `Waiting for ${creator}`;
+    case 'waitCreate':
+      return `Waiting for ${creator} to create it`;
+    case 'pay':
+    case 'paying':
+    case 'waitPay':
+      return `${membersIn(g).filter((m) => m.paid).length} of ${inCount} paid`;
+    case 'approve':
+    case 'waitVotes':
+      return `${n.approvals} of ${g.threshold} approved`;
+    case 'closed':
+      return 'Cashed out';
+    case 'solo':
+      return g.isCreator ? 'You invested alone' : `${g.creator.displayName} invested alone`;
+    case 'out':
+      return g.myState === 'declined'
+        ? 'You passed'
+        : g.myState === 'left'
+          ? 'You left'
+          : 'Invite lapsed';
+    default:
+      return null;
+  }
+}
+
+/** A group still on its way to a jar: before it's bought. */
+const UNBOUGHT: SocialGroup['status'][] = ['inviting', 'creating', 'funding', 'buying'];
+
+/**
+ * The groups Home's Jars lists before they're bought, newest first: ones you made or
+ * joined, and invites still open. Declined, lapsed, left, solo and closed ones aren't
+ * listed; a bought one is listed as its jar.
+ */
+export function pendingGroups<
+  G extends Pick<SocialGroup, 'status' | 'isCreator' | 'myState' | 'members' | 'createdAt'>,
+>(all: G[]): G[] {
+  return all
+    .filter(
+      (g) =>
+        UNBOUGHT.includes(g.status) &&
+        (g.myState === 'accepted' || (g.myState === 'invited' && g.status === 'inviting')),
+    )
+    .sort((a, b) => b.createdAt - a.createdAt);
+}
+
+/** A pending group's line on Home's Jars: where it stands, or who invited you. */
+export function pendingGroupLine(
+  g: Pick<
+    SocialGroup,
+    | 'status'
+    | 'isCreator'
+    | 'creator'
+    | 'myState'
+    | 'members'
+    | 'proposals'
+    | 'threshold'
+    | 'shareUsd'
+  >,
+) {
+  const step = groupStep(g, { paying: false, votedOnBuy: false });
+  if (step === 'join') return `${g.creator.displayName} invited you`;
+  // Whoever opened the vote approved it (the votes themselves are on NEAR).
+  const approvals = openProposal(g, 'buy') ? 1 : 0;
+  const joined = membersIn(g).length - 1;
+  return groupStatus(step, g, { joined, approvals }) ?? `${dollars(g.shareUsd)} each`;
+}
+
 /** The open vote of a kind, newest first, if there is one. */
 export const openProposal = (g: Pick<SocialGroup, 'proposals'>, kind: SocialGroupProposalKind) =>
   g.proposals.find((p) => p.kind === kind && p.status === 'open');

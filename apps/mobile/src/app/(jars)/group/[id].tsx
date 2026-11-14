@@ -14,6 +14,7 @@ import { isDemoGroup } from '@/lib/group-demo';
 import {
   dollars,
   type GroupStep,
+  groupStatus,
   groupStep,
   memberChip,
   membersIn,
@@ -217,7 +218,8 @@ function GroupPage({ group: g, ring }: { group: SocialGroup; ring: string }) {
 
   // Whoever opened the vote approved it.
   const approvals = chainBuy?.approvals.length ?? (buyVote ? 1 : 0);
-  const status = statusLine(step, g, { joined, approvals });
+  // const status = statusLine(step, g, { joined, approvals });
+  const status = groupStatus(step, g, { joined, approvals });
 
   return (
     <PushedScreen
@@ -276,42 +278,43 @@ function MemberRow({ member: m }: { member: SocialGroupMember }) {
   );
 }
 
-/** One short line on where the group stands, when there's something to say. */
-function statusLine(
-  step: GroupStep,
-  g: SocialGroup,
-  n: { joined: number; approvals: number },
-): string | null {
-  const creator = g.isCreator ? 'you' : g.creator.displayName;
-  const inCount = membersIn(g).length;
-  switch (step) {
-    case 'goAhead':
-      return `${n.joined} of ${g.members.length - 1} joined`;
-    case 'waitInvites':
-      return `Waiting for ${creator}`;
-    case 'waitCreate':
-      return `Waiting for ${creator} to create it`;
-    case 'pay':
-    case 'paying':
-    case 'waitPay':
-      return `${membersIn(g).filter((m) => m.paid).length} of ${inCount} paid`;
-    case 'approve':
-    case 'waitVotes':
-      return `${n.approvals} of ${g.threshold} approved`;
-    case 'closed':
-      return 'Cashed out';
-    case 'solo':
-      return g.isCreator ? 'You invested alone' : `${g.creator.displayName} invested alone`;
-    case 'out':
-      return g.myState === 'declined'
-        ? 'You passed'
-        : g.myState === 'left'
-          ? 'You left'
-          : 'Invite lapsed';
-    default:
-      return null;
-  }
-}
+// Moved to group-jar-core `groupStatus` (14 Nov) so Home's Jars rows say the same.
+// /** One short line on where the group stands, when there's something to say. */
+// function statusLine(
+//   step: GroupStep,
+//   g: SocialGroup,
+//   n: { joined: number; approvals: number },
+// ): string | null {
+//   const creator = g.isCreator ? 'you' : g.creator.displayName;
+//   const inCount = membersIn(g).length;
+//   switch (step) {
+//     case 'goAhead':
+//       return `${n.joined} of ${g.members.length - 1} joined`;
+//     case 'waitInvites':
+//       return `Waiting for ${creator}`;
+//     case 'waitCreate':
+//       return `Waiting for ${creator} to create it`;
+//     case 'pay':
+//     case 'paying':
+//     case 'waitPay':
+//       return `${membersIn(g).filter((m) => m.paid).length} of ${inCount} paid`;
+//     case 'approve':
+//     case 'waitVotes':
+//       return `${n.approvals} of ${g.threshold} approved`;
+//     case 'closed':
+//       return 'Cashed out';
+//     case 'solo':
+//       return g.isCreator ? 'You invested alone' : `${g.creator.displayName} invested alone`;
+//     case 'out':
+//       return g.myState === 'declined'
+//         ? 'You passed'
+//         : g.myState === 'left'
+//           ? 'You left'
+//           : 'Invite lapsed';
+//     default:
+//       return null;
+//   }
+// }
 
 /** The page's buttons for this step: the one honey action at the bottom, grey above it. */
 function footerFor(

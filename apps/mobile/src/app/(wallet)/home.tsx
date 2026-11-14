@@ -32,6 +32,7 @@ import { ExploreTokens } from '@/components/home/ExploreTokens';
 import { NftGallery } from '@/components/home/NftGallery';
 import { TradesList, useHasTrades } from '@/components/home/PositionsList';
 import { Icon, type IconName } from '@/components/Icon';
+import { PendingGroupList, usePendingGroups } from '@/components/jars/GroupJar';
 import { JarList } from '@/components/jars/JarParts';
 import { HoneyJar } from '@/components/logo/HoneyJar';
 import { HoneyMascot } from '@/components/logo/HoneyMascot';
@@ -66,7 +67,9 @@ import { TabScreen } from '@/components/wallet/TabScreen';
 import { WalletHeader } from '@/components/wallet/WalletHeader';
 import { openBuy } from '@/lib/buy';
 import { SHOW_DEMO_LABELS } from '@/lib/demo-money-copy';
+import { useFocusPolling } from '@/lib/focus-polling';
 import { useMoney } from '@/lib/fx';
+import { loadMyGroups } from '@/lib/group-jars';
 import { tap } from '@/lib/haptics';
 import { LOADS } from '@/lib/loads';
 import { useHoldingsChart } from '@/lib/market';
@@ -159,6 +162,13 @@ function NoWalletYet() {
   );
 }
 
+/** Your group jars from Honey, quietly (the ones on this phone stay when it can't). */
+const refreshGroups = () => {
+  void loadMyGroups().catch(() => {});
+};
+/** How often Home looks again for friends joining, paying or inviting you. */
+const GROUPS_POLL_MS = 30_000;
+
 function HomeScreen() {
   const reduceMotion = useReducedMotion();
   const insets = useSafeAreaInsets();
@@ -185,6 +195,7 @@ function HomeScreen() {
   const refresh = async () => {
     setRefreshing(true);
     await refreshNow(wallet).catch(() => undefined);
+    if (SOCIAL && !multisig) refreshGroups();
     setRefreshing(false);
   };
   // Each wallet's balances arrive once; switching back to one shows them straight away.
@@ -210,7 +221,12 @@ function HomeScreen() {
   // An empty wallet, as on Uniswap's Home: Explore (the top tokens) instead of an empty
   // Tokens list, and only the sections that have something in them.
   const exploring = empty && !failed && !multisig;
-  const hasJars = useThesisJars().some((j) => j.mine);
+  // const hasJars = useThesisJars().some((j) => j.mine);
+  // A group jar still waiting for friends counts too (14 Nov).
+  const pendingGroups = usePendingGroups();
+  const hasJars = useThesisJars().some((j) => j.mine) || pendingGroups.length > 0;
+  // Group jars live on Honey: friends join, pay and invite you while you're away.
+  useFocusPolling(refreshGroups, GROUPS_POLL_MS, SOCIAL && !multisig);
   const pastActivity = (usePortfolio(wallet, exploring).activity?.length ?? 0) > 0;
   // const sections = SECTIONS.filter(
   //   (s) =>
@@ -976,9 +992,25 @@ const useStyles = makeStyles((c) => ({
 }));
 
 /** Home's Jars: the jars you own or share, or a way to start one. */
+// function HomeJars() {
+//   const mine = useThesisJars().filter((j) => j.mine);
+//   if (!mine.length)
+//     return (
+//       <EmptyState
+//         icon="pie"
+//         title="No jars yet"
+//         hint="Turn an idea into tokens you can buy, alone or with friends."
+//         action={{ label: 'Create a jar', onPress: () => router.push('/jar-create') }}
+//       />
+//     );
+//   return <JarList jars={mine} />;
+// }
+// 14 Nov: group jars not bought yet come first (made, joined or invited to), so one
+// waiting for friends is never lost behind a back swipe.
 function HomeJars() {
   const mine = useThesisJars().filter((j) => j.mine);
-  if (!mine.length)
+  const pending = usePendingGroups();
+  if (!mine.length && !pending.length)
     return (
       <EmptyState
         icon="pie"
@@ -987,5 +1019,10 @@ function HomeJars() {
         action={{ label: 'Create a jar', onPress: () => router.push('/jar-create') }}
       />
     );
-  return <JarList jars={mine} />;
+  return (
+    <View>
+      <PendingGroupList list={pending} />
+      <JarList jars={mine} />
+    </View>
+  );
 }
