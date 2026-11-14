@@ -42,7 +42,7 @@ verify Honey → Midnight → Graphite → Honey, relaunch persistence, and deep
 ### Dependency security patches
 
 `pnpm-workspace.yaml` pins Xcode's UUID dependency to 11.1.1 and query-string's
-decoder to 0.5.0. The decoder patch preserves its callable CommonJS export for
+decoder to 0.5.1. The decoder patch preserves its callable CommonJS export for
 Expo Router without changing the upstream decoding fix.
 
 Until fixed releases exist, two tracked patches address high-severity advisories:
