@@ -26,6 +26,11 @@ describe('DEX routing', () => {
     expect(fetch.mock.calls[0]?.[0]).toBe(
       'http://api.test/api/v1/dex/token?chain=base&address=0x940181a94a35a4569e4529a3cdfb74e38fd98631',
     );
+    // Without a chain (15 Nov): the server finds where an EVM contract trades.
+    await api.dexToken(undefined, '0x940181a94a35a4569e4529a3cdfb74e38fd98631');
+    expect(fetch.mock.calls[1]?.[0]).toBe(
+      'http://api.test/api/v1/dex/token?address=0x940181a94a35a4569e4529a3cdfb74e38fd98631',
+    );
   });
 
   it('quotes and routes with only the contract fields', async () => {

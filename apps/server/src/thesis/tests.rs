@@ -330,6 +330,95 @@ async fn risk_levels_share_one_ranked_set_and_one_quote_round() {
     assert!(quoter.0.load(std::sync::atomic::Ordering::SeqCst) <= 12);
 }
 
+/// 15 Nov: a token is quoted at its smallest and largest amounts only; the amounts in
+/// between are read off those two (exact for a linear price), and a "too small" refusal
+/// at the smallest amount still drops it from every level.
+#[tokio::test]
+async fn each_token_is_quoted_at_its_ends_and_a_too_small_refusal_still_counts() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let base = vec![
+        pick("BTC", Conviction::High),
+        pick("XAUT", Conviction::High),
+        pick("RENDER", Conviction::Medium),
+    ];
+    let origin = assets().into_iter().find(|a| a.symbol == "USDC").unwrap();
+    // The amounts each token is sized at across the three levels.
+    let (sized, _) = strategy::variants(&base, 100.0, Some(&origin), None).await;
+    let amounts = |ticker: &str| {
+        let mut a: Vec<f64> = sized
+            .iter()
+            .flat_map(|v| &v.picks)
+            .filter(|p| p.ticker == ticker)
+            .map(|p| p.amount_usd)
+            .collect();
+        a.sort_by(f64::total_cmp);
+        a.dedup();
+        a
+    };
+    let distinct: usize = ["BTC", "XAUT", "RENDER"]
+        .iter()
+        .map(|t| amounts(t).len())
+        .sum();
+    let quoter = CountingQuoter(AtomicUsize::new(0));
+    let (variants, log) = strategy::variants(&base, 100.0, Some(&origin), Some(&quoter)).await;
+    assert!(log.failed.is_empty());
+    let calls = quoter.0.load(Ordering::SeqCst);
+    assert!(calls <= 6, "at most two per token, was {calls}");
+    assert!(calls <= distinct);
+    for p in variants.iter().flat_map(|v| &v.picks) {
+        let q = p.quote.as_ref().unwrap();
+        assert!(q.ok, "{}", p.ticker);
+        let got: f64 = q.amount_out.as_deref().unwrap().parse().unwrap();
+        let want = p.amount_usd / p.asset.price_usd.unwrap_or(1.0);
+        assert!(
+            (got - want).abs() <= want * 1e-6,
+            "{}: {got} vs {want}",
+            p.ticker
+        );
+    }
+
+    // A token sized at two or more amounts is refused below the middle of them: its
+    // smallest is refused, so it leaves every level, as when each amount was quoted.
+    let target = ["BTC", "XAUT", "RENDER"]
+        .into_iter()
+        .find(|t| amounts(t).len() >= 2)
+        .unwrap_or_else(|| panic!("{:?}", ["BTC", "XAUT", "RENDER"].map(amounts)));
+    let sizes = amounts(target);
+    let floor = (sizes[0] + sizes[sizes.len() - 1]) / 2.0;
+    let asset = sized
+        .iter()
+        .flat_map(|v| &v.picks)
+        .find(|p| p.ticker == target)
+        .map(|p| p.asset.asset_id.clone())
+        .unwrap();
+    struct TooSmall(String, f64);
+    #[async_trait]
+    impl Quoter for TooSmall {
+        async fn dry_quote(
+            &self,
+            from: &RegistryAsset,
+            to: &RegistryAsset,
+            amount_in: u128,
+        ) -> Result<DryQuote, String> {
+            if to.asset_id == self.0 && (amount_in as f64) / 1e6 < self.1 {
+                return Err("Amount is too low for bridge".into());
+            }
+            MockQuoter.dry_quote(from, to, amount_in).await
+        }
+    }
+    let (variants, log) =
+        strategy::variants(&base, 100.0, Some(&origin), Some(&TooSmall(asset, floor))).await;
+    assert!(
+        log.failed.iter().any(|(t, _)| t == target),
+        "{target} {sizes:?} {log:?}"
+    );
+    assert!(
+        variants
+            .iter()
+            .all(|v| v.picks.iter().all(|p| p.ticker != target))
+    );
+}
+
 #[test]
 fn banned_phrases_are_whole_words() {
     assert_eq!(banned_phrase("This is GUARANTEED."), Some("guaranteed"));

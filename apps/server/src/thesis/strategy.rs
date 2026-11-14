@@ -794,12 +794,74 @@ pub async fn variants(
         let (Some(quoter), Some(origin)) = (quoter, origin) else {
             break;
         };
+        // Replaced 15 Nov: one dry quote per (token, amount), up to 45 a run.
+        // let mut needed: Vec<&StrategyPick> = Vec::new();
+        // let mut seen = HashSet::new();
+        // for p in out.iter().flat_map(|v| &v.picks) {
+        //     let key = (p.asset.asset_id.clone(), cents(p.amount_usd));
+        //     if !quotes.contains_key(&key) && seen.insert(key) {
+        //         needed.push(p);
+        //     }
+        // }
+        // if needed.is_empty() {
+        //     break;
+        // }
+        // tokens.extend(needed.iter().map(|p| p.asset.asset_id.clone()));
+        // let results = futures_util::future::join_all(needed.iter().map(|p| async move {
+        //     if p.asset.asset_id == origin.asset_id {
+        //         return Ok(super::quote::DryQuote {
+        //             amount_out: format!("{:.2}", p.amount_usd),
+        //         });
+        //     }
+        //     quoter
+        //         .dry_quote(origin, &p.asset, atomic_usd(p.amount_usd, origin.decimals))
+        //         .await
+        // }))
+        // .await;
+        // let mut new_failure = false;
+        // for (p, result) in needed.iter().zip(results) {
+        //     if let Err(why) = &result
+        //         && !failed.contains_key(&p.coin_key)
+        //     {
+        //         failed.insert(p.coin_key.clone(), (p.ticker.clone(), why.clone()));
+        //         log.failed.push((p.ticker.clone(), why.clone()));
+        //         new_failure = true;
+        //     }
+        //     quotes.insert((p.asset.asset_id.clone(), cents(p.amount_usd)), result);
+        // }
+        // if !new_failure {
+        //     break;
+        // }
+        //
+        // 15 Nov: per token, only its smallest and largest amounts not yet covered are
+        // quoted; an amount between two good quotes of the same token is read off the
+        // line between them (`between`). A refusal for being too small is caught at the
+        // smallest amount and one for being too big (liquidity) at the largest; either
+        // drops the token from every level, as any failed quote did before.
         let mut needed: Vec<&StrategyPick> = Vec::new();
         let mut seen = HashSet::new();
+        let mut by_asset: HashMap<String, Vec<&StrategyPick>> = HashMap::new();
         for p in out.iter().flat_map(|v| &v.picks) {
             let key = (p.asset.asset_id.clone(), cents(p.amount_usd));
-            if !quotes.contains_key(&key) && seen.insert(key) {
-                needed.push(p);
+            if quotes.contains_key(&key) || !seen.insert(key.clone()) {
+                continue;
+            }
+            if let Some(q) = between(&quotes, &key.0, key.1) {
+                quotes.insert(key, Ok(q));
+                continue;
+            }
+            by_asset.entry(key.0).or_default().push(p);
+        }
+        for picks in by_asset.values() {
+            let lo = picks.iter().min_by_key(|p| cents(p.amount_usd));
+            let hi = picks.iter().max_by_key(|p| cents(p.amount_usd));
+            for p in lo.into_iter().chain(hi) {
+                if !needed.iter().any(|n| {
+                    n.asset.asset_id == p.asset.asset_id
+                        && cents(n.amount_usd) == cents(p.amount_usd)
+                }) {
+                    needed.push(p);
+                }
             }
         }
         if needed.is_empty() {
@@ -827,6 +889,17 @@ pub async fn variants(
                 new_failure = true;
             }
             quotes.insert((p.asset.asset_id.clone(), cents(p.amount_usd)), result);
+        }
+        // The amounts in between, now covered by both ends.
+        for picks in by_asset.values() {
+            for p in picks {
+                let key = (p.asset.asset_id.clone(), cents(p.amount_usd));
+                if !quotes.contains_key(&key)
+                    && let Some(q) = between(&quotes, &key.0, key.1)
+                {
+                    quotes.insert(key, Ok(q));
+                }
+            }
         }
         if !new_failure {
             break;
@@ -865,6 +938,56 @@ pub async fn variants(
         }
     }
     (out, log)
+}
+
+/// A dry quote for `asset` at `at` cents read off two good quotes of it (15 Nov), the
+/// nearest below and above (either may be `at` itself): a straight line between their
+/// outputs. None unless both exist.
+fn between(
+    quotes: &HashMap<(String, u64), Result<super::quote::DryQuote, String>>,
+    asset: &str,
+    at: u64,
+) -> Option<super::quote::DryQuote> {
+    let good = |below: bool| {
+        quotes
+            .iter()
+            .filter(|((a, c), r)| {
+                a == asset && r.is_ok() && if below { *c <= at } else { *c >= at }
+            })
+            .filter_map(|((_, c), r)| {
+                let out = r.as_ref().ok()?;
+                Some((
+                    *c,
+                    out.amount_out.parse::<f64>().ok()?,
+                    out.amount_out.clone(),
+                ))
+            })
+            .filter(|(_, v, _)| v.is_finite() && *v >= 0.0)
+            .collect::<Vec<_>>()
+    };
+    let lo = good(true).into_iter().max_by_key(|(c, _, _)| *c)?;
+    let hi = good(false).into_iter().min_by_key(|(c, _, _)| *c)?;
+    if lo.0 == at {
+        return Some(super::quote::DryQuote { amount_out: lo.2 });
+    }
+    if hi.0 == at {
+        return Some(super::quote::DryQuote { amount_out: hi.2 });
+    }
+    let t = (at - lo.0) as f64 / (hi.0 - lo.0) as f64;
+    let value = lo.1 + (hi.1 - lo.1) * t;
+    let places = [&lo.2, &hi.2]
+        .iter()
+        .map(|s| s.split_once('.').map(|(_, f)| f.len()).unwrap_or(0))
+        .max()
+        .unwrap_or(0)
+        .min(18);
+    let text = format!("{value:.places$}");
+    let text = if text.contains('.') {
+        text.trim_end_matches('0').trim_end_matches('.').to_string()
+    } else {
+        text
+    };
+    Some(super::quote::DryQuote { amount_out: text })
 }
 
 fn clip(s: &str, max: usize) -> String {

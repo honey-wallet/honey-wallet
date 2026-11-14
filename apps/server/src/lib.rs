@@ -206,6 +206,10 @@ fn router(config: &Config, health: runtime::RuntimeHealth, services: RouterServi
         std::sync::Arc::new(routes::polymarket::PolymarketCatalogService::new(store))
     }));
     let market = market_data();
+    // CoinGecko's pace shared with the DEX build and every replica (15 Nov).
+    if let Some(market) = &market {
+        market.share_pacer(redis.clone());
+    }
     let portfolio = portfolio_router(
         market.clone(),
         redis.clone().map(|redis| {

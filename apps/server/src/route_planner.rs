@@ -303,6 +303,11 @@ pub trait Sources: Send + Sync {
     async fn dex(&self, user: Uuid, ask: QuoteRequest) -> Result<QuoteResponse, AppError>;
     /// A DEX token's USD price and decimals.
     async fn dex_price(&self, chain: DexChain, token: &str) -> Option<(f64, u8)>;
+    /// A DEX token's USD price read within the last minute (live: DexScreener by
+    /// address, `DexService::price_now`), never a list's (up to hours old).
+    async fn dex_price_now(&self, chain: DexChain, token: &str) -> Option<f64> {
+        self.dex_price(chain, token).await.map(|(p, _)| p)
+    }
     /// Safe DEX tokens that are the same coin as `(chain, token)` by CoinGecko's map,
     /// from lists already built ([`DexService::same_coin`]).
     async fn same_coin(&self, _chain: DexChain, _token: &str) -> Vec<crate::dex::TokenView> {
@@ -627,7 +632,14 @@ pub fn choose(
 pub struct Planner<S: Sources> {
     sources: S,
     timeout: Duration,
+    /// How long the 1Click direct quote may run alone before the fallbacks start anyway.
+    hedge: Duration,
 }
+
+/// 15 Nov: 1Click is asked first and the fallbacks only when it is costly or fails; when
+/// it hasn't answered within this, the fallbacks start alongside it, so a slow 1Click
+/// (with its retry) and then the fallbacks never add up past the app's 10 s budget.
+pub const INTENTS_HEDGE: Duration = Duration::from_millis(1_500);
 
 type Candidate<'a> = BoxFuture<'a, (RouteKind, Result<RouteOption, AppError>)>;
 
@@ -636,7 +648,14 @@ impl<S: Sources> Planner<S> {
         Self {
             sources,
             timeout: LEG_TIMEOUT,
+            hedge: INTENTS_HEDGE,
         }
+    }
+
+    /// Another hedge delay (tests).
+    pub fn with_hedge(mut self, hedge: Duration) -> Self {
+        self.hedge = hedge;
+        self
     }
 
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
@@ -682,22 +701,46 @@ impl<S: Sources> Planner<S> {
     ) -> Result<QuoteResponse, AppError> {
         // Audit #4: the DEX ceilings are charged before the provider is asked.
         self.sources.admit_dex(user, chain).await?;
-        for token in [sell, buy] {
-            self.sources.warm(chain, token);
+        // for token in [sell, buy] {
+        //     self.sources.warm(chain, token);
+        // }
+        // 15 Nov: the quote below fills the same caches (GoPlus, decimals, price), so warming
+        // alongside it asked the providers twice. Warm only when its timeout dropped it.
+        let quoted = self
+            .timed(self.sources.dex(
+                user,
+                QuoteRequest {
+                    chain: chain.name().into(),
+                    sell_token: sell.into(),
+                    buy_token: buy.into(),
+                    sell_amount: amount.into(),
+                    taker: taker.into(),
+                    slippage_bps: Some(slippage),
+                    sponsor: None,
+                },
+            ))
+            .await;
+        if matches!(quoted, Err(AppError::Timeout)) {
+            for token in [sell, buy] {
+                self.sources.warm(chain, token);
+            }
         }
-        self.timed(self.sources.dex(
-            user,
-            QuoteRequest {
-                chain: chain.name().into(),
-                sell_token: sell.into(),
-                buy_token: buy.into(),
-                sell_amount: amount.into(),
-                taker: taker.into(),
-                slippage_bps: Some(slippage),
-                sponsor: None,
-            },
-        ))
-        .await
+        quoted
+    }
+
+    /// A same-coin candidate's price now (15 Nov): within [`SAME_COIN_PRICE_GAP`] of the
+    /// pick's, else the candidate is dropped (as it is without a live price).
+    async fn same_coin_price(
+        &self,
+        t: &crate::dex::TokenView,
+        pick_price: f64,
+    ) -> Result<f64, AppError> {
+        self.sources
+            .dex_price_now(t.chain, &t.address)
+            .await
+            .filter(|p| p.is_finite() && *p > 0.0)
+            .filter(|p| (p - pick_price).abs() <= pick_price * SAME_COIN_PRICE_GAP)
+            .ok_or_else(|| bad("the same coin's live price doesn't match the pick's"))
     }
 
     async fn swap_gas(&self, user: Uuid, chain: DexChain, q: &QuoteResponse) -> GasCost {
@@ -1060,10 +1103,12 @@ impl<S: Sources> Planner<S> {
                 .into_iter()
                 .filter(|t| t.coingecko_id.is_some())
                 .filter(|t| t.liquidity_usd.unwrap_or(0.0) >= SAME_COIN_MIN_LIQUIDITY)
-                .filter(|t| {
-                    t.price_usd.is_finite()
-                        && (t.price_usd - pick_price).abs() <= pick_price * SAME_COIN_PRICE_GAP
-                })
+                // .filter(|t| {
+                //     t.price_usd.is_finite()
+                //         && (t.price_usd - pick_price).abs() <= pick_price * SAME_COIN_PRICE_GAP
+                // })
+                // 15 Nov: the list's price is up to a day old; each candidate checks a live
+                // price instead (`same_coin_price`), only when the fallbacks run.
                 .filter(|t| !(t.chain == pick_chain && t.address == *pick_address))
                 .collect();
             found.sort_by(|a, b| {
@@ -1091,12 +1136,14 @@ impl<S: Sources> Planner<S> {
                 candidates.push(
                     async move {
                         let r = async {
+                            let live = self.same_coin_price(&t, pick_price).await?;
                             let q = self
                                 .dex_quote(
                                     user, from_chain, &sell, &t.address, &amount, &taker, slippage,
                                 )
                                 .await?;
-                            let price = pick_price.min(t.price_usd);
+                            // let price = pick_price.min(t.price_usd);
+                            let price = pick_price.min(live);
                             let mut o = self
                                 .one_swap(
                                     user,
@@ -1147,6 +1194,7 @@ impl<S: Sources> Planner<S> {
                     candidates.push(
                         async move {
                             let r = async {
+                                let live = self.same_coin_price(&t, pick_price).await?;
                                 let bridge = self.intents_quote(user, ask.clone()).await?;
                                 let q = self
                                     .dex_quote(
@@ -1159,7 +1207,8 @@ impl<S: Sources> Planner<S> {
                                         slippage,
                                     )
                                     .await?;
-                                let price = pick_price.min(t.price_usd);
+                                // let price = pick_price.min(t.price_usd);
+                                let price = pick_price.min(live);
                                 let deposit = self
                                     .sources
                                     .gas(user, from_chain, Work::Deposit { native })
@@ -1377,16 +1426,55 @@ impl<S: Sources> Planner<S> {
         // costly, refused or failed 1Click quote asks the fallbacks (in parallel, as before).
         let intents_first =
             !candidates.is_empty() && from.listing.is_some() && to.listing.is_some();
+        let settled = |first: &(RouteKind, Result<RouteOption, AppError>)| {
+            matches!(first, (RouteKind::Intents, Ok(o))
+                if amount_in_usd.is_none_or(|usd| o.min_out_usd >= usd * SWITCH_BELOW))
+        };
         let results = if intents_first {
             let mut rest = candidates;
-            let first = rest.remove(0).await;
-            let settled = matches!(&first, (RouteKind::Intents, Ok(o))
-                if amount_in_usd.is_none_or(|usd| o.min_out_usd >= usd * SWITCH_BELOW));
-            let mut results = vec![first];
-            if !settled && !rest.is_empty() {
-                results.extend(join_all(rest).await);
+            // let first = rest.remove(0).await;
+            // let settled = matches!(&first, (RouteKind::Intents, Ok(o))
+            //     if amount_in_usd.is_none_or(|usd| o.min_out_usd >= usd * SWITCH_BELOW));
+            // let mut results = vec![first];
+            // if !settled && !rest.is_empty() {
+            //     results.extend(join_all(rest).await);
+            // }
+            // results
+            // 15 Nov (hedged): 1Click alone for `hedge`; if it hasn't answered by then the
+            // fallbacks start alongside it, and are dropped if it then answers well.
+            let mut first = rest.remove(0);
+            let early = tokio::select! {
+                r = &mut first => Some(r),
+                _ = tokio::time::sleep(self.hedge) => None,
+            };
+            match early {
+                Some(first) => {
+                    let keep = settled(&first);
+                    let mut results = vec![first];
+                    if !keep && !rest.is_empty() {
+                        results.extend(join_all(rest).await);
+                    }
+                    results
+                }
+                None => {
+                    let mut others = Box::pin(join_all(rest));
+                    tokio::select! {
+                        r = &mut first => {
+                            let keep = settled(&r);
+                            let mut results = vec![r];
+                            if !keep {
+                                results.extend(others.await);
+                            }
+                            results
+                        }
+                        others = &mut others => {
+                            let mut results = vec![first.await];
+                            results.extend(others);
+                            results
+                        }
+                    }
+                }
             }
-            results
         } else {
             join_all(candidates).await
         };
@@ -1682,6 +1770,13 @@ impl Sources for LiveSources {
             return Some((1.0, 6));
         }
         self.dex.as_ref()?.token_price(chain, token).await
+    }
+
+    async fn dex_price_now(&self, chain: DexChain, token: &str) -> Option<f64> {
+        if chain.is_usdc(token) {
+            return Some(1.0);
+        }
+        self.dex.as_ref()?.price_now(chain, token).await.ok()
     }
 
     async fn same_coin(&self, chain: DexChain, token: &str) -> Vec<crate::dex::TokenView> {

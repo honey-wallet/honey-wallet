@@ -115,6 +115,8 @@ enum Answer {
     Out(&'static str, &'static str),
     Fail(AppError),
     Slow,
+    /// Answers after this many milliseconds (15 Nov: the hedge).
+    Late(u64, &'static str, &'static str),
 }
 
 impl Clone for AppError {
@@ -142,6 +144,8 @@ struct Fake {
     /// What `same_coin` answers, and every 1Click ask (recipients checked).
     same: Vec<crate::dex::TokenView>,
     asks: Mutex<Vec<IntentsAsk>>,
+    /// Live prices by token (15 Nov); without one, a same-coin token's list price.
+    live: Vec<(&'static str, f64)>,
 }
 
 impl Fake {
@@ -157,6 +161,7 @@ impl Fake {
             out_of_budget: false,
             same: Vec::new(),
             asks: Mutex::new(Vec::new()),
+            live: Vec::new(),
         }
     }
 }
@@ -168,6 +173,10 @@ async fn answer<T>(a: Answer, ok: impl FnOnce(&str, &str) -> T) -> Result<T, App
         Answer::Slow => {
             tokio::time::sleep(Duration::from_secs(5)).await;
             Err(AppError::Busy)
+        }
+        Answer::Late(ms, out, min) => {
+            tokio::time::sleep(Duration::from_millis(ms)).await;
+            Ok(ok(out, min))
         }
     }
 }
@@ -238,6 +247,15 @@ impl Sources for Fake {
             return Some((1.0, 6));
         }
         (token == AERO).then_some((0.5, 18))
+    }
+    async fn dex_price_now(&self, chain: DexChain, token: &str) -> Option<f64> {
+        if let Some((_, p)) = self.live.iter().find(|(t, _)| *t == token) {
+            return Some(*p);
+        }
+        if let Some(t) = self.same.iter().find(|t| t.address == token) {
+            return Some(t.price_usd);
+        }
+        self.dex_price(chain, token).await.map(|(p, _)| p)
     }
     async fn same_coin(&self, chain: DexChain, token: &str) -> Vec<crate::dex::TokenView> {
         if chain == DexChain::Ethereum && token == LINK_ETH {
@@ -1188,4 +1206,96 @@ async fn a_btc_legs_usdc_hop_goes_to_the_wallet_not_the_bitcoin_address() {
     assert_eq!(asks[0].recipient, BTC_ADDRESS);
     assert!(asks.len() >= 2);
     assert!(asks.iter().skip(1).all(|a| a.recipient == TAKER));
+}
+
+#[tokio::test]
+async fn the_same_coin_is_priced_live_not_from_the_list() {
+    // 15 Nov: the list says Base's LINK is $20.1 (it can be a day old); DexScreener says
+    // $21 now, 5% off the pick's $20, so it is dropped. Arbitrum's list price is 5% off but
+    // its live price matches, so it is used, valued at the lower live price.
+    let mut f = link_fake(vec![
+        same(
+            DexChain::Base,
+            LINK_BASE,
+            20.1,
+            400_000.0,
+            Some("chainlink"),
+        ),
+        same(
+            DexChain::Arbitrum,
+            LINK_ARB,
+            21.0,
+            2_000_000.0,
+            Some("chainlink"),
+        ),
+    ]);
+    f.live = vec![(LINK_BASE, 21.0), (LINK_ARB, 19.9)];
+    let r = Planner::new(f)
+        .with_timeout(Duration::from_millis(100))
+        .best(Uuid::new_v4(), link_leg(false))
+        .await
+        .unwrap();
+    assert!(r.alternatives.iter().all(|o| o.kind != RouteKind::Wrapped));
+    let arb = std::iter::once(&r.best)
+        .chain(r.alternatives.iter())
+        .find(|o| o.buy_chain == "arbitrum")
+        .expect("Arbitrum kept on its live price");
+    assert!((arb.min_out_usd - 0.246 * 1.99).abs() < 1e-6);
+    assert!(r.best.kind != RouteKind::Wrapped);
+}
+
+#[tokio::test]
+async fn a_fast_good_1click_answer_asks_no_dex() {
+    // 15 Nov: 1Click answers well inside the hedge: no fallback is quoted at all.
+    let p = Planner::new(Fake::new(
+        vec![Answer::Late(20, "9990000", "9950000")],
+        vec![(USDT_ARB, Answer::Out("10000000", "9990000"))],
+    ))
+    .with_timeout(Duration::from_secs(1))
+    .with_hedge(Duration::from_millis(300));
+    let r = p
+        .best(Uuid::new_v4(), stable_swap("10000000"))
+        .await
+        .unwrap();
+    assert_eq!(r.best.kind, RouteKind::Intents);
+    assert_eq!(p.sources().dex_calls.load(AtomicOrdering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn a_slow_1click_answer_starts_the_fallbacks_after_the_hedge() {
+    // 1Click takes 300 ms (good in the end); the hedge is 50 ms, so the DEX is quoted
+    // alongside it, and 1Click is still chosen.
+    let p = Planner::new(Fake::new(
+        vec![Answer::Late(300, "9990000", "9950000")],
+        vec![(USDT_ARB, Answer::Out("10000000", "9990000"))],
+    ))
+    .with_timeout(Duration::from_secs(1))
+    .with_hedge(Duration::from_millis(50));
+    let r = p
+        .best(Uuid::new_v4(), stable_swap("10000000"))
+        .await
+        .unwrap();
+    assert_eq!(r.best.kind, RouteKind::Intents);
+    assert_eq!(p.sources().dex_calls.load(AtomicOrdering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn a_hedged_plan_takes_the_longer_of_1click_and_the_fallbacks_not_their_sum() {
+    // 1Click times out twice (2 × 500 ms); the DEX answers in 450 ms. Unhedged that was
+    // 1,000 + 450 ms; hedged at 50 ms it is about 1,000 ms.
+    let p = Planner::new(Fake::new(
+        vec![Answer::Slow],
+        vec![(USDT_ARB, Answer::Late(450, "10000000", "9990000"))],
+    ))
+    .with_timeout(Duration::from_millis(500))
+    .with_hedge(Duration::from_millis(50));
+    let started = std::time::Instant::now();
+    let r = p
+        .best(Uuid::new_v4(), stable_swap("10000000"))
+        .await
+        .unwrap();
+    let took = started.elapsed();
+    assert_eq!(r.best.kind, RouteKind::Dex);
+    assert!(took < Duration::from_millis(1_300), "{took:?}");
+    assert_eq!(p.sources().dex_calls.load(AtomicOrdering::SeqCst), 1);
 }
