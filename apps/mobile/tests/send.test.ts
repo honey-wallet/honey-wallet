@@ -413,6 +413,7 @@ it('sends a tokenized stock as shown (raw × multiplier) and pays raw units (15 
       to,
       amount: '2.0076046',
       token: { contract: aapl.mint, decimals: 8 },
+      shown: {},
     },
     { rpcFor: () => rpc, keyOf: keyOf as never, confirm: async () => true },
   );

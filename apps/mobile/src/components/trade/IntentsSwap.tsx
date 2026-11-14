@@ -91,7 +91,7 @@ import { refreshAfterChange } from '@/lib/portfolio';
 import type { SendPlan } from '@/lib/send';
 import { serverNow } from '@/lib/server-clock';
 import { shareTrade } from '@/lib/social';
-import { rawUnits, shownUnits, uiScaleOf } from '@/lib/solana-mint';
+import { rawUnits, rawUnitsAtMost, shownUnits, uiScaleOf } from '@/lib/solana-mint';
 import { type TokenRef, updateSwap, useSwap } from '@/lib/swap';
 import { TEST_MODE } from '@/lib/test-mode';
 import { quickPicks } from '@/lib/token-picker';
@@ -257,7 +257,11 @@ function IntentsSwapForm() {
 
   const view = useWalletView();
   const holdings = 'holdings' in view ? (view.holdings ?? []) : [];
-  const balance = holdings.find((h) => sameToken(h, sell))?.amount ?? 0;
+  // const balance = holdings.find((h) => sameToken(h, sell))?.amount ?? 0;
+  const sellHolding = holdings.find((h) => sameToken(h, sell));
+  const balance = sellHolding?.amount ?? 0;
+  /** The exact raw balance when the server sent it (15 Nov), for selling all of it. */
+  const rawBalance = (sellHolding as { rawAmount?: string } | undefined)?.rawAmount;
   // Start like Uniswap: sell what you hold the most of (lib/intents-swap `bestPayWith`)
   // when the token left in the form isn't held. Once per visit, so a token picked to sell
   // that isn't held stays picked.
@@ -392,7 +396,15 @@ function IntentsSwapForm() {
           // sellAmount: toBaseUnits(amount, sellDecimals),
           sellToken,
           buyToken,
-          sellAmount: rawUnits(amount, sellDecimals, scale.sell),
+          // sellAmount: rawUnits(amount, sellDecimals, scale.sell),
+          // Never past the raw balance; all of it is exactly that (tokenized stocks only).
+          sellAmount:
+            scale.sell === 1
+              ? rawUnits(amount, sellDecimals, 1)
+              : rawUnitsAtMost(amount, sellDecimals, scale.sell, {
+                  rawBalance,
+                  all: typed >= balance,
+                }),
           taker,
           slippageBps: SWAP_SLIPPAGE_BPS,
           walletId: wallet.id,

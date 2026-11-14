@@ -300,6 +300,8 @@ export function toHoldings(holdings: PortfolioHolding[]): SendHolding[] {
       amount: h.amount,
       usd: h.usd,
       ...(h.assetId ? { assetId: h.assetId } : {}),
+      // The exact raw balance when the server sends it (15 Nov), for sending all of it.
+      ...(rawAmountOf(h) ? { rawAmount: rawAmountOf(h) } : {}),
       token:
         h.contract && h.decimals != null
           ? { contract: h.contract, decimals: h.decimals }
@@ -307,11 +309,19 @@ export function toHoldings(holdings: PortfolioHolding[]): SendHolding[] {
     }));
 }
 
+/** A holding's exact raw balance (base units), when the server sent one (15 Nov). */
+const rawAmountOf = (h: PortfolioHolding) => {
+  const raw = (h as { rawAmount?: unknown }).rawAmount;
+  return typeof raw === 'string' && /^\d{1,30}$/.test(raw) ? raw : undefined;
+};
+
 export type SendHolding = {
   symbol: string;
   chain: Chain;
   amount: number;
   usd: number;
+  /** The exact raw balance in base units, when the server sent it (15 Nov). */
+  rawAmount?: string;
   /** NEAR Intents' asset id, when the server matched the token in its list. */
   assetId?: string;
   /** A token paid by contract (lib/send's SendToken); none for a chain's coin or USDC. */

@@ -22,7 +22,6 @@ import {
   solanaAddressOfKey,
   toBaseUnits,
   USDC_NEAR,
-  uiAmountToRaw,
   uiMultiplier,
   waitForEvmReceipt,
   waitForSolana,
@@ -52,6 +51,7 @@ import {
 import { type Chain, EVM_CHAIN_IDS, EVM_CHAINS, NATIVE_COIN } from '@/lib/mock-wallet';
 import { signAndSendNearCall, signNearDelegate } from '@/lib/near-call';
 import { sendNear } from '@/lib/near-execution';
+import { rawUnitsAtMost } from '@/lib/solana-mint';
 import { TEST_MODE } from '@/lib/test-mode';
 import { privateKeyOf } from '@/lib/vault';
 import { type AddedWallet, wallets } from '@/lib/wallets';
@@ -214,7 +214,20 @@ export type SendToken = { contract: string; decimals: number };
 
 export async function prepareSend(
   wallet: AddedWallet,
-  input: { chain: Chain; symbol: string; to: string; amount: string; token?: SendToken },
+  // input: { chain: Chain; symbol: string; to: string; amount: string; token?: SendToken },
+  input: {
+    chain: Chain;
+    symbol: string;
+    to: string;
+    amount: string;
+    token?: SendToken;
+    /**
+     * `amount` was typed as people see it (Send, 15 Nov): a Solana token with a
+     * ScaledUiAmount multiplier is converted to raw units, never past `rawBalance`, and
+     * `all` sends exactly `rawBalance`. Other callers pass amounts in raw terms, as before.
+     */
+    shown?: { rawBalance?: string; all?: boolean };
+  },
   deps: Partial<SendDeps> = {},
 ): Promise<SendPlan> {
   const d = { ...defaults, ...deps };
@@ -234,7 +247,7 @@ export async function prepareSend(
   // on chain. Every other token: as before.
   let units = toBaseUnits(input.amount, decimals);
   const amount = format(units, decimals);
-  if (chain === 'Solana' && token && isSolanaAddress(token.contract)) {
+  if (input.shown && chain === 'Solana' && token && isSolanaAddress(token.contract)) {
     const scale = await readSolanaMint(d.rpcFor(chain), token.contract)
       .then((mint) => uiMultiplier(mint, Math.floor(Date.now() / 1000)))
       .catch((error: unknown) => {
@@ -246,7 +259,12 @@ export async function prepareSend(
           return 1;
         throw error;
       });
-    if (scale !== 1) units = uiAmountToRaw(input.amount, decimals, scale);
+    // if (scale !== 1) units = uiAmountToRaw(input.amount, decimals, scale);
+    // Rounded down, never past the balance; all of it is exactly the raw balance.
+    if (scale !== 1) {
+      units = rawUnitsAtMost(input.amount, decimals, scale, input.shown);
+      if (units <= 0n) throw new Error('Amount must be more than zero');
+    }
   }
 
   const chainId = EVM_CHAIN_ID[chain];

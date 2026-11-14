@@ -213,6 +213,12 @@ export default function SendAmountSheet() {
           ),
           // A NEAR token (RHEA, wNEAR…): paid by its contract, from the balance read.
           token: sendToken,
+          // Typed as shown (15 Nov): a tokenized stock's raw units come from it, never past
+          // the raw balance; the whole balance sends exactly that.
+          shown: {
+            rawBalance: (token as { rawAmount?: string }).rawAmount,
+            all: tokenValue >= token.amount,
+          },
         }),
       );
       setPage('review');

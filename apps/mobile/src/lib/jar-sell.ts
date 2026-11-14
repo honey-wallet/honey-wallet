@@ -47,6 +47,7 @@ import { buyMoving, heldUnits, refreshJarValues } from '@/lib/jar-holdings';
 import { formatUsd } from '@/lib/mock-wallet';
 import { prepareSend } from '@/lib/send';
 import { serverNow } from '@/lib/server-clock';
+import { shownRawUnits } from '@/lib/solana-mint';
 import type { TokenRef } from '@/lib/swap';
 import { type JarSell, jarCash, type ThesisJar, thesisJars } from '@/lib/thesis';
 
@@ -430,7 +431,13 @@ async function sellDex(
     walletId: quoted.ask.walletId,
     chain,
     aggregator: sent.quote.aggregator,
-    sell: { symbol: leg.symbol, amount: units.toString(), decimals: leg.dex?.decimals ?? 18 },
+    // sell: { symbol: leg.symbol, amount: units.toString(), decimals: leg.dex?.decimals ?? 18 },
+    // 15 Nov: as people see it (a tokenized stock's raw × multiplier, lib/solana-mint).
+    sell: {
+      symbol: leg.symbol,
+      amount: leg.dex ? shownRawUnits({ chain, address: leg.dex.token }, units) : units.toString(),
+      decimals: leg.dex?.decimals ?? 18,
+    },
     buy: { symbol: 'USDC', amount: sent.quote.minBuyAmount, decimals: 6 },
     status: 'SENT',
     at: Date.now(),
