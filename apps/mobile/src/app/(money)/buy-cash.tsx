@@ -405,9 +405,9 @@ function DemoBuyCashSheet() {
                       }
                     />
                   </View>
-                  <Text style={styles.note}>
+                  {/* <Text style={styles.note}>
                     Prices move. The final amount is set when your order goes through.
-                  </Text>
+                  </Text> */}
 
                   <PillButton
                     label={selling ? signer.cta('Confirm sale', sellAction) : 'Confirm buy'}

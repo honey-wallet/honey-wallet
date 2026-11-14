@@ -60,10 +60,10 @@ export function LiveEarnMarkets({ symbol }: { symbol?: string }) {
       <AaveExecution />
       <MorphoExecution />
       <Text style={styles.heading}>Earn markets</Text>
-      <Text style={styles.note}>
+      {/* <Text style={styles.note}>
         Savings positions are not connected yet. These rates describe the markets, not your wallet's
         earnings.
-      </Text>
+      </Text> */}
       {state === 'loading' && !catalog ? (
         <SkeletonBar width="100%" height={80} radius={20} />
       ) : null}
