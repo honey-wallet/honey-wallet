@@ -209,7 +209,10 @@ function HomeScreen() {
   const sampleNfts = TEST_MODE && !('live' in view) && !multisig && !empty;
   // An empty wallet, as on Uniswap's Home: Explore (the top tokens) instead of an empty
   // Tokens list, and only the sections that have something in them.
-  const exploring = empty && !failed && !multisig;
+  // Not while balances are still loading: a live wallet reads as empty until they arrive, so
+  // Home showed Explore first and then swapped to Tokens.
+  // const exploring = empty && !failed && !multisig;
+  const exploring = empty && !failed && !multisig && !loading;
   const hasJars = useThesisJars().some((j) => j.mine);
   const pastActivity = (usePortfolio(wallet, exploring).activity?.length ?? 0) > 0;
   // const sections = SECTIONS.filter(

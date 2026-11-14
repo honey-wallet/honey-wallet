@@ -16,7 +16,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
+import Animated, { FadeIn, FadeOut, useReducedMotion } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle, Defs, LinearGradient, Path, Stop, Text as SvgText } from 'react-native-svg';
 import { Icon } from '@/components/Icon';
@@ -739,19 +739,44 @@ const partKey = (parts: ChatPart[], i: number) => {
 };
 
 /** Three dots while the agent starts thinking. */
+// Before: the dots were added and removed, so the line's width changed every tick.
+// function Typing() {
+//   const styles = useStyles();
+//   const [n, setN] = useState(1);
+//   useEffect(() => {
+//     const t = setInterval(() => setN((x) => (x % 3) + 1), 350);
+//     return () => clearInterval(t);
+//   }, []);
+//   return (
+//     <Text style={styles.muted} accessibilityLabel="Honey is thinking">
+//       Thinking{'.'.repeat(n)}
+//     </Text>
+//   );
+// }
+/**
+ * Three dots while the agent starts thinking. The dots not yet shown are there but
+ * clear, so the line keeps one width. Under Reduce Motion the dots hold still.
+ */
 function Typing() {
   const styles = useStyles();
-  const [n, setN] = useState(1);
+  const reduceMotion = useReducedMotion();
+  const [n, setN] = useState(reduceMotion ? 3 : 1);
   useEffect(() => {
+    if (reduceMotion) {
+      setN(3);
+      return;
+    }
     const t = setInterval(() => setN((x) => (x % 3) + 1), 350);
     return () => clearInterval(t);
-  }, []);
+  }, [reduceMotion]);
   return (
     <Text style={styles.muted} accessibilityLabel="Honey is thinking">
       Thinking{'.'.repeat(n)}
+      <Text style={TRANSPARENT}>{'.'.repeat(3 - n)}</Text>
     </Text>
   );
 }
+const TRANSPARENT = { color: 'transparent' } as const;
 
 /** Text that types itself out the first time it shows, like a streamed answer. */
 function StreamText({ text, stream }: { text: string; stream: boolean }) {
