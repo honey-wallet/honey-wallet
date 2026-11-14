@@ -70,7 +70,7 @@ Doing it together means screenshots, spreadsheets and trusting whoever holds the
 
 Honey does not use Chain Signatures.
 
-On mainnet: the production relayers, a group jar DAO and a team wallet's transactions, with explorer links, in [HACKATHON.md](HACKATHON.md#on-mainnet).
+On mainnet: 7 cross-chain swaps settled on NEAR Intents with gas paid by Honey, the production relayers and a group jar DAO, with explorer links, in [HACKATHON.md](HACKATHON.md#on-mainnet).
 
 ## Features
 
