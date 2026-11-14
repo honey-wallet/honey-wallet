@@ -127,7 +127,6 @@ export const validAddress = (chain: DexChain, a: unknown): a is string =>
 export const text = (v: unknown, max = 256): v is string =>
   typeof v === 'string' && v.length > 0 && v.length <= max;
 /** Invisible, format or direction characters (zero-width, bidi overrides) or controls. */
-// biome-ignore lint/suspicious/noControlCharactersInRegex: intentional look-alike filter
 export const hasHidden = (s: string) => /[\p{Cf}\p{Cc}]/u.test(s.normalize('NFKC'));
 export const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
 
