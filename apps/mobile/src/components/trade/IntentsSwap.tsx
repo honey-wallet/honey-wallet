@@ -582,9 +582,16 @@ function IntentsSwapForm() {
                 if (balance > 0) setAmount(trimTo(balance, maxDecimals));
               }}
             >
-              <Text style={[styles.meta, tooMuch && styles.error]}>
-                {balance ? `${formatBalance(balance)} ${sell.symbol}` : `No ${sell.symbol}`}
-              </Text>
+              {/* While balances load, a placeholder rather than "No ETH" on a funded wallet. */}
+              {'loading' in view && view.loading ? (
+                <View style={styles.metaLine}>
+                  <SkeletonBar width={72} height={12} />
+                </View>
+              ) : (
+                <Text style={[styles.meta, tooMuch && styles.error]}>
+                  {balance ? `${formatBalance(balance)} ${sell.symbol}` : `No ${sell.symbol}`}
+                </Text>
+              )}
             </PressableScale>
           </View>
         </View>
