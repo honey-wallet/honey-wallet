@@ -113,7 +113,7 @@ describe('the route planner (privacy first)', () => {
       toToken: 'nep141:eth-0x68749665ff8d2d112fa859aa293f07a622782f38.omft.near',
       toSymbol: 'XAUT',
     };
-    const route = (buyToken: string, buyChain = 'arbitrum') =>
+    const route = (buyToken: string, buyChain = 'arbitrum', buyDecimals = 6) =>
       deps({
         best: option({
           kind: 'intents_dex',
@@ -121,7 +121,7 @@ describe('the route planner (privacy first)', () => {
           buyToken,
           buyChain,
           buySymbol: 'XAUt0',
-          buyDecimals: 6,
+          buyDecimals,
           holdAs: 'XAUT (as XAUt0 on Arbitrum)',
         }),
         fallback: 'fees',
@@ -135,6 +135,8 @@ describe('the route planner (privacy first)', () => {
     // Not curated, another family (WBTC for XAUT), or the paying chain itself: refused.
     await expect(planRoute(leg, route(ATTACKER))).rejects.toThrow(/route changed/);
     await expect(planRoute(leg, route(WBTC_ARB))).rejects.toThrow(/route changed/);
+    // The server's decimals must be XAUt0's own, or every amount would read wrong.
+    await expect(planRoute(leg, route(XAUT0, 'arbitrum', 18))).rejects.toThrow(/route changed/);
     await expect(
       planRoute({ ...leg, fromChain: 'Arbitrum', fromToken: USDC_ARB }, route(XAUT0)),
     ).rejects.toThrow(/route changed/);
@@ -159,7 +161,11 @@ describe('the route planner (privacy first)', () => {
       dropped: [],
     });
     await expect(planRoute(jarLeg, d)).rejects.toThrow(/route changed/);
-    expect(canonicalOf('Arbitrum', WBTC_ARB)).toEqual({ symbol: 'WBTC', family: 'BTC' });
+    expect(canonicalOf('Arbitrum', WBTC_ARB)).toEqual({
+      symbol: 'WBTC',
+      family: 'BTC',
+      decimals: 8,
+    });
     expect(canonicalOf('Arbitrum', ATTACKER)).toBeNull();
   });
 

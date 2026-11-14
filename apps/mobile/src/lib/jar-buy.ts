@@ -305,6 +305,11 @@ type DexPick = {
   micro: bigint;
   /** From the route planner: its checked quote, its value, and why it's a DEX. */
   planned?: PlannedRoute;
+  /**
+   * The NEAR Intents asset of the same family (XAUT for XAUt0): its price, not the
+   * server's figure, values a wrapped version bought on another chain.
+   */
+  priceAsset?: string;
 };
 
 /** Dollars to integer micro-USDC. Every sum happens on these, never on floats. */
@@ -637,6 +642,7 @@ export async function quoteJarBuy(
         decimals: r.elsewhere.decimals,
         micro: l.micro,
         planned: r,
+        priceAsset: l.assetId,
       });
       legs.splice(i, 1);
       continue;
@@ -740,8 +746,9 @@ export async function quoteJarBuy(
   // The buy is signed without showing each quote, so a leg that would lose most of its
   // value to fees or a thin market stops it here, as a swap would be.
   const values: LegValue[] = [];
+  let tokens: PricedToken[] | null = null;
   if (out.length) {
-    const tokens = await withinTime(d.tokens(d.fetcher), STEP_MS, 'timed out').catch(() => null);
+    tokens = await withinTime(d.tokens(d.fetcher), STEP_MS, 'timed out').catch(() => null);
     if (!tokens) throw new Error('Couldn’t price this buy right now. Try again. Nothing was paid.');
     // checkValueKept(out, tokens);
     // Each leg's value for the review; a bridge carrying a DEX pick's USDC is valued by
@@ -791,7 +798,16 @@ export async function quoteJarBuy(
       continue;
     }
     const asset = dexAssetId(p.chain, p.token);
-    const price = dexPrices[asset];
+    // const price = dexPrices[asset];
+    // A wrapped version on another chain is valued at its family's NEAR Intents price,
+    // never the server's own figure; no price, no buy (security review, 14 Nov).
+    const price = p.priceAsset
+      ? tokens?.find((t) => t.assetId === p.priceAsset)?.price
+      : dexPrices[asset];
+    if (p.priceAsset && !(price && price > 0)) {
+      dexProblems.push({ symbol: p.symbol, reason: `Couldn’t price ${p.symbol} right now.` });
+      continue;
+    }
     // A wrapped buy is valued as the planner valued it (one WBTC counts as one BTC).
     const kept = price
       ? (Number(quoted.quote.minBuyAmount) / 10 ** p.decimals) * price

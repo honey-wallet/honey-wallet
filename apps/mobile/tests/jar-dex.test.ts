@@ -428,3 +428,58 @@ describe('a jar pick NEAR Intents doesn’t list', () => {
     });
   });
 });
+
+describe('a leg held wrapped on another chain (XAUT as XAUt0 on Arbitrum)', () => {
+  const XAUT = 'nep141:eth-0x68749665ff8d2d112fa859aa293f07a622782f38.omft.near';
+  // The server says this keeps all $10; only the app's own XAUT price can say otherwise.
+  const planned = {
+    best: { kind: 'intents_dex', label: 'NEAR Intents, then KyberSwap on Arbitrum', minOutUsd: 10 },
+    why: 'This uses NEAR Intents, then KyberSwap on Arbitrum. Swaps here are public on-chain.',
+    fallback: null,
+    holdAs: 'XAUT (as XAUt0 on Arbitrum)',
+    dex: null,
+    elsewhere: { chain: 'Arbitrum', token: GRAIL.toLowerCase(), decimals: 6 },
+    alternatives: [],
+  };
+  const buy = (xautPrice: number | null) => {
+    const { quote, fetcher } = oneClick();
+    const route = intentsRoute('XAUT', 10, XAUT);
+    route.legs = [{ chain: 'Ethereum', venue: 'Pool', usd: 10, units: 1, assetId: XAUT }];
+    return quoteJarBuy([route], 0.01, {
+      balances: async () => ({ Base: M(25) }),
+      quote: quote as never,
+      fetcher,
+      tokens: async () => [
+        { assetId: ARB_USDC_ASSET, decimals: 6, price: 1 },
+        ...(xautPrice === null ? [] : [{ assetId: XAUT, decimals: 6, price: xautPrice }]),
+      ],
+      usdcAsset: async () => ARB_USDC_ASSET,
+      route: (async () => planned) as never,
+      dex: dexDeps(fakeServer()),
+      dexPrices: vi.fn(async () => ({})),
+    });
+  };
+
+  it('is valued at XAUT’s own NEAR Intents price, not the server’s figure', async () => {
+    // 9.9 USDC lands; the DEX's minimum is 9,801 units: at $0.001 each, $9.80 kept.
+    const out = await buy(0.001);
+    expect(out.legs[0]).toMatchObject({
+      route: 'dex',
+      holdAs: 'XAUT (as XAUt0 on Arbitrum)',
+      dex: { chain: 'Arbitrum', bridged: true },
+    });
+    // At $0.0001 each it keeps $0.98 of $10, whatever the server said.
+    const error = await buy(0.0001).catch((e) => e);
+    expect(error.legs).toEqual([
+      {
+        symbol: 'XAUT',
+        reason: 'Fees would take more than half of this swap. Buy more or pick another token.',
+      },
+    ]);
+  });
+
+  it('is refused when the app can’t price XAUT itself', async () => {
+    const error = await buy(null).catch((e) => e);
+    expect(error.legs).toEqual([{ symbol: 'XAUT', reason: 'Couldn’t price XAUT right now.' }]);
+  });
+});

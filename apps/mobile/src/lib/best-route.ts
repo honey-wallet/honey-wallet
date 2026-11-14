@@ -47,20 +47,68 @@ export const setPrivateRoutes = (on: boolean) => privateRoutes.set({ on });
 // export const CANONICAL: Readonly<Record<string, { symbol: string; family: 'BTC' | 'ETH' }>> = {
 /** A family of one asset across chains: Bitcoin, Ether, Tether Gold (14 Nov). */
 export type Family = 'BTC' | 'ETH' | 'XAUT';
-export const CANONICAL: Readonly<Record<string, { symbol: string; family: Family }>> = {
-  'Base:0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf': { symbol: 'cbBTC', family: 'BTC' },
-  'Arbitrum:0x2f2a2543b76a4166549f7aab2e75bef0aefc5b0f': { symbol: 'WBTC', family: 'BTC' },
-  'Ethereum:0x2260fac5e5542a773aa44fbcfedf7c193bc2c599': { symbol: 'WBTC', family: 'BTC' },
-  'Polygon:0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6': { symbol: 'WBTC', family: 'BTC' },
+// export const CANONICAL: Readonly<Record<string, { symbol: string; family: Family }>> = {
+/** Each with its on-chain decimals, so a live quote is read in the app's own units. */
+export const CANONICAL: Readonly<
+  Record<string, { symbol: string; family: Family; decimals: number }>
+> = {
+  'Base:0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf': {
+    symbol: 'cbBTC',
+    family: 'BTC',
+    decimals: 8,
+  },
+  'Arbitrum:0x2f2a2543b76a4166549f7aab2e75bef0aefc5b0f': {
+    symbol: 'WBTC',
+    family: 'BTC',
+    decimals: 8,
+  },
+  'Ethereum:0x2260fac5e5542a773aa44fbcfedf7c193bc2c599': {
+    symbol: 'WBTC',
+    family: 'BTC',
+    decimals: 8,
+  },
+  'Polygon:0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6': {
+    symbol: 'WBTC',
+    family: 'BTC',
+    decimals: 8,
+  },
   // Optimism's, read on chain on 2026-11-14 (apps/server/src/dex/canonical.rs).
-  'Optimism:0x68f180fcce6836688e9084f035309e29bf0a2095': { symbol: 'WBTC', family: 'BTC' },
-  'Optimism:0x4200000000000000000000000000000000000006': { symbol: 'WETH', family: 'ETH' },
-  'Base:0x4200000000000000000000000000000000000006': { symbol: 'WETH', family: 'ETH' },
-  'Arbitrum:0x82af49447d8a07e3bd95bd0d56f35241523fbab1': { symbol: 'WETH', family: 'ETH' },
-  'Ethereum:0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2': { symbol: 'WETH', family: 'ETH' },
-  'Polygon:0x7ceb23fd6bc0add59e62ac25578270cff1b9f619': { symbol: 'WETH', family: 'ETH' },
+  'Optimism:0x68f180fcce6836688e9084f035309e29bf0a2095': {
+    symbol: 'WBTC',
+    family: 'BTC',
+    decimals: 8,
+  },
+  'Optimism:0x4200000000000000000000000000000000000006': {
+    symbol: 'WETH',
+    family: 'ETH',
+    decimals: 18,
+  },
+  'Base:0x4200000000000000000000000000000000000006': {
+    symbol: 'WETH',
+    family: 'ETH',
+    decimals: 18,
+  },
+  'Arbitrum:0x82af49447d8a07e3bd95bd0d56f35241523fbab1': {
+    symbol: 'WETH',
+    family: 'ETH',
+    decimals: 18,
+  },
+  'Ethereum:0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2': {
+    symbol: 'WETH',
+    family: 'ETH',
+    decimals: 18,
+  },
+  'Polygon:0x7ceb23fd6bc0add59e62ac25578270cff1b9f619': {
+    symbol: 'WETH',
+    family: 'ETH',
+    decimals: 18,
+  },
   // Tether Gold's XAUt0 on Arbitrum, read on chain on 2026-11-14 (apps/server/src/dex/canonical.rs).
-  'Arbitrum:0x40461291347e1ecbb09499f3371d3f17f10d7159': { symbol: 'XAUt0', family: 'XAUT' },
+  'Arbitrum:0x40461291347e1ecbb09499f3371d3f17f10d7159': {
+    symbol: 'XAUt0',
+    family: 'XAUT',
+    decimals: 6,
+  },
 };
 export const canonicalOf = (chain: DexChain, address: string) =>
   CANONICAL[`${chain}:${address.toLowerCase()}`] ?? null;
@@ -280,7 +328,13 @@ export async function planRoute(
   if (best.kind === 'intents_dex' && ask.wrapped) {
     const chain = dexChainOf(best.buyChain);
     const held = chain ? canonicalOf(chain, best.buyToken) : null;
-    if (!chain || chain === ask.fromChain || !held || held.family !== familyOf(ask.toSymbol))
+    if (
+      !chain ||
+      chain === ask.fromChain ||
+      !held ||
+      held.family !== familyOf(ask.toSymbol) ||
+      best.buyDecimals !== held.decimals
+    )
       throw changed();
     return {
       best,
@@ -288,7 +342,7 @@ export async function planRoute(
       fallback: route.fallback ?? null,
       holdAs: `${held.family} (as ${held.symbol} on ${chain})`,
       dex: null,
-      elsewhere: { chain, token: best.buyToken.toLowerCase(), decimals: best.buyDecimals },
+      elsewhere: { chain, token: best.buyToken.toLowerCase(), decimals: held.decimals },
       alternatives: route.alternatives,
     };
   }
