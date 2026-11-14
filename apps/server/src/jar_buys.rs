@@ -431,7 +431,8 @@ impl JarBuys {
         // fee to dodge, and their swaps from a wallet not linked to this sign-in still work.
         if !input.intents
             && let (Some(pool), Some(copier)) = (&self.pool, copier)
-            && copy_fees::holds_copied(pool, copier, &input.origin_asset).await?
+            && (copy_fees::holds_copied(pool, copier, &input.origin_asset).await?
+                || copy_fees::copied_at(pool, &input.origin_asset, &input.refund_to).await?)
             && !copy_fees::refund_allowed(pool, copier, &input.refund_to).await?
         {
             return Err(AppError::BadRequest(
