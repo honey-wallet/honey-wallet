@@ -161,7 +161,11 @@ impl Coin {
             return false;
         }
         match self.kind() {
-            InstrumentType::Stablecoin | InstrumentType::TokenizedStock => true,
+            // InstrumentType::Stablecoin | InstrumentType::TokenizedStock => true,
+            InstrumentType::Stablecoin => true,
+            // 15 Nov: a tokenized stock at every level, but only with the DEX list's
+            // floors met ($25k+ pools, $5k+ a day), like any other DEX token.
+            InstrumentType::TokenizedStock => self.dex_liquid(),
             InstrumentType::Token => {
                 // let floor = match risk {
                 //     Risk::Low => 1_000_000_000.0,
@@ -387,8 +391,14 @@ pub fn universe(
             Some(Coin {
                 key: key.clone(),
                 ticker: display.clone(),
-                name: row
-                    .map(|r| r.name.clone())
+                // name: row.map(|r| r.name.clone())
+                //     .or_else(|| members.iter().find_map(|(a, _)| a.name.clone()))
+                //     .unwrap_or_else(|| display.clone()),
+                // A tokenized stock keeps its issuer's name, "Apple (xStocks)" (15 Nov).
+                name: (asset.instrument_type == InstrumentType::TokenizedStock)
+                    .then(|| asset.name.clone())
+                    .flatten()
+                    .or_else(|| row.map(|r| r.name.clone()))
                     .or_else(|| members.iter().find_map(|(a, _)| a.name.clone()))
                     .unwrap_or_else(|| display.clone()),
                 symbols,

@@ -1103,8 +1103,14 @@ async fn prices(
         .collect();
     if let Some(dex) = dex {
         for t in dex.safe_tokens_cached().await {
-            if t.price_usd.is_finite() && t.price_usd > 0.0 {
-                out.insert(format!("dex:{}:{}", t.chain.name(), t.address), t.price_usd);
+            // if t.price_usd.is_finite() && t.price_usd > 0.0 {
+            //     out.insert(format!("dex:{}:{}", t.chain.name(), t.address), t.price_usd);
+            // }
+            // Per base unit, like `price_now`'s marks (15 Nov: a tokenized stock's list
+            // price is per shown share).
+            let price = t.price_usd * t.ui_multiplier.unwrap_or(1.0);
+            if price.is_finite() && price > 0.0 {
+                out.insert(format!("dex:{}:{}", t.chain.name(), t.address), price);
             }
         }
     }
@@ -3617,6 +3623,8 @@ mod tests {
             metadata: "uniswap",
             route: "dex",
             safety: crate::dex::SafetyView { ok, flags: vec![] },
+            issuer: None,
+            ui_multiplier: None,
         }
     }
 

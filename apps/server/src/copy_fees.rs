@@ -1745,6 +1745,9 @@ mod tests {
                 contract: None,
                 decimals: None,
                 asset_id: asset.map(String::from),
+                raw_amount: None,
+                issuer: None,
+                ui_multiplier: None,
             }
         };
         let held = [

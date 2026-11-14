@@ -1433,12 +1433,23 @@ export interface PortfolioHolding {
   /**
    * A token's contract (ERC-20 address, classic SPL mint or NEP-141 account) and decimals,
    * to pay it; absent for the chain's coin, USDC (paid by name) and Token-2022 mints (not
-   * payable here).
+   * payable here), except tokenized stocks, which carry their Token-2022 mint and raw
+   * mint decimals.
    */
   contract?: string;
   decimals?: number;
   /** NEAR Intents' asset id when the token is in its list (every token but the chain's coin). */
   assetId?: string;
+  /**
+   * The exact balance in base units (decimal string); set for Solana tokens. For a
+   * tokenized stock `amount` is in shown units (`rawAmount / 10^decimals × uiMultiplier`),
+   * so sell or send from this to never round above the balance.
+   */
+  rawAmount?: string;
+  /** Tokenized stocks only: `xstocks`, `ondo` or `backpack` (known by mint). */
+  issuer?: DexStockIssuer;
+  /** Tokenized stocks only: the multiplier in force now (already in `amount` and `priceUsd`). */
+  uiMultiplier?: number;
 }
 
 /** `GET /portfolio/balances`. Mirrors `portfolio::Portfolio`. */
@@ -2005,6 +2016,11 @@ export interface DexToken {
   name: string;
   decimals: number;
   logoUrl?: string;
+  /**
+   * USD per whole token (`10^decimals` base units); for a tokenized stock, per shown unit
+   * (one share as a wallet shows it: base units / 10^decimals × `uiMultiplier`).
+   * Quote amounts are always base units.
+   */
   priceUsd: number;
   liquidityUsd?: number;
   volume24hUsd?: number;
@@ -2023,7 +2039,14 @@ export interface DexToken {
   /** Always `dex`: bought through an aggregator, not 1Click. */
   route: 'dex';
   safety: DexSafety;
+  /** Tokenized stocks only (Solana Token-2022): who issues it, known by mint. */
+  issuer?: DexStockIssuer;
+  /** Tokenized stocks only: the ScaledUiAmount multiplier in force now. */
+  uiMultiplier?: number;
 }
+
+/** Who issues a tokenized stock on Solana. */
+export type DexStockIssuer = 'xstocks' | 'ondo' | 'backpack';
 
 export type DexTokenMetadata = 'uniswap' | 'coingecko' | 'jupiter' | 'chain' | 'intents';
 

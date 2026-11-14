@@ -7,7 +7,8 @@ use sha2::{Digest, Sha256};
 
 use super::chains::JUPITER_V6;
 use crate::solana_relayer::{
-    ATA_PROGRAM, COMPUTE_BUDGET_PROGRAM, LAMPORTS_PER_SIGNATURE, SYSTEM_PROGRAM, TOKEN_PROGRAM,
+    ATA_PROGRAM, COMPUTE_BUDGET_PROGRAM, LAMPORTS_PER_SIGNATURE, SYSTEM_PROGRAM,
+    TOKEN_2022_PROGRAM, TOKEN_PROGRAM,
 };
 
 /// Most compute units a sponsored swap may ask for (Solana's per-transaction maximum).
@@ -237,7 +238,9 @@ pub fn check_swap(
                     return Err("Honey only opens your own token accounts");
                 }
             }
-            TOKEN_PROGRAM => {
+            // TOKEN_PROGRAM => {
+            // 15 Nov: Token-2022 too (tokenized stocks), under the same two instructions.
+            TOKEN_PROGRAM | TOKEN_2022_PROGRAM => {
                 if !relayer_at.is_empty() {
                     return Err("the swap may not use Honey's fee payer");
                 }
@@ -457,10 +460,33 @@ pub fn check_jupiter_accounts(
     sell_mint: &[u8; 32],
     buy_mint: &[u8; 32],
 ) -> Result<(), &'static str> {
-    let msg = MessageV0::decode(message)?;
     let token = decode_key(TOKEN_PROGRAM).ok_or("bad token program")?;
-    let source = associated_token_address(taker, sell_mint, &token).ok_or("no source account")?;
-    let output = associated_token_address(taker, buy_mint, &token).ok_or("no output account")?;
+    check_jupiter_accounts_with(message, taker, (sell_mint, &token), (buy_mint, &token))
+}
+
+/// [`check_jupiter_accounts`] with each side's `(mint, token program)` (15 Nov): a
+/// Token-2022 mint's associated account is derived under Token-2022, so a classic
+/// derivation names an account the route never touches.
+pub fn check_jupiter_accounts_with(
+    message: &[u8],
+    taker: &[u8; 32],
+    sell: (&[u8; 32], &[u8; 32]),
+    buy: (&[u8; 32], &[u8; 32]),
+) -> Result<(), &'static str> {
+    let msg = MessageV0::decode(message)?;
+    // let token = decode_key(TOKEN_PROGRAM).ok_or("bad token program")?;
+    // let source = associated_token_address(taker, sell_mint, &token).ok_or("no source account")?;
+    // let output = associated_token_address(taker, buy_mint, &token).ok_or("no output account")?;
+    let ((sell_mint, sell_program), (buy_mint, buy_program)) = (sell, buy);
+    for program in [sell_program, buy_program] {
+        if b58(program) != TOKEN_PROGRAM && b58(program) != TOKEN_2022_PROGRAM {
+            return Err("bad token program");
+        }
+    }
+    let source =
+        associated_token_address(taker, sell_mint, sell_program).ok_or("no source account")?;
+    let output =
+        associated_token_address(taker, buy_mint, buy_program).ok_or("no output account")?;
     let jupiter = decode_key(JUPITER_V6).ok_or("bad Jupiter program")?;
     let mut routes = 0usize;
     for ix in &msg.instructions {

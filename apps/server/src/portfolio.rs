@@ -290,6 +290,18 @@ pub struct Holding {
     /// NEAR Intents' asset id for a token matched in its list, so Swap finds it exactly.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub asset_id: Option<String>,
+    /// The exact balance in base units (15 Nov; Solana tokens), so a "sell all" never
+    /// rounds above what is held. For a tokenized stock `amount` is in shown units
+    /// (`raw_amount / 10^decimals × ui_multiplier`), so this is the one to send.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub raw_amount: Option<String>,
+    /// Tokenized stocks only (15 Nov): `xstocks`, `ondo` or `backpack`, by mint.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub issuer: Option<&'static str>,
+    /// Tokenized stocks only: the multiplier in force now (already in `amount` and
+    /// `price_usd`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ui_multiplier: Option<f64>,
 }
 
 /// Response shape mirrored in `packages/api-client/src/types.ts` (`Portfolio`).
@@ -371,6 +383,9 @@ pub struct PortfolioService {
     endpoints: Endpoints,
     keys: ExplorerKeys,
     market: Option<Arc<MarketData>>,
+    /// Honey's DEX list (15 Nov): which Token-2022 mints are tokenized stocks, and their
+    /// prices. None leaves them out, as before.
+    dex: Option<Arc<crate::dex::DexService>>,
     // Replaced (audit #3): maps that were cleared wholesale once full.
     // cache: RwLock<HashMap<String, (Instant, Cached)>>,
     // solana_txs: RwLock<HashMap<String, Option<Movement>>>,
@@ -421,6 +436,14 @@ impl<'a> Misses<'a> {
 
 impl PortfolioService {
     pub fn new(market: Option<Arc<MarketData>>) -> anyhow::Result<Arc<Self>> {
+        Self::new_with_dex(market, None)
+    }
+
+    /// [`Self::new`] showing tokenized stocks from Honey's DEX registry (15 Nov).
+    pub fn new_with_dex(
+        market: Option<Arc<MarketData>>,
+        dex: Option<Arc<crate::dex::DexService>>,
+    ) -> anyhow::Result<Arc<Self>> {
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(5))
             .timeout(Duration::from_secs(8))
@@ -429,7 +452,8 @@ impl PortfolioService {
             .build()?;
         Ok(Arc::new(
             Self::with_endpoints(client, Endpoints::from_env(), market)
-                .with_keys(ExplorerKeys::from_env()),
+                .with_keys(ExplorerKeys::from_env())
+                .with_dex(dex),
         ))
     }
 
@@ -443,6 +467,7 @@ impl PortfolioService {
             endpoints,
             keys: ExplorerKeys::default(),
             market,
+            dex: None,
             // Replaced (audit #3): see the field note.
             // cache: RwLock::new(HashMap::new()),
             // solana_txs: RwLock::new(HashMap::new()),
@@ -454,6 +479,13 @@ impl PortfolioService {
 
     pub fn with_keys(mut self, keys: ExplorerKeys) -> Self {
         self.keys = keys;
+        self
+    }
+
+    /// Shows tokenized stocks (Token-2022 mints Honey's DEX registry admitted) with the
+    /// DEX list's prices (15 Nov).
+    pub fn with_dex(mut self, dex: Option<Arc<crate::dex::DexService>>) -> Self {
+        self.dex = dex;
         self
     }
 
@@ -840,11 +872,21 @@ impl PortfolioService {
             "Solana",
             lamports as f64 / 1e9,
         )];
+        // out.extend(solana_tokens(classic.as_ref(), token_2022.as_ref(), listed, coins));
+        // Tokenized stocks among the Token-2022 holdings (15 Nov).
+        let stocks = match &self.dex {
+            Some(dex) => {
+                let mints = token_mints(token_2022.as_ref());
+                dex.stock_holdings(&mints).await
+            }
+            None => HashMap::new(),
+        };
         out.extend(solana_tokens(
             classic.as_ref(),
             token_2022.as_ref(),
             listed,
             coins,
+            &stocks,
         ));
         Some(out)
     }
@@ -1291,6 +1333,12 @@ struct Raw {
     contract: Option<String>,
     decimals: Option<u8>,
     asset_id: Option<String>,
+    /// Base units (15 Nov), and a tokenized stock's issuer and multiplier.
+    raw_amount: Option<String>,
+    issuer: Option<&'static str>,
+    ui_multiplier: Option<f64>,
+    /// Priced by its contract only (a tokenized stock): never by a same-symbol token.
+    by_contract: bool,
 }
 
 impl Raw {
@@ -1311,6 +1359,10 @@ impl Raw {
             contract: None,
             decimals: None,
             asset_id: None,
+            raw_amount: None,
+            issuer: None,
+            ui_multiplier: None,
+            by_contract: false,
         }
     }
 }
@@ -1347,6 +1399,10 @@ fn listed_raw(
         contract: (!known).then(|| entry.contract_address.clone()).flatten(),
         decimals: (!known).then_some(entry.decimals),
         asset_id: Some(entry.asset_id.clone()),
+        raw_amount: None,
+        issuer: None,
+        ui_multiplier: None,
+        by_contract: false,
     })
 }
 
@@ -1472,14 +1528,32 @@ fn blockscout_tokens(
     out
 }
 
+/// The mints of `getTokenAccountsByOwner` accounts (15 Nov).
+fn token_mints(body: Option<&Value>) -> Vec<String> {
+    let mut out: Vec<String> = body
+        .and_then(|b| b["value"].as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|a| a["account"]["data"]["parsed"]["info"]["mint"].as_str())
+        .map(String::from)
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
 /// Token accounts from `getTokenAccountsByOwner` (classic SPL and Token-2022), summed
 /// per mint and kept when 1Click lists the mint on Solana. Without the list, USDC alone.
 /// A Token-2022 balance shows but carries no contract: the app can't pay it.
+/// 15 Nov: except a tokenized stock (`stocks`, by mint, from Honey's DEX registry): it
+/// shows with its mint and decimals, in shown units (the multiplier in force applied to
+/// amount and price), and its exact base units. Every Solana token carries its base units.
 fn solana_tokens(
     classic: Option<&Value>,
     token_2022: Option<&Value>,
     listed: Option<&[OneClickToken]>,
     coins: Option<&HashMap<String, CoinMarket>>,
+    stocks: &HashMap<String, crate::dex::StockHolding>,
 ) -> Vec<Raw> {
     // (mint, atomic, on-chain decimals, Token-2022)
     let mut sums: Vec<(String, u128, u64, bool)> = Vec::new();
@@ -1507,15 +1581,29 @@ fn solana_tokens(
     }
     let mut out = Vec::new();
     for (mint, atomic, decimals, is_2022) in sums {
+        if is_2022
+            && atomic > 0
+            && let Some(stock) = stocks.get(&mint)
+            && u64::from(stock.decimals) == decimals
+        {
+            let shown = atomic as f64 / 10f64.powi(i32::from(stock.decimals)) * stock.multiplier;
+            let mut raw = Raw::new("Solana", "sol", &stock.symbol, &stock.name, shown);
+            raw.price = stock.price_usd.map(|p| p / stock.multiplier);
+            raw.contract = Some(mint.clone());
+            raw.decimals = Some(stock.decimals);
+            raw.raw_amount = Some(atomic.to_string());
+            raw.issuer = Some(stock.issuer);
+            raw.ui_multiplier = Some(stock.multiplier);
+            raw.by_contract = true;
+            out.push(raw);
+            continue;
+        }
         let Some(listed) = listed else {
             if mint == SOLANA_USDC && atomic > 0 {
-                out.push(Raw::new(
-                    "Solana",
-                    "sol",
-                    "USDC",
-                    "USD Coin",
-                    atomic as f64 / 1e6,
-                ));
+                // out.push(Raw::new("Solana", "sol", "USDC", "USD Coin", atomic as f64 / 1e6));
+                let mut raw = Raw::new("Solana", "sol", "USDC", "USD Coin", atomic as f64 / 1e6);
+                raw.raw_amount = Some(atomic.to_string());
+                out.push(raw);
             }
             continue;
         };
@@ -1535,6 +1623,7 @@ fn solana_tokens(
                 raw.contract = None;
                 raw.decimals = None;
             }
+            raw.raw_amount = Some(atomic.to_string());
             out.push(raw);
         }
     }
@@ -1586,6 +1675,9 @@ fn near_tokens(
 /// the same symbol anywhere (NEAR is listed as wNEAR). Unknown prices leave `usd` at 0.
 fn price(raw: Raw, tokens: Option<&[OneClickToken]>) -> Holding {
     let price_usd = raw.price.or_else(|| {
+        if raw.by_contract {
+            return None;
+        }
         let tokens = tokens?;
         let wrapped = format!("W{}", raw.symbol);
         let is = |t: &&OneClickToken, s: &str| t.symbol.eq_ignore_ascii_case(s);
@@ -1607,6 +1699,9 @@ fn price(raw: Raw, tokens: Option<&[OneClickToken]>) -> Holding {
         contract: raw.contract,
         decimals: raw.decimals,
         asset_id: raw.asset_id,
+        raw_amount: raw.raw_amount,
+        issuer: raw.issuer,
+        ui_multiplier: raw.ui_multiplier,
     }
 }
 
@@ -2546,7 +2641,13 @@ mod tests {
         let token_2022 = json!({ "value": [
             token_account("2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo", "4000000", 6),
         ]});
-        let raws = solana_tokens(Some(&classic), Some(&token_2022), Some(&tokens), None);
+        let raws = solana_tokens(
+            Some(&classic),
+            Some(&token_2022),
+            Some(&tokens),
+            None,
+            &HashMap::new(),
+        );
         let shown: Vec<(&str, f64, Option<&str>)> = raws
             .iter()
             .map(|r| (r.symbol.as_str(), r.amount, r.contract.as_deref()))
@@ -2562,9 +2663,69 @@ mod tests {
             "summed per mint; unlisted mints and wrong decimals left out"
         );
         // No list: USDC alone.
-        let raws = solana_tokens(Some(&classic), None, None, None);
+        let raws = solana_tokens(Some(&classic), None, None, None, &HashMap::new());
         assert_eq!(raws.len(), 1);
         assert_eq!((raws[0].symbol.as_str(), raws[0].amount), ("USDC", 3.0));
+        // 15 Nov: every Solana token carries its exact base units.
+        assert_eq!(raws[0].raw_amount.as_deref(), Some("3000000"));
+    }
+
+    #[test]
+    fn a_tokenized_stock_shows_in_shown_units_with_its_mint_and_base_units() {
+        // 15 Nov: AAPLx (Token-2022, 8 decimals) at a 1.0038 multiplier, $356.75 per
+        // 10^8 base units on the DEX list ($355.40 a shown share). A same-symbol token and
+        // a Token-2022 mint the registry doesn't know stay out or unpriced.
+        const AAPLX: &str = "XsbEhLAtcf6HdfpFZ5xEMdqW8nfAvcsP5bdudRLJzJp";
+        let stocks = HashMap::from([(
+            AAPLX.to_string(),
+            crate::dex::StockHolding {
+                issuer: "xstocks",
+                symbol: "AAPLx".into(),
+                name: "Apple (xStocks)".into(),
+                decimals: 8,
+                multiplier: 1.0038,
+                price_usd: Some(356.75),
+            },
+        )]);
+        let token_2022 = json!({ "value": [
+            token_account(AAPLX, "150000000", 8),
+            token_account(AAPLX, "50000000", 8),
+            token_account("2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo", "4000000", 6),
+        ]});
+        let raws = solana_tokens(None, Some(&token_2022), Some(&[]), None, &stocks);
+        assert_eq!(raws.len(), 1, "only the registry's mint");
+        let h = price(raws.into_iter().next().unwrap(), Some(&[]));
+        assert_eq!(h.chain, "Solana");
+        assert_eq!(
+            (h.symbol.as_str(), h.name.as_str()),
+            ("AAPLx", "Apple (xStocks)")
+        );
+        assert_eq!(h.contract.as_deref(), Some(AAPLX));
+        assert_eq!(h.decimals, Some(8));
+        assert_eq!(h.raw_amount.as_deref(), Some("200000000"));
+        assert!((h.amount - 2.0076).abs() < 1e-9, "{}", h.amount);
+        assert!((h.price_usd.unwrap() - 356.75 / 1.0038).abs() < 1e-9);
+        // The value is the base units at the list's price either way.
+        assert!((h.usd - 2.0 * 356.75).abs() < 1e-6, "{}", h.usd);
+        assert_eq!((h.issuer, h.ui_multiplier), (Some("xstocks"), Some(1.0038)));
+        let body = serde_json::to_value(&h).unwrap();
+        assert_eq!(body["rawAmount"], "200000000");
+        assert_eq!(body["uiMultiplier"], 1.0038);
+        // Unpriced on the list: no price by symbol from anywhere else.
+        let mut unpriced = stocks.clone();
+        unpriced.get_mut(AAPLX).unwrap().price_usd = None;
+        let raws = solana_tokens(None, Some(&token_2022), None, None, &unpriced);
+        let listed = [OneClickToken {
+            asset_id: "x".into(),
+            blockchain: "sol".into(),
+            symbol: "AAPLx".into(),
+            decimals: 8,
+            contract_address: None,
+            price: Some(1.0),
+            coingecko_id: None,
+        }];
+        let h = price(raws.into_iter().next().unwrap(), Some(&listed));
+        assert_eq!((h.price_usd, h.usd), (None, 0.0));
     }
 
     #[test]

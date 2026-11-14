@@ -25,6 +25,7 @@ pub mod kyber;
 pub mod pacer;
 pub mod safety;
 pub mod solana;
+pub mod stocks;
 pub mod store;
 pub mod universe;
 
@@ -174,6 +175,9 @@ pub struct TokenView {
     pub decimals: u8,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub logo_url: Option<String>,
+    /// USD per whole token: per `10^decimals` base units for every token but a tokenized
+    /// stock (15 Nov), whose price is per shown unit (one share as a wallet shows it,
+    /// `10^decimals / ui_multiplier` base units). Quotes stay in base units.
     pub price_usd: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub liquidity_usd: Option<f64>,
@@ -193,6 +197,15 @@ pub struct TokenView {
     pub metadata: &'static str,
     pub route: &'static str,
     pub safety: SafetyView,
+    /// Tokenized stocks only (15 Nov): who issues it, `xstocks`, `ondo` or `backpack`,
+    /// known by its mint and on-chain authorities (never by its symbol).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub issuer: Option<&'static str>,
+    /// Tokenized stocks only: the Token-2022 `ScaledUiAmount` multiplier in force now.
+    /// Shown amount = `base units / 10^decimals × ui_multiplier`; value =
+    /// shown amount × `price_usd`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ui_multiplier: Option<f64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -359,6 +372,8 @@ pub struct DexConfig {
     /// Spacing of CoinGecko and GeckoTerminal calls while building the lists (their free
     /// limits); tests shrink it.
     pub build_interval: Option<Duration>,
+    /// The xStocks list's origin (`api.xstocks.fi`; 15 Nov, tokenized stocks).
+    pub xstocks: String,
 }
 
 /// Public RPCs (the same defaults as the gas sponsors').
@@ -406,6 +421,7 @@ impl Default for DexConfig {
             uniswap_list: UNISWAP_LIST.into(),
             coingecko_lists: COINGECKO_LISTS.into(),
             build_interval: None,
+            xstocks: stocks::XSTOCKS_ORIGIN.into(),
         }
     }
 }
@@ -614,7 +630,32 @@ pub struct DexService {
     solana_payer: Option<String>,
     buys: Option<Arc<JarBuys>>,
     market: Option<Arc<MarketData>>,
+    /// Tokenized stocks by mint (15 Nov), read daily, with when.
+    stocks: std::sync::RwLock<Option<(Instant, Arc<stocks::StockRegistry>)>>,
+    /// One registry build at a time.
+    stocks_flight: tokio::sync::Mutex<()>,
+    /// When the last registry build failed (tried again an hour later).
+    stocks_failed: Mutex<Option<Instant>>,
+    /// Quote-time reads of tokenized stock mints (`stocks::MINT_READ_TTL_SECS`).
+    stock_mints: Mutex<HashMap<String, (Instant, stocks::MintInfo)>>,
 }
+
+/// What the portfolio shows for a tokenized stock held (15 Nov).
+#[derive(Clone, Debug, PartialEq)]
+pub struct StockHolding {
+    pub issuer: &'static str,
+    pub symbol: String,
+    /// "Apple (xStocks)".
+    pub name: String,
+    pub decimals: u8,
+    /// The multiplier in force now.
+    pub multiplier: f64,
+    /// USD per `10^decimals` base units (the DEX list's price), when it has one.
+    pub price_usd: Option<f64>,
+}
+
+/// A failed registry build is tried again after this.
+const STOCKS_RETRY: Duration = Duration::from_secs(60 * 60);
 
 fn rfc3339(unix: u64) -> String {
     OffsetDateTime::from_unix_timestamp(unix as i64)
@@ -707,6 +748,10 @@ impl DexService {
             solana_payer: None,
             buys: None,
             market: None,
+            stocks: std::sync::RwLock::default(),
+            stocks_flight: tokio::sync::Mutex::new(()),
+            stocks_failed: Mutex::default(),
+            stock_mints: Mutex::default(),
             client,
             config,
         })
@@ -955,9 +1000,20 @@ impl DexService {
         name: &str,
         keep: Duration,
     ) -> Option<(Duration, T)> {
+        self.load_saved("dex-coingecko", name, keep).await
+    }
+
+    /// A value copied to Redis under `domain` (15 Nov: CoinGecko's answers, and the
+    /// tokenized stock registry): (age, value) when there is one under `keep`.
+    async fn load_saved<T: serde::de::DeserializeOwned>(
+        &self,
+        domain: &str,
+        name: &str,
+        keep: Duration,
+    ) -> Option<(Duration, T)> {
         let redis = self.redis.as_ref()?;
         let body: Option<String> = redis
-            .query(redis::cmd("GET").arg(redis.key("dex-coingecko", name)))
+            .query(redis::cmd("GET").arg(redis.key(domain, name)))
             .await
             .ok()?;
         let saved: SavedCoinGecko<T> = serde_json::from_str(&body?).ok()?;
@@ -967,6 +1023,11 @@ impl DexService {
 
     /// Copies a CoinGecko answer to Redis for `keep` (best effort).
     async fn save_coingecko<T: Serialize>(&self, name: &str, value: &T, keep: Duration) {
+        self.save_saved("dex-coingecko", name, value, keep).await
+    }
+
+    /// Copies a value to Redis under `domain` for `keep` (best effort).
+    async fn save_saved<T: Serialize>(&self, domain: &str, name: &str, value: &T, keep: Duration) {
         let Some(redis) = &self.redis else {
             return;
         };
@@ -979,14 +1040,14 @@ impl DexService {
         let saved: Result<(), AppError> = redis
             .query(
                 redis::cmd("SET")
-                    .arg(redis.key("dex-coingecko", name))
+                    .arg(redis.key(domain, name))
                     .arg(body)
                     .arg("EX")
                     .arg(keep.as_secs()),
             )
             .await;
         if saved.is_err() {
-            tracing::warn!(name, "coingecko copy not saved to redis");
+            tracing::warn!(domain, name, "copy not saved to redis");
         }
     }
 
@@ -1102,6 +1163,299 @@ impl DexService {
         None
     }
 
+    // Tokenized stocks (15 Nov, `dex::stocks`)
+
+    /// The registry held in memory, however old.
+    fn stock_registry_held(&self) -> Option<Arc<stocks::StockRegistry>> {
+        self.stocks
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+            .map(|(_, r)| r.clone())
+    }
+
+    /// The tokenized stock at `mint` (Solana), if the registry admitted it.
+    pub fn stock(&self, mint: &str) -> Option<stocks::StockEntry> {
+        self.stock_registry_held()?.get(mint).cloned()
+    }
+
+    /// Seeds the registry (tests).
+    #[cfg(test)]
+    pub fn set_stocks(&self, registry: stocks::StockRegistry) {
+        *self.stocks.write().unwrap_or_else(|p| p.into_inner()) =
+            Some((Instant::now(), Arc::new(registry)));
+    }
+
+    /// Puts Redis's registry in memory when it is newer than what is there.
+    async fn restore_stocks(&self) -> bool {
+        let keep = Duration::from_secs(stocks::REGISTRY_KEEP_SECS);
+        let Some((age, registry)) = self
+            .load_saved::<stocks::StockRegistry>("dex-stocks", "registry", keep)
+            .await
+        else {
+            return false;
+        };
+        let Some(at) = Instant::now().checked_sub(age) else {
+            return false;
+        };
+        let mut held = self.stocks.write().unwrap_or_else(|p| p.into_inner());
+        if held.as_ref().is_none_or(|(h, _)| *h < at) {
+            *held = Some((at, Arc::new(registry)));
+        }
+        true
+    }
+
+    /// The registry, read again when over a day old (memory, else Redis's copy, else
+    /// built: the xStocks list, Ondo's and Backpack's tags in `verified`, then every mint
+    /// on chain). A failed build keeps the last registry (tried again an hour later);
+    /// none at all is empty. Never fails the Solana list's build.
+    async fn stock_registry(&self, verified: &Value) -> Arc<stocks::StockRegistry> {
+        let ttl = Duration::from_secs(stocks::REGISTRY_TTL_SECS);
+        let fresh = |this: &Self| {
+            this.stocks
+                .read()
+                .unwrap_or_else(|p| p.into_inner())
+                .as_ref()
+                .filter(|(at, _)| at.elapsed() < ttl)
+                .map(|(_, r)| r.clone())
+        };
+        if let Some(r) = fresh(self) {
+            return r;
+        }
+        let _flight = self.stocks_flight.lock().await;
+        if let Some(r) = fresh(self) {
+            return r;
+        }
+        if self.restore_stocks().await
+            && let Some(r) = fresh(self)
+        {
+            return r;
+        }
+        let failed_recently = self
+            .stocks_failed
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .is_some_and(|at| at.elapsed() < STOCKS_RETRY);
+        if !failed_recently {
+            match self.build_stocks(verified).await {
+                Ok(registry) => {
+                    tracing::info!(stocks = registry.len(), "tokenized stock registry built");
+                    self.save_saved(
+                        "dex-stocks",
+                        "registry",
+                        &registry,
+                        Duration::from_secs(stocks::REGISTRY_KEEP_SECS),
+                    )
+                    .await;
+                    let registry = Arc::new(registry);
+                    *self.stocks.write().unwrap_or_else(|p| p.into_inner()) =
+                        Some((Instant::now(), registry.clone()));
+                    *self.stocks_failed.lock().unwrap_or_else(|p| p.into_inner()) = None;
+                    return registry;
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "tokenized stock registry build failed");
+                    *self.stocks_failed.lock().unwrap_or_else(|p| p.into_inner()) =
+                        Some(Instant::now());
+                }
+            }
+        }
+        self.stock_registry_held().unwrap_or_default()
+    }
+
+    /// One registry build: the xStocks list's pages (one call each), then the candidates'
+    /// mints, 100 per `getMultipleAccounts`. Without the xStocks list, Jupiter's
+    /// `xstocks` tag names them instead (each still admitted only on chain).
+    async fn build_stocks(&self, verified: &Value) -> Result<stocks::StockRegistry, AppError> {
+        let mut candidates = match self.xstocks_pages().await {
+            Ok(pages) => stocks::xstocks_candidates(&pages),
+            Err(error) => {
+                tracing::warn!(%error, "xStocks list unreadable; using Jupiter's tag");
+                Vec::new()
+            }
+        };
+        let issuers: &[stocks::Issuer] = if candidates.is_empty() {
+            &[
+                stocks::Issuer::Xstocks,
+                stocks::Issuer::Ondo,
+                stocks::Issuer::Backpack,
+            ]
+        } else {
+            &[stocks::Issuer::Ondo, stocks::Issuer::Backpack]
+        };
+        candidates.extend(stocks::jupiter_candidates(verified, issuers));
+        let mints: Vec<String> = candidates.iter().map(|c| c.mint.clone()).collect();
+        let read = self.read_mints(&mints).await?;
+        Ok(stocks::StockRegistry {
+            built_at: unix_now(),
+            entries: stocks::admit_all(&candidates, &read),
+        })
+    }
+
+    /// Every page of the xStocks list (`/api/v2/public/assets?page=N`, keyless).
+    async fn xstocks_pages(&self) -> Result<Vec<Value>, AppError> {
+        let url = format!("{}/api/v2/public/assets", self.config.xstocks);
+        let mut pages = Vec::new();
+        for page in 0..stocks::XSTOCKS_MAX_PAGES {
+            if page > 0 {
+                tokio::time::sleep(self.config.build_interval.unwrap_or(Duration::from_secs(1)))
+                    .await;
+            }
+            let body = self.get(&url, &[("page", page.to_string())], &[]).await?;
+            if !body["nodes"].is_array() {
+                return Err(AppError::Busy);
+            }
+            let more = body["page"]["hasNextPage"].as_bool() == Some(true);
+            pages.push(body);
+            if !more {
+                break;
+            }
+        }
+        Ok(pages)
+    }
+
+    /// Mint accounts on Solana (owner, data), in order, 100 per `getMultipleAccounts`.
+    async fn read_mints(
+        &self,
+        mints: &[String],
+    ) -> Result<Vec<Option<(String, Vec<u8>)>>, AppError> {
+        let url = self
+            .config
+            .rpc
+            .get(&DexChain::Solana)
+            .ok_or(AppError::Busy)?;
+        let mut out = Vec::with_capacity(mints.len());
+        for (i, chunk) in mints.chunks(stocks::ACCOUNTS_PER_CALL).enumerate() {
+            if i > 0 {
+                tokio::time::sleep(self.config.build_interval.unwrap_or(CHAIN_READ_INTERVAL)).await;
+            }
+            let body = self
+                .send(self.client.post(url).json(&serde_json::json!({
+                    "jsonrpc": "2.0", "id": 1, "method": "getMultipleAccounts",
+                    "params": [chunk, { "encoding": "base64", "commitment": "confirmed" }],
+                })))
+                .await?;
+            let read = stocks::accounts(&body);
+            if read.len() != chunk.len() {
+                return Err(AppError::Busy);
+            }
+            out.extend(read);
+        }
+        Ok(out)
+    }
+
+    /// A tokenized stock's mint read now (cached a minute), for a quote: it must still be
+    /// its issuer's, with no active hook, pause, fee or frozen default, and no multiplier
+    /// change within the hour. Its decimals are kept for the quote.
+    async fn stock_check(&self, entry: &stocks::StockEntry) -> Result<(), AppError> {
+        let held = self
+            .stock_mints
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(&entry.mint)
+            .filter(|(at, _)| at.elapsed() < Duration::from_secs(stocks::MINT_READ_TTL_SECS))
+            .map(|(_, info)| info.clone());
+        let info = match held {
+            Some(info) => info,
+            None => {
+                let read = self.read_mints(std::slice::from_ref(&entry.mint)).await?;
+                let (owner, data) = read.into_iter().next().flatten().ok_or(AppError::Busy)?;
+                if owner != crate::solana_relayer::TOKEN_2022_PROGRAM {
+                    return Err(bad("Honey won't trade this token: not its issuer's mint"));
+                }
+                let info = stocks::parse_mint(&data)
+                    .map_err(|_| bad("Honey won't trade this token: unreadable mint"))?;
+                let mut held = self.stock_mints.lock().unwrap_or_else(|p| p.into_inner());
+                if held.len() >= MAX_CACHED {
+                    held.retain(|_, (at, _)| {
+                        at.elapsed() < Duration::from_secs(stocks::MINT_READ_TTL_SECS)
+                    });
+                }
+                held.insert(entry.mint.clone(), (Instant::now(), info.clone()));
+                info
+            }
+        };
+        stocks::admit(entry.issuer, &info).map_err(|why| {
+            AppError::BadRequest(format!("Honey won't trade this token right now: {why}"))
+        })?;
+        if info
+            .scaled
+            .is_some_and(|s| s.changes_near(unix_now() as i64))
+        {
+            return Err(bad(
+                "this stock's share multiplier changes within the hour; try again later",
+            ));
+        }
+        let mut decimals = self.decimals.lock().unwrap_or_else(|p| p.into_inner());
+        if decimals.len() < MAX_CACHED {
+            decimals.insert((DexChain::Solana, entry.mint.clone()), info.decimals);
+        }
+        Ok(())
+    }
+
+    /// The token program a Solana mint's accounts live under: Token-2022 for tokenized
+    /// stocks, else the classic one (other Token-2022 mints are refused before a quote).
+    fn token_program(&self, mint: &str) -> &'static str {
+        if self.stock(mint).is_some() {
+            crate::solana_relayer::TOKEN_2022_PROGRAM
+        } else {
+            crate::solana_relayer::TOKEN_PROGRAM
+        }
+    }
+
+    /// `token` with the flags tokenized stocks waive dropped (when it is one), for
+    /// choosing what GoPlus is asked about.
+    fn waived(&self, tokens: &[DexToken]) -> Vec<DexToken> {
+        let Some(registry) = self.stock_registry_held().filter(|r| !r.is_empty()) else {
+            return tokens.to_vec();
+        };
+        tokens
+            .iter()
+            .cloned()
+            .map(|mut t| {
+                if t.chain == DexChain::Solana && registry.get(&t.address).is_some() {
+                    stocks::waive(&mut t.flags);
+                }
+                t
+            })
+            .collect()
+    }
+
+    /// For the portfolio (15 Nov): each held mint that is a tokenized stock, with the DEX
+    /// list's price for it (memory only; never builds or calls a provider).
+    pub async fn stock_holdings(&self, mints: &[String]) -> HashMap<String, StockHolding> {
+        let Some(registry) = self.stock_registry_held() else {
+            return HashMap::new();
+        };
+        let now = unix_now() as i64;
+        let lists = self.universe.read().await;
+        let listed = lists.get(&DexChain::Solana).map(|(_, t)| t.clone());
+        drop(lists);
+        mints
+            .iter()
+            .filter_map(|m| {
+                let e = registry.get(m)?;
+                let price = listed
+                    .as_ref()
+                    .and_then(|t| t.iter().find(|t| t.address == *m).cloned())
+                    .or_else(|| self.registered(DexChain::Solana, m).flatten())
+                    .map(|t| t.price_usd)
+                    .filter(|p| p.is_finite() && *p > 0.0);
+                Some((
+                    m.clone(),
+                    StockHolding {
+                        issuer: e.issuer.as_str(),
+                        symbol: e.symbol.clone(),
+                        name: e.display_name(),
+                        decimals: e.decimals,
+                        multiplier: e.multiplier(now),
+                        price_usd: price,
+                    },
+                ))
+            })
+            .collect()
+    }
+
     // The universe
 
     /// The chain's DEX universe (cached six hours; stale data is served if a refresh
@@ -1140,7 +1494,9 @@ impl DexService {
                 // self.safety.warm(chain, tokens.iter().filter(|t| t.flags.is_empty())
                 //     .map(|t| t.address.clone()).collect());
                 // 15 Nov: the top `WARM_TOP` of them; the rest lazily.
-                self.safety.warm(chain, warm_candidates(&tokens, WARM_TOP));
+                // self.safety.warm(chain, warm_candidates(&tokens, WARM_TOP));
+                self.safety
+                    .warm(chain, warm_candidates(&self.waived(&tokens), WARM_TOP));
                 self.universe
                     .write()
                     .await
@@ -1269,8 +1625,12 @@ impl DexService {
         if saved.tokens.iter().any(|t| t.chain != chain) {
             return;
         }
-        let addresses: Vec<String> = saved
-            .tokens
+        // Tokenized stocks' registry first (15 Nov), so their waived flags count.
+        if chain == DexChain::Solana && self.stock_registry_held().is_none() {
+            self.restore_stocks().await;
+        }
+        let addresses: Vec<String> = self
+            .waived(&saved.tokens)
             .iter()
             .filter(|t| t.flags.is_empty())
             .map(|t| t.address.clone())
@@ -1619,7 +1979,18 @@ impl DexService {
             Err(_) => HashMap::new(),
         };
         // Ok(universe::solana_tokens(&list, unix_now() as i64))
-        Ok(universe::solana_tokens(&list, &ids, unix_now() as i64))
+        // Ok(universe::solana_tokens(&list, &ids, unix_now() as i64))
+        // Tokenized stocks (15 Nov): the registry (read daily), and their Jupiter prices
+        // (per shown unit) as Honey's per-raw-unit prices.
+        let registry = self.stock_registry(&list).await;
+        let now = unix_now() as i64;
+        let mut tokens = universe::solana_tokens(&list, &ids, now);
+        for t in &mut tokens {
+            if let Some(e) = registry.get(&t.address) {
+                t.price_usd = stocks::raw_price(t.price_usd, e.multiplier(now));
+            }
+        }
+        Ok(tokens)
     }
 
     fn view(&self, token: &DexToken, goplus: Option<safety::Verdict>) -> TokenView {
@@ -1629,14 +2000,31 @@ impl DexService {
             None => flags.push("unchecked".into()),
         }
         flags.dedup();
+        // A tokenized stock (15 Nov): its Token-2022 shape isn't a scam signal; a quote
+        // reads its mint on chain instead (`stock_check`).
+        let stock = (token.chain == DexChain::Solana)
+            .then(|| self.stock(&token.address))
+            .flatten();
+        if stock.is_some() {
+            stocks::waive(&mut flags);
+        }
+        let multiplier = stock.as_ref().map(|s| s.multiplier(unix_now() as i64));
         TokenView {
+            issuer: stock.as_ref().map(|s| s.issuer.as_str()),
+            ui_multiplier: multiplier,
             chain: token.chain,
             address: token.address.clone(),
             symbol: token.symbol.clone(),
             name: token.name.clone(),
             decimals: token.decimals,
             logo_url: token.logo_url.clone(),
-            price_usd: token.price_usd,
+            // price_usd: token.price_usd,
+            // The list keeps raw-unit prices (quotes count base units); a stock shows
+            // its price per share (15 Nov).
+            price_usd: match multiplier {
+                Some(m) => token.price_usd / m,
+                None => token.price_usd,
+            },
             liquidity_usd: token.liquidity_usd,
             volume24h_usd: token.volume24h_usd,
             market_cap_usd: token.market_cap_usd,
@@ -1676,7 +2064,9 @@ impl DexService {
     fn warm_unchecked(&self, chain: DexChain, tokens: &[DexToken]) {
         // self.safety.warm(chain, tokens.iter().filter(|t| t.flags.is_empty())
         //     .map(|t| t.address.clone()).collect());
-        self.safety.warm(chain, warm_candidates(tokens, WARM_TOP));
+        // self.safety.warm(chain, warm_candidates(tokens, WARM_TOP));
+        self.safety
+            .warm(chain, warm_candidates(&self.waived(tokens), WARM_TOP));
     }
 
     /// The tokens the thesis registry may merge as `route: dex`: safe ones only.
@@ -1876,6 +2266,12 @@ impl DexService {
                 "Honey won't trade this token: {}",
                 view.safety.flags.join(", ")
             )));
+        }
+        // A tokenized stock: its mint as of the last minute (15 Nov).
+        if chain == DexChain::Solana
+            && let Some(entry) = self.stock(address)
+        {
+            self.stock_check(&entry).await?;
         }
         Ok(token)
     }
@@ -2235,9 +2631,14 @@ impl DexService {
             return Ok(None);
         }
         let prices = universe::pair_prices(&pairs);
+        // A tokenized stock's Jupiter price is per shown unit; DexScreener's per raw unit
+        // (15 Nov).
+        if let Some(e) = self.stock(address) {
+            t.price_usd = stocks::raw_price(t.price_usd, e.multiplier(now));
+        }
         universe::second_price(&mut t, prices.get(&address.to_ascii_lowercase()).copied());
-        // The mint's own decimals over Jupiter's (a classic SPL mint; a Token-2022 one is
-        // blocked anyway). Unreadable keeps Jupiter's: a quote reads them again.
+        // The mint's own decimals over Jupiter's (classic SPL or, 15 Nov, Token-2022).
+        // Unreadable keeps Jupiter's: a quote reads them again.
         if let Ok(decimals) = self.onchain_decimals(chain, address).await {
             t.decimals = decimals;
         }
@@ -2289,6 +2690,8 @@ impl DexService {
     /// A DEX token's USD price read within the last minute (DexScreener by address,
     /// `fresh_price`), for prices that are recorded: a jar's start price at publish and
     /// its hourly marks. Never the six-hour list's. Fails closed (`Busy`, or off).
+    /// Per `10^decimals` base units, a tokenized stock's too (15 Nov): a jar holds base
+    /// units, so a dividend paid in shares shows as the return it is.
     pub async fn price_now(&self, chain: DexChain, address: &str) -> Result<f64, AppError> {
         if !self.enabled() {
             return Err(off());
@@ -2393,13 +2796,17 @@ impl DexService {
                 .map(|b| b[31])
         } else {
             // A classic SPL mint: decimals at byte 44.
+            // let value = &result["value"];
+            // (value["owner"].as_str() == Some(crate::solana_relayer::TOKEN_PROGRAM))
+            //     .then(|| value["data"][0].as_str())
+            //     .flatten()
+            //     .and_then(|d| STANDARD.decode(d).ok())
+            //     .filter(|d| d.len() == 82)
+            //     .map(|d| d[44])
+            // 15 Nov: or a Token-2022 mint, whose first 82 bytes are the same (its
+            // extensions follow).
             let value = &result["value"];
-            (value["owner"].as_str() == Some(crate::solana_relayer::TOKEN_PROGRAM))
-                .then(|| value["data"][0].as_str())
-                .flatten()
-                .and_then(|d| STANDARD.decode(d).ok())
-                .filter(|d| d.len() == 82)
-                .map(|d| d[44])
+            mint_decimals(value["owner"].as_str(), value["data"][0].as_str())
         }
         .ok_or_else(|| {
             tracing::warn!(chain = chain.name(), address, "token decimals unreadable");
@@ -2649,7 +3056,17 @@ impl DexService {
                     &self.jupiter_headers(),
                 )
                 .await?;
-            let q = jupiter::check_order(&body, sell, buy, amount, taker, payer, slippage)?;
+            // let q = jupiter::check_order(&body, sell, buy, amount, taker, payer, slippage)?;
+            let q = jupiter::check_order_with(
+                &body,
+                sell,
+                buy,
+                amount,
+                taker,
+                payer,
+                slippage,
+                (self.token_program(sell), self.token_program(buy)),
+            )?;
             // Honey never pays a new token account's rent in a swap (the taker could
             // close it to themselves for cash): without the account, the wallet pays.
             let opens_account = q.rent_lamports > 0
@@ -2941,6 +3358,20 @@ fn impact_warning(impact: Option<f64>) -> Vec<String> {
         Some(p) if p > 1.0 => vec![format!("price impact is {p:.1}%")],
         None => vec!["price impact unknown".into()],
         _ => Vec::new(),
+    }
+}
+
+/// A Solana mint's decimals from its account (owner, base64 data): a classic SPL mint
+/// (82 bytes) or a Token-2022 one (the same 82 bytes, then its extensions), at byte 44.
+pub fn mint_decimals(owner: Option<&str>, data: Option<&str>) -> Option<u8> {
+    let data = STANDARD.decode(data?).ok()?;
+    match owner? {
+        crate::solana_relayer::TOKEN_PROGRAM => (data.len() == 82).then(|| data[44]),
+        crate::solana_relayer::TOKEN_2022_PROGRAM => stocks::parse_mint(&data)
+            .ok()
+            .filter(|_| data.len() == 82 || data.len() > 165)
+            .map(|m| m.decimals),
+        _ => None,
     }
 }
 

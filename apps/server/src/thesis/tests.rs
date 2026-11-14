@@ -67,7 +67,11 @@ fn universe_folds_wrappers_and_drops_junk() {
     let usdc = u.iter().find(|c| c.ticker == "USDC").unwrap();
     assert!(usdc.liquid());
     let nvda = u.iter().find(|c| c.ticker == "NVDAON").unwrap();
-    assert!(nvda.liquid(), "tokenized stocks pass without market cap");
+    // assert!(nvda.liquid(), "tokenized stocks pass without market cap");
+    // 15 Nov: a symbol doesn't make a tokenized stock (the issuer registry does, by
+    // mint), and a stock needs the DEX list's floors too.
+    assert_eq!(nvda.kind(), registry::InstrumentType::Token);
+    assert!(!nvda.liquid(), "no market figures at all");
 }
 
 #[test]
@@ -1003,6 +1007,8 @@ fn dex_view(
             ok,
             flags: if ok { vec![] } else { vec!["honeypot".into()] },
         },
+        issuer: None,
+        ui_multiplier: None,
     }
 }
 
@@ -1406,4 +1412,55 @@ fn candidate_lists_and_the_menu_are_capped() {
     }];
     let (lists, _) = shortlist(&exposures, &u, Some(Risk::High));
     assert_eq!(lists[0].candidates.len(), shortlist::MAX_CANDIDATES);
+}
+
+#[test]
+fn tokenized_stocks_come_from_the_issuer_registry_by_mint_and_need_the_floors() {
+    // 15 Nov: AAPLx admitted by Honey's issuer registry reaches the agent as a tokenized
+    // stock named "Apple (xStocks)"; a token merely called NVDAx is an ordinary token;
+    // 1Click's USDCx is a stablecoin; and a thin stock is left out at every level.
+    use crate::dex::DexChain;
+    use registry::{InstrumentType, merge_dex};
+    const AAPLX: &str = "XsbEhLAtcf6HdfpFZ5xEMdqW8nfAvcsP5bdudRLJzJp";
+    const SPOOF: &str = "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263";
+    let mut aaplx = dex_view(DexChain::Solana, AAPLX, "AAPLx", None, None, true);
+    aaplx.name = "Apple xStock".into();
+    aaplx.price_usd = 355.4;
+    aaplx.issuer = Some("xstocks");
+    aaplx.ui_multiplier = Some(1.0038);
+    aaplx.liquidity_usd = Some(673_805.0);
+    aaplx.volume24h_usd = Some(380_000.0);
+    let spoof = dex_view(DexChain::Solana, SPOOF, "NVDAx", None, None, true);
+    let merged = merge_dex(assets(), &[aaplx.clone(), spoof]);
+    let stock = merged.iter().find(|a| a.symbol == "AAPLx").unwrap();
+    assert_eq!(stock.instrument_type, InstrumentType::TokenizedStock);
+    assert_eq!(stock.issuer, Some("xStocks"));
+    assert_eq!(stock.name.as_deref(), Some("Apple (xStocks)"));
+    let fake = merged.iter().find(|a| a.symbol == "NVDAx").unwrap();
+    assert_eq!(fake.instrument_type, InstrumentType::Token);
+    assert_eq!(fake.issuer, None);
+    // USDCx as 1Click lists it (Aleo).
+    let usdcx = parse_tokens(&serde_json::json!([{
+        "assetId": "nep141:aleo-usdcx.omft.near", "blockchain": "aleo",
+        "symbol": "USDCx", "decimals": 6, "price": 0.9996
+    }]));
+    assert_eq!(usdcx[0].instrument_type, InstrumentType::Stablecoin);
+    // On the shortlist as a tokenized stock with its issuer's name, at every risk level.
+    let listed = universe(&merged, Some(&coins()));
+    let coin = listed.iter().find(|c| c.ticker == "AAPLX").unwrap();
+    assert_eq!(coin.kind(), InstrumentType::TokenizedStock);
+    assert_eq!(coin.name, "Apple (xStocks)");
+    assert!(coin.line().contains("tokenized stock"));
+    for risk in [Risk::Low, Risk::Medium, Risk::High] {
+        assert!(coin.allowed_at(risk), "{risk:?}");
+    }
+    // Under the DEX list's floors: no longer a free pass.
+    let mut thin = aaplx;
+    thin.liquidity_usd = Some(10_000.0);
+    let merged = merge_dex(assets(), &[thin]);
+    let listed = universe(&merged, Some(&coins()));
+    let coin = listed.iter().find(|c| c.ticker == "AAPLX").unwrap();
+    for risk in [Risk::Low, Risk::Medium, Risk::High] {
+        assert!(!coin.allowed_at(risk), "{risk:?}");
+    }
 }

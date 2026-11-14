@@ -14,6 +14,13 @@
 //! hour old ([`Safety::check_fresh`]). A token GoPlus has no data for is `unchecked`,
 //! which blocks it, and is asked again a day later; so is an upgradeable (proxy) token
 //! unless it is on the reviewed allowlist (`DEX_UPGRADEABLE_ALLOWLIST`).
+//!
+//! The daily budget is split by who spends it (15 Nov, security review): public
+//! `GET /dex/token` lookups (anonymous) get [`LOOKUP_DAILY_BUDGET`], the warm-up
+//! [`WARM_DAILY_BUDGET`], and together they never reach the last [`QUOTE_RESERVE`]
+//! calls of [`DAILY_CAP`], which only signed-in quotes spend. A quote that finds the
+//! budget spent uses the last verdict still standing (memory or Redis) rather than
+//! `unchecked`.
 
 use std::{
     collections::HashMap,
@@ -53,8 +60,12 @@ pub const BLOCKING: &[&str] = &[
     "closable",
     "transfer_fee",
     "transfer_hook",
+    // 15 Nov: GoPlus's "could be changed" forms, apart from the active ones (tokenized
+    // stocks waive these only: `dex::stocks`).
+    "transfer_hook_upgradable",
     "non_transferable",
     "default_frozen",
+    "default_state_upgradable",
     "token_2022",
     "suspicious",
     "low_organic",
@@ -84,15 +95,81 @@ pub const WARM_DAILY_BUDGET: u64 = 2_500;
 /// The most GoPlus calls of any kind a day (warm-up, lookups, quotes): past it a token
 /// is `unchecked` (blocked) until the next UTC day. 31 days of it stay under 150k.
 pub const DAILY_CAP: u64 = 4_500;
-/// Reserves one call of a day's budget when the count is under ARGV[1]. KEYS[1] is the
-/// day's counter; ARGV[2] its expiry. Returns 1 when reserved, 0 when spent.
+/// The last calls of [`DAILY_CAP`] only quotes may spend (15 Nov): the warm-up and
+/// lookups together stop at `DAILY_CAP - QUOTE_RESERVE`.
+pub const QUOTE_RESERVE: u64 = 1_500;
+/// The most calls public `GET /dex/token` lookups make a day (15 Nov): anyone can ask
+/// about any contract, so they can't spend the warm-up's or the quotes' share.
+pub const LOOKUP_DAILY_BUDGET: u64 = 500;
+// const SPEND: &str = r"
+// local n = tonumber(redis.call('GET', KEYS[1]) or '0')
+// if n >= tonumber(ARGV[1]) then return 0 end
+// redis.call('INCR', KEYS[1])
+// redis.call('EXPIRE', KEYS[1], ARGV[2])
+// return 1
+// ";
+/// Reserves one call against every counter in KEYS at once (15 Nov: the old script
+/// counted one budget at a time, so a refusal by the second still spent the first).
+/// ARGV[i] is KEYS[i]'s limit; the last ARGV the counters' expiry. Returns 1 when
+/// reserved, 0 when any is spent.
 const SPEND: &str = r"
-local n = tonumber(redis.call('GET', KEYS[1]) or '0')
-if n >= tonumber(ARGV[1]) then return 0 end
-redis.call('INCR', KEYS[1])
-redis.call('EXPIRE', KEYS[1], ARGV[2])
+for i = 1, #KEYS do
+  if tonumber(redis.call('GET', KEYS[i]) or '0') >= tonumber(ARGV[i]) then return 0 end
+end
+for i = 1, #KEYS do
+  redis.call('INCR', KEYS[i])
+  redis.call('EXPIRE', KEYS[i], ARGV[#KEYS + 1])
+end
 return 1
 ";
+
+/// Who a GoPlus call is for (15 Nov): each spends its own share of the day's budget.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Purpose {
+    /// The background warm-up of the token lists.
+    Warm,
+    /// A public lookup by contract (`GET /dex/token`, anonymous).
+    Lookup,
+    /// A signed-in quote (or the planner's warm-up for one).
+    Quote,
+}
+
+/// The day's budgets (calls per UTC day).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Budgets {
+    pub warm: u64,
+    pub lookup: u64,
+    /// The share of `all` only quotes spend.
+    pub quote_reserve: u64,
+    pub all: u64,
+}
+
+impl Default for Budgets {
+    fn default() -> Self {
+        Self {
+            warm: WARM_DAILY_BUDGET,
+            lookup: LOOKUP_DAILY_BUDGET,
+            quote_reserve: QUOTE_RESERVE,
+            all: DAILY_CAP,
+        }
+    }
+}
+
+impl Budgets {
+    /// The counters a call for `purpose` reserves against, with their limits.
+    pub fn counters(&self, purpose: Purpose) -> Vec<(&'static str, u64)> {
+        let shared = self.all.saturating_sub(self.quote_reserve);
+        match purpose {
+            Purpose::Warm => vec![("warm", self.warm), ("shared", shared), ("all", self.all)],
+            Purpose::Lookup => vec![
+                ("lookup", self.lookup),
+                ("shared", shared),
+                ("all", self.all),
+            ],
+            Purpose::Quote => vec![("all", self.all)],
+        }
+    }
+}
 /// A quote re-checks a verdict older than this: a token upgraded into a honeypot keeps
 /// passing for at most an hour (docs/routing/AUDIT.md finding 7).
 pub const FRESH: Duration = Duration::from_secs(60 * 60);
@@ -141,6 +218,10 @@ type Held = (Verdict, Duration);
 struct Saved {
     flags: Vec<String>,
     checked: bool,
+    /// 1 from 15 Nov (GoPlus's upgradable hook and default state apart from the active
+    /// ones); a Solana copy without it that names either is asked again.
+    #[serde(default)]
+    v: u8,
     /// Unix seconds when GoPlus answered.
     at: u64,
     /// Seconds it stands.
@@ -266,19 +347,33 @@ pub fn solana_flags(r: &Value) -> Vec<String> {
     {
         add("transfer_fee");
     }
-    if r["transfer_hook"].as_array().is_some_and(|a| !a.is_empty())
-        || status(&r["transfer_hook_upgradable"])
-    {
+    // if r["transfer_hook"].as_array().is_some_and(|a| !a.is_empty())
+    //     || status(&r["transfer_hook_upgradable"])
+    // {
+    //     add("transfer_hook");
+    // }
+    // 15 Nov: an active hook and one that could be set are told apart (tokenized stocks
+    // carry an unset hook their issuer may change; Honey reads it on chain at quote time).
+    if r["transfer_hook"].as_array().is_some_and(|a| !a.is_empty()) {
         add("transfer_hook");
+    }
+    if status(&r["transfer_hook_upgradable"]) {
+        add("transfer_hook_upgradable");
     }
     if flag(&r["non_transferable"]) {
         add("non_transferable");
     }
     // DefaultAccountState: 1 initialized, 2 frozen.
-    if r["default_account_state"].as_str() == Some("2")
-        || status(&r["default_account_state_upgradable"])
-    {
+    // if r["default_account_state"].as_str() == Some("2")
+    //     || status(&r["default_account_state_upgradable"])
+    // {
+    //     add("default_frozen");
+    // }
+    if r["default_account_state"].as_str() == Some("2") {
         add("default_frozen");
+    }
+    if status(&r["default_account_state_upgradable"]) {
+        add("default_state_upgradable");
     }
     flags
 }
@@ -299,9 +394,13 @@ pub struct Safety {
     pacer: Pacer,
     /// Where verdicts and the daily budget are kept across deploys and replicas.
     redis: std::sync::OnceLock<RedisStore>,
-    /// The daily budgets (warm-up, everything) and, without Redis, this process's count.
-    budget: (u64, u64),
-    spent: Mutex<(u64, u64, u64)>,
+    // /// The daily budgets (warm-up, everything) and, without Redis, this process's count.
+    // budget: (u64, u64),
+    // spent: Mutex<(u64, u64, u64)>,
+    /// The daily budgets (15 Nov: by purpose) and, without Redis, this process's counts
+    /// (the UTC day, then each counter).
+    budget: Budgets,
+    spent: Mutex<(u64, HashMap<&'static str, u64>)>,
     quiet_until: Mutex<Option<Instant>>,
     // warming: std::sync::atomic::AtomicBool,
     /// Chains with a warm-up running: one per chain (a single flag for all chains left
@@ -325,8 +424,8 @@ impl Safety {
             cache: Mutex::default(),
             pacer: Pacer::new("goplus", interval, super::pacer::DEFAULT_MAX_WAIT),
             redis: std::sync::OnceLock::new(),
-            budget: (WARM_DAILY_BUDGET, DAILY_CAP),
-            spent: Mutex::new((0, 0, 0)),
+            budget: Budgets::default(),
+            spent: Mutex::new((0, HashMap::new())),
             quiet_until: Mutex::new(None),
             // warming: std::sync::atomic::AtomicBool::new(false),
             warming: Mutex::default(),
@@ -344,9 +443,22 @@ impl Safety {
         let _ = self.redis.set(redis);
     }
 
-    /// Other daily budgets (tests): (warm-up, everything).
+    /// Other daily budgets (tests): (warm-up, everything), lookups limited by the cap
+    /// alone and nothing held back for quotes.
     pub fn with_budget(mut self, warm: u64, all: u64) -> Self {
-        self.budget = (warm, all);
+        // self.budget = (warm, all);
+        self.budget = Budgets {
+            warm,
+            lookup: all,
+            quote_reserve: 0,
+            all,
+        };
+        self
+    }
+
+    /// Other daily budgets (tests).
+    pub fn with_budgets(mut self, budgets: Budgets) -> Self {
+        self.budget = budgets;
         self
     }
 
@@ -373,7 +485,8 @@ impl Safety {
         {
             return Ok(v);
         }
-        self.fetch(chain, address, false).await
+        // self.fetch(chain, address, false).await
+        self.fetch(chain, address, Purpose::Quote).await
     }
 
     /// The cached verdict, if any (never calls GoPlus).
@@ -409,6 +522,17 @@ impl Safety {
                 let Some(saved) = body.and_then(|b| serde_json::from_str::<Saved>(&b).ok()) else {
                     continue;
                 };
+                // A Solana copy from before 15 Nov may count an upgradable hook or default
+                // state as an active one: asked again instead.
+                if chain == DexChain::Solana
+                    && saved.v < 1
+                    && saved
+                        .flags
+                        .iter()
+                        .any(|f| f == "transfer_hook" || f == "default_frozen")
+                {
+                    continue;
+                }
                 let age = Duration::from_secs(now.saturating_sub(saved.at));
                 let ttl = Duration::from_secs(saved.ttl);
                 let Some(at) = Instant::now().checked_sub(age).filter(|_| age < ttl) else {
@@ -444,6 +568,7 @@ impl Safety {
         let Ok(body) = serde_json::to_string(&Saved {
             flags: verdict.flags.clone(),
             checked: verdict.checked,
+            v: 1,
             at: unix_now(),
             ttl: ttl.as_secs(),
         }) else {
@@ -463,71 +588,119 @@ impl Safety {
         }
     }
 
-    /// Reserves one GoPlus call of today's (UTC) budget: the warm-up's when
-    /// `background`, else the overall cap. With Redis the count is shared by every
-    /// replica and survives deploys; without it (or when Redis fails) it is this
-    /// process's own.
-    async fn spend(&self, background: bool) -> bool {
-        let limit = if background {
-            self.budget.0.min(self.budget.1)
-        } else {
-            self.budget.1
-        };
+    // Replaced 15 Nov (budgets by purpose: warm-up, lookups, quotes):
+    // /// Reserves one GoPlus call of today's (UTC) budget: the warm-up's when
+    // /// `background`, else the overall cap. With Redis the count is shared by every
+    // /// replica and survives deploys; without it (or when Redis fails) it is this
+    // /// process's own.
+    // async fn spend(&self, background: bool) -> bool {
+    //     let limit = if background {
+    //         self.budget.0.min(self.budget.1)
+    //     } else {
+    //         self.budget.1
+    //     };
+    //     let day = unix_now() / 86_400;
+    //     if let Some(redis) = self.redis.get() {
+    //         // The warm-up counts against both budgets; other calls against the cap.
+    //         let mut ok = true;
+    //         let budgets: &[(&str, u64)] = if background {
+    //             &[("warm", limit), ("all", self.budget.1)]
+    //         } else {
+    //             &[("all", limit)]
+    //         };
+    //         for (name, limit) in budgets {
+    //             let reserved: Result<i64, AppError> = redis
+    //                 .query(
+    //                     redis::cmd("EVAL")
+    //                         .arg(SPEND)
+    //                         .arg(1)
+    //                         .arg(redis.key("dex-goplus-budget", &format!("{name}:{day}")))
+    //                         .arg(*limit)
+    //                         .arg(2 * 86_400),
+    //                 )
+    //                 .await;
+    //             match reserved {
+    //                 Ok(1) => {}
+    //                 Ok(_) => ok = false,
+    //                 Err(_) => return self.spend_local(background, day),
+    //             }
+    //             if !ok {
+    //                 break;
+    //             }
+    //         }
+    //         if !ok {
+    //             tracing::info!(background, "goplus daily budget spent");
+    //         }
+    //         return ok;
+    //     }
+    //     self.spend_local(background, day)
+    // }
+    //
+    // fn spend_local(&self, background: bool, day: u64) -> bool {
+    //     // (day, warm-up calls, all calls) of this process.
+    //     let mut spent = self.spent.lock().unwrap_or_else(|p| p.into_inner());
+    //     if spent.0 != day {
+    //         *spent = (day, 0, 0);
+    //     }
+    //     let ok = if background {
+    //         spent.1 < self.budget.0 && spent.2 < self.budget.1
+    //     } else {
+    //         spent.2 < self.budget.1
+    //     };
+    //     if ok {
+    //         spent.2 += 1;
+    //         if background {
+    //             spent.1 += 1;
+    //         }
+    //     }
+    //     ok
+    // }
+
+    /// Reserves one GoPlus call of today's (UTC) budget for `purpose`
+    /// ([`Budgets::counters`]): every counter or none. With Redis the counts are shared
+    /// by every replica and survive deploys; without it (or when Redis fails) they are
+    /// this process's own.
+    async fn spend(&self, purpose: Purpose) -> bool {
         let day = unix_now() / 86_400;
+        let counters = self.budget.counters(purpose);
         if let Some(redis) = self.redis.get() {
-            // The warm-up counts against both budgets; other calls against the cap.
-            let mut ok = true;
-            let budgets: &[(&str, u64)] = if background {
-                &[("warm", limit), ("all", self.budget.1)]
-            } else {
-                &[("all", limit)]
-            };
-            for (name, limit) in budgets {
-                let reserved: Result<i64, AppError> = redis
-                    .query(
-                        redis::cmd("EVAL")
-                            .arg(SPEND)
-                            .arg(1)
-                            .arg(redis.key("dex-goplus-budget", &format!("{name}:{day}")))
-                            .arg(*limit)
-                            .arg(2 * 86_400),
-                    )
-                    .await;
-                match reserved {
-                    Ok(1) => {}
-                    Ok(_) => ok = false,
-                    Err(_) => return self.spend_local(background, day),
-                }
-                if !ok {
-                    break;
-                }
+            let mut command = redis::cmd("EVAL");
+            command.arg(SPEND).arg(counters.len());
+            for (name, _) in &counters {
+                command.arg(redis.key("dex-goplus-budget", &format!("{name}:{day}")));
             }
-            if !ok {
-                tracing::info!(background, "goplus daily budget spent");
+            for (_, limit) in &counters {
+                command.arg(*limit);
             }
-            return ok;
+            command.arg(2 * 86_400);
+            let reserved: Result<i64, AppError> = redis.query(&mut command).await;
+            match reserved {
+                Ok(1) => return true,
+                Ok(_) => {
+                    tracing::info!(?purpose, "goplus daily budget spent");
+                    return false;
+                }
+                Err(_) => return self.spend_local(&counters, day),
+            }
         }
-        self.spend_local(background, day)
+        self.spend_local(&counters, day)
     }
 
-    fn spend_local(&self, background: bool, day: u64) -> bool {
-        // (day, warm-up calls, all calls) of this process.
+    fn spend_local(&self, counters: &[(&'static str, u64)], day: u64) -> bool {
         let mut spent = self.spent.lock().unwrap_or_else(|p| p.into_inner());
         if spent.0 != day {
-            *spent = (day, 0, 0);
+            *spent = (day, HashMap::new());
         }
-        let ok = if background {
-            spent.1 < self.budget.0 && spent.2 < self.budget.1
-        } else {
-            spent.2 < self.budget.1
-        };
-        if ok {
-            spent.2 += 1;
-            if background {
-                spent.1 += 1;
-            }
+        if counters
+            .iter()
+            .any(|(name, limit)| spent.1.get(name).copied().unwrap_or(0) >= *limit)
+        {
+            return false;
         }
-        ok
+        for (name, _) in counters {
+            *spent.1.entry(name).or_default() += 1;
+        }
+        true
     }
 
     /// Seeds a verdict (tests, and offline fixtures).
@@ -578,7 +751,8 @@ impl Safety {
         if let Some(v) = self.cached(chain, address) {
             return v;
         }
-        self.fetch(chain, address, false)
+        // self.fetch(chain, address, false)
+        self.fetch(chain, address, Purpose::Lookup)
             .await
             .unwrap_or_else(|_| unchecked())
     }
@@ -588,12 +762,14 @@ impl Safety {
     /// with thousands of tokens and a warm-up per chain, queued warm-up calls used to
     /// push a quote's own check past its 5 s bound. Past the day's budget (15 Nov) the
     /// warm-up gets `TooManyRequests` (it stops) and anything else `unchecked`.
+    /// 15 Nov: by purpose; a quote past the budget gets the last verdict still standing.
     async fn fetch(
         &self,
         chain: DexChain,
         address: &str,
-        background: bool,
+        purpose: Purpose,
     ) -> Result<Verdict, AppError> {
+        let background = purpose == Purpose::Warm;
         let unchecked = unchecked();
         if self.quiet() {
             return Ok(unchecked);
@@ -610,11 +786,19 @@ impl Safety {
         {
             return Ok(v);
         }
-        if !self.spend(background).await {
-            return if background {
-                Err(AppError::TooManyRequests)
-            } else {
-                Ok(unchecked)
+        // if !self.spend(background).await {
+        //     return if background { Err(AppError::TooManyRequests) } else { Ok(unchecked) };
+        // }
+        if !self.spend(purpose).await {
+            return match purpose {
+                Purpose::Warm => Err(AppError::TooManyRequests),
+                Purpose::Lookup => Ok(unchecked),
+                // The last verdict still standing for the list (memory, which
+                // `check_fresh` filled from Redis), rather than blocking the trade.
+                Purpose::Quote => Ok(self
+                    .cached(chain, address)
+                    .filter(|v| v.checked)
+                    .unwrap_or(unchecked)),
             };
         }
         let path = if chain == DexChain::Solana {
@@ -740,7 +924,7 @@ impl Safety {
                 // In the background: when quotes hold the queue, try again a little later.
                 // while matches!(me.fetch(chain, &address, true).await, Err(AppError::Busy)) {
                 loop {
-                    match me.fetch(chain, &address, true).await {
+                    match me.fetch(chain, &address, Purpose::Warm).await {
                         Err(AppError::Busy) => tokio::time::sleep(me.interval).await,
                         Err(AppError::TooManyRequests) => break 'tokens,
                         _ => break,
@@ -834,6 +1018,56 @@ mod tests {
         assert_eq!(evm_flags(&r), vec!["upgradeable".to_string()]);
         assert!(blocking(&evm_flags(&r)));
         assert!(blocking(&["unchecked".to_string()]));
+    }
+
+    #[test]
+    fn lookups_and_the_warm_up_never_spend_the_quotes_share() {
+        // 15 Nov (security review): totals stay under the cap, lookups have their own
+        // smaller budget, and the last `QUOTE_RESERVE` calls are the quotes'.
+        let b = Budgets::default();
+        assert_eq!(b.all, DAILY_CAP);
+        assert!(b.warm + b.lookup <= b.all - b.quote_reserve);
+        let safety = Safety::new(
+            reqwest::Client::new(),
+            String::new(),
+            Duration::from_millis(1),
+            Vec::new(),
+        )
+        .with_budgets(Budgets {
+            warm: 3,
+            lookup: 2,
+            quote_reserve: 4,
+            all: 8,
+        });
+        let spend = |p: Purpose| safety.spend_local(&safety.budget.counters(p), 1);
+        // Lookups stop at their own two.
+        assert!(spend(Purpose::Lookup) && spend(Purpose::Lookup));
+        assert!(!spend(Purpose::Lookup));
+        // The warm-up gets the rest of the shared four (8 - 4 held for quotes), not its 3.
+        assert!(spend(Purpose::Warm) && spend(Purpose::Warm));
+        assert!(!spend(Purpose::Warm));
+        // Quotes still have the four held back, then the cap stops them too.
+        for _ in 0..4 {
+            assert!(spend(Purpose::Quote));
+        }
+        assert!(!spend(Purpose::Quote));
+        // A new day starts over.
+        assert!(safety.spend_local(&safety.budget.counters(Purpose::Lookup), 2));
+    }
+
+    #[test]
+    fn goplus_tells_an_active_hook_from_one_that_could_be_set() {
+        let r = json!({
+            "transfer_hook": [],
+            "transfer_hook_upgradable": {"status": "1"},
+            "default_account_state": "1",
+            "default_account_state_upgradable": {"status": "1"}
+        });
+        assert_eq!(
+            solana_flags(&r),
+            vec!["transfer_hook_upgradable", "default_state_upgradable"]
+        );
+        assert!(blocking(&solana_flags(&r)));
     }
 
     #[test]

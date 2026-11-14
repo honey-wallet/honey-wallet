@@ -12,7 +12,8 @@ use serde_json::Value;
 
 use super::{
     evm::{floor_bps, parse_amount},
-    solana::{MessageV0, check_jupiter_accounts, check_jupiter_amounts, decode_key},
+    // solana::{MessageV0, check_jupiter_accounts, check_jupiter_amounts, decode_key},
+    solana::{MessageV0, check_jupiter_accounts_with, check_jupiter_amounts, decode_key},
 };
 use crate::{error::AppError, solana_relayer::Wire};
 
@@ -69,6 +70,33 @@ pub fn check_order(
     taker: &str,
     payer: Option<&str>,
     slippage_bps: u16,
+) -> Result<JupiterQuote, AppError> {
+    let classic = crate::solana_relayer::TOKEN_PROGRAM;
+    check_order_with(
+        body,
+        sell,
+        buy,
+        amount,
+        taker,
+        payer,
+        slippage_bps,
+        (classic, classic),
+    )
+}
+
+/// [`check_order`] with each mint's own token program (15 Nov: tokenized stocks are
+/// Token-2022 mints, whose accounts are derived under that program), as
+/// `(sell program, buy program)`.
+#[allow(clippy::too_many_arguments)]
+pub fn check_order_with(
+    body: &Value,
+    sell: &str,
+    buy: &str,
+    amount: U256,
+    taker: &str,
+    payer: Option<&str>,
+    slippage_bps: u16,
+    programs: (&str, &str),
 ) -> Result<JupiterQuote, AppError> {
     if let Some(error) = body["error"].as_str() {
         tracing::info!(error, "jupiter refused an order");
@@ -130,11 +158,18 @@ pub fn check_order(
     check_jupiter_amounts(&wire.message, sell_amount, min_u64).map_err(upstream)?;
     // ...and that it sells exactly `sell` from the taker's own account into its own.
     let mint = |m: &str| decode_key(m).ok_or_else(|| upstream("mint"));
-    check_jupiter_accounts(
+    // check_jupiter_accounts(
+    //     &wire.message,
+    //     &decode_key(taker).ok_or_else(|| upstream("taker"))?,
+    //     &mint(sell)?,
+    //     &mint(buy)?,
+    // )
+    // .map_err(upstream)?;
+    check_jupiter_accounts_with(
         &wire.message,
         &decode_key(taker).ok_or_else(|| upstream("taker"))?,
-        &mint(sell)?,
-        &mint(buy)?,
+        (&mint(sell)?, &mint(programs.0)?),
+        (&mint(buy)?, &mint(programs.1)?),
     )
     .map_err(upstream)?;
     let price_impact_pct = body["priceImpactPct"]
