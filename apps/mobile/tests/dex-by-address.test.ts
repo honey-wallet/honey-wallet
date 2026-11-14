@@ -65,6 +65,22 @@ describe('long-tail tokens in Search (15 Nov)', () => {
     ]);
   });
 
+  it('folds invisible characters and flags non-ASCII look-alikes', () => {
+    const live = [{ symbol: 'USDC', name: 'USD Coin' }];
+    const tokens = [
+      // A zero-width space and full-width letters fold to the listed ticker.
+      listed(row('base', AERO, 'US\u200BDＣ')),
+      // A Cyrillic С: never equal after folding, flagged as non-ASCII instead.
+      listed(row('arbitrum', GRAIL, 'USD\u0421')),
+      listed(row('solana', JTO, 'JTO')),
+    ];
+    expect(dex.dexMarketRows(live, tokens).map((r) => r.exact ?? false)).toEqual([
+      true,
+      true,
+      false,
+    ]);
+  });
+
   it('matches a contract only to the token at it, and a NEAR Intents token by its contract', () => {
     const rows: MarketToken[] = [
       {

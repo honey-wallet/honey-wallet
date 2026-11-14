@@ -546,6 +546,15 @@ export function dexLogos(tokens: readonly DexToken[]): Record<string, string> {
 //     ];
 //   });
 // }
+/** A ticker or name as compared for look-alikes: NFKC, no invisible characters or spaces, lower case. */
+export const foldName = (text: string) =>
+  text
+    .normalize('NFKC')
+    .replace(/[\p{Cf}\s]/gu, '')
+    .toLowerCase();
+/** Printable ASCII only (after folding). */
+const isPlainAscii = (text: string) => /^[\x21-\x7e]*$/.test(text);
+
 /**
  * Search's rows for the safe DEX tokens, one per (chain, address) (15 Nov): long-tail
  * tokens sharing a ticker all show. A row whose symbol another row has is `exact`: it
@@ -571,16 +580,21 @@ export function dexMarketRows(
   // A shared ticker or name (a look-alike "USDC" too) marks the row `exact`: it stays out
   // of Top tokens, ranks below the listed one and shows its contract (security review,
   // 15 Nov).
+  // Compared folded (NFKC, invisible characters and spaces dropped, lower case); a
+  // ticker or name with any other non-ASCII letter (a Cyrillic "С" in "USDС") is
+  // treated as a look-alike outright (security review, 15 Nov).
   const count = new Map<string, number>();
   const bump = (key: string) => count.set(key, (count.get(key) ?? 0) + 1);
   for (const r of [...rows, ...safe]) {
-    bump(`s:${r.symbol.toUpperCase()}`);
-    const name = (r as { name?: string }).name?.trim().toLowerCase();
+    bump(`s:${foldName(r.symbol)}`);
+    const name = foldName((r as { name?: string }).name ?? '');
     if (name) bump(`n:${name}`);
   }
   const shared = (t: DexToken) =>
-    (count.get(`s:${t.symbol.toUpperCase()}`) ?? 0) > 1 ||
-    (count.get(`n:${t.name.trim().toLowerCase()}`) ?? 0) > 1;
+    !isPlainAscii(foldName(t.symbol)) ||
+    !isPlainAscii(foldName(t.name)) ||
+    (count.get(`s:${foldName(t.symbol)}`) ?? 0) > 1 ||
+    (count.get(`n:${foldName(t.name)}`) ?? 0) > 1;
   return safe.map((t) => dexMarketRow(t, shared(t)));
 }
 
