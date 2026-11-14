@@ -66,6 +66,38 @@ const RETRY_UNCHECKED: Duration = Duration::from_secs(10 * 60);
 /// passing for at most an hour (docs/routing/AUDIT.md finding 7).
 pub const FRESH: Duration = Duration::from_secs(60 * 60);
 const QUIET_AFTER_LIMIT: Duration = Duration::from_secs(60);
+/// Verdicts kept at most (15 Nov): `GET /dex/token` can ask about any contract, so the
+/// cache is bounded; expired verdicts go first, then the oldest.
+pub const MAX_VERDICTS: usize = 20_000;
+
+/// Inserts into a cache of `(when, value)` holding at most `max` entries: when full,
+/// entries older than `ttl(value)` are dropped first, then the oldest ones.
+pub fn bounded_insert<K: std::hash::Hash + Eq + Clone, V>(
+    map: &mut HashMap<K, (Instant, V)>,
+    key: K,
+    value: V,
+    max: usize,
+    ttl: impl Fn(&V) -> Duration,
+) {
+    if !map.contains_key(&key) && map.len() >= max {
+        map.retain(|_, (at, v)| at.elapsed() < ttl(v));
+        while map.len() >= max.max(1) {
+            let Some(oldest) = map
+                .iter()
+                .min_by_key(|(_, (at, _))| *at)
+                .map(|(k, _)| k.clone())
+            else {
+                break;
+            };
+            map.remove(&oldest);
+        }
+    }
+    map.insert(key, (Instant::now(), value));
+}
+
+fn verdict_ttl(v: &Verdict) -> Duration {
+    if v.checked { TTL } else { RETRY_UNCHECKED }
+}
 
 fn unchecked() -> Verdict {
     Verdict {
@@ -265,7 +297,7 @@ impl Safety {
         {
             return Ok(v);
         }
-        self.fetch(chain, address).await
+        self.fetch(chain, address, false).await
     }
 
     /// The cached verdict, if any (never calls GoPlus).
@@ -273,21 +305,29 @@ impl Safety {
         let cache = self.cache.lock().unwrap_or_else(|p| p.into_inner());
         cache
             .get(&(chain, address.to_string()))
-            .filter(|(at, v)| at.elapsed() < if v.checked { TTL } else { RETRY_UNCHECKED })
+            .filter(|(at, v)| at.elapsed() < verdict_ttl(v))
             .map(|(_, v)| v.clone())
     }
 
     /// Seeds a verdict (tests, and offline fixtures).
     pub fn insert(&self, chain: DexChain, address: &str, flags: Vec<String>) {
-        self.cache.lock().unwrap_or_else(|p| p.into_inner()).insert(
+        self.remember(
+            chain,
+            address,
+            Verdict {
+                flags,
+                checked: true,
+            },
+        );
+    }
+
+    fn remember(&self, chain: DexChain, address: &str, verdict: Verdict) {
+        bounded_insert(
+            &mut self.cache.lock().unwrap_or_else(|p| p.into_inner()),
             (chain, address.to_string()),
-            (
-                Instant::now(),
-                Verdict {
-                    flags,
-                    checked: true,
-                },
-            ),
+            verdict,
+            MAX_VERDICTS,
+            verdict_ttl,
         );
     }
 
@@ -304,18 +344,30 @@ impl Safety {
         if let Some(v) = self.cached(chain, address) {
             return v;
         }
-        self.fetch(chain, address)
+        self.fetch(chain, address, false)
             .await
             .unwrap_or_else(|_| unchecked())
     }
 
     /// One paced GoPlus call, cached. `Busy` when the queue is full (nothing asked).
-    async fn fetch(&self, chain: DexChain, address: &str) -> Result<Verdict, AppError> {
+    /// `background` (the list warm-up) takes a slot only when one is free now (15 Nov):
+    /// with thousands of tokens and a warm-up per chain, queued warm-up calls used to
+    /// push a quote's own check past its 5 s bound.
+    async fn fetch(
+        &self,
+        chain: DexChain,
+        address: &str,
+        background: bool,
+    ) -> Result<Verdict, AppError> {
         let unchecked = unchecked();
         if self.quiet() {
             return Ok(unchecked);
         }
-        self.pacer.wait().await?;
+        if background {
+            self.pacer.wait_up_to(Duration::ZERO).await?;
+        } else {
+            self.pacer.wait().await?;
+        }
         // Another caller may have refreshed it while this one waited its turn.
         if let Some((age, v)) = self.age(chain, address)
             && v.checked
@@ -381,10 +433,7 @@ impl Safety {
             }
             _ => unchecked,
         };
-        self.cache.lock().unwrap_or_else(|p| p.into_inner()).insert(
-            (chain, address.to_string()),
-            (Instant::now(), verdict.clone()),
-        );
+        self.remember(chain, address, verdict.clone());
         Ok(verdict)
     }
 
@@ -430,7 +479,7 @@ impl Safety {
                     break;
                 }
                 // In the background: when quotes hold the queue, try again a little later.
-                while matches!(me.fetch(chain, &address).await, Err(AppError::Busy)) {
+                while matches!(me.fetch(chain, &address, true).await, Err(AppError::Busy)) {
                     tokio::time::sleep(me.interval).await;
                 }
             }
@@ -458,6 +507,29 @@ mod tests {
             "trading_cooldown": "0", "personal_slippage_modifiable": "0",
             "is_open_source": "1", "selfdestruct": "0", "owner_address": ""
         })
+    }
+
+    #[test]
+    fn the_verdict_cache_is_bounded() {
+        let mut map: HashMap<u32, (Instant, u32)> = HashMap::new();
+        for i in 0..10 {
+            bounded_insert(&mut map, i, i, 4, |_| Duration::from_secs(60));
+        }
+        assert_eq!(map.len(), 4);
+        // The newest stay; the oldest went first.
+        for i in 6..10 {
+            assert!(map.contains_key(&i), "{i}");
+        }
+        // Re-inserting a key that is there replaces it without evicting another.
+        bounded_insert(&mut map, 9, 99, 4, |_| Duration::from_secs(60));
+        assert_eq!((map.len(), map[&9].1), (4, 99));
+        // Expired entries are dropped before live ones.
+        let mut map: HashMap<u32, (Instant, u32)> = HashMap::new();
+        bounded_insert(&mut map, 1, 0, 2, |_| Duration::ZERO);
+        bounded_insert(&mut map, 2, 0, 2, |_| Duration::ZERO);
+        bounded_insert(&mut map, 3, 0, 2, |_| Duration::ZERO);
+        assert!(map.contains_key(&3));
+        assert!(map.len() <= 2);
     }
 
     #[test]

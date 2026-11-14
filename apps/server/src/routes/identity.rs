@@ -182,6 +182,30 @@ pub(crate) async fn limit_market_data_reads_by_ip(
     Ok(next.run(request).await)
 }
 
+/// `GET /dex/token` (15 Nov): a lookup missing every cache spends a GeckoTerminal or
+/// Jupiter call, a DexScreener call, a GoPlus call and chain reads, so one client gets a
+/// few a minute. Misses are also paced across all clients inside the DEX service.
+pub(crate) const DEX_LOOKUP_GLOBAL_LIMIT: i32 = 1_200;
+pub(crate) const DEX_LOOKUP_PEER_LIMIT: i32 = 20;
+
+pub(crate) async fn limit_dex_token_lookups_by_ip(
+    State(state): State<AuthenticatedApiAdmission>,
+    request: Request<axum::body::Body>,
+    next: Next,
+) -> Result<Response, AppError> {
+    let ip = client_ip_from_request(state.trust_proxy, &state.trusted_proxy_cidrs, &request)?;
+    state
+        .redis
+        .rate_limit_pair(
+            "dex_token_lookup",
+            &client_bucket(ip).to_string(),
+            state.global_limit.min(DEX_LOOKUP_GLOBAL_LIMIT),
+            state.peer_limit.min(DEX_LOOKUP_PEER_LIMIT),
+        )
+        .await?;
+    Ok(next.run(request).await)
+}
+
 /// `fresh=1` portfolio reads skip the server's cache and go to public nodes and
 /// explorers, so each client gets a few a minute (an app makes about eight after one
 /// transaction). Past that the read is answered from the cache, not refused.

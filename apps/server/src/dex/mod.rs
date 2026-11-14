@@ -70,9 +70,32 @@ const UNIVERSE_TTL: Duration = Duration::from_secs(6 * 60 * 60);
 /// How often the background refresher looks at every chain (it rebuilds only what is
 /// older than `UNIVERSE_TTL`, and re-asks GoPlus for unchecked tokens).
 const REFRESH_EVERY: Duration = Duration::from_secs(20 * 60);
+// Timing of one full refresh, keyless (15 Nov, long tail). Every list is rebuilt when
+// older than `UNIVERSE_TTL` (6 h), one chain after another, so the whole refresh must fit
+// well inside 6 h and leave each provider's budget for quotes and lookups:
+// - CoinGecko: the coin list plus 20 `/coins/markets` pages (16 by market cap, 4 by
+//   volume) at 12 s = about 4 min (45 s with a demo key), once, shared by every chain.
+// - GeckoTerminal (6 s, 10 a minute): per EVM chain 10 pool pages plus up to 47
+//   `/tokens/multi` calls (1,200 CoinGecko candidates and up to 200 pool tokens, 30 a
+//   call) = at most 57 calls, about 6 min; 5 EVM chains about 30 min. Quotes never call
+//   it; a `GET /dex/token` lookup waits at most two slots for its turn
+//   (`LOOKUP_GECKO_WAIT`).
+// - DexScreener (250 ms): one call per `/tokens/multi` call, under 2% of its budget, so a
+//   quote's fresh price waits at most one slot.
+// - Chain reads: at most `MAX_CHAIN_READS` tokens a chain (three `eth_call`s each),
+//   `CHAIN_READ_INTERVAL` apart: a few calls a second on the public RPCs, about 2-5 min.
+// - Solana: one Jupiter call. GoPlus: floor-passing tokens only, verdicts kept a day, and
+//   the warm-up takes only free slots (`Safety::warm`), so a quote's check never queues
+//   behind it.
+// A full refresh is about 40 min of the 6 h; the refresher looks every `REFRESH_EVERY`.
+// `BUILD_SLOT_TRIES` (60 s of half-second retries) covers the longest wait for a slot:
+// CoinGecko's 12 s, or GeckoTerminal's 6 s behind a lookup's slot.
 /// CoinGecko `/coins/markets` pages read for the EVM candidates: the top 1,000 by market
 /// cap, then the top 250 by 24 h volume (cached `UNIVERSE_TTL`, shared by every chain).
-const MARKET_CAP_PAGES: u32 = 4;
+// const MARKET_CAP_PAGES: u32 = 4;
+/// 15 Nov: the top 4,000 by market cap, then the top 1,000 by 24 h volume.
+const MARKET_CAP_PAGES: u32 = 16;
+const VOLUME_PAGES: u32 = 4;
 /// Keyless CoinGecko allows roughly 5 to 15 calls a minute (it answers 429 sooner under
 /// load); a demo key (`COINGECKO_API_KEY`) 30.
 const COINGECKO_INTERVAL: Duration = Duration::from_secs(12);
@@ -98,7 +121,24 @@ const COINGECKO_LISTS: &str = "https://tokens.coingecko.com";
 /// Curated token lists change slowly.
 const TOKEN_LIST_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 /// On-chain metadata reads per build (tokens no curated list has), at most.
-const MAX_CHAIN_READS: usize = 120;
+// const MAX_CHAIN_READS: usize = 120;
+const MAX_CHAIN_READS: usize = 600;
+/// Spacing of those reads (each is three `eth_call`s) on the public RPCs.
+const CHAIN_READ_INTERVAL: Duration = Duration::from_millis(150);
+/// `GET /dex/token` (15 Nov): lookups kept at most (found or not), how long a found token
+/// stays registered (tradable when it passes, like a token of a built list), and how
+/// long "no market" is remembered.
+const LOOKUP_MAX_CACHED: usize = 2_000;
+const LOOKUP_TTL: Duration = UNIVERSE_TTL;
+const LOOKUP_MISS_TTL: Duration = Duration::from_secs(10 * 60);
+/// Lookups that miss every cache: one every 10 s across replicas (6 a minute). Each
+/// spends a GeckoTerminal or Jupiter call, a DexScreener call, a GoPlus call and (EVM)
+/// three chain reads; 6 a minute keeps Jupiter under its keyless 30 with Solana quotes'
+/// 24, and GoPlus under its daily 30k with the warm-up.
+const LOOKUP_INTERVAL: Duration = Duration::from_secs(10);
+/// How long a lookup waits for a GeckoTerminal slot: a build holds one slot ahead, so
+/// two intervals and a second.
+const LOOKUP_GECKO_WAIT: Duration = Duration::from_secs(13);
 
 // API shapes (mirrored in packages/api-client/src/types.ts)
 
@@ -481,6 +521,8 @@ impl SponsorGate for PgGate {
 type Cached<T> = tokio::sync::RwLock<Option<(Instant, Arc<T>)>>;
 type TokenLists = Arc<Vec<HashMap<String, universe::ListEntry>>>;
 type Universe = tokio::sync::RwLock<HashMap<DexChain, (Instant, Arc<Vec<DexToken>>)>>;
+/// `GET /dex/token` answers: the token, or None for "no market".
+type Lookups = HashMap<(DexChain, String), (Instant, Option<DexToken>)>;
 
 pub struct DexService {
     config: DexConfig,
@@ -507,6 +549,11 @@ pub struct DexService {
     prices: Mutex<HashMap<(DexChain, String), (Instant, f64)>>,
     /// Decimals read on chain (they don't change; upgradeable tokens are blocked).
     decimals: Mutex<HashMap<(DexChain, String), u8>>,
+    /// `GET /dex/token` answers by (chain, address): the token (registered for quotes
+    /// while fresh), or None for "no market".
+    lookups: Mutex<Lookups>,
+    /// Paces lookups that miss every cache (`LOOKUP_INTERVAL`).
+    lookup: Pacer,
     gate: Option<Arc<dyn SponsorGate>>,
     evm_sponsored: OnceLock<Vec<u64>>,
     solana_payer: Option<String>,
@@ -588,6 +635,12 @@ impl DexService {
             dexscreener: Pacer::new("dexscreener", Duration::from_millis(250), wait),
             prices: Mutex::default(),
             decimals: Mutex::default(),
+            lookups: Mutex::default(),
+            lookup: Pacer::new(
+                "dex-lookup",
+                config.build_interval.unwrap_or(LOOKUP_INTERVAL),
+                wait,
+            ),
             gate: None,
             evm_sponsored: OnceLock::new(),
             solana_payer: None,
@@ -612,6 +665,7 @@ impl DexService {
                 &self.jupiter,
                 &self.gecko,
                 &self.dexscreener,
+                &self.lookup,
                 self.safety.pacer(),
             ] {
                 pacer.share(redis.clone());
@@ -941,7 +995,8 @@ impl DexService {
         let mut pages: Vec<(&str, u32)> = (1..=MARKET_CAP_PAGES)
             .map(|p| ("market_cap_desc", p))
             .collect();
-        pages.push(("volume_desc", 1));
+        // pages.push(("volume_desc", 1));
+        pages.extend((1..=VOLUME_PAGES).map(|p| ("volume_desc", p)));
         let mut all = Vec::new();
         for (order, page) in pages {
             self.slot(&self.coingecko).await?;
@@ -1083,6 +1138,9 @@ impl DexService {
                     t.flags.push("no_decimals".into());
                 }
                 continue;
+            }
+            if reads > 0 {
+                tokio::time::sleep(self.config.build_interval.unwrap_or(CHAIN_READ_INTERVAL)).await;
             }
             reads += 1;
             let decimals = self.onchain_decimals(chain, &t.address).await.ok();
@@ -1243,7 +1301,7 @@ impl DexService {
             return Vec::new();
         }
         let lists = self.universe.read().await;
-        chains::ALL
+        let mut out: Vec<TokenView> = chains::ALL
             .into_iter()
             .filter_map(|chain| lists.get(&chain).map(|(_, t)| (chain, t.clone())))
             .flat_map(|(chain, tokens)| {
@@ -1253,7 +1311,21 @@ impl DexService {
                     .filter(|v| v.safety.ok)
                     .collect::<Vec<_>>()
             })
-            .collect()
+            .collect();
+        drop(lists);
+        // Tokens looked up by contract (`GET /dex/token`) that passed, while registered.
+        let known: std::collections::HashSet<(DexChain, String)> =
+            out.iter().map(|v| (v.chain, v.address.clone())).collect();
+        for t in self.registered_tokens() {
+            if known.contains(&(t.chain, t.address.clone())) {
+                continue;
+            }
+            let v = self.view(&t, self.safety.cached(t.chain, &t.address));
+            if v.safety.ok {
+                out.push(v);
+            }
+        }
+        out
     }
 
     /// Builds every chain's list now and keeps them fresh (every `REFRESH_EVERY`, each
@@ -1340,12 +1412,18 @@ impl DexService {
         let tokens = self.universe(chain).await?;
         let token = match tokens.iter().find(|t| t.address == address) {
             Some(t) => t.clone(),
-            // A curated wrapped major (dex::canonical), or a token NEAR Intents lists on
-            // this chain (the route planner's fallback when 1Click can't do a trade),
-            // that the volume-ranked list missed: GoPlus-checked below like any other.
-            None => match self.canonical_token(chain, address).await {
-                Ok(t) => t,
-                Err(_) => self.listed_token(chain, address).await?,
+            // A token looked up by contract (`GET /dex/token`, 15 Nov), with the same flags
+            // a built list gives it.
+            None => match self.registered(chain, address).flatten() {
+                Some(t) => t,
+                // A curated wrapped major (dex::canonical), or a token NEAR Intents lists
+                // on this chain (the route planner's fallback when 1Click can't do a
+                // trade), that the volume-ranked list missed: GoPlus-checked below like
+                // any other.
+                None => match self.canonical_token(chain, address).await {
+                    Ok(t) => t,
+                    Err(_) => self.listed_token(chain, address).await?,
+                },
             },
         };
         let verdict = self.safety.check_fresh(chain, address).await?;
@@ -1433,8 +1511,219 @@ impl DexService {
         tokens
             .iter()
             .find(|t| t.address == address)
+            .cloned()
+            .or_else(|| self.registered(chain, address).flatten())
             .filter(|t| t.price_usd.is_finite() && t.price_usd > 0.0)
             .map(|t| (t.price_usd, t.decimals))
+    }
+
+    // Lookups by contract (`GET /dex/token`, 15 Nov)
+
+    /// `GET /dex/token`: any token on `chain` by contract (or mint), as a `/dex/tokens`
+    /// row with its safety verdict. A token of a built list answers from it; any other is
+    /// read now (GeckoTerminal and DexScreener on EVM with its decimals, symbol and name
+    /// from the chain; Jupiter and DexScreener on Solana), held to the same floors, two
+    /// prices and scam checks, asked of GoPlus, and cached. One that passes is registered:
+    /// quotes, dry quotes and the thesis registry accept it like a listed token.
+    /// `NotFound` when it trades nowhere; `Busy` when the providers' budget is spent.
+    pub async fn lookup(&self, chain: DexChain, address: &str) -> Result<TokenView, AppError> {
+        if !self.enabled() {
+            return Err(off());
+        }
+        let address = chain
+            .normalize(address)
+            .ok_or_else(|| bad("invalid address"))?;
+        if chain.is_usdc(&address) {
+            return Err(bad("USDC is the other side of every DEX swap"));
+        }
+        if chain == DexChain::Solana && address == chains::WRAPPED_SOL {
+            return Err(bad("SOL trades through NEAR Intents"));
+        }
+        let listed = self
+            .universe
+            .read()
+            .await
+            .get(&chain)
+            .and_then(|(_, tokens)| tokens.iter().find(|t| t.address == address).cloned());
+        let token = match listed {
+            Some(t) => t,
+            None => match self.registered(chain, &address) {
+                Some(found) => found.ok_or(AppError::NotFound)?,
+                None => {
+                    let found = self.fetch_token(chain, &address).await?;
+                    self.remember_lookup(chain, &address, found.clone());
+                    found.ok_or(AppError::NotFound)?
+                }
+            },
+        };
+        let verdict = match self.safety.cached(chain, &address) {
+            Some(v) => v,
+            None => self.safety.check(chain, &address).await,
+        };
+        Ok(self.view(&token, Some(verdict)))
+    }
+
+    /// A lookup's cached answer while fresh: Some(Some(token)), Some(None) for "no
+    /// market", None when it must be read.
+    fn registered(&self, chain: DexChain, address: &str) -> Option<Option<DexToken>> {
+        self.lookups
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(&(chain, address.to_string()))
+            .filter(|(at, t)| at.elapsed() < lookup_ttl(t))
+            .map(|(_, t)| t.clone())
+    }
+
+    /// Every token looked up and still registered.
+    fn registered_tokens(&self) -> Vec<DexToken> {
+        self.lookups
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .values()
+            .filter(|(at, t)| at.elapsed() < lookup_ttl(t))
+            .filter_map(|(_, t)| t.clone())
+            .collect()
+    }
+
+    fn remember_lookup(&self, chain: DexChain, address: &str, token: Option<DexToken>) {
+        safety::bounded_insert(
+            &mut self.lookups.lock().unwrap_or_else(|p| p.into_inner()),
+            (chain, address.to_string()),
+            token,
+            LOOKUP_MAX_CACHED,
+            lookup_ttl,
+        );
+    }
+
+    /// Lookups held (tests).
+    #[cfg(test)]
+    fn lookups_held(&self) -> usize {
+        self.lookups.lock().unwrap_or_else(|p| p.into_inner()).len()
+    }
+
+    /// One token read from the providers now: Ok(None) when it has no market.
+    async fn fetch_token(
+        &self,
+        chain: DexChain,
+        address: &str,
+    ) -> Result<Option<DexToken>, AppError> {
+        self.lookup.wait().await?;
+        let now = unix_now() as i64;
+        let coingecko_id = self.cached_coingecko_id(chain, address).await;
+        let token = if chain == DexChain::Solana {
+            self.jupiter.wait().await?;
+            let found = self
+                .get(
+                    &format!("{}/tokens/v2/search", self.config.jupiter),
+                    &[("query", address.to_string())],
+                    &self.jupiter_headers(),
+                )
+                .await?;
+            let ids: HashMap<String, String> = coingecko_id
+                .map(|id| (address.to_string(), id))
+                .into_iter()
+                .collect();
+            found
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|t| t["id"].as_str() == Some(address))
+                .and_then(|t| universe::solana_token(t, &ids, now))
+        } else {
+            self.gecko.wait_up_to(LOOKUP_GECKO_WAIT).await?;
+            let url = format!(
+                "{}/networks/{}/tokens/multi/{address}",
+                self.config.geckoterminal,
+                chain.geckoterminal()
+            );
+            let body = self.get(&url, &[], &[]).await?;
+            // Found or not, the same parser and floors as a built list; the second price
+            // comes from DexScreener below.
+            let gecko: Vec<Value> = body["data"].as_array().cloned().unwrap_or_default();
+            let candidate = universe::Candidate {
+                coingecko_id,
+                address: address.to_string(),
+                ..universe::Candidate::default()
+            };
+            let pairs = self.dexscreener_pairs(chain, address).await?;
+            let mut tokens = universe::evm_tokens(
+                chain,
+                &[candidate],
+                &gecko,
+                &universe::oldest_pairs(&pairs),
+                &universe::pair_prices(&pairs),
+                now,
+            );
+            let Some(mut t) = tokens.pop() else {
+                return Ok(None);
+            };
+            if !universe::has_market(t.liquidity_usd, universe::pairs_name(&pairs, address)) {
+                return Ok(None);
+            }
+            // Metadata: a curated list already read, else the contract itself (always,
+            // even when a flag blocks it, so the row names it right).
+            let lists = self
+                .token_lists
+                .read()
+                .await
+                .get(&chain)
+                .map(|(_, l)| l.clone())
+                .unwrap_or_default();
+            universe::apply_lists(std::slice::from_mut(&mut t), &lists);
+            if t.metadata == "geckoterminal" {
+                let decimals = self.onchain_decimals(chain, &t.address).await.ok();
+                let symbol = self.onchain_text(chain, &t.address, "0x95d89b41").await;
+                let name = self.onchain_text(chain, &t.address, "0x06fdde03").await;
+                universe::confirm_onchain(&mut t, decimals, symbol, name);
+            }
+            return Ok(Some(t));
+        };
+        // Solana: Jupiter's entry, DexScreener's pairs for the second price (Solana's
+        // built list is Jupiter-verified; a looked-up mint needn't be, so it must agree
+        // with a second source).
+        let Some(mut t) = token else {
+            return Ok(None);
+        };
+        let pairs = self.dexscreener_pairs(chain, address).await?;
+        if !universe::has_market(t.liquidity_usd, universe::pairs_name(&pairs, address)) {
+            return Ok(None);
+        }
+        let prices = universe::pair_prices(&pairs);
+        universe::second_price(&mut t, prices.get(&address.to_ascii_lowercase()).copied());
+        Ok(Some(t))
+    }
+
+    /// DexScreener's pairs for one address (an empty list when it has none).
+    async fn dexscreener_pairs(
+        &self,
+        chain: DexChain,
+        address: &str,
+    ) -> Result<Vec<Value>, AppError> {
+        self.dexscreener.wait().await?;
+        let url = format!(
+            "{}/tokens/v1/{}/{address}",
+            self.config.dexscreener,
+            chain.dexscreener()
+        );
+        Ok(match self.get(&url, &[], &[]).await? {
+            Value::Array(pairs) => pairs,
+            _ => Vec::new(),
+        })
+    }
+
+    /// CoinGecko's id for a contract from the coin list already read (never fetches it).
+    async fn cached_coingecko_id(&self, chain: DexChain, address: &str) -> Option<String> {
+        let list = self
+            .coin_list
+            .read()
+            .await
+            .as_ref()
+            .map(|(_, v)| v.clone())?;
+        let platform = chain.coingecko_platform();
+        list.as_array()?.iter().find_map(|c| {
+            let a = chain.normalize(c["platforms"][platform].as_str()?)?;
+            (a == address).then(|| c["id"].as_str().map(String::from))?
+        })
     }
 
     /// Fills the caches a quote of `token` needs (the universe, GoPlus's verdict, its
@@ -2032,6 +2321,14 @@ impl DexService {
             .and_then(|t| t.format(&Rfc3339).ok())
             .ok_or(AppError::Busy)?;
         Ok(RouteResponse { legs, expires_at })
+    }
+}
+
+fn lookup_ttl(token: &Option<DexToken>) -> Duration {
+    if token.is_some() {
+        LOOKUP_TTL
+    } else {
+        LOOKUP_MISS_TTL
     }
 }
 

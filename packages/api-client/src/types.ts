@@ -1992,7 +1992,10 @@ export interface DexSafety {
   flags: string[];
 }
 
-/** `GET /api/v1/dex/tokens?chain=…[&all=1]`: one token of the DEX universe. */
+/**
+ * `GET /api/v1/dex/tokens?chain=…[&all=1]`: one token of the DEX universe. Also the whole
+ * answer of `GET /api/v1/dex/token?chain=…&address=…` (a lookup by contract).
+ */
 export interface DexToken {
   chain: DexChain;
   /** Lowercase 0x hex on EVM, base58 mint on Solana. */

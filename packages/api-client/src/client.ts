@@ -64,6 +64,7 @@ import type {
   DexQuoteRequest,
   DexRoute,
   DexRouteRequest,
+  DexToken,
   DexTokens,
   EvmSponsorPlan,
   EvmSponsorPrepareRequest,
@@ -474,6 +475,16 @@ export function createApiClient({ baseUrl, fetch: fetchImpl = fetch }: ApiClient
     dexTokens: (chain: DexChain, options: { all?: boolean } = {}, init?: RequestInit) =>
       request<DexTokens>(
         `/api/v1/dex/tokens?chain=${encodeURIComponent(chain)}${options.all ? '&all=1' : ''}`,
+        init,
+      ),
+    /**
+     * Any token by contract (EVM) or mint (Solana), as one `dexTokens({ all: true })`
+     * row with its safety verdict. One whose `safety.ok` is true can then be quoted.
+     * 404 when it trades nowhere, 400 for a bad chain or address.
+     */
+    dexToken: (chain: DexChain, address: string, init?: RequestInit) =>
+      request<DexToken>(
+        `/api/v1/dex/token?chain=${encodeURIComponent(chain)}&address=${encodeURIComponent(address)}`,
         init,
       ),
     /** A stored, executable DEX quote (KyberSwap on EVM, Jupiter on Solana). */

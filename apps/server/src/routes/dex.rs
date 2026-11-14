@@ -2,6 +2,10 @@
 //!
 //! - `GET /dex/tokens?chain=base|arbitrum|optimism|polygon|ethereum|solana[&all=1]`: the DEX
 //!   universe with safety verdicts (public, cached).
+//! - `GET /dex/token?chain=...&address=<contract or mint>` (15 Nov): any token by contract,
+//!   as one `/dex/tokens?all=1` row (public; 400 for a bad chain or address, 404 when it
+//!   trades nowhere). One that passes can then be quoted. Its own per-IP budget
+//!   (`limit_dex_token_lookups_by_ip`) on top of the public reads'.
 //! - `POST /dex/quote` (signed in): a KyberSwap or Jupiter quote, stored so the gas
 //!   sponsors can bind execution to it.
 //! - `POST /dex/route` (signed in): the legs of a cross-chain buy or sell (1Click USDC
@@ -90,6 +94,16 @@ pub fn public_router(dex: Arc<DexService>) -> Router {
         })
 }
 
+/// The lookup by contract (its own rate limit is layered on in `lib.rs`).
+pub fn lookup_router(dex: Arc<DexService>) -> Router {
+    Router::new()
+        .route("/dex/token", get(token))
+        .with_state(StateData {
+            identity: None,
+            dex,
+        })
+}
+
 /// Quotes and routes (signed in).
 pub fn router(identity: Option<Identity>, dex: Arc<DexService>) -> Router {
     Router::new()
@@ -114,6 +128,21 @@ async fn tokens(
     Ok(Json(TokensResponse {
         tokens: s.dex.tokens(chain, all).await?,
     }))
+}
+
+#[derive(Deserialize)]
+struct TokenQuery {
+    chain: String,
+    address: String,
+}
+
+async fn token(
+    State(s): State<StateData>,
+    Query(q): Query<TokenQuery>,
+) -> Result<Json<crate::dex::TokenView>, AppError> {
+    let chain = DexChain::parse(&q.chain)
+        .ok_or_else(|| AppError::BadRequest("unsupported chain".into()))?;
+    s.dex.lookup(chain, &q.address).await.map(Json)
 }
 
 async fn signed_in(s: &StateData, headers: &HeaderMap) -> Result<(Identity, Uuid), AppError> {
@@ -264,6 +293,11 @@ mod tests {
             ("POST", "/dex/quote", router(None, dex.clone())),
             ("POST", "/dex/route", router(None, dex.clone())),
             ("GET", "/dex/tokens?chain=base", public_router(dex.clone())),
+            (
+                "GET",
+                "/dex/token?chain=base&address=0x940181a94a35a4569e4529a3cdfb74e38fd98631",
+                lookup_router(dex.clone()),
+            ),
         ] {
             let (status, body) = call(app, method, path).await;
             assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{path}");
@@ -327,5 +361,22 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn a_lookup_with_a_bad_chain_or_address_is_400_before_any_provider() {
+        let dex = enabled();
+        for path in [
+            "/dex/token?chain=bsc&address=0x940181a94a35a4569e4529a3cdfb74e38fd98631",
+            "/dex/token?chain=base&address=0x1234",
+            "/dex/token?chain=base&address=JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
+            "/dex/token?chain=solana&address=0x940181a94a35a4569e4529a3cdfb74e38fd98631",
+            "/dex/token?chain=base",
+            // USDC is the other side of every swap, not a token to look up.
+            "/dex/token?chain=base&address=0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        ] {
+            let (status, body) = call(lookup_router(dex.clone()), "GET", path).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{path}: {body}");
+        }
     }
 }
