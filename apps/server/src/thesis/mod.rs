@@ -320,6 +320,7 @@ pub struct Settings {
     pub quote_account: String,
     pub near_ai_base_url: String,
     pub near_ai_api_key: Option<String>,
+    pub near_ai_fallback_key: Option<String>,
     pub linkup_base_url: String,
     pub linkup_api_key: Option<String>,
 }
@@ -336,6 +337,7 @@ impl Settings {
             near_ai_base_url: var("NEAR_AI_BASE_URL")
                 .unwrap_or_else(|| near_ai::DEFAULT_BASE_URL.into()),
             near_ai_api_key: var("NEAR_AI_API_KEY"),
+            near_ai_fallback_key: var("NEAR_AI_API_KEY_FALLBACK"),
             linkup_base_url: var("LINKUP_BASE_URL")
                 .unwrap_or_else(|| research::DEFAULT_BASE_URL.into()),
             linkup_api_key: var("LINKUP_API_KEY"),
@@ -448,7 +450,8 @@ impl ThesisService {
         let mut service = Self::with_parts(
             registry,
             Intake::new()?,
-            NearAi::new(client, settings.near_ai_base_url, settings.near_ai_api_key),
+            NearAi::new(client, settings.near_ai_base_url, settings.near_ai_api_key)
+                .with_fallback_key(settings.near_ai_fallback_key),
         )
         .with_search(search)
         .with_quoter(Arc::new(quoter));

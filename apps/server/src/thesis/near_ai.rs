@@ -75,6 +75,9 @@ pub struct NearAi {
     client: reqwest::Client,
     base_url: String,
     api_key: Option<String>,
+    /// `NEAR_AI_API_KEY_FALLBACK`: used for the rest of a call when the main key is
+    /// refused (401/402/403), rate-limited (429) or the server errors (15 Nov).
+    fallback_key: Option<String>,
 }
 
 /// What one structured call asks for.
@@ -105,7 +108,20 @@ impl NearAi {
             client,
             base_url: base_url.trim_end_matches('/').to_string(),
             api_key: api_key.filter(|k| !k.trim().is_empty()),
+            fallback_key: None,
         }
+    }
+
+    /// A second key for when the main one is refused or rate-limited. Without a main key
+    /// it becomes the only one.
+    pub fn with_fallback_key(mut self, key: Option<String>) -> Self {
+        let key = key.filter(|k| !k.trim().is_empty());
+        if self.api_key.is_none() {
+            self.api_key = key;
+        } else if key != self.api_key {
+            self.fallback_key = key;
+        }
+        self
     }
 
     /// No key: the pipeline answers with fixtures (DRY_RUN).
@@ -143,9 +159,12 @@ impl NearAi {
             latency_ms: 0,
             first_try_valid: false,
         };
-        let Some(key) = &self.api_key else {
+        let Some(mut key) = self.api_key.as_deref() else {
             return Completion { value: None, call };
         };
+        let mut spare = self.fallback_key.as_deref();
+        // Two attempts, plus one when a refused key is swapped for the fallback.
+        let mut tries = 2;
         // No response_format, the schema goes in the instructions instead: NEAR AI's strict
         // `json_schema` mode never answered for DeepSeek (every call ran into the
         // timeout), while the same model answers a plain request in about a second.
@@ -159,7 +178,7 @@ impl NearAi {
             json!({"role": "user", "content": user}),
         ];
         let mut model = model;
-        for _ in 0..2 {
+        while call.attempts < tries {
             let left = timeout.saturating_sub(started.elapsed());
             if left < Duration::from_secs(3) || !budget.take() {
                 break;
@@ -188,6 +207,17 @@ impl NearAi {
                 Err(kind) => {
                     tracing::warn!(model, kind, "near ai call failed");
                     call.error = Some(kind.into());
+                    // A refused or rate-limited key: the rest of the call uses the fallback.
+                    if matches!(kind, "key" | "transport")
+                        && let Some(other) = spare.take()
+                    {
+                        tracing::warn!(kind, "near ai: switching to the fallback key");
+                        key = other;
+                        if kind == "key" {
+                            tries += 1;
+                            continue;
+                        }
+                    }
                     if kind == "timeout" || kind == "transport" {
                         if model == MODEL_REASON {
                             model = MODEL_FALLBACK;
@@ -262,10 +292,16 @@ impl NearAi {
         let status = response.status();
         if !status.is_success() {
             tracing::warn!(status = status.as_u16(), "near ai call rejected");
-            return Err(if status.is_server_error() || status.as_u16() == 429 {
-                "transport"
-            } else {
-                "rejected"
+            // return Err(if status.is_server_error() || status.as_u16() == 429 {
+            //     "transport"
+            // } else {
+            //     "rejected"
+            // });
+            return Err(match status.as_u16() {
+                401..=403 => "key",
+                429 => "transport",
+                _ if status.is_server_error() => "transport",
+                _ => "rejected",
             });
         }
         let streamed = response
@@ -424,5 +460,84 @@ mod tests {
             .await;
         assert!(out.value.is_none());
         assert_eq!(out.call.attempts, 0);
+    }
+
+    /// A stand-in NEAR AI that answers only `good`; any other key gets `refused`.
+    async fn keyed_stub(good: &'static str, refused: u16) -> String {
+        use axum::{Json, Router, http::HeaderMap, http::StatusCode, routing::post};
+        let app = Router::new().route(
+            "/chat/completions",
+            post(move |headers: HeaderMap| async move {
+                let auth = headers
+                    .get("authorization")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or_default();
+                if auth != format!("Bearer {good}") {
+                    return Err(StatusCode::from_u16(refused).unwrap());
+                }
+                Ok(Json(
+                    json!({"choices": [{"message": {"content": "{\"theme\":\"t\"}"}}]}),
+                ))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        format!("http://{addr}")
+    }
+
+    async fn ask(ai: &NearAi) -> Completion {
+        ai.json(
+            &RunBudget::new(6),
+            JsonRequest {
+                model: MODEL_REASON,
+                prompt_version: "t/1",
+                system: "s",
+                user: "u",
+                schema_name: "Thesis",
+                schema: &json!({}),
+                timeout: CALL_TIMEOUT,
+                think: false,
+                on_text: None,
+            },
+            has_theme,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn a_refused_or_rate_limited_key_hands_over_to_the_fallback() {
+        for status in [401, 402, 403, 429, 503] {
+            let base = keyed_stub("spare", status).await;
+            let ai = NearAi::new(reqwest::Client::new(), base, Some("main".into()))
+                .with_fallback_key(Some("spare".into()));
+            let out = ask(&ai).await;
+            assert_eq!(out.value, Some(json!({"theme": "t"})), "status {status}");
+            assert_eq!(out.call.attempts, 2, "status {status}");
+        }
+    }
+
+    #[tokio::test]
+    async fn without_a_fallback_a_refused_key_stops_and_a_bad_request_never_switches() {
+        let base = keyed_stub("spare", 401).await;
+        let ai = NearAi::new(reqwest::Client::new(), base, Some("main".into()));
+        let out = ask(&ai).await;
+        assert!(out.value.is_none());
+        assert_eq!(out.call.attempts, 1);
+        assert_eq!(out.call.error.as_deref(), Some("key"));
+        // 400 is the request's fault: the fallback key isn't tried.
+        let base = keyed_stub("spare", 400).await;
+        let ai = NearAi::new(reqwest::Client::new(), base, Some("main".into()))
+            .with_fallback_key(Some("spare".into()));
+        let out = ask(&ai).await;
+        assert!(out.value.is_none());
+        assert_eq!(out.call.error.as_deref(), Some("rejected"));
+    }
+
+    #[test]
+    fn the_fallback_alone_is_the_key() {
+        let ai = NearAi::new(reqwest::Client::new(), String::new(), None)
+            .with_fallback_key(Some("spare".into()));
+        assert!(ai.enabled());
     }
 }
