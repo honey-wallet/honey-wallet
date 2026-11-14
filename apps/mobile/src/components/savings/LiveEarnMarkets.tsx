@@ -60,18 +60,18 @@ export function LiveEarnMarkets({ symbol }: { symbol?: string }) {
       <AaveExecution />
       <MorphoExecution />
       <Text style={styles.heading}>Earn markets</Text>
-      <Text style={styles.note}>
+      {/* <Text style={styles.note}>
         Savings positions are not connected yet. These rates describe the markets, not your wallet's
         earnings.
-      </Text>
+      </Text> */}
       {state === 'loading' && !catalog ? (
         <SkeletonBar width="100%" height={80} radius={20} />
       ) : null}
-      {state === 'error' ? (
+      {/* {state === 'error' ? (
         <Text accessibilityLiveRegion="polite" style={styles.note}>
           Market updates are unavailable. Previously fetched rates may be out of date.
         </Text>
-      ) : null}
+      ) : null} (off 14 Nov, owner) */}
       {state === 'paused' ? <Text style={styles.note}>Market updates paused.</Text> : null}
       {catalog?.status === 'not_configured' ? (
         <Text style={styles.note}>Earn markets are not available yet.</Text>
@@ -101,7 +101,8 @@ export function LiveEarnMarkets({ symbol }: { symbol?: string }) {
               ? `Fetched ${Math.floor((p.ageMs ?? 0) / 1000)}s ago`
               : p.status === 'unavailable'
                 ? 'Market data unavailable'
-                : 'Data may be out of date'}
+                : // 'Data may be out of date' (off 14 Nov, owner)
+                  ''}
           </Text>
           <Text selectable style={styles.address}>
             {p.contractAddress}

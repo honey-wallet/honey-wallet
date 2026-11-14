@@ -67,7 +67,7 @@ it('shows a swap made here once, in place of the deposit that paid it', () => {
   expect(feed[1]).toMatchObject({
     kind: 'swapped',
     title: 'Swapped',
-    swap: { from: ['USDC', '25'], to: ['SOL', '0.310'] },
+    swap: { from: ['USDC', '25.00'], to: ['SOL', '0.310'], chains: ['Base', 'Solana'] },
     month: 'November',
     date: 'Nov 12',
   });

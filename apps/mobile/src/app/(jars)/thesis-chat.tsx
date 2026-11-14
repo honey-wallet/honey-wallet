@@ -16,7 +16,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
+import Animated, { FadeIn, FadeOut, useReducedMotion } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle, Defs, LinearGradient, Path, Stop, Text as SvgText } from 'react-native-svg';
 import { Icon } from '@/components/Icon';
@@ -573,9 +573,9 @@ function Welcome({ onIdea }: { onIdea: (text: string) => void }) {
       <View style={styles.welcomeTop}>
         <HoneyLogo variant="mark" height={56} />
         <Text style={styles.welcomeTitle}>What do you believe in?</Text>
-        <Text style={styles.welcomeHint}>
+        {/* <Text style={styles.welcomeHint}>
           Say it any way, or paste a post. Honey finds what you can buy.
-        </Text>
+        </Text> (off 14 Nov, owner) */}
       </View>
       {/* The Jars page's idea cards, each starting the conversation with its idea. */}
       <IdeaGrid onPick={onIdea} />
@@ -739,19 +739,44 @@ const partKey = (parts: ChatPart[], i: number) => {
 };
 
 /** Three dots while the agent starts thinking. */
+// Before: the dots were added and removed, so the line's width changed every tick.
+// function Typing() {
+//   const styles = useStyles();
+//   const [n, setN] = useState(1);
+//   useEffect(() => {
+//     const t = setInterval(() => setN((x) => (x % 3) + 1), 350);
+//     return () => clearInterval(t);
+//   }, []);
+//   return (
+//     <Text style={styles.muted} accessibilityLabel="Honey is thinking">
+//       Thinking{'.'.repeat(n)}
+//     </Text>
+//   );
+// }
+/**
+ * Three dots while the agent starts thinking. The dots not yet shown are there but
+ * clear, so the line keeps one width. Under Reduce Motion the dots hold still.
+ */
 function Typing() {
   const styles = useStyles();
-  const [n, setN] = useState(1);
+  const reduceMotion = useReducedMotion();
+  const [n, setN] = useState(reduceMotion ? 3 : 1);
   useEffect(() => {
+    if (reduceMotion) {
+      setN(3);
+      return;
+    }
     const t = setInterval(() => setN((x) => (x % 3) + 1), 350);
     return () => clearInterval(t);
-  }, []);
+  }, [reduceMotion]);
   return (
     <Text style={styles.muted} accessibilityLabel="Honey is thinking">
       Thinking{'.'.repeat(n)}
+      <Text style={TRANSPARENT}>{'.'.repeat(3 - n)}</Text>
     </Text>
   );
 }
+const TRANSPARENT = { color: 'transparent' } as const;
 
 /** Text that types itself out the first time it shows, like a streamed answer. */
 function StreamText({ text, stream }: { text: string; stream: boolean }) {
@@ -829,6 +854,9 @@ function Part({
  * "How much?", where the amount is set. Nothing it can buy: say so, with the way to pick
  * tokens yourself.
  */
+/** The critic's "What could go wrong" under Read more: off since 14 Nov (owner). */
+const SHOW_BEAR_CASE: boolean = false;
+
 function AnswerCard({
   proposal,
   latest,
@@ -859,7 +887,8 @@ function AnswerCard({
   // Compact by default (2026-11-14, "too much slop text"): one line per pick; the
   // "Wrong if" lines, Left out and What could go wrong open behind Read more.
   const [more, setMore] = useState(false);
-  const hasMore = left.length > 0 || bear.length > 0 || shown.picks.some((p) => p.wrongIf);
+  // const hasMore = left.length > 0 || bear.length > 0 || shown.picks.some((p) => p.wrongIf);
+  const hasMore = left.length > 0;
   const riskSwitch =
     levels.length > 1 ? (
       <SegmentedTabs<Risk>
@@ -967,7 +996,7 @@ function AnswerCard({
               subtitle={
                 <View style={styles.flex}>
                   {p.reason ? <Text style={styles.rowReason}>{p.reason}</Text> : null}
-                  {p.wrongIf ? <Text style={styles.footnote}>{wrongIfLine(p.wrongIf)}</Text> : null}
+                  {/* {p.wrongIf ? <Text style={styles.footnote}>{wrongIfLine(p.wrongIf)}</Text> : null} (off 14 Nov, owner) */}
                 </View>
               }
             />
@@ -975,7 +1004,8 @@ function AnswerCard({
         </ContentSwap>
       ) : null}
       {more ? leftOutBlock : null}
-      {more && bear.length ? (
+      {/* What could go wrong: off 14 Nov (owner). */}
+      {SHOW_BEAR_CASE && more && bear.length ? (
         <View style={styles.moreBlock}>
           <Text style={styles.sectionLabel}>What could go wrong</Text>
           <View style={styles.list}>
@@ -1168,6 +1198,7 @@ function Sources({ proposal }: { proposal: Proposal }) {
 }
 
 /** "Wrong if AI budgets shrink.", however the agent phrased it. */
+// biome-ignore lint/correctness/noUnusedVariables: kept for the Wrong if line, off since 14 Nov.
 function wrongIfLine(text: string) {
   const t = text.trim();
   if (/^wrong if\b/i.test(t)) return t;

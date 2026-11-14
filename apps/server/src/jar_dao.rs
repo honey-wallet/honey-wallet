@@ -204,11 +204,12 @@ impl JarDao {
                 json!({ "request_type": "view_account", "finality": "final", "account_id": account }),
             )
             .await?;
-        view["code_hash"]
-            .as_str()
-            .filter(|h| !h.is_empty() && h.len() <= 64)
-            .map(String::from)
-            .ok_or(AppError::Busy)
+        // view["code_hash"]
+        //     .as_str()
+        //     .filter(|h| !h.is_empty() && h.len() <= 64)
+        //     .map(String::from)
+        //     .ok_or(AppError::Busy)
+        deployed_code_hash(&view).ok_or(AppError::Busy)
     }
 
     /// The code hash sputnik-dao.near deploys for new DAOs (`get_default_code_hash`),
@@ -532,8 +533,48 @@ fn deposit_check(
     })
 }
 
+/// The code an account runs, from `view_account`: its own `code_hash`, or, for an account
+/// using a NEAR global contract by hash (how sputnik-dao.near deploys DAOs since late
+/// 2026), `global_contract_hash`; its own hash then reads as all 1s (empty). A global
+/// contract named by account id isn't accepted: its code can change under it.
+fn deployed_code_hash(view: &Value) -> Option<String> {
+    const EMPTY: &str = "11111111111111111111111111111111";
+    let ok = |h: &&str| !h.is_empty() && h.len() <= 64 && *h != EMPTY;
+    view["code_hash"]
+        .as_str()
+        .filter(ok)
+        .or_else(|| view["global_contract_hash"].as_str().filter(ok))
+        .map(String::from)
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_dao_on_a_global_contract_reads_that_contract_hash() {
+        let own = json!({ "code_hash": "DtHZA1mUmGYeScEaUoUZYQGGFHSMpnjMCvkr5U9hJXuF" });
+        assert_eq!(
+            super::deployed_code_hash(&own).as_deref(),
+            Some("DtHZA1mUmGYeScEaUoUZYQGGFHSMpnjMCvkr5U9hJXuF")
+        );
+        // sputnik-dao.near's DAOs since late 2026 (e.g. privacy-is-normal-6c4a2d7b).
+        let global = json!({
+            "code_hash": "11111111111111111111111111111111",
+            "global_contract_hash": "DtHZA1mUmGYeScEaUoUZYQGGFHSMpnjMCvkr5U9hJXuF",
+        });
+        assert_eq!(
+            super::deployed_code_hash(&global).as_deref(),
+            Some("DtHZA1mUmGYeScEaUoUZYQGGFHSMpnjMCvkr5U9hJXuF")
+        );
+        // No code at all, or a global contract named by account id: nothing to trust.
+        let empty = json!({ "code_hash": "11111111111111111111111111111111" });
+        assert_eq!(super::deployed_code_hash(&empty), None);
+        let by_account = json!({
+            "code_hash": "11111111111111111111111111111111",
+            "global_contract_account_id": "someone.near",
+        });
+        assert_eq!(super::deployed_code_hash(&by_account), None);
+    }
+
     use super::*;
 
     const DAO: &str = "japan-trip.sputnik-dao.near";

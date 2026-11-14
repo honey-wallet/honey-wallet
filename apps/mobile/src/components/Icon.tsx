@@ -28,6 +28,8 @@ const ICONS = {
   sell: { ios: 'minus.circle.fill', android: 'do_not_disturb_on', web: 'do_not_disturb_on' },
   home: { ios: 'house', android: 'home', web: 'home' },
   trade: { ios: 'arrow.left.arrow.right', android: 'swap_horiz', web: 'swap_horiz' },
+  /** A cross-chain swap's badge, as on Uniswap's Activity rows. */
+  shuffle: { ios: 'shuffle', android: 'shuffle', web: 'shuffle' },
   swapVertical: { ios: 'arrow.down', android: 'arrow_downward', web: 'arrow_downward' },
   arrowUp: { ios: 'arrow.up', android: 'arrow_upward', web: 'arrow_upward' },
   arrowDown: { ios: 'arrow.down', android: 'arrow_downward', web: 'arrow_downward' },

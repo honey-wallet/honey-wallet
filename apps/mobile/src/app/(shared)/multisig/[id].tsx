@@ -192,7 +192,8 @@ function MultisigPage({ id }: { id: string }) {
             compact
             icon="receive"
             title="Nothing here yet"
-            hint="Shared wallets are a preview. Do not send funds to them."
+            // hint="Shared wallets are a preview. Do not send funds to them." (off 14 Nov, owner)
+            hint=""
           />
         ) : null}
       </SkeletonReveal>

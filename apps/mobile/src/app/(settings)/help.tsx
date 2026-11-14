@@ -10,7 +10,7 @@ import { SearchField } from '@/components/wallet/SearchField';
 import { tap } from '@/lib/haptics';
 import { EVM_CHAINS, listNames } from '@/lib/mock-wallet';
 import { isWeb } from '@/lib/platform';
-import { COPY_FEES } from '@/lib/surface';
+// import { COPY_FEES } from '@/lib/surface'; (unused while copying is free, 14 Nov)
 import { warningOn } from '@/lib/warnings';
 import { makeStyles, useTheme } from '@/theme';
 
@@ -67,9 +67,11 @@ const JAR_FAQ: { q: string; a: string }[] = [
     //   ? 'The creator’s fee is a share of your profit, and nothing on a loss. Network and route fees show before you approve.'
     //   : 'Only the network and route fees, and they show before you approve.',
     // Honey keeps the copy fee (2026-11-14), whatever COPY_FEES (creators' cut) says.
-    a: COPY_FEES
-      ? 'The creator’s fee is a share of your profit, and nothing on a loss. Network and route fees show before you approve.'
-      : 'The Honey fee is a share of your profit, and nothing on a loss. Network and route fees show before you approve.',
+    // a: COPY_FEES
+    //   ? 'The creator’s fee is a share of your profit, and nothing on a loss. Network and route fees show before you approve.'
+    //   : 'The Honey fee is a share of your profit, and nothing on a loss. Network and route fees show before you approve.',
+    // No fees for users (14 Nov, owner): only the network and route fees.
+    a: 'Only the network and route fees, and they show before you approve.',
   },
   ...(warningOn('jarGuideSmallBuys')
     ? [
