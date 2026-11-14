@@ -1021,6 +1021,55 @@ async fn prices(
     Some(out)
 }
 
+/// The value new picks continue from when a jar is republished with other picks: the
+/// old picks' value now when every one of them is priced, else the latest mark, else
+/// `Busy`. Never renormalised over the priced subset (security review, 2026-11-14).
+pub fn republish_base(
+    old_picks: &[Pick],
+    old_start: &HashMap<String, f64>,
+    base: f64,
+    now: &HashMap<String, f64>,
+    latest_mark: Option<f64>,
+) -> Result<f64, AppError> {
+    fully_priced(old_picks, old_start, now)
+        .then(|| jar_index(old_picks, old_start, base, now))
+        .flatten()
+        .or(latest_mark)
+        .ok_or(AppError::Busy)
+}
+
+/// The leaderboard's ranking: $1 window days (or null), $2 minimum age in hours, $3
+/// `STALE_MARK_HOURS`.
+const LEADERBOARD_SQL: &str = "SELECT id, base FROM (
+                   SELECT j.id, cur.value AS cur,
+                          COALESCE(b.value, CASE WHEN $1::int IS NULL OR j.published_at
+                              > clock_timestamp() - make_interval(days => $1::int)
+                            THEN f.value END) AS base
+                   FROM social_jars j
+                   JOIN social_profiles p ON p.user_id = j.owner
+                   JOIN LATERAL (SELECT value, at FROM social_jar_marks m WHERE m.jar_id = j.id
+                                 ORDER BY m.at DESC LIMIT 1) cur ON true
+                   LEFT JOIN LATERAL (SELECT value FROM social_jar_marks m
+                                      WHERE m.jar_id = j.id
+                                        AND $1::int IS NOT NULL
+                                        AND m.at <= clock_timestamp() - make_interval(days => $1::int)
+                                      ORDER BY m.at DESC LIMIT 1) b ON true
+                   LEFT JOIN LATERAL (SELECT value FROM social_jar_marks m WHERE m.jar_id = j.id
+                                      ORDER BY m.at LIMIT 1) f ON true
+                   WHERE j.unpublished_at IS NULL
+                     -- Ranked by return: only public accounts that show returns.
+                     AND p.public_profile AND p.show_returns
+                     AND j.published_at <= clock_timestamp() - make_interval(hours => $2)
+                     -- A jar the marker couldn't price for a day (a pick lost its price,
+                     -- e.g. a rugged DEX token) leaves the board: its old mark isn't its value.
+                     AND cur.at > clock_timestamp() - make_interval(hours => $3)) r
+                 WHERE base IS NOT NULL
+                 ORDER BY cur / base DESC LIMIT 20";
+
+/// A jar whose latest mark is older than this is off the leaderboard (and, being
+/// unmarked, gets no milestones): a pick has had no price for a day.
+pub const STALE_MARK_HOURS: i32 = 24;
+
 /// The longest a DEX pick's recorded price may be old (start price at publish, hourly
 /// marks). `DexService::price_now` reads within a minute; this bounds it regardless.
 pub const MAX_DEX_PRICE_AGE: Duration = Duration::from_secs(5 * 60);
@@ -2314,18 +2363,24 @@ async fn publish_as(
             let base = if changed {
                 let old_start: HashMap<String, f64> =
                     serde_json::from_str(&old_start).unwrap_or_default();
-                let reached = match jar_index(&old_picks, &old_start, base, &now) {
-                    Some(v) => Some(v),
-                    None => sqlx::query_scalar(
-                        "SELECT value FROM social_jar_marks WHERE jar_id = $1
-                         ORDER BY at DESC LIMIT 1",
-                    )
-                    .bind(id)
-                    .fetch_optional(&mut *tx)
-                    .await
-                    .map_err(unavailable)?,
-                };
-                reached.unwrap_or(base)
+                // The old picks' DEX prices read now too (`now` has the new picks' only),
+                // and the old value only from every old pick (security review): else the
+                // latest mark, else Busy. Never renormalised over a subset.
+                fresh_dex_prices(state.dex.as_deref(), &old_picks, &mut now).await;
+                // let reached = match jar_index(&old_picks, &old_start, base, &now) {
+                //     Some(v) => Some(v),
+                //     None => <latest mark>,
+                // };
+                // reached.unwrap_or(base)
+                let latest: Option<f64> = sqlx::query_scalar(
+                    "SELECT value FROM social_jar_marks WHERE jar_id = $1
+                     ORDER BY at DESC LIMIT 1",
+                )
+                .bind(id)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(unavailable)?;
+                republish_base(&old_picks, &old_start, base, &now, latest)?
             } else {
                 base
             };
@@ -2907,35 +2962,13 @@ async fn leaderboard(
         Some(list) => list,
         None => {
             let pool = pool(&state)?;
-            let ranked: Vec<(Uuid, f64)> = sqlx::query_as(
-                "SELECT id, base FROM (
-                   SELECT j.id, cur.value AS cur,
-                          COALESCE(b.value, CASE WHEN $1::int IS NULL OR j.published_at
-                              > clock_timestamp() - make_interval(days => $1::int)
-                            THEN f.value END) AS base
-                   FROM social_jars j
-                   JOIN social_profiles p ON p.user_id = j.owner
-                   JOIN LATERAL (SELECT value FROM social_jar_marks m WHERE m.jar_id = j.id
-                                 ORDER BY m.at DESC LIMIT 1) cur ON true
-                   LEFT JOIN LATERAL (SELECT value FROM social_jar_marks m
-                                      WHERE m.jar_id = j.id
-                                        AND $1::int IS NOT NULL
-                                        AND m.at <= clock_timestamp() - make_interval(days => $1::int)
-                                      ORDER BY m.at DESC LIMIT 1) b ON true
-                   LEFT JOIN LATERAL (SELECT value FROM social_jar_marks m WHERE m.jar_id = j.id
-                                      ORDER BY m.at LIMIT 1) f ON true
-                   WHERE j.unpublished_at IS NULL
-                     -- Ranked by return: only public accounts that show returns.
-                     AND p.public_profile AND p.show_returns
-                     AND j.published_at <= clock_timestamp() - make_interval(hours => $2)) r
-                 WHERE base IS NOT NULL
-                 ORDER BY cur / base DESC LIMIT 20",
-            )
-            .bind(days)
-            .bind(LEADERBOARD_MIN_AGE_HOURS)
-            .fetch_all(pool)
-            .await
-            .map_err(unavailable)?;
+            let ranked: Vec<(Uuid, f64)> = sqlx::query_as(LEADERBOARD_SQL)
+                .bind(days)
+                .bind(LEADERBOARD_MIN_AGE_HOURS)
+                .bind(STALE_MARK_HOURS)
+                .fetch_all(pool)
+                .await
+                .map_err(unavailable)?;
             let ids: Vec<Uuid> = ranked.iter().map(|r| r.0).collect();
             let bases: HashMap<Uuid, f64> = ranked.into_iter().collect();
             let rows = ordered_rows(pool, &ids).await?;
@@ -3211,6 +3244,47 @@ mod tests {
             route: "dex",
             safety: crate::dex::SafetyView { ok, flags: vec![] },
         }
+    }
+
+    #[test]
+    fn republishing_continues_from_every_old_pick_or_the_latest_mark() {
+        // Security review 4: the old picks' value counts only when all are priced now.
+        const AERO: &str = "0x940181a94a35a4569e4529a3cdfb74e38fd98631";
+        let p = |symbol: &str, address: Option<&str>| Pick {
+            symbol: symbol.into(),
+            chain: "base".into(),
+            weight: 50.0,
+            address: address.map(String::from),
+        };
+        let old = [p("AERO", Some(AERO)), p("ETH", None)];
+        let key = format!("dex:base:{AERO}");
+        let start = HashMap::from([(key.clone(), 1.0), ("ETH".into(), 100.0)]);
+        let both = HashMap::from([(key, 0.5), ("ETH".into(), 150.0)]);
+        // (0.5 + 1.5) / 2 = 1.0 of base 2.0.
+        assert!((republish_base(&old, &start, 2.0, &both, Some(9.0)).unwrap() - 2.0).abs() < 1e-9);
+        // AERO unpriced: never ETH alone (which would read 1.5 × 2 = 3.0); the last mark.
+        let eth_only = HashMap::from([("ETH".to_string(), 150.0)]);
+        assert_eq!(
+            republish_base(&old, &start, 2.0, &eth_only, Some(1.7)).unwrap(),
+            1.7
+        );
+        assert!(matches!(
+            republish_base(&old, &start, 2.0, &eth_only, None),
+            Err(AppError::Busy)
+        ));
+    }
+
+    #[test]
+    fn a_jar_unmarked_for_a_day_is_off_the_leaderboard() {
+        // Security review 5: an unpriceable pick (a rugged DEX token) stops the marks; its
+        // last mark is not its value, so after `STALE_MARK_HOURS` the jar isn't ranked.
+        assert_eq!(STALE_MARK_HOURS, 24);
+        let sql = LEADERBOARD_SQL
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(sql.contains("SELECT value, at FROM social_jar_marks m WHERE m.jar_id = j.id ORDER BY m.at DESC LIMIT 1) cur"));
+        assert!(sql.contains("AND cur.at > clock_timestamp() - make_interval(hours => $3)"));
     }
 
     #[test]
