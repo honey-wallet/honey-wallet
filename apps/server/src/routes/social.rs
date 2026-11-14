@@ -688,9 +688,14 @@ pub fn validate_picks(picks: &[Pick]) -> Result<(), AppError> {
 /// the live 1Click list (`market_list`, which lists native NEAR as NEAR).
 pub fn buyable_picks(picks: &[Pick], list: &[MarketListToken]) -> Result<(), AppError> {
     for pick in picks {
+        // A thesis jar names its chain by 1Click's code ("eth"), a hand-built one by name
+        // ("Ethereum"): both mean the same network (2026-11-14: thesis jars couldn't post).
+        let named = oneclick_chain_label(&pick.chain.to_ascii_lowercase()).unwrap_or(&pick.chain);
         let ok = list.iter().any(|t| {
             t.symbol.eq_ignore_ascii_case(&pick.symbol)
-                && t.chains.iter().any(|c| c.eq_ignore_ascii_case(&pick.chain))
+                && t.chains
+                    .iter()
+                    .any(|c| c.eq_ignore_ascii_case(&pick.chain) || c.eq_ignore_ascii_case(named))
         });
         if !ok {
             return Err(AppError::BadRequest(format!(
@@ -2983,6 +2988,9 @@ mod tests {
         let err = buyable_picks(&[pick("PAXG", "Ethereum")], &list).unwrap_err();
         assert!(matches!(err, AppError::BadRequest(ref m) if m.starts_with("PAXG on Ethereum")));
         assert!(buyable_picks(&[pick("ETH", "Solana")], &list).is_err());
+        // A thesis jar's picks name their chain by 1Click's code (2026-11-14).
+        assert!(buyable_picks(&[pick("XAUT", "eth")], &list).is_ok());
+        assert!(buyable_picks(&[pick("XAUT", "sol")], &list).is_err());
     }
 
     use super::*;
