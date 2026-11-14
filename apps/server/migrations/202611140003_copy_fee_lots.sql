@@ -50,6 +50,8 @@ CREATE INDEX copy_buy_lots_open_idx ON copy_buy_lots (copier, asset, recipient, 
     WHERE state = 'settled' AND sold < units;
 CREATE INDEX copy_buy_lots_quoted_idx ON copy_buy_lots (copier, asset)
     WHERE state = 'quoted';
+-- Copied units delivered to an address, whoever copied (the refund-address rule).
+CREATE INDEX copy_buy_lots_recipient_idx ON copy_buy_lots (recipient, asset);
 
 -- A quoted sell of copied units (one 1Click deposit address) and the lots it sells from.
 -- Its parts count as sold only once 1Click says the sell succeeded.

@@ -622,6 +622,21 @@ pub async fn holds_copied(pool: &PgPool, user: Uuid, asset: &str) -> Result<bool
     .map_err(unavailable)
 }
 
+/// Whether anyone's copied units of `asset` were delivered to `seller` and may still be
+/// there: selling from that address under another sign-in mustn't dodge their fee.
+pub async fn copied_at(pool: &PgPool, asset: &str, seller: &str) -> Result<bool, AppError> {
+    sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM copy_buy_lots
+         WHERE recipient = $1 AND asset = $2 AND state <> 'void'
+           AND (units IS NULL OR sold < units))",
+    )
+    .bind(normalize_address(seller))
+    .bind(asset)
+    .fetch_one(pool)
+    .await
+    .map_err(unavailable)
+}
+
 /// Marks a deposit the app says it paid: a copy buy's (it now counts towards the
 /// outstanding cap) or a sell's (its units are now spoken for), under the copier's lock.
 pub async fn mark_deposited(pool: &PgPool, deposit_address: &str) -> Result<(), AppError> {

@@ -936,6 +936,22 @@ async fn refunds_go_only_to_a_wallet_the_seller_signed_in_with() {
 
 #[tokio::test]
 #[ignore = "requires TEST_DATABASE_URL"]
+async fn another_sign_in_cannot_sell_copied_units_from_a_wallet_it_never_linked() {
+    let db = TestDatabase::new().await;
+    let (buys, double, _, copier, _, jar) = setup(&db, true).await;
+    copied(&buys, &double, &copier.to_string(), jar, BOUGHT_FOR, BOUGHT).await;
+    holds(&double, WALLET_A, 50_000_000_000_000_000);
+    // A second Honey account with no copies of its own sells from the copier's wallet.
+    let stranger = uuid::Uuid::new_v4().to_string();
+    assert!(matches!(
+        buys.quote(&stranger, sell_from(WALLET_A, BOUGHT)).await,
+        Err(AppError::BadRequest(_))
+    ));
+    db.close().await;
+}
+
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL"]
 async fn a_swap_with_no_copied_units_may_refund_to_an_unlinked_wallet() {
     let db = TestDatabase::new().await;
     let (buys, double, _, copier, _, _) = setup(&db, true).await;
