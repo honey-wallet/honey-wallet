@@ -139,7 +139,10 @@ export function ActivitySection() {
   return (
     <View>
       {/* With months to list, the filter sits at the right of the first month's row. */}
-      {!multisig && months.length > 0 ? null : filter}
+      {/* {!multisig && months.length > 0 ? null : filter} */}
+      {/* Not while loading either: the skeleton's month row stands in for the row the filter
+          joins, so it no longer sits on top and then jumps into it. */}
+      {!multisig && (loading || months.length > 0) ? null : filter}
       <SkeletonReveal
         loading={loading}
         skeleton={multisig ? <ProposalsSkeleton /> : <ActivitySkeleton />}

@@ -5,14 +5,40 @@ import { getProfile } from '@/lib/profile';
 // Feedback is supplementary: unsupported hardware or a rejected native request
 // must never interrupt a wallet action. Android uses its semantic system effects,
 // not the legacy Vibrator fallback. Web stays quiet rather than producing a buzz.
-function play(android: Haptics.AndroidHaptics, ios: () => Promise<void>) {
-  if (!getProfile().haptics || AppState.currentState !== 'active' || Platform.OS === 'web') return;
+// function play(android: Haptics.AndroidHaptics, ios: () => Promise<void>) {
+//   if (!getProfile().haptics || AppState.currentState !== 'active' || Platform.OS === 'web') return;
+//   try {
+//     const result = Platform.OS === 'android' ? Haptics.performAndroidHapticsAsync(android) : ios();
+//     void result.catch(() => {});
+//   } catch {
+//     // Haptics are unavailable on some devices and in some system states.
+//   }
+// }
+
+function fire(android: Haptics.AndroidHaptics, ios: () => Promise<void>) {
   try {
     const result = Platform.OS === 'android' ? Haptics.performAndroidHapticsAsync(android) : ios();
     void result.catch(() => {});
   } catch {
     // Haptics are unavailable on some devices and in some system states.
   }
+}
+
+/**
+ * How long an outcome (success, failure) stays "already said": a flow that confirms in
+ * code and then shows its success page (which plays success too) buzzes once, not twice.
+ */
+const REPEAT_MS = 450;
+let lastOutcome: { kind: string; at: number } | null = null;
+
+function play(android: Haptics.AndroidHaptics, ios: () => Promise<void>, outcome?: string) {
+  if (!getProfile().haptics || AppState.currentState !== 'active' || Platform.OS === 'web') return;
+  if (outcome) {
+    const now = Date.now();
+    if (lastOutcome?.kind === outcome && now - lastOutcome.at < REPEAT_MS) return;
+    lastOutcome = { kind: outcome, at: now };
+  }
+  fire(android, ios);
 }
 
 /** A discrete selection changed: tabs, chips, switches and picker stops. */
@@ -46,14 +72,18 @@ export function limit() {
 
 /** A completed action, never the start of a request. */
 export function success() {
-  play(Haptics.AndroidHaptics.Confirm, () =>
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success),
+  play(
+    Haptics.AndroidHaptics.Confirm,
+    () => Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success),
+    'success',
   );
 }
 
 /** A rejected action, paired with visible explanation and recovery. */
 export function failure() {
-  play(Haptics.AndroidHaptics.Reject, () =>
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error),
+  play(
+    Haptics.AndroidHaptics.Reject,
+    () => Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error),
+    'failure',
   );
 }

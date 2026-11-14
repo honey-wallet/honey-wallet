@@ -3,6 +3,7 @@ import {
   Pressable,
   type PressableProps,
   type StyleProp,
+  StyleSheet,
   type View,
   type ViewStyle,
 } from 'react-native';
@@ -28,10 +29,13 @@ type Props = Omit<PressableProps, 'style'> & {
   layout?: ComponentProps<typeof AnimatedPressable>['layout'];
 };
 
+/** Under Reduce Motion a press dims instead of shrinking: no movement, still an answer. */
+const REDUCED_DIM = 0.6;
+
 /**
  * A Pressable that dips slightly while held and returns on release. Press feedback is
  * felt, not seen: 0.97 with an 80ms response and a 150ms release. Both directions animate from
- * wherever the scale is, so quick taps never jump.
+ * wherever the scale is, so quick taps never jump. Under Reduce Motion it dims instead.
  */
 export function PressableScale({
   style,
@@ -43,26 +47,38 @@ export function PressableScale({
 }: Props) {
   const scale = useSharedValue(1);
   const reduceMotion = useReducedMotion();
-  const animatedStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.get() }] }));
+  // const animatedStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.get() }] }));
+  // Before: under Reduce Motion nothing answered a press. Now the same value drives a dim.
+  // The dim multiplies any opacity the caller set (a disabled button stays faded).
+  const baseOpacity = reduceMotion ? Number(StyleSheet.flatten(style)?.opacity ?? 1) : 1;
+  const animatedStyle = useAnimatedStyle(() =>
+    reduceMotion
+      ? {
+          opacity: baseOpacity * (1 - (1 - scale.get()) * ((1 - REDUCED_DIM) / (1 - PRESS_SCALE))),
+        }
+      : { transform: [{ scale: scale.get() }] },
+  );
 
   return (
     <AnimatedPressable
       {...props}
       ref={ref as AnimatedPressableRef}
       onPressIn={(event) => {
-        if (!reduceMotion)
-          scale.set(
-            withTiming(Math.min(1, Math.max(scaleTo, 0.95)), {
+        // if (!reduceMotion)
+        scale.set(
+          withTiming(
+            reduceMotion && scaleTo < 1 ? PRESS_SCALE : Math.min(1, Math.max(scaleTo, 0.95)),
+            {
               duration: DURATION.micro,
               easing: EASE.press,
-            }),
-          );
+            },
+          ),
+        );
         onPressIn?.(event);
       }}
       onPressOut={(event) => {
-        scale.set(
-          reduceMotion ? 1 : withTiming(1, { duration: DURATION.quick, easing: EASE.smoothOut }),
-        );
+        // scale.set(reduceMotion ? 1 : withTiming(1, { duration: DURATION.quick, easing: EASE.smoothOut }));
+        scale.set(withTiming(1, { duration: DURATION.quick, easing: EASE.smoothOut }));
         onPressOut?.(event);
       }}
       style={[style, animatedStyle]}
