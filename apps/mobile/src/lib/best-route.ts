@@ -32,6 +32,7 @@ import {
   parseDexQuote,
   sameToken,
 } from '@/lib/dex';
+import { dexChainOf } from '@/lib/dex-tokens';
 import { serverNow } from '@/lib/server-clock';
 import { createStore } from '@/lib/store';
 
@@ -43,7 +44,10 @@ export const privateRoutes = createStore<{ on: boolean }>(
 export const setPrivateRoutes = (on: boolean) => privateRoutes.set({ on });
 
 /** The curated wrapped majors a jar may hold (read on chain on 2026-11-13). */
-export const CANONICAL: Readonly<Record<string, { symbol: string; family: 'BTC' | 'ETH' }>> = {
+// export const CANONICAL: Readonly<Record<string, { symbol: string; family: 'BTC' | 'ETH' }>> = {
+/** A family of one asset across chains: Bitcoin, Ether, Tether Gold (14 Nov). */
+export type Family = 'BTC' | 'ETH' | 'XAUT';
+export const CANONICAL: Readonly<Record<string, { symbol: string; family: Family }>> = {
   'Base:0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf': { symbol: 'cbBTC', family: 'BTC' },
   'Arbitrum:0x2f2a2543b76a4166549f7aab2e75bef0aefc5b0f': { symbol: 'WBTC', family: 'BTC' },
   'Ethereum:0x2260fac5e5542a773aa44fbcfedf7c193bc2c599': { symbol: 'WBTC', family: 'BTC' },
@@ -55,15 +59,18 @@ export const CANONICAL: Readonly<Record<string, { symbol: string; family: 'BTC' 
   'Arbitrum:0x82af49447d8a07e3bd95bd0d56f35241523fbab1': { symbol: 'WETH', family: 'ETH' },
   'Ethereum:0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2': { symbol: 'WETH', family: 'ETH' },
   'Polygon:0x7ceb23fd6bc0add59e62ac25578270cff1b9f619': { symbol: 'WETH', family: 'ETH' },
+  // Tether Gold's XAUt0 on Arbitrum, read on chain on 2026-11-14 (apps/server/src/dex/canonical.rs).
+  'Arbitrum:0x40461291347e1ecbb09499f3371d3f17f10d7159': { symbol: 'XAUt0', family: 'XAUT' },
 };
 export const canonicalOf = (chain: DexChain, address: string) =>
   CANONICAL[`${chain}:${address.toLowerCase()}`] ?? null;
 
 /** The family a pick's symbol belongs to (BTC, WBTC, cbBTC; ETH, WETH), as the server reads it. */
-export function familyOf(symbol: string | undefined): 'BTC' | 'ETH' | null {
+export function familyOf(symbol: string | undefined): Family | null {
   const s = symbol?.trim().toUpperCase();
   if (s === 'BTC' || s === 'WBTC' || s === 'CBBTC') return 'BTC';
   if (s === 'ETH' || s === 'WETH') return 'ETH';
+  if (s === 'XAUT' || s === 'XAUT0') return 'XAUT';
   return null;
 }
 
@@ -98,6 +105,11 @@ export type PlannedRoute = {
   holdAs: string | null;
   /** A one-swap DEX route's quote, checked and ready to execute. */
   dex: DexQuoted | null;
+  /**
+   * A jar leg bought as its wrapped version on another chain (XAUT as XAUt0 on
+   * Arbitrum): NEAR Intents carries the USDC there, then the DEX buys it, as a DEX pick.
+   */
+  elsewhere?: { chain: DexChain; token: string; decimals: number } | null;
   /** Every other route that quoted (logged, not shown). */
   alternatives: RouteOption[];
 };
@@ -262,6 +274,23 @@ export async function planRoute(
     if (!wrapped && !sameToken(quote.chain, quote.buyToken, ask.toToken)) throw changed();
     checkDexQuote(quote, dexAsk, d.now());
     dex = { ask: dexAsk, quote };
+  }
+  // A jar leg's wrapped version on another chain (1Click USDC there, then the DEX):
+  // only a curated contract of the pick's own family, on a chain the DEX knows.
+  if (best.kind === 'intents_dex' && ask.wrapped) {
+    const chain = dexChainOf(best.buyChain);
+    const held = chain ? canonicalOf(chain, best.buyToken) : null;
+    if (!chain || chain === ask.fromChain || !held || held.family !== familyOf(ask.toSymbol))
+      throw changed();
+    return {
+      best,
+      why: route.fallbackText ?? `This uses ${best.label}. Swaps here are public on-chain.`,
+      fallback: route.fallback ?? null,
+      holdAs: `${held.family} (as ${held.symbol} on ${chain})`,
+      dex: null,
+      elsewhere: { chain, token: best.buyToken.toLowerCase(), decimals: best.buyDecimals },
+      alternatives: route.alternatives,
+    };
   }
   const held = dex ? canonicalOf(dex.ask.chain, dex.quote.buyToken) : null;
   return {

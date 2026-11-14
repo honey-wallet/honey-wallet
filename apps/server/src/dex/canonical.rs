@@ -15,6 +15,8 @@ use super::DexChain;
 pub enum Family {
     Btc,
     Eth,
+    /// Tether Gold: XAUT on Ethereum, XAUt0 (its official LayerZero version) elsewhere.
+    Xaut,
 }
 
 impl Family {
@@ -23,6 +25,7 @@ impl Family {
         match symbol.trim().to_ascii_uppercase().as_str() {
             "BTC" | "WBTC" | "CBBTC" => Some(Self::Btc),
             "ETH" | "WETH" => Some(Self::Eth),
+            "XAUT" | "XAUT0" => Some(Self::Xaut),
             _ => None,
         }
     }
@@ -31,6 +34,7 @@ impl Family {
         match self {
             Self::Btc => "BTC",
             Self::Eth => "ETH",
+            Self::Xaut => "XAUT",
         }
     }
 }
@@ -116,6 +120,16 @@ pub const CANONICAL: &[Canonical] = &[
         symbol: "WETH",
         decimals: 18,
     },
+    // Tether Gold's XAUt0 on Arbitrum, read on chain on 2026-11-14 (arb1.arbitrum.io:
+    // symbol XAUt0, 6 decimals). NEAR Intents lists XAUT only on Ethereum, whose payout
+    // fee sinks small buys; a jar leg can hold this instead.
+    Canonical {
+        family: Family::Xaut,
+        chain: DexChain::Arbitrum,
+        address: "0x40461291347e1ecbb09499f3371d3f17f10d7159",
+        symbol: "XAUt0",
+        decimals: 6,
+    },
 ];
 
 /// The family's canonical version on `chain`, if Honey has one.
@@ -155,5 +169,7 @@ mod tests {
         assert_eq!(Family::of_symbol("SOL"), None);
         assert_eq!(on(Family::Btc, DexChain::Arbitrum).unwrap().symbol, "WBTC");
         assert!(on(Family::Eth, DexChain::Solana).is_none());
+        assert_eq!(Family::of_symbol("XAUt0"), Some(Family::Xaut));
+        assert_eq!(on(Family::Xaut, DexChain::Arbitrum).unwrap().decimals, 6);
     }
 }

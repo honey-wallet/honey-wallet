@@ -625,6 +625,22 @@ export async function quoteJarBuy(
   for (const [i, l] of [...legs.entries()].reverse()) {
     const r = routed[i];
     const origin = planned[i] as PayChain;
+    // Its wrapped version on another chain (XAUT as XAUt0 on Arbitrum): a DEX pick there,
+    // its USDC carried by NEAR Intents below like any other DEX pick's (14 Nov).
+    if (r?.elsewhere && isDexChain(origin)) {
+      // Its USDC was set aside on `origin` above; the DEX pick sets it aside again below.
+      left[origin] = (left[origin] ?? 0n) + l.micro;
+      picks.push({
+        symbol: l.symbol,
+        chain: r.elsewhere.chain,
+        token: r.elsewhere.token,
+        decimals: r.elsewhere.decimals,
+        micro: l.micro,
+        planned: r,
+      });
+      legs.splice(i, 1);
+      continue;
+    }
     if (r?.dex && isDexChain(origin)) {
       // Bought where the money is: a same-chain DEX swap, its USDC already set aside.
       const pick: DexPick = {

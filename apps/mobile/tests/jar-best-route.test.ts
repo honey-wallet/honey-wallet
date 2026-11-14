@@ -145,6 +145,38 @@ describe('jar legs take the planner’s route (privacy first)', () => {
     expect(out.legs.find((l) => l.symbol === 'ETH')?.holdAs).toBe('ETH (as WETH on Arbitrum)');
   });
 
+  it('a leg held wrapped on another chain is carried there as USDC by NEAR Intents (14 Nov)', async () => {
+    const CBBTC = '0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf';
+    const BASE_USDC = 'nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near';
+    const elsewhere = {
+      ...intents(),
+      best: { kind: 'intents_dex', label: 'NEAR Intents, then KyberSwap on Base' },
+      holdAs: 'BTC (as cbBTC on Base)',
+      elsewhere: { chain: 'Base', token: CBBTC, decimals: 8 },
+    } as unknown as PlannedRoute;
+    const quote = vi.fn(async () => {
+      throw new Error('stop here');
+    });
+    await expect(
+      quoteJarBuy([route('BTC', 0.17)], 0.01, {
+        balances: async () => ({ Arbitrum: 170_000n }),
+        route: (async () => elsewhere) as never,
+        quote: quote as never,
+        usdcAsset: (async () => BASE_USDC) as never,
+        dexPrices: vi.fn(async () => ({})),
+      }),
+    ).rejects.toBeInstanceOf(JarBuyError);
+    // One 1Click quote from Arbitrum's USDC: the leg's USDC to Base, for the DEX there.
+    expect(quote).toHaveBeenCalledTimes(1);
+    expect(quote).toHaveBeenCalledWith(
+      'session',
+      expect.objectContaining({
+        originAsset: USDC_ORIGINS.Arbitrum,
+        legs: [expect.objectContaining({ destinationAsset: BASE_USDC, amount: '170000' })],
+      }),
+    );
+  });
+
   it('every leg nothing can buy says why, in one line each, and nothing is paid', async () => {
     const routeFor = vi.fn(async (ask: { toToken: string; amount: bigint }) => {
       if (ask.toToken === PICKS.SOL.assetId)

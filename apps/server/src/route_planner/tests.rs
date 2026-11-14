@@ -330,8 +330,11 @@ async fn a_jar_leg_below_the_1click_minimum_buys_wrapped_where_the_money_is_b() 
             "NEAR Intents can't do this amount, so this uses KyberSwap on Arbitrum. Swaps here are public on-chain."
         )
     );
-    // An amount refusal is an answer, not a failure: never asked twice.
-    assert_eq!(p.sources().intents_calls.load(AtomicOrdering::SeqCst), 1);
+    // // An amount refusal is an answer, not a failure: never asked twice.
+    // assert_eq!(p.sources().intents_calls.load(AtomicOrdering::SeqCst), 1);
+    // An amount refusal is an answer, not a failure: 1Click direct is asked once; the
+    // second quote is the USDC hop of the wrapped-elsewhere candidate (cbBTC on Base).
+    assert_eq!(p.sources().intents_calls.load(AtomicOrdering::SeqCst), 2);
     assert_eq!(r.dropped[0].kind, RouteKind::Intents);
     assert!(r.dropped[0].reason.contains("too low"));
 }
@@ -938,4 +941,38 @@ async fn every_quote_is_charged_before_its_provider_is_asked() {
     assert!(matches!(err, AppError::TooManyRequests), "{err:?}");
     assert_eq!(p.sources().intents_calls.load(AtomicOrdering::SeqCst), 0);
     assert_eq!(p.sources().dex_calls.load(AtomicOrdering::SeqCst), 0);
+}
+
+#[test]
+fn a_costly_intents_route_gives_way_only_to_one_that_keeps_clearly_more() {
+    // $0.25 BTC: 1Click keeps $0.13 (52%), cbBTC on Base keeps $0.24.
+    let intents = option(RouteKind::Intents, 0.13, 0.0, 1, 30);
+    let wrapped = option(RouteKind::Wrapped, 0.24, 0.0, 1, 10);
+    let (best, why, _) = choose(
+        Some(Ok(intents.clone())),
+        vec![wrapped.clone()],
+        Some(0.25),
+        false,
+    )
+    .unwrap();
+    assert_eq!(best.kind, RouteKind::Wrapped);
+    assert_eq!(why, Some(Fallback::Fees));
+    // Private routes only: 1Click stays, costly or not.
+    let (best, why, _) = choose(
+        Some(Ok(intents.clone())),
+        vec![wrapped.clone()],
+        Some(0.25),
+        true,
+    )
+    .unwrap();
+    assert_eq!((best.kind, why), (RouteKind::Intents, None));
+    // A fallback within 2% of 1Click: a near tie stays private.
+    let close = option(RouteKind::Wrapped, 0.1315, 0.0, 1, 10);
+    let (best, _, _) = choose(Some(Ok(intents)), vec![close], Some(0.25), false).unwrap();
+    assert_eq!(best.kind, RouteKind::Intents);
+    // 1Click keeping 90% or more stays, even with a better DEX.
+    let fine = option(RouteKind::Intents, 9.2, 0.0, 1, 30);
+    let dex = option(RouteKind::Dex, 9.9, 0.0, 1, 10);
+    let (best, why, _) = choose(Some(Ok(fine)), vec![dex], Some(10.0), false).unwrap();
+    assert_eq!((best.kind, why), (RouteKind::Intents, None));
 }

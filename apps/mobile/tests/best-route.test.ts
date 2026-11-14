@@ -104,6 +104,42 @@ describe('the route planner (privacy first)', () => {
     expect(r.dex?.ask).toMatchObject({ chain: 'Arbitrum', taker: ME, buyToken: WBTC_ARB });
   });
 
+  it('a small XAUT leg is carried to Arbitrum as USDC and held as XAUt0 there (14 Nov)', async () => {
+    const XAUT0 = '0x40461291347e1ecbb09499f3371d3f17f10d7159';
+    const leg = {
+      ...jarLeg,
+      fromChain: 'Base' as const,
+      fromToken: USDC_BASE,
+      toToken: 'nep141:eth-0x68749665ff8d2d112fa859aa293f07a622782f38.omft.near',
+      toSymbol: 'XAUT',
+    };
+    const route = (buyToken: string, buyChain = 'arbitrum') =>
+      deps({
+        best: option({
+          kind: 'intents_dex',
+          label: 'NEAR Intents, then KyberSwap on Arbitrum',
+          buyToken,
+          buyChain,
+          buySymbol: 'XAUt0',
+          buyDecimals: 6,
+          holdAs: 'XAUT (as XAUt0 on Arbitrum)',
+        }),
+        fallback: 'fees',
+        alternatives: [],
+        dropped: [],
+      }).d;
+    const r = await planRoute(leg, route(XAUT0));
+    expect(r.holdAs).toBe('XAUT (as XAUt0 on Arbitrum)');
+    expect(r.elsewhere).toEqual({ chain: 'Arbitrum', token: XAUT0, decimals: 6 });
+    expect(r.dex).toBeNull();
+    // Not curated, another family (WBTC for XAUT), or the paying chain itself: refused.
+    await expect(planRoute(leg, route(ATTACKER))).rejects.toThrow(/route changed/);
+    await expect(planRoute(leg, route(WBTC_ARB))).rejects.toThrow(/route changed/);
+    await expect(
+      planRoute({ ...leg, fromChain: 'Arbitrum', fromToken: USDC_ARB }, route(XAUT0)),
+    ).rejects.toThrow(/route changed/);
+  });
+
   it('refuses a wrapped token that isn’t on the curated map', async () => {
     const { d } = deps({
       best: option({

@@ -58,6 +58,22 @@ pub const LEG_TIMEOUT: Duration = Duration::from_millis(2_500);
 /// 1Click is "too expensive" (fallback reason `fees`) when its guaranteed output is
 /// worth less than this share of the input: the app's `MIN_VALUE_KEPT`.
 pub const MIN_VALUE_KEPT: f64 = 0.5;
+/// Below this share of the input kept, a DEX route that keeps clearly more
+/// ([`SWITCH_GAIN`]) is taken instead of 1Click (14 Nov, owner: a $0.25 BTC leg kept
+/// 52% through 1Click and 97% as cbBTC on Base). At or above it, 1Click stays.
+pub const SWITCH_BELOW: f64 = 0.9;
+/// How much more (net) a fallback must keep to replace a 1Click route under
+/// [`SWITCH_BELOW`]: 2%, so a near tie stays private.
+pub const SWITCH_GAIN: f64 = 1.02;
+/// Chains a jar leg may be carried to for a wrapped version (Honey pays gas there).
+const WRAPPED_ELSEWHERE: [DexChain; 4] = [
+    DexChain::Arbitrum,
+    DexChain::Base,
+    DexChain::Optimism,
+    DexChain::Polygon,
+];
+/// At most this many other chains are quoted for a wrapped version, to bound latency.
+const WRAPPED_ELSEWHERE_MAX: usize = 2;
 /// Fallback routes this close in net value (a hundredth of a percent, at least
 /// $0.0005) are a tie: fewer legs, then faster, wins.
 pub const TIE_BPS: f64 = 1.0;
@@ -141,7 +157,8 @@ impl Fallback {
         let why = match self {
             Self::NotListed => "Not on NEAR Intents",
             Self::Amount => "NEAR Intents can't do this amount",
-            Self::Fees => "NEAR Intents' fees would take more than half of this",
+            // Self::Fees => "NEAR Intents' fees would take more than half of this",
+            Self::Fees => "NEAR Intents' fees are high for this amount",
             Self::Failed => "NEAR Intents didn't answer",
         };
         format!("{why}, so this uses {via}. Swaps here are public on-chain.")
@@ -537,8 +554,15 @@ pub fn choose(
     let (fallback, intents_ok, intents_error) = match intents {
         None => (Fallback::NotListed, None, None),
         Some(Ok(o)) => {
+            // let kept = amount_in_usd.is_none_or(|usd| o.min_out_usd >= usd * MIN_VALUE_KEPT);
             let kept = amount_in_usd.is_none_or(|usd| o.min_out_usd >= usd * MIN_VALUE_KEPT);
-            if kept {
+            // Kept but costly (under SWITCH_BELOW): a fallback that keeps clearly more
+            // wins; otherwise 1Click stays.
+            let costly = amount_in_usd.is_some_and(|usd| o.min_out_usd < usd * SWITCH_BELOW);
+            let better = fallbacks
+                .iter()
+                .any(|f| f.net_usd > o.net_usd.max(0.0) * SWITCH_GAIN);
+            if kept && !(costly && better && !private_only) {
                 let mut rest = fallbacks;
                 rest.sort_by(strict);
                 return Ok((o, None, rest));
@@ -879,6 +903,106 @@ impl<S: Sources> Planner<S> {
                 }
                 .boxed(),
             );
+        }
+
+        // 3b. Jars: the pick's wrapped version on another chain where Honey pays gas,
+        // reached by 1Click USDC to USDC there, then the DEX (XAUT as XAUt0 on Arbitrum).
+        if dex_on
+            && input.wrapped
+            && let (Some(family), Some(fl)) = (family, &from.listing)
+            && from.address.as_deref() == Some(from_chain.usdc())
+        {
+            let targets = WRAPPED_ELSEWHERE
+                .iter()
+                .filter(|c| **c != from_chain)
+                .filter_map(|c| canonical::on(family, *c))
+                .take(WRAPPED_ELSEWHERE_MAX);
+            for c in targets {
+                let Some(usdc) = usdc_listing(&tokens, c.chain) else {
+                    continue;
+                };
+                let ask = IntentsAsk {
+                    origin_asset: fl.asset_id.clone(),
+                    destination_asset: usdc.asset_id.clone(),
+                    amount: amount.clone(),
+                    recipient: taker.clone(),
+                    refund_to: from_address.clone(),
+                    slippage_bps: slippage.min(100),
+                };
+                let (taker, from_code) = (taker.clone(), from.code.clone());
+                let family_price = out_price.map(|(p, _)| p);
+                let native = native_in;
+                candidates.push(
+                    async move {
+                        let r = async {
+                            let bridge = self.intents_quote(user, ask.clone()).await?;
+                            let q = self
+                                .dex_quote(
+                                    user,
+                                    c.chain,
+                                    c.chain.usdc(),
+                                    c.address,
+                                    &bridge.min_amount_out,
+                                    &taker,
+                                    slippage,
+                                )
+                                .await?;
+                            // One XAUt0 counts as one XAUT: the family's price.
+                            let price =
+                                family_price.ok_or_else(|| bad("no price for the token bought"))?;
+                            let deposit = self
+                                .sources
+                                .gas(user, from_chain, Work::Deposit { native })
+                                .await;
+                            let swap = self.swap_gas(user, c.chain, &q).await;
+                            let min_out_usd = units(&q.min_buy_amount, c.decimals, price);
+                            let gas = deposit.usd + swap.usd;
+                            Ok(RouteOption {
+                                kind: RouteKind::IntentsDex,
+                                label: format!(
+                                    "NEAR Intents, then {} on {}",
+                                    aggregator_name(q.aggregator),
+                                    chain_label(c.chain)
+                                ),
+                                legs: vec![
+                                    Self::intents_leg(
+                                        &ask,
+                                        &from_code,
+                                        c.chain.oneclick(),
+                                        &bridge,
+                                    ),
+                                    Self::dex_leg(&q),
+                                ],
+                                buy_token: c.address.into(),
+                                buy_chain: c.chain.name().into(),
+                                buy_symbol: Some(c.symbol.into()),
+                                buy_decimals: c.decimals,
+                                hold_as: Some(format!(
+                                    "{} (as {} on {})",
+                                    family.name(),
+                                    c.symbol,
+                                    chain_label(c.chain)
+                                )),
+                                amount_out: q.buy_amount.clone(),
+                                min_amount_out: q.min_buy_amount.clone(),
+                                min_out_usd,
+                                gas_usd: gas,
+                                sponsored: deposit.sponsored && swap.sponsored,
+                                net_usd: min_out_usd - gas,
+                                seconds: bridge
+                                    .time_estimate
+                                    .map(|s| s.min(3_600) as u32)
+                                    .unwrap_or(INTENTS_SECONDS)
+                                    + dex_seconds(c.chain),
+                                dex_quote: None,
+                            })
+                        }
+                        .await;
+                        (RouteKind::IntentsDex, r)
+                    }
+                    .boxed(),
+                );
+            }
         }
 
         // 4. 1Click to USDC on the target chain, then the DEX (a token 1Click doesn't list).
