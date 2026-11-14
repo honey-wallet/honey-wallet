@@ -9,31 +9,51 @@ tokens), share it, let friends copy it, or buy one together from a shared treasu
 [![Android: coming soon](https://img.shields.io/badge/Android-coming%20soon-lightgrey.svg)](#limitations)
 
 <p>
+  <a href="https://youtu.be/T4bECnY5kW0"><img src="https://img.youtube.com/vi/T4bECnY5kW0/maxresdefault.jpg" height="300" alt="Honey demo video on YouTube"></a>
+  <a href="https://www.youtube.com/shorts/gY5JyJx0dT4"><img src="https://img.youtube.com/vi/gY5JyJx0dT4/oardefault.jpg" height="300" alt="Honey screen recording on a phone, on YouTube"></a>
+</p>
+
+[Demo video](https://youtu.be/T4bECnY5kW0) · [Screen recording on a phone](https://www.youtube.com/shorts/gY5JyJx0dT4) · [Demo post on X](https://x.com/0xabhii/status/2121714135209820197)
+
+<p>
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="apps/web/public/screens/current/everyone-dark.png">
-    <img src="apps/web/public/screens/current/everyone-light.png" width="190" alt="Feed, Everyone tab: jars people posted, each with a Copy button">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/screens/feed-dark.png">
+    <img src="docs/screens/feed-light.png" width="190" alt="Feed, Everyone: jars people posted, each with Copy">
   </picture>
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="apps/web/public/screens/current/jar-dark.png">
-    <img src="apps/web/public/screens/current/jar-light.png" width="190" alt="A jar: value since launch, what it holds, Sell">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/screens/leaderboard-dark.png">
+    <img src="docs/screens/leaderboard-light.png" width="190" alt="Leaderboard: this week's best and worst jars">
   </picture>
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="apps/web/public/screens/current/group-dark.png">
-    <img src="apps/web/public/screens/current/group-light.png" width="190" alt="A group jar: three members, your share, changes need 2 of 3">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/screens/jar-dark.png">
+    <img src="docs/screens/jar-light.png" width="190" alt="A jar: its chart since launch, what it holds, Copy">
   </picture>
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="apps/web/public/screens/current/wallet-dark.png">
-    <img src="apps/web/public/screens/current/wallet-light.png" width="190" alt="Wallet: balance and tokens across chains">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/screens/profile-dark.png">
+    <img src="docs/screens/profile-light.png" width="190" alt="A profile: posts and trades">
+  </picture>
+</p>
+<p>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/screens/agent-dark.png">
+    <img src="docs/screens/agent-light.png" width="190" alt="The thesis agent: what do you believe in?">
+  </picture>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/screens/token-dark.png">
+    <img src="docs/screens/token-light.png" width="190" alt="A token page with its live chart">
+  </picture>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/screens/search-dark.png">
+    <img src="docs/screens/search-light.png" width="190" alt="Search: favourite tokens, people to follow, top tokens">
+  </picture>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/screens/trade-dark.png">
+    <img src="docs/screens/trade-light.png" width="190" alt="Swap">
   </picture>
 </p>
 
-<sub>Native iPhone simulator captures of `apps/mobile`, 14 Nov 2026, in test mode with
-sample people and balances. They are not usage or return figures.
-[How they were taken](apps/web/public/screens/current/SOURCES.md).</sub>
-
-[![Honey demo video, 2 minutes: play](docs/demo/poster.jpg)](https://github.com/honey-wallet/honey-wallet/blob/demo-video/honey-demo.mp4)
-
-**Demo video (2 min):** [watch on GitHub](https://github.com/honey-wallet/honey-wallet/blob/demo-video/honey-demo.mp4) or [on X](https://x.com/0xabhii/status/2121714135209820197).
+<sub>Native iPhone simulator captures of `apps/mobile` on 15 Nov 2026, running against the
+production API (signed out). Jars, prices, charts, returns and people are live data.</sub>
 
 Built at [NEAR HACKATHON](https://nearhackathon.com/) (1 to 14 Nov 2026). Honey existed
 before as an EVM wallet; the hackathon work is the diff from the baseline commit:

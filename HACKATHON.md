@@ -17,7 +17,7 @@ The organizers' rules live at [nearhackathon.com/HACKATHON.md](https://nearhacka
 | Website and deck | [honeywallet.org](https://honeywallet.org), [honeywallet.org/deck](https://honeywallet.org/deck) |
 | API | [api.honeywallet.org](https://api.honeywallet.org/health) |
 | Demo post on X | [x.com/0xabhii/status/2121714135209820197](https://x.com/0xabhii/status/2121714135209820197) |
-| Demo video | Attached to the [X post](https://x.com/0xabhii/status/2121714135209820197). |
+| Demo video | [youtu.be/T4bECnY5kW0](https://youtu.be/T4bECnY5kW0) (also on the X post). Screen recording on a phone: [YouTube Shorts](https://www.youtube.com/shorts/gY5JyJx0dT4) |
 | License | [PolyForm Noncommercial 1.0.0](LICENSE) |
 
 ## Tracks
