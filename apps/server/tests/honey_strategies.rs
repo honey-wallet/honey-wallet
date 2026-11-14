@@ -493,6 +493,8 @@ async fn honeys_accounts_carry_the_badge_everywhere_they_are_served() {
     let jar = &gold["jars"][0];
     assert_eq!(jar["owner"]["official"], true);
     assert_eq!(jar["copies"], 0);
+    // No fee on Honey's jars: users pay none (14 Nov).
+    assert_eq!(jar["copyFee"], 0);
     assert_eq!(jar["copyable"], true);
     // Valued like any jar: unchanged prices, no gain.
     assert_eq!(jar["returnSincePublish"].as_f64(), Some(0.0));

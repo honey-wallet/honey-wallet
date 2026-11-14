@@ -44,9 +44,10 @@ pub const HANDLE_PREFIX: &str = "honey_";
 pub const JAR_CLIENT_ID: &str = "honey-strategy";
 /// Live public jars by people at which Honey's step back, when the env doesn't say.
 pub const DEFAULT_MIN_ORGANIC: i64 = 10;
-/// The copy fee recorded on the jars (the jar column's default). It charges nothing by
-/// itself: only `HONEY_COPY_FEE_ACCOUNT` turns copy fees on (`copy_fees`), and it's unset.
-const COPY_FEE: i16 = 10;
+/// The copy fee recorded on Honey's jars: none. Users pay no fees (2026-11-14), and a
+/// fee here would start charging the day `HONEY_COPY_FEE_ACCOUNT` were set.
+// const COPY_FEE: i16 = 10;
+pub const COPY_FEE: i16 = 0;
 /// Serialises seeding runs (two Cloud Run executions at once can't race on a handle).
 const SEED_LOCK: i64 = 0x484f_4e45_5953_5452;
 
