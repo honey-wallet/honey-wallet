@@ -42,3 +42,6 @@ inspiration/
 # Python bytecode caches
 __pycache__/
 *.pyc
+
+# Design references, kept local (not part of the repo).
+inspiration/
