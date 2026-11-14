@@ -59,6 +59,7 @@ vi.mock('@/lib/backend-session', () => ({
 }));
 
 import { startBackendLifecycle } from '@/lib/backend-lifecycle';
+import { clearBackendSession, suspendBackendSession } from '@/lib/backend-session';
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
@@ -163,4 +164,13 @@ it('hides Sign in until the saved session has had its quiet try', async () => {
   await flush();
   expect(restoringSession.get()).toBe(false);
   stop();
+});
+
+it('unmounting puts the session away and never deletes the saved one', () => {
+  vi.mocked(clearBackendSession).mockClear();
+  vi.mocked(suspendBackendSession).mockClear();
+  const stop = startBackendLifecycle();
+  stop();
+  expect(clearBackendSession).not.toHaveBeenCalled();
+  expect(suspendBackendSession).toHaveBeenCalled();
 });
