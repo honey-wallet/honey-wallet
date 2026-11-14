@@ -32,9 +32,16 @@ import {
 } from '@honey-wallet/keyring';
 import { createPublicClient, formatUnits, type Hex, http, isAddress, toHex } from 'viem';
 import { api } from '@/lib/api';
+import { type AppPriceDeps, appPriceOf } from '@/lib/app-price';
 import { confirmOwner } from '@/lib/auth';
 import { backendSessionToken } from '@/lib/backend-session';
-import { type PlannedRoute, planRoute, type RouteAsk, routeStatus } from '@/lib/best-route';
+import {
+  canonicalOf,
+  type PlannedRoute,
+  planRoute,
+  type RouteAsk,
+  routeStatus,
+} from '@/lib/best-route';
 import { prepareEvmSend } from '@/lib/dapp-sign';
 import { type depositTxState, depositTxVerdict } from '@/lib/deposit-tx';
 import {
@@ -43,7 +50,7 @@ import {
   type DexDeps,
   dexAssetId,
   dexChainOf,
-  fetchAllDexTokens,
+  // fetchAllDexTokens (DEX picks are priced by the app now, lib/app-price; 15 Nov),
   isDexChain,
   quoteDex,
   routeLabel,
@@ -413,8 +420,13 @@ export type JarBuyDeps = {
   usdcAsset: (chain: DexChain, fetcher: typeof fetch) => Promise<string | null>;
   /** DEX quotes and sends (lib/dex). */
   dex: Partial<DexDeps>;
-  /** DEX tokens' prices, for the value check. */
-  dexPrices: () => Promise<Record<string, number>>;
+  // /** DEX tokens' prices, for the value check. */
+  // dexPrices: () => Promise<Record<string, number>>;
+  /**
+   * The app's own prices for DEX picks (lib/app-price: 1Click, DexScreener and the chain,
+   * never Honey's server), for the value check (15 Nov).
+   */
+  appPrice: Partial<AppPriceDeps>;
   /** The route planner (lib/best-route): NEAR Intents unless it can't do the leg. */
   route: (ask: RouteAsk) => Promise<PlannedRoute>;
   /**
@@ -467,10 +479,11 @@ const defaults: JarBuyDeps = {
     return swapAssetOf(await fetchSwapTokens(fetcher), { symbol: 'USDC', chain })?.assetId ?? null;
   },
   dex: {},
-  dexPrices: async () =>
-    Object.fromEntries(
-      (await fetchAllDexTokens()).map((t) => [dexAssetId(t.chain, t.address), t.priceUsd]),
-    ),
+  // dexPrices: async () =>
+  //   Object.fromEntries(
+  //     (await fetchAllDexTokens()).map((t) => [dexAssetId(t.chain, t.address), t.priceUsd]),
+  //   ),
+  appPrice: {},
   route: (ask) => planRoute(ask),
   now: serverNow,
   // depositTx: (chain, hash) => depositTxState(chain, hash),
@@ -649,13 +662,24 @@ export async function quoteJarBuy(
     }
     if (r?.dex && isDexChain(origin)) {
       // Bought where the money is: a same-chain DEX swap, its USDC already set aside.
+      // const pick: DexPick = {
+      //   symbol: l.symbol,
+      //   chain: origin,
+      //   token: r.dex.quote.buyToken,
+      //   decimals: r.best.buyDecimals,
+      //   micro: l.micro,
+      //   planned: r,
+      // };
+      // A curated wrapped major: the app's own decimals, valued at its pick's NEAR Intents
+      // price, never the server's figures (15 Nov).
       const pick: DexPick = {
         symbol: l.symbol,
         chain: origin,
         token: r.dex.quote.buyToken,
-        decimals: r.best.buyDecimals,
+        decimals: canonicalOf(origin, r.dex.quote.buyToken)?.decimals ?? r.best.buyDecimals,
         micro: l.micro,
         planned: r,
+        priceAsset: l.assetId,
       };
       picks.push(pick);
       sameChain.add(pick);
@@ -758,12 +782,19 @@ export async function quoteJarBuy(
   }
   // DEX picks: a live quote for each (sold from the USDC that will be there: the bridge's
   // guaranteed minimum), checked, and held to the same floor.
-  const unplanned = picks.some((p) => !p.planned);
-  const dexPrices = unplanned
-    ? await withinTime(d.dexPrices(), STEP_MS, 'timed out').catch(() => null)
-    : {};
-  if (!dexPrices)
-    throw new Error('Couldn’t price this buy right now. Try again. Nothing was paid.');
+  // const unplanned = picks.some((p) => !p.planned);
+  // const dexPrices = unplanned
+  //   ? await withinTime(d.dexPrices(), STEP_MS, 'timed out').catch(() => null)
+  //   : {};
+  // if (!dexPrices)
+  //   throw new Error('Couldn’t price this buy right now. Try again. Nothing was paid.');
+  // Each pick is valued at the app's own price (lib/app-price), never Honey's /dex/tokens
+  // figure or the planner's `minOutUsd` (15 Nov, security review).
+  const priceDeps: Partial<AppPriceDeps> = {
+    fetcher: d.fetcher,
+    oneClick: () => (tokens ? Promise.resolve(tokens) : d.tokens(d.fetcher)),
+    ...d.appPrice,
+  };
   const dexProblems: LegProblem[] = [];
   for (const p of picks) {
     const i = legs.findIndex((l) => l.dex === p);
@@ -801,17 +832,39 @@ export async function quoteJarBuy(
     // const price = dexPrices[asset];
     // A wrapped version on another chain is valued at its family's NEAR Intents price,
     // never the server's own figure; no price, no buy (security review, 14 Nov).
-    const price = p.priceAsset
-      ? tokens?.find((t) => t.assetId === p.priceAsset)?.price
-      : dexPrices[asset];
-    if (p.priceAsset && !(price && price > 0)) {
+    // const price = p.priceAsset
+    //   ? tokens?.find((t) => t.assetId === p.priceAsset)?.price
+    //   : dexPrices[asset];
+    // if (p.priceAsset && !(price && price > 0)) {
+    //   dexProblems.push({ symbol: p.symbol, reason: `Couldn’t price ${p.symbol} right now.` });
+    //   continue;
+    // }
+    // A wrapped buy is valued as the planner valued it (one WBTC counts as one BTC).
+    // const kept = price
+    //   ? (Number(quoted.quote.minBuyAmount) / 10 ** p.decimals) * price
+    //   : (p.planned?.best.minOutUsd ?? 0);
+    // Every pick at the app's own price and decimals (15 Nov): a wrapped major at its
+    // pick's NEAR Intents price, anything else at DexScreener's with decimals read on
+    // chain. No price, no buy; the server's figure never stands in.
+    const priced = await withinTime(
+      appPriceOf(
+        {
+          chain: p.chain,
+          address: p.token,
+          symbol: p.symbol,
+          decimals: p.decimals,
+          priceAsset: p.priceAsset,
+        },
+        priceDeps,
+      ),
+      STEP_MS,
+      'timed out',
+    ).catch(() => null);
+    if (!priced) {
       dexProblems.push({ symbol: p.symbol, reason: `Couldn’t price ${p.symbol} right now.` });
       continue;
     }
-    // A wrapped buy is valued as the planner valued it (one WBTC counts as one BTC).
-    const kept = price
-      ? (Number(quoted.quote.minBuyAmount) / 10 ** p.decimals) * price
-      : (p.planned?.best.minOutUsd ?? 0);
+    const kept = (Number(quoted.quote.minBuyAmount) / 10 ** priced.decimals) * priced.price;
     values.push({ symbol: p.symbol, inUsd: fromMicro(p.micro), outUsd: kept });
     if (!(kept >= fromMicro(p.micro) * MIN_VALUE_KEPT)) {
       dexProblems.push({

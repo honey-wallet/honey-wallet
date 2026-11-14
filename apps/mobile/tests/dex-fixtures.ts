@@ -379,3 +379,26 @@ export function dexDeps(api: DexApi, rpc = deviceRpc()) {
 }
 
 export const unlimited = maxUint256;
+
+/**
+ * DexScreener's `/tokens/v1/{chain}/{address}` as the device reads it (15 Nov): for each
+ * token in `prices` (lower-cased address, or a Solana mint as is), a thin pair at a silly
+ * price and its most liquid pair at the price given; any other token has no pairs.
+ */
+export function screener(prices: Record<string, number>) {
+  return vi.fn(async (url: string | URL | Request) => {
+    const [chain = '', raw = ''] = String(url).split('/').slice(-2);
+    const address = decodeURIComponent(raw);
+    const price = prices[address] ?? prices[address.toLowerCase()];
+    const pair = (usd: number, liquidity: number) => ({
+      chainId: chain,
+      baseToken: { address },
+      quoteToken: { address: 'quote' },
+      priceUsd: String(usd),
+      liquidity: { usd: liquidity },
+    });
+    return new Response(
+      JSON.stringify(price === undefined ? [] : [pair(1e6, 10), pair(price, 2_000_000)]),
+    );
+  });
+}

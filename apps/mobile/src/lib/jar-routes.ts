@@ -1,10 +1,14 @@
 import { useEffect, useState } from 'react';
 import {
   type DexToken,
+  type DexTokenDeps,
+  dexChainNamed,
   fetchAllDexTokens,
+  fetchDexToken,
   findDexToken,
   findDexTokenByAddress,
   SAMPLE_DEX_TOKENS,
+  withFound,
 } from '@/lib/dex-tokens';
 import { TEST_MODE } from '@/lib/test-mode';
 /**
@@ -273,7 +277,7 @@ export const deliveryUsd = (chain: string) =>
 
 type LiveVenues = { price: number; venues: Venue[] };
 /** `none`: the server answered and NEAR Intents can't deliver it; `error`: no answer. */
-type LiveAnswer = LiveVenues | 'none' | 'error';
+export type LiveAnswer = LiveVenues | 'none' | 'error';
 const venueCache = new Map<string, { at: number; value: Promise<LiveAnswer> }>();
 
 /**
@@ -288,15 +292,31 @@ const venueCache = new Map<string, { at: number; value: Promise<LiveAnswer> }>()
  * on Honey's DEX list by (chain, address): its symbol is never used to find it, so a
  * look-alike on NEAR Intents or another chain can't stand in for it.
  */
-function liveVenues(symbol: string, chain: string, address?: string): Promise<LiveAnswer> {
+// function liveVenues(symbol: string, chain: string, address?: string): Promise<LiveAnswer> {
+export function liveVenues(
+  symbol: string,
+  chain: string,
+  address?: string,
+  /** The server's DEX reads (tests). */
+  deps: DexTokenDeps = {},
+): Promise<LiveAnswer> {
   const key = `${symbol}:${chain}:${address ?? ''}`;
   const hit = venueCache.get(key);
   if (hit && Date.now() - hit.at < 30_000) return hit.value;
   if (address) {
-    const value = fetchAllDexTokens()
-      .then((all): LiveAnswer => {
-        const dex = findDexTokenByAddress(all, chain, address);
-        return dex ? { price: dex.priceUsd, venues: [dexVenue(dex)] } : 'none';
+    // const value = fetchAllDexTokens()
+    //   .then((all): LiveAnswer => {
+    //     const dex = findDexTokenByAddress(all, chain, address);
+    //     return dex ? { price: dex.priceUsd, venues: [dexVenue(dex)] } : 'none';
+    //   })
+    //   .catch((): LiveAnswer => 'error');
+    // Long-tail tokens (15 Nov): the list, the ones found by address in Search or the
+    // picker, else the server asked for this one token. Only safe tokens, by (chain, address).
+    const value = fetchAllDexTokens(deps)
+      .then(async (all): Promise<LiveAnswer> => {
+        const listed = findDexTokenByAddress(withFound(all), chain, address);
+        const one = listed ?? (await askOne(chain, address, deps));
+        return one ? { price: one.priceUsd, venues: [dexVenue(one)] } : 'none';
       })
       .catch((): LiveAnswer => 'error');
     venueCache.set(key, { at: Date.now(), value });
@@ -330,6 +350,18 @@ function liveVenues(symbol: string, chain: string, address?: string): Promise<Li
     });
   venueCache.set(key, { at: Date.now(), value });
   return value;
+}
+
+/** One token by (chain, address) from the server, when it's safe; null otherwise. */
+async function askOne(
+  chain: string,
+  address: string,
+  deps: DexTokenDeps,
+): Promise<DexToken | null> {
+  const name = dexChainNamed(chain);
+  if (!name) return null;
+  const found = await fetchDexToken(name, address, deps);
+  return found ? findDexTokenByAddress([found], name, address) : null;
 }
 
 /**

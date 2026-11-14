@@ -14,6 +14,7 @@ import {
   quoteFor,
   ROUTER,
   routerCall,
+  screener,
   TX,
   USDC_ARB,
 } from './dex-fixtures';
@@ -39,6 +40,7 @@ const jarDex = await import('../src/lib/jar-dex');
 const { jarBuyRecords } = await import('../src/lib/activity-feed');
 const { valueJar } = await import('../src/lib/jar-holdings');
 const { outstandingBatches } = await import('@/lib/evm-in-flight');
+const { forgetAppPrices } = await import('../src/lib/app-price');
 
 const M = (usd: number) => BigInt(Math.round(usd * 1e6));
 const ARB_USDC_ASSET = 'nep141:arb-0xaf88d065e77c8cc2239327c5edb3a432268e5831.omft.near';
@@ -116,14 +118,20 @@ function oneClick(destinationAsset = ARB_USDC_ASSET) {
   return { quote, fetcher };
 }
 
-const prices = async () => ({
-  [`dex:base:${AERO.toLowerCase()}`]: 1,
-  [`dex:arbitrum:${GRAIL.toLowerCase()}`]: 1,
-});
+// const prices = async () => ({
+//   [`dex:base:${AERO.toLowerCase()}`]: 1,
+//   [`dex:arbitrum:${GRAIL.toLowerCase()}`]: 1,
+// });
+/** The app's own prices (15 Nov): DexScreener from the device, decimals read on chain. */
+const prices = (
+  usd: Record<string, number> = { [AERO.toLowerCase()]: 1, [GRAIL.toLowerCase()]: 1 },
+  decimals: number | null = 9,
+) => ({ fetcher: screener(usd) as unknown as typeof fetch, decimals: async () => decimals });
 
 beforeEach(() => {
   outstandingBatches.set({});
   jarDex.forgetConsent();
+  forgetAppPrices();
 });
 
 describe('a jar pick NEAR Intents doesn’t list', () => {
@@ -137,7 +145,7 @@ describe('a jar pick NEAR Intents doesn’t list', () => {
       quote: quote as never,
       fetcher,
       dex: d,
-      dexPrices: prices,
+      appPrice: prices(),
     });
     expect(quote).not.toHaveBeenCalled();
     expect(quoted.legs).toHaveLength(1);
@@ -218,7 +226,7 @@ describe('a jar pick NEAR Intents doesn’t list', () => {
         tokens: async () => [{ assetId: ARB_USDC_ASSET, decimals: 6, price: 1 }],
         usdcAsset: async () => ARB_USDC_ASSET,
         dex: d,
-        dexPrices: prices,
+        appPrice: prices(),
       });
       return { quoted, quote };
     };
@@ -431,6 +439,8 @@ describe('a jar pick NEAR Intents doesn’t list', () => {
 
 describe('a leg held wrapped on another chain (XAUT as XAUt0 on Arbitrum)', () => {
   const XAUT = 'nep141:eth-0x68749665ff8d2d112fa859aa293f07a622782f38.omft.near';
+  // XAUt0 on Arbitrum: only a curated contract is valued at its family's price (15 Nov).
+  const XAUT0 = '0x40461291347e1ecbb09499f3371d3f17f10d7159';
   // The server says this keeps all $10; only the app's own XAUT price can say otherwise.
   const planned = {
     best: { kind: 'intents_dex', label: 'NEAR Intents, then KyberSwap on Arbitrum', minOutUsd: 10 },
@@ -438,7 +448,8 @@ describe('a leg held wrapped on another chain (XAUT as XAUt0 on Arbitrum)', () =
     fallback: null,
     holdAs: 'XAUT (as XAUt0 on Arbitrum)',
     dex: null,
-    elsewhere: { chain: 'Arbitrum', token: GRAIL.toLowerCase(), decimals: 6 },
+    // elsewhere: { chain: 'Arbitrum', token: GRAIL.toLowerCase(), decimals: 6 },
+    elsewhere: { chain: 'Arbitrum', token: XAUT0, decimals: 6 },
     alternatives: [],
   };
   const buy = (xautPrice: number | null) => {
@@ -456,7 +467,8 @@ describe('a leg held wrapped on another chain (XAUT as XAUt0 on Arbitrum)', () =
       usdcAsset: async () => ARB_USDC_ASSET,
       route: (async () => planned) as never,
       dex: dexDeps(fakeServer()),
-      dexPrices: vi.fn(async () => ({})),
+      // DexScreener would say it's fine: a curated major never asks it.
+      appPrice: prices({ [XAUT0]: 1e9 }),
     });
   };
 
@@ -481,5 +493,53 @@ describe('a leg held wrapped on another chain (XAUT as XAUt0 on Arbitrum)', () =
   it('is refused when the app can’t price XAUT itself', async () => {
     const error = await buy(null).catch((e) => e);
     expect(error.legs).toEqual([{ symbol: 'XAUT', reason: 'Couldn’t price XAUT right now.' }]);
+  });
+});
+
+describe('a DEX pick is valued at the app’s own price, never the server’s (15 Nov)', () => {
+  // The server's row said AERO is worth $1 and has 9 decimals; only the app's reads count.
+  const buyAero = (appPrice: ReturnType<typeof prices>) => {
+    const { quote, fetcher } = oneClick();
+    return quoteJarBuy([dexRoute('AERO', 'Base', AERO, 10)], 0.01, {
+      balances: async () => ({ Base: M(25) }),
+      quote: quote as never,
+      fetcher,
+      tokens: async () => [],
+      dex: dexDeps(fakeServer()),
+      appPrice,
+    });
+  };
+
+  it('buys when DexScreener’s most liquid pair says it keeps its value', async () => {
+    const appPrice = prices();
+    const out = await buyAero(appPrice);
+    expect(out.legs[0]).toMatchObject({ route: 'dex', decimals: 9 });
+    // 9.9 AERO guaranteed at $1: $9.90 of $10.
+    expect(out.values).toEqual([{ symbol: 'AERO', inUsd: 10, outUsd: 9.9 }]);
+    expect(appPrice.fetcher).toHaveBeenCalledWith(
+      `https://api.dexscreener.com/tokens/v1/base/${AERO}`,
+      expect.anything(),
+    );
+  });
+
+  it('is refused when the app’s price says fees take most of it, whatever the server said', async () => {
+    const error = await buyAero(prices({ [AERO.toLowerCase()]: 0.1 })).catch((e) => e);
+    expect(error.legs).toEqual([
+      {
+        symbol: 'AERO',
+        reason: 'Fees would take more than half of this swap. Buy more or pick another token.',
+      },
+    ]);
+  });
+
+  it('is refused when DexScreener has no price for it', async () => {
+    const error = await buyAero(prices({})).catch((e) => e);
+    expect(error.legs).toEqual([{ symbol: 'AERO', reason: 'Couldn’t price AERO right now.' }]);
+  });
+
+  it('is refused when the chain says other decimals than the server’s row', async () => {
+    // 18 decimals on chain: the row's 9 would have made 9.9 AERO of 0.0000000099.
+    const error = await buyAero(prices(undefined, 18)).catch((e) => e);
+    expect(error.legs).toEqual([{ symbol: 'AERO', reason: 'Couldn’t price AERO right now.' }]);
   });
 });

@@ -17,7 +17,14 @@ import {
 import { EmptyState, NetworkGrid, TokenIcon } from '@/components/wallet/parts';
 import { SearchField } from '@/components/wallet/SearchField';
 import { dexTokenList, loadDexTokens } from '@/lib/dex';
-import { dexPickerEntries } from '@/lib/dex-tokens';
+import {
+  addressKind,
+  blockedLine,
+  dexPickerEntries,
+  findDexTokensAt,
+  foundDexTokens,
+  withFound,
+} from '@/lib/dex-tokens';
 import { useMoney } from '@/lib/fx';
 import { tap } from '@/lib/haptics';
 import {
@@ -165,7 +172,12 @@ function LiveTokens({
   const { tokens: oneClick, failed } = swapTokenList.useValue();
   // Tokens NEAR Intents doesn't list but Honey's DEX route trades on their own chain.
   const { tokens: dex } = dexTokenList.useValue();
-  const tokens = oneClick ? [...oneClick, ...dexPickerEntries(dex ?? [], oneClick)] : null;
+  // const tokens = oneClick ? [...oneClick, ...dexPickerEntries(dex ?? [], oneClick)] : null;
+  // And the ones found by their address (15 Nov).
+  const { tokens: found } = foundDexTokens.useValue();
+  const tokens = oneClick
+    ? [...oneClick, ...dexPickerEntries(withFound(dex ?? [], found), oneClick)]
+    : null;
   const [query, setQuery] = useState('');
   const [chain, setChain] = useState<string | null>(null);
   // The network selector's list of networks, shown in place of the tokens.
@@ -240,6 +252,32 @@ function LiveTokens({
   const [limit, setLimit] = useState(PAGE);
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset whenever the search or network changes.
   useEffect(() => setLimit(PAGE), [q, chain]);
+  // A contract or mint nothing listed matches (15 Nov): Honey's DEX universe is asked. A
+  // safe token found joins the list (and so the results); a blocked one says why.
+  const at = query.trim();
+  const unmatched = !jar && !!addressKind(at) && !!tokens && results.length === 0;
+  const [lookup, setLookup] = useState<{ at: string; blocked: string[] } | null>(null);
+  useEffect(() => {
+    if (!unmatched) return;
+    let alive = true;
+    void findDexTokensAt(at)
+      .catch(() => [])
+      .then((list) => {
+        if (alive)
+          setLookup({
+            at,
+            blocked: list.flatMap((t) => {
+              const line = blockedLine(t);
+              return line ? [line] : [];
+            }),
+          });
+      });
+    return () => {
+      alive = false;
+    };
+  }, [unmatched, at]);
+  const lookingUp = unmatched && lookup?.at !== at;
+  const blocked = unmatched && lookup?.at === at ? lookup.blocked : [];
 
   const pick = (ref: TokenRef) => {
     if (!jar) rememberPick(ref);
@@ -524,6 +562,12 @@ function LiveTokens({
       {!jar && more(rest.length)}
       {results.slice(0, limit).map((t) => row(t, 'result', 'tag'))}
       {more(results.length)}
+      {lookingUp ? <SheetRowSkeletons count={2} icon={36} /> : null}
+      {blocked.map((line) => (
+        <Text key={line} style={styles.note}>
+          {line}
+        </Text>
+      ))}
       {jar && !usdcRow && yours.length === 0 && !q && (
         <EmptyState
           icon="wallet"
@@ -531,20 +575,23 @@ function LiveTokens({
           hint="Add money to this wallet first."
         />
       )}
-      {(q ? results.length === 0 : rest.length === 0) && (jar ? !!q && !usdcRow : true) && (
-        <EmptyState
-          icon="search"
-          title="No tokens found"
-          hint="Try another name, symbol or address."
-          action={{
-            label: 'Clear search',
-            onPress: () => {
-              setQuery('');
-              setChain(null);
-            },
-          }}
-        />
-      )}
+      {(q ? results.length === 0 : rest.length === 0) &&
+        (jar ? !!q && !usdcRow : true) &&
+        !lookingUp &&
+        !blocked.length && (
+          <EmptyState
+            icon="search"
+            title="No tokens found"
+            hint="Try another name, symbol or address."
+            action={{
+              label: 'Clear search',
+              onPress: () => {
+                setQuery('');
+                setChain(null);
+              },
+            }}
+          />
+        )}
     </SheetScreen>
   );
 }

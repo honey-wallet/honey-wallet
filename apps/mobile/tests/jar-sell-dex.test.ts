@@ -7,6 +7,7 @@ import {
   GRAIL,
   ME,
   MY_SOL,
+  screener,
   TX,
   USDC_ARB,
   USDC_BASE,
@@ -92,6 +93,13 @@ const { executeJarSell, quoteJarSell } = await import('@/lib/jar-sell');
 const { thesisJars } = await import('@/lib/thesis');
 const { dexSwaps } = await import('@/lib/dex');
 const { outstandingBatches } = await import('@/lib/evm-in-flight');
+const { forgetAppPrices } = await import('@/lib/app-price');
+
+/** The app's own prices (15 Nov): DexScreener from the device, decimals read on chain. */
+const appPrice = (
+  usd: Record<string, number> = { [AERO.toLowerCase()]: 1, [GRAIL.toLowerCase()]: 1 },
+  decimals: number | null = 9,
+) => ({ fetcher: screener(usd) as unknown as typeof fetch, decimals: async () => decimals });
 type Jar = import('@/lib/thesis').ThesisJar;
 type Leg = import('@/lib/jar-buy').BuyLeg;
 
@@ -148,6 +156,7 @@ beforeEach(() => {
   prepareFails = false;
   outstandingBatches.set({});
   dexSwaps.set({});
+  forgetAppPrices();
 });
 
 describe('selling a DEX-bought token', () => {
@@ -156,7 +165,7 @@ describe('selling a DEX-bought token', () => {
     const d = dexDeps(api, deviceRpc({ [TX('a')]: '0x1' }));
     const j = jar([dexLeg('Base', AERO, 'AERO')]);
     thesisJars.set([j]);
-    const q = await quoteJarSell(j, 12, 12, { dex: d }, 'USDC');
+    const q = await quoteJarSell(j, 12, 12, { dex: d, price: appPrice() }, 'USDC');
     expect(api.quote).toHaveBeenCalledWith(
       'session',
       expect.objectContaining({
@@ -190,7 +199,7 @@ describe('selling a DEX-bought token', () => {
     const d = dexDeps(api, deviceRpc({ [TX('a')]: '0x1' }));
     const j = jar([dexLeg('Arbitrum', GRAIL, 'GRAIL')]);
     thesisJars.set([j]);
-    const q = await quoteJarSell(j, 6, 12, { dex: d }, 'USDC');
+    const q = await quoteJarSell(j, 6, 12, { dex: d, price: appPrice() }, 'USDC');
     expect(api.quote).toHaveBeenCalledWith(
       'session',
       expect.objectContaining({ chain: 'Arbitrum', buyToken: USDC_ARB, sellAmount: '10000000000' }),
@@ -217,7 +226,7 @@ describe('selling a DEX-bought token', () => {
       const d = dexDeps(api, deviceRpc({ [TX('a')]: '0x1' }));
       const j = jar([dexLeg('Arbitrum', GRAIL, 'GRAIL')]);
       thesisJars.set([j]);
-      const q = await quoteJarSell(j, 6, 12, { dex: d }, 'USDC');
+      const q = await quoteJarSell(j, 6, 12, { dex: d, price: appPrice() }, 'USDC');
       return executeJarSell(j, q, () => true, { confirm, dex: d });
     };
     // Any other failure is not a reason to re-quote: the USDC stays, nothing more is paid.
@@ -260,11 +269,36 @@ describe('selling a DEX-bought token', () => {
     const d = dexDeps(api, deviceRpc({ [TX('a')]: '0x0' }));
     const j = jar([dexLeg('Arbitrum', GRAIL, 'GRAIL')]);
     thesisJars.set([j]);
-    const q = await quoteJarSell(j, 12, 12, { dex: d }, 'USDC');
+    const q = await quoteJarSell(j, 12, 12, { dex: d, price: appPrice() }, 'USDC');
     await expect(
       executeJarSell(j, q, () => true, { confirm: async () => true, dex: d }),
     ).rejects.toThrow('The GRAIL sale didn’t go through. Nothing was sold.');
     expect(calls).toEqual([]);
     expect(thesisJars.get()[0]?.sells?.[0]).toMatchObject({ status: 'FAILED' });
+  });
+});
+
+describe('a DEX sale keeps its value at the app’s own price (15 Nov)', () => {
+  // The fixture's quote pays 20,000,000 USDC for 20 AERO: fine unless AERO is worth more.
+  const sellAero = (price: ReturnType<typeof appPrice>) => {
+    const api = fakeServer();
+    const j = jar([dexLeg('Base', AERO, 'AERO')]);
+    thesisJars.set([j]);
+    return quoteJarSell(j, 12, 12, { dex: dexDeps(api), price }, 'USDC');
+  };
+
+  it('sells when what it gets is worth at least half of what it gives', async () => {
+    const q = await sellAero(appPrice());
+    expect(q.dex).toHaveLength(1);
+  });
+
+  it('is refused when the app’s price says fees take most of it', async () => {
+    await expect(sellAero(appPrice({ [AERO.toLowerCase()]: 10_000_000 }))).rejects.toThrow(
+      'Fees would take more than half of this swap. Try a larger amount or another network.',
+    );
+  });
+
+  it('is refused when the app can’t price it', async () => {
+    await expect(sellAero(appPrice({}))).rejects.toThrow('Couldn’t price AERO right now.');
   });
 });

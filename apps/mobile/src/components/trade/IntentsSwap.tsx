@@ -19,6 +19,7 @@ import { Spinner } from '@/components/trade/SwapReview';
 import { InFlightBar } from '@/components/wallet/InFlightBar';
 import { applyKey, Keypad, PercentChips, TypedAmount } from '@/components/wallet/Keypad';
 import { /* SCREEN, */ TokenIcon } from '@/components/wallet/parts';
+import { checkDexValue, SWAP_TOO_COSTLY } from '@/lib/app-price';
 import { confirmOwner } from '@/lib/auth';
 import { backendSession, backendSessionToken } from '@/lib/backend-session';
 import { planRoute } from '@/lib/best-route';
@@ -30,6 +31,7 @@ import {
   dexTokenByAsset,
   dexTokenList,
   executeDex,
+  foundDexTokens,
   isDexAsset,
   isDexChain,
   loadDexTokens,
@@ -40,6 +42,7 @@ import {
   saveDexSwap,
   takerOn,
   usdcOn,
+  withFound,
 } from '@/lib/dex';
 import { floorSignificant } from '@/lib/format';
 import { useMoney } from '@/lib/fx';
@@ -205,8 +208,13 @@ function IntentsSwapForm() {
   const { tokens: dexList } = dexTokenList.useValue();
   useEffect(loadDexTokens, []);
   const { sell, buy } = supportedPair(stored, tokens);
-  const sellDex = isDexAsset(sell.assetId) ? dexTokenByAsset(dexList ?? [], sell.assetId) : null;
-  const buyDex = isDexAsset(buy.assetId) ? dexTokenByAsset(dexList ?? [], buy.assetId) : null;
+  // const sellDex = isDexAsset(sell.assetId) ? dexTokenByAsset(dexList ?? [], sell.assetId) : null;
+  // const buyDex = isDexAsset(buy.assetId) ? dexTokenByAsset(dexList ?? [], buy.assetId) : null;
+  // And the safe tokens found by their address in Search or the picker (15 Nov).
+  const { tokens: found } = foundDexTokens.useValue();
+  const dexKnown = withFound(dexList ?? [], found);
+  const sellDex = isDexAsset(sell.assetId) ? dexTokenByAsset(dexKnown, sell.assetId) : null;
+  const buyDex = isDexAsset(buy.assetId) ? dexTokenByAsset(dexKnown, buy.assetId) : null;
   const dexMode = isDexAsset(sell.assetId) || isDexAsset(buy.assetId);
   const dexToken = sellDex ?? buyDex;
   const sellAsset = tokens ? swapAssetOf(tokens, sell) : null;
@@ -371,6 +379,18 @@ function IntentsSwapForm() {
         }).catch(() => null);
         // An older server without the planner: the DEX quote directly.
         const quoted = planned?.dex ?? (await quoteDex(ask));
+        // Held to the swap floor at the app's own prices (lib/app-price), never the
+        // server's: no price, no quote (15 Nov).
+        await checkDexValue(
+          quoted,
+          {
+            sell: sell.symbol,
+            buy: buy.symbol,
+            sellDecimals: sellDex?.decimals,
+            buyDecimals: buyDex?.decimals,
+          },
+          SWAP_TOO_COSTLY,
+        );
         // const why =
         //   planned?.why ??
         //   `Not on NEAR Intents, so this uses ${routeLabel(quoted.quote.aggregator, chain, false)}. Swaps here are public on-chain.`;
@@ -403,6 +423,17 @@ function IntentsSwapForm() {
           walletId: wallet.id,
         }).catch(() => null);
         if (planned?.dex) {
+          // The same floor at 1Click's prices, read by the app (15 Nov).
+          await checkDexValue(
+            planned.dex,
+            {
+              sell: sell.symbol,
+              buy: buy.symbol,
+              sellDecimals: sellAsset.decimals,
+              buyDecimals: buyAsset.decimals,
+            },
+            SWAP_TOO_COSTLY,
+          );
           if (id === flight.current)
             setDexQuote({ key, quoted: planned.dex, why: planned.why, at: Date.now() });
           return;

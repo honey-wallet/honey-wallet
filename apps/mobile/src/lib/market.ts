@@ -7,7 +7,15 @@ import type {
 import { ApiError } from '@honey-wallet/api-client';
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '@/lib/api';
-import { dexMarketRows, dexTokenList, loadDexTokens } from '@/lib/dex-tokens';
+import {
+  addressKind,
+  blockedLine,
+  dexMarketRow,
+  dexMarketRows,
+  dexTokenList,
+  findDexTokensAt,
+  loadDexTokens,
+} from '@/lib/dex-tokens';
 import { CHAINS, type Chain, MARKET, type MarketToken, series } from '@/lib/mock-wallet';
 import { type HeldToken, holdingsHistory, type PriceSeries } from '@/lib/portfolio-history';
 import { createStore } from '@/lib/store';
@@ -526,7 +534,17 @@ export function findMarketToken<T extends { symbol: string; aliases?: string[] }
 }
 
 /** Whether a row matches a search: its name, symbol or a folded-in copy's symbol. */
-export function matchesQuery(t: { symbol: string; name: string; aliases?: string[] }, q: string) {
+// export function matchesQuery(t: { symbol: string; name: string; aliases?: string[] }, q: string) {
+/** A contract or mint matches only the token at it (15 Nov). */
+export function matchesQuery(
+  t: { symbol: string; name: string; aliases?: string[]; address?: string },
+  q: string,
+) {
+  const kind = addressKind(q);
+  if (kind)
+    return kind === 'solana'
+      ? t.address === q.trim()
+      : t.address?.toLowerCase() === q.trim().toLowerCase();
   const query = q.trim().toLowerCase();
   return (
     !query ||
@@ -534,6 +552,75 @@ export function matchesQuery(t: { symbol: string; name: string; aliases?: string
     t.symbol.toLowerCase().includes(query) ||
     !!t.aliases?.some((a) => a.toLowerCase().includes(query))
   );
+}
+
+/**
+ * The rows Search lists for a contract or mint: the listed tokens at it (a DEX row, or a
+ * NEAR Intents token by its contract, shown as its market row); empty when none is.
+ */
+export function addressMatches(
+  rows: readonly MarketToken[],
+  oneClick: readonly { symbol: string; contractAddress: string | null }[],
+  q: string,
+): MarketToken[] {
+  const kind = addressKind(q);
+  if (!kind) return [];
+  const query = q.trim();
+  const same = (a: string) =>
+    kind === 'solana' ? a === query : a.toLowerCase() === query.toLowerCase();
+  const symbols = new Set(
+    oneClick.filter((t) => !!t.contractAddress && same(t.contractAddress)).map((t) => t.symbol),
+  );
+  const listed = [...symbols].flatMap((symbol) => {
+    const row = rows.find((r) => !r.assetId && r.symbol === symbol);
+    return row ? [row] : [];
+  });
+  return [...rows.filter((r) => matchesQuery(r, query)), ...listed];
+}
+
+/**
+ * Search by address (15 Nov): the listed tokens at it first; when there are none, Honey's
+ * DEX universe is asked (`GET /dex/token`, each EVM chain at once). Safe tokens come back
+ * as rows that open by their own asset; blocked ones as the server's reason, in a line.
+ */
+export function useAddressSearch(
+  query: string,
+  rows: readonly MarketToken[],
+  oneClick: readonly { symbol: string; contractAddress: string | null }[] | null,
+): { rows: MarketToken[]; blocked: string[]; searching: boolean } | null {
+  const q = query.trim();
+  const kind = addressKind(q);
+  const listed = useMemo(() => addressMatches(rows, oneClick ?? [], q), [rows, oneClick, q]);
+  const [found, setFound] = useState<{
+    q: string;
+    rows: MarketToken[];
+    blocked: string[];
+  } | null>(null);
+  const ask = !!kind && !listed.length;
+  useEffect(() => {
+    if (!ask) return;
+    let alive = true;
+    void findDexTokensAt(q)
+      .catch(() => [])
+      .then((tokens) => {
+        if (!alive) return;
+        setFound({
+          q,
+          rows: tokens.filter((t) => t.safety.ok).map((t) => dexMarketRow(t, true)),
+          blocked: tokens.flatMap((t) => {
+            const line = blockedLine(t);
+            return line ? [line] : [];
+          }),
+        });
+      });
+    return () => {
+      alive = false;
+    };
+  }, [ask, q]);
+  if (!kind) return null;
+  if (listed.length) return { rows: listed, blocked: [], searching: false };
+  if (found?.q !== q) return { rows: [], blocked: [], searching: true };
+  return { rows: found.rows, blocked: found.blocked, searching: false };
 }
 
 /**

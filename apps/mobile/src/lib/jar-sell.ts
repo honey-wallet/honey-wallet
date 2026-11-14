@@ -11,6 +11,7 @@
  * Intents swap of that USDC to it, paid once the DEX swap has landed. All under the same
  * one confirmation.
  */
+import { type AppPriceDeps, checkDexValue, SWAP_TOO_COSTLY } from '@/lib/app-price';
 import { copiedJarId, type SellCopyFee, sellCopyFee } from '@/lib/copy-fees';
 import {
   type DexChain,
@@ -139,7 +140,8 @@ export async function quoteJarSell(
   jar: ThesisJar,
   usd: number,
   value: number,
-  deps: Partial<SwapDeps> & { dex?: Partial<DexDeps> } = {},
+  // deps: Partial<SwapDeps> & { dex?: Partial<DexDeps> } = {},
+  deps: Partial<SwapDeps> & { dex?: Partial<DexDeps>; price?: Partial<AppPriceDeps> } = {},
   into: SellInto = 'USDC',
 ): Promise<JarSellQuote> {
   const tokens = await fetchSwapTokens(deps.fetcher, deps.now?.());
@@ -156,7 +158,16 @@ export async function quoteJarSell(
     cash > 0,
   );
   const dex = await Promise.all(
-    parts.filter((p) => isDexLeg(p.leg)).map((p) => quoteDexSale(p.leg, p.units, buy, deps)),
+    // parts.filter((p) => isDexLeg(p.leg)).map((p) => quoteDexSale(p.leg, p.units, buy, deps)),
+    // Valued at the app's own prices; 1Click's list is the one just read (15 Nov).
+    parts
+      .filter((p) => isDexLeg(p.leg))
+      .map((p) =>
+        quoteDexSale(p.leg, p.units, buy, {
+          ...deps,
+          price: { oneClick: async () => tokens, ...deps.price },
+        }),
+      ),
   );
   // A copied jar's sells name the jar copied: the server adds its creator's fee, if any.
   const copySaleOf = copiedJarId(jar);
@@ -251,7 +262,8 @@ async function quoteDexSale(
   leg: BuyLeg,
   units: bigint,
   buy: TokenRef,
-  deps: Partial<SwapDeps> & { dex?: Partial<DexDeps> },
+  // deps: Partial<SwapDeps> & { dex?: Partial<DexDeps> },
+  deps: Partial<SwapDeps> & { dex?: Partial<DexDeps>; price?: Partial<AppPriceDeps> },
 ): Promise<DexSale> {
   if (!isDexLeg(leg)) throw new Error(`${leg.symbol} can’t be sold right now.`);
   const { chain, token, taker } = leg.dex;
@@ -272,6 +284,14 @@ async function quoteDexSale(
       walletId: wallet.id,
     },
     deps.dex,
+  );
+  // What's sold, at the app's own price (lib/app-price, never the server's), against the
+  // USDC it's guaranteed to pay: the swap floor, before anything is signed (15 Nov).
+  await checkDexValue(
+    quoted,
+    { sell: leg.symbol, buy: 'USDC', sellDecimals: leg.dex.decimals },
+    SWAP_TOO_COSTLY,
+    deps.price,
   );
   const here = buy.chain === chain && buy.symbol === 'USDC';
   const payout = here
