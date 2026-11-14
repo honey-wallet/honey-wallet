@@ -57,6 +57,12 @@ export type Route = {
    * unavailable: the server couldn't be reached. Only `ok` routes are ever paid.
    */
   status: 'ok' | 'thin' | 'loading' | 'unbuyable' | 'unavailable';
+  /**
+   * Every NEAR Intents asset the pick can be delivered as (one per chain), when there's
+   * more than one: the review quotes each and buys the one that gets the most
+   * (lib/jar-minimum `withChoices`), which favours an L2 over Ethereum at small sizes.
+   */
+  options?: { chain: string; assetId: string }[];
 };
 
 /** Pools shallower than this are ignored: too easy to move, too easy to be stuck in. */
@@ -132,6 +138,14 @@ export function planRoute(
     })
     .filter((l) => l.usd > 0)
     .sort((a, b) => b.usd - a.usd);
+  // Each deliverable asset once (chain by chain), for the review to quote side by side.
+  const options = [
+    ...new Map(
+      usable
+        .filter((v) => v.assetId && !v.dex)
+        .map((v) => [v.assetId as string, { chain: v.chain, assetId: v.assetId as string }]),
+    ).values(),
+  ];
   return {
     symbol,
     usd,
@@ -139,6 +153,7 @@ export function planRoute(
     slippage,
     bridgeUsd: best.bridge,
     status: slippage <= maxSlippage ? 'ok' : 'thin',
+    ...(options.length > 1 ? { options } : {}),
   };
 }
 
@@ -243,8 +258,17 @@ export function sampleRoute(
 
 /** Rough cost of moving funds to another chain through NEAR Intents, in dollars. */
 const BRIDGE_USD = 0.3;
+/**
+ * Rough cost of delivering to Ethereum itself: its gas is paid out of the swap
+ * (2026-11-14: $0.60 of XAUT on Ethereum came back as $0.36). An L2 venue for the same
+ * pick wins at small sizes; the review then checks with live quotes (lib/jar-minimum).
+ */
+export const L1_DELIVERY_USD = 0.5;
 /** Where a jar's money starts; buys on other chains cross through NEAR Intents. */
 const FUNDING_CHAIN = 'Base';
+/** The modelled cost of getting a buy onto `chain`. */
+export const deliveryUsd = (chain: string) =>
+  chain === FUNDING_CHAIN ? 0 : chain === 'Ethereum' ? L1_DELIVERY_USD : BRIDGE_USD;
 
 type LiveVenues = { price: number; venues: Venue[] };
 /** `none`: the server answered and NEAR Intents can't deliver it; `error`: no answer. */
@@ -275,7 +299,8 @@ function liveVenues(symbol: string, chain: string): Promise<LiveAnswer> {
               venue: v.venue,
               depthUsd: v.depthUsd,
               feeBps: v.feeBps,
-              bridgeUsd: v.chain === FUNDING_CHAIN ? 0 : BRIDGE_USD,
+              // bridgeUsd: v.chain === FUNDING_CHAIN ? 0 : BRIDGE_USD,
+              bridgeUsd: deliveryUsd(v.chain),
             })),
           };
     })

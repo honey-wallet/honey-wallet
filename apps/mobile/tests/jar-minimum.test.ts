@@ -52,15 +52,27 @@ describe('the jar minimum (maths)', () => {
   it('takes a refused leg at its planner minimum, and a fair quote as no minimum', () => {
     expect(legMinimumUsd({ kind: 'below', minUsd: 6.1 })).toBe(6.1);
     expect(legMinimumUsd({ kind: 'ok', inUsd: 10, outUsd: 9.5 })).toBeNull();
-    expect(legMinimumUsd({ kind: 'ok', inUsd: 10, outUsd: 7 })).toBeNull();
+    // expect(legMinimumUsd({ kind: 'ok', inUsd: 10, outUsd: 7 })).toBeNull();
+    // Since 14 Nov a leg binds from 15% lost; 14% is a warning, not a minimum.
+    expect(legMinimumUsd({ kind: 'ok', inUsd: 10, outUsd: 8.6 })).toBeNull();
     expect(legMinimumUsd({ kind: 'unknown' })).toBeNull();
   });
 
-  it('holds a leg whose fees eat 30% or more to where they would not', () => {
-    // $0.49 in, $0.25 out: $0.24 of fees, fair from $0.80.
-    expect(legMinimumUsd({ kind: 'ok', inUsd: 0.49, outUsd: 0.25 })).toBeCloseTo(0.8, 6);
+  // it('holds a leg whose fees eat 30% or more to where they would not', () => {
+  //   // $0.49 in, $0.25 out: $0.24 of fees, fair from $0.80.
+  //   expect(legMinimumUsd({ kind: 'ok', inUsd: 0.49, outUsd: 0.25 })).toBeCloseTo(0.8, 6);
+  //   // Nothing out at all: every cent was fees.
+  //   expect(legMinimumUsd({ kind: 'ok', inUsd: 1, outUsd: -0.2 })).toBeCloseTo(1 / 0.3, 6);
+  // });
+  it('holds a leg losing more than 15% to where it would lose under 5%', () => {
+    // $0.49 in, $0.25 out: $0.24 of fees, under 5% from $4.80.
+    expect(legMinimumUsd({ kind: 'ok', inUsd: 0.49, outUsd: 0.25 })).toBeCloseTo(4.8, 6);
+    // The founder's XAUT: $0.60 in, $0.36 out, so $4.80 too.
+    expect(legMinimumUsd({ kind: 'ok', inUsd: 0.6, outUsd: 0.36 })).toBeCloseTo(4.8, 6);
+    // 30% lost now binds (it didn't before 14 Nov).
+    expect(legMinimumUsd({ kind: 'ok', inUsd: 10, outUsd: 7 })).toBeCloseTo(60, 6);
     // Nothing out at all: every cent was fees.
-    expect(legMinimumUsd({ kind: 'ok', inUsd: 1, outUsd: -0.2 })).toBeCloseTo(1 / 0.3, 6);
+    expect(legMinimumUsd({ kind: 'ok', inUsd: 1, outUsd: -0.2 })).toBeCloseTo(1 / 0.05, 6);
   });
 
   it('is the largest leg minimum over its share, rounded up', () => {
@@ -242,3 +254,84 @@ describe('checking a jar', () => {
     expect(route.mock.calls[0]?.[0]).toMatchObject({ fromChain: 'Arbitrum' });
   });
 });
+
+describe('what each leg gets, and where it is bought (2026-11-14)', () => {
+  const XAUT_ARB = 'nep141:arb-0x40461291347e1ecbb09499f3371d3f17f10d7159.omft.near';
+  const gold = (usd: number): Route => ({
+    ...route('XAUT', 'Ethereum', XAUT, usd),
+    options: [
+      { chain: 'Ethereum', assetId: XAUT },
+      { chain: 'Arbitrum', assetId: XAUT_ARB },
+    ],
+  });
+
+  it('quotes a pick on each chain it trades on and buys where it gets the most', async () => {
+    const { checkJarLegs, withChoices } = await import('../src/lib/jar-minimum');
+    const asked: string[] = [];
+    const route = vi.fn(async (ask: RouteAsk) => {
+      asked.push(ask.toToken);
+      // Ethereum's gas eats the small leg; Arbitrum keeps nearly all of it.
+      return planned(ask.toToken === XAUT ? 0.36 : 0.58);
+    });
+    const check = await checkJarLegs(
+      {
+        routes: [gold(0.6)],
+        slippage: 0.01,
+        payWith: null,
+        balances: { Arbitrum: 1_000_000n },
+        wallet: WALLET,
+      },
+      { route },
+    );
+    expect(asked).toEqual([XAUT, XAUT_ARB]);
+    expect(check?.choices).toEqual({ XAUT: { chain: 'Arbitrum', assetId: XAUT_ARB } });
+    expect(check?.legs).toEqual([{ symbol: 'XAUT', inUsd: 0.6, outUsd: 0.58 }]);
+    expect(check?.minimum).toBeNull();
+    const [bought] = withChoices([gold(0.6)], check?.choices ?? {});
+    expect(bought?.legs).toEqual([
+      { chain: 'Arbitrum', venue: 'Pool', usd: 0.6, units: 1, assetId: XAUT_ARB },
+    ]);
+  });
+
+  it('keeps the planned chain, and asks for more, when it is the only route', async () => {
+    const { checkJarLegs } = await import('../src/lib/jar-minimum');
+    const route = vi.fn(async () => planned(0.36));
+    const check = await checkJarLegs(
+      {
+        routes: [route_('XAUT', 0.6)],
+        slippage: 0.01,
+        payWith: null,
+        balances: { Arbitrum: 1_000_000n },
+        wallet: WALLET,
+      },
+      { route },
+    );
+    expect(check?.choices).toEqual({});
+    expect(check?.legs).toEqual([{ symbol: 'XAUT', inUsd: 0.6, outUsd: 0.36 }]);
+    // $0.24 of fees: under 5% from $4.80, the whole jar.
+    expect(check?.minimum).toEqual({ usd: 5, symbol: 'XAUT', legUsd: expect.closeTo(4.8, 6) });
+    expect(belowMinimum(0.6, check?.minimum ?? null)?.label).toBe('Add at least $5.00');
+  });
+
+  it('warns from 5% lost, and the sample routes say the same in test mode', async () => {
+    const { costlyLegs, sampleCheck } = await import('../src/lib/jar-minimum');
+    expect(
+      costlyLegs([
+        { symbol: 'BTC', inUsd: 10, outUsd: 9.6 },
+        { symbol: 'XAUT', inUsd: 10, outUsd: 9.4 },
+      ]).map((l) => l.symbol),
+    ).toEqual(['XAUT']);
+    const s = sampleCheck([
+      { ...route('XAUT', 'Ethereum', XAUT, 8), slippage: 0.01, bridgeUsd: 0.5 },
+    ]);
+    expect(s.legs).toEqual([{ symbol: 'XAUT', inUsd: 8, outUsd: 8 * 0.99 - 0.5 }]);
+    expect(s.minimum).toBeNull();
+    expect(
+      sampleCheck([{ ...route('XAUT', 'Ethereum', XAUT, 0.6), bridgeUsd: 0.5 }]).minimum?.usd,
+    ).toBe(10.5);
+  });
+});
+
+function route_(symbol: string, usd: number): Route {
+  return route(symbol, 'Ethereum', XAUT, usd);
+}

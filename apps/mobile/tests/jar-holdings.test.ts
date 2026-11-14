@@ -8,10 +8,18 @@ vi.mock('@/lib/intents-swap', () => ({
 vi.mock('@/lib/jar-buy', () => ({ refreshJarBuy: vi.fn() }));
 vi.mock('@/lib/market', () => ({ livePrices: () => ({}) }));
 
-const { delivered, heldUnits, markJar, pricer, refreshJarValues, valueJar } = await import(
-  '@/lib/jar-holdings'
-);
-const { thesisJars } = await import('@/lib/thesis');
+const {
+  delivered,
+  heldUnits,
+  inJarsText,
+  jarHoldings,
+  jarsHolding,
+  markJar,
+  pricer,
+  refreshJarValues,
+  valueJar,
+} = await import('@/lib/jar-holdings');
+const { jarCash, jarReturn, thesisJars } = await import('@/lib/thesis');
 type Jar = import('@/lib/thesis').ThesisJar;
 type Leg = import('@/lib/jar-buy').BuyLeg;
 
@@ -202,5 +210,66 @@ describe('refreshJarValues', () => {
     expect(j?.sells?.[0]?.status).toBe('REFUNDED');
     // The refunded wNEAR is the jar's again: 2 × $4.
     expect(j?.history.at(-1)).toBe(8);
+  });
+});
+
+describe('a jar that keeps USDC (2026-11-14)', () => {
+  // The owner's AI Bubble: $1 in, $0.60 to XAUT on Ethereum (0.000093 XAUT came back,
+  // worth $0.36) and $0.40 kept in USDC.
+  const xaut = leg({
+    symbol: 'XAUT',
+    chain: 'Ethereum',
+    usd: 0.6,
+    destinationAsset: 'nep141:eth-xaut',
+    amountIn: '600000',
+    minAmountOut: '90',
+    amountOut: '93',
+    decimals: 6,
+  });
+  const XAUT_PRICE = 0.36 / 0.000093;
+  const priceOf = () => ({ price: XAUT_PRICE, decimals: 6 });
+  const gold = { symbol: 'XAUT', weight: 60 } as Jar['picks'][number];
+
+  it('counts the USDC in its value and its cost: $0.76 and -24%, not $0.36 and -40%', () => {
+    const j = jar({
+      picks: [gold],
+      cashPct: 40,
+      cash: 0.4,
+      buy: [xaut],
+      history: [1, 1],
+      invested: 1,
+    });
+    const v = valueJar(j, priceOf);
+    expect(v?.value).toBeCloseTo(0.76, 6);
+    expect(v?.cost).toBeCloseTo(1, 6);
+    const marked = markJar(j, v as { value: number; cost: number }, T0 + 1000);
+    expect(marked.history.at(-1)).toBe(0.76);
+    expect(jarReturn(marked)).toBeCloseTo(-0.24, 6);
+  });
+
+  it('works out the USDC of a jar bought before it was recorded', () => {
+    // Saved without `cash`, its marks already scaled to the $0.60 that was swapped.
+    const old = jar({ picks: [gold], buy: [xaut], history: [0.6, 0.36], invested: 0.6 });
+    expect(jarCash(old)).toBe(0.4);
+    const v = valueJar(old, priceOf);
+    expect(v?.value).toBeCloseTo(0.76, 6);
+    const marked = markJar(old, v as { value: number; cost: number }, T0 + 1000);
+    expect(marked.history[0]).toBe(1);
+    expect(jarReturn(marked)).toBeCloseTo(-0.24, 6);
+  });
+
+  it('lists what it holds token by token, and which jars hold each token for Home', () => {
+    const j = jar({ name: 'AI Bubble', picks: [gold], cashPct: 40, cash: 0.4, buy: [xaut] });
+    const held = jarHoldings(j, priceOf);
+    expect(held.get('XAUT')?.units).toBeCloseTo(0.000093, 9);
+    expect(held.get('XAUT')?.usd).toBeCloseTo(0.36, 6);
+    const holding = jarsHolding([j, jar({ id: 'j2', name: 'Other', mine: false, buy: [xaut] })]);
+    expect(holding.get('XAUT')).toEqual(['AI Bubble']);
+    expect(holding.get('USDC')).toEqual(['AI Bubble']);
+    expect(inJarsText(holding.get('XAUT'))).toBe('In AI Bubble');
+    expect(inJarsText(['A', 'B'])).toBe('In 2 jars');
+    expect(inJarsText(undefined)).toBeNull();
+    // Sold or refunded: no longer in the jar.
+    expect(jarsHolding([jar({ cash: 0, buy: [leg({ status: 'REFUNDED' })] })]).size).toBe(0);
   });
 });

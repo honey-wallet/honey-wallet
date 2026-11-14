@@ -162,6 +162,31 @@ describe('quoteJarBuy from another network', () => {
           tokens: list,
         }),
       ).rejects.toThrow('Nothing was paid');
+    // Each leg's value goes to the review: $4.95 for $5 here.
+    expect(out.values).toEqual([{ symbol: 'wNEAR', inUsd: 5, outUsd: expect.closeTo(4.95, 6) }]);
+    // 2026-11-14: a leg losing more than 15% stops before anything is signed, saying what
+    // it would get ($4.20 for $5); one losing 9% goes on, its value kept for the review.
+    const at = (price: number) =>
+      quoteJarBuy([route('wNEAR', 'NEAR', 5, 'nep141:wrap.near')], 0.01, {
+        balances: async () => ({ Base: M(1), Solana: M(40) }),
+        quote: quote as never,
+        fetcher,
+        tokens: async () => [{ assetId: 'nep141:wrap.near', decimals: 6, price }],
+      });
+    await expect(at(4.2)).rejects.toThrow('wNEAR: You get ≈ $4.16 for $5.00');
+    expect((await at(4.6)).values[0]?.outUsd).toBeCloseTo(4.554, 6);
+    // The jar's cash share stays in the wallet as USDC: it must be there beside the legs.
+    const deps = {
+      balances: async () => ({ Base: M(1), Solana: M(40) }),
+      quote: quote as never,
+      fetcher,
+      tokens,
+    };
+    const one = [route('wNEAR', 'NEAR', 5, 'nep141:wrap.near')];
+    await expect(quoteJarBuy(one, 0.01, deps, null, 40)).rejects.toThrow(
+      'You have $41.00 in USDC; this buy needs $45.00',
+    );
+    expect((await quoteJarBuy(one, 0.01, deps, null, 3)).legs).toHaveLength(1);
   });
 
   it('keeps every leg above Swap’s value floor', () => {

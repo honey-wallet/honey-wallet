@@ -146,6 +146,13 @@ export type ThesisJar = {
   markedAt?: number;
   /** A resting limit order still waiting to fill, if the jar was bought that way. */
   openOrder?: { kind: OrderKind; amount: number; placedAt: number };
+  /** The share its strategy kept in USDC (`Proposal.cashPct`): picks + cash = 100. */
+  cashPct?: number;
+  /**
+   * Dollars of USDC the jar keeps (its cash share): set aside when it was bought, never
+   * swapped, less what was sold. Part of its value and returns (`jarCash`).
+   */
+  cash?: number;
 };
 
 /** One token sold out of a jar: a NEAR Intents swap of `units` of `asset` to USDC on Base. */
@@ -565,6 +572,53 @@ export function splitWithCash<T extends { symbol: string; weight: number }>(
   else out.push({ symbol: 'USDC', weight: cash });
   return out;
 }
+
+/** The symbol and chain a jar's cash is kept and published as: USDC on Base, where jars pay and sell. */
+export const CASH = { symbol: 'USDC', name: 'USD Coin', chain: 'Base' } as const;
+export const isCashSymbol = (symbol: string) => symbol.toUpperCase() === CASH.symbol;
+
+/**
+ * Picks with any USDC pick taken out as cash (2026-11-14): a published jar lists its
+ * cash as a USDC pick, and copying it keeps that share in USDC instead of swapping USDC
+ * for itself. Returns the other picks and the cash share (the USDC weight, or what the
+ * picks leave, whichever is more).
+ */
+export function cashOut<T extends { symbol: string; weight: number }>(
+  picks: readonly T[],
+  cashPct = 0,
+): { picks: T[]; cashPct: number } {
+  const rest = picks.filter((p) => !isCashSymbol(p.symbol));
+  const usdc = picks.filter((p) => isCashSymbol(p.symbol)).reduce((s, p) => s + p.weight, 0);
+  if (!rest.length) return { picks: [...picks], cashPct: 0 };
+  return { picks: rest, cashPct: Math.max(cashShare(rest, cashPct), Math.round(usdc)) };
+}
+
+/**
+ * The USDC a jar keeps, in dollars: what was set aside when it was bought, less what was
+ * sold. Jars bought before it was recorded (2026-11-14) kept it all the same (only the
+ * picks were routed), so theirs is worked out from their swaps: the legs paid the picks'
+ * share, and the cash is the rest in the same proportion.
+ */
+export function jarCash(jar: {
+  cash?: number;
+  cashPct?: number;
+  picks: readonly { weight: number }[];
+  buy?: readonly { usd: number }[];
+}): number {
+  if (jar.cash !== undefined) return Math.max(0, jar.cash);
+  if (!jar.buy?.length) return 0;
+  const picked = jar.picks.reduce((s, p) => s + p.weight, 0);
+  const cash = cashShare(jar.picks, jar.cashPct);
+  if (!(picked > 0) || !cash) return 0;
+  const bought = jar.buy.reduce((s, l) => s + l.usd, 0);
+  return +((bought * cash) / picked).toFixed(2);
+}
+
+/** A jar's split with its cash as a USDC slice (bar, rows, lists). */
+export const jarSplit = (jar: {
+  picks: readonly { symbol: string; weight: number }[];
+  cashPct?: number;
+}) => splitWithCash(jar.picks, jar.cashPct);
 
 export type ThesisInput = { text: string; amount: number; risk: Risk };
 
@@ -1376,6 +1430,11 @@ export function createThesisJar(
     order: OrderKind;
     /** Set when the jar was bought for real: its swaps. */
     buy?: import('@/lib/jar-buy').BuyLeg[];
+    /**
+     * Dollars kept in USDC (the cash share), when it was set aside rather than bought;
+     * else the cash share of your amount.
+     */
+    cash?: number;
     /** Set in advance when something (a proposal) must name the jar first. */
     id?: string;
     /** Set when this jar copies someone else's: who gets a cut of the profit. */
@@ -1418,6 +1477,16 @@ export function createThesisJar(
           ],
       picks: proposal.picks,
       buy: options.buy,
+      // The cash share is part of the jar (2026-11-14: a $1 jar of 60% XAUT and 40% USDC
+      // showed only its $0.60 of XAUT, and its value left the $0.40 out).
+      ...(cashShare(proposal.picks, proposal.cashPct)
+        ? {
+            cashPct: cashShare(proposal.picks, proposal.cashPct),
+            cash:
+              options.cash ??
+              +((share * cashShare(proposal.picks, proposal.cashPct)) / 100).toFixed(2),
+          }
+        : {}),
       copiedFrom: options.copiedFrom,
       sharedWallet: shared
         ? { walletId: shared.walletId, label: shared.label, proposalId: shared.proposalId }
@@ -1469,11 +1538,15 @@ export function updateJarBuy(id: string, buy: import('@/lib/jar-buy').BuyLeg[]) 
  * it's a real buy and never claims sample prices.
  */
 export function copyProposal(jar: ThesisJar, amount: number): Proposal {
+  // A USDC pick (a published jar's cash) is kept in USDC, not swapped (2026-11-14).
+  const { picks, cashPct } = cashOut(jar.picks, jar.cashPct);
   return {
     thesis: jar.thesis,
     amount,
     risk: 'Medium',
-    picks: jar.picks.map((p) => ({ ...p, reason: p.reason || `${p.weight}% of ${jar.name}` })),
+    // picks: jar.picks.map((p) => ({ ...p, reason: p.reason || `${p.weight}% of ${jar.name}` })),
+    picks: picks.map((p) => ({ ...p, reason: p.reason || `${p.weight}% of ${jar.name}` })),
+    cashPct: cashPct || undefined,
     unmatched: [],
     // Copy fees aren't charged yet: outside test mode, none is promised. Same rule as
     // lib/surface `COPY_FEES` (not imported: it pulls react-native into this pure module).

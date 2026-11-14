@@ -47,7 +47,7 @@ import { formatUsd } from '@/lib/mock-wallet';
 import { prepareSend } from '@/lib/send';
 import { serverNow } from '@/lib/server-clock';
 import type { TokenRef } from '@/lib/swap';
-import { type JarSell, type ThesisJar, thesisJars } from '@/lib/thesis';
+import { type JarSell, jarCash, type ThesisJar, thesisJars } from '@/lib/thesis';
 
 const USDC_ON_BASE = { symbol: 'USDC', chain: 'Base', assetId: USDC_BASE_ASSET } as const;
 
@@ -73,6 +73,8 @@ export function sellUnits(
   jar: Pick<ThesisJar, 'buy' | 'sells'>,
   frac: number,
   decimalsOf: (leg: BuyLeg) => number | undefined,
+  /** The jar keeps USDC too: holding no tokens still leaves that to sell. */
+  hasCash = false,
 ): { leg: BuyLeg; units: bigint; decimals: number }[] {
   if (buyMoving(jar)) throw new Error('This jar’s buy is still landing. Sell once it’s done.');
   if (!(frac > 0)) throw new Error('Enter an amount.');
@@ -89,7 +91,8 @@ export function sellUnits(
     if (extra > 0) units -= units % 10n ** BigInt(extra);
     if (units > 0n) out.push({ leg, units, decimals });
   }
-  if (!out.length) throw new Error('There’s nothing in this jar to sell yet.');
+  // if (!out.length) throw new Error('There’s nothing in this jar to sell yet.');
+  if (!out.length && !hasCash) throw new Error('There’s nothing in this jar to sell yet.');
   return out;
 }
 
@@ -118,7 +121,18 @@ export type JarSellQuote = {
   usdOutMin: number;
   /** A copied jar's creator fee on this sell (server-set, checked with 1Click); null when none. */
   copyFee: SellCopyFee | null;
+  /**
+   * Dollars of the jar's USDC (its cash share) this sell takes: USDC already, so nothing
+   * is swapped; it just leaves the jar. In `usdOut`, and in `amountOut` when sold for USDC.
+   */
+  cash: number;
 };
+
+/** The share `frac` of a jar's USDC, in dollars, rounded down to the cent (all of it at 1). */
+export function cashSold(cash: number, frac: number) {
+  if (!(cash > 0) || !(frac > 0)) return 0;
+  return frac >= 1 ? cash : Math.floor(cash * frac * 100) / 100;
+}
 
 /** One verified NEAR Intents quote per token, to `into` (USDC on Base unless picked). */
 export async function quoteJarSell(
@@ -133,10 +147,13 @@ export async function quoteJarSell(
     into === 'USDC' ? USDC_ON_BASE : swapRefForSymbol(tokens, into, SELL_INTO_CHAIN[into]);
   if (!buy) throw new Error(`${into} can’t be bought through NEAR Intents right now.`);
   const frac = sellFraction(usd, value);
+  // The jar's USDC goes out as it is (2026-11-14): nothing to swap.
+  const cash = cashSold(jarCash(jar), frac);
   const parts = sellUnits(
     jar,
     frac,
     (leg) => tokens.find((t) => t.assetId === leg.destinationAsset)?.decimals ?? leg.decimals,
+    cash > 0,
   );
   const dex = await Promise.all(
     parts.filter((p) => isDexLeg(p.leg)).map((p) => quoteDexSale(p.leg, p.units, buy, deps)),
@@ -179,13 +196,17 @@ export async function quoteJarSell(
     x.payout
       ? units(min ? x.payout.minAmountOut : x.payout.amountOut, x.payout.buyDecimals ?? 6)
       : units(min ? x.quoted.quote.minBuyAmount : x.quoted.quote.buyAmount, 6);
+  const dollars = into === 'USDC';
+  // Sold for USDC, the jar's own USDC is part of what you get; otherwise it stays USDC.
+  const kept = dollars ? cash : 0;
   const amountOut =
     swaps.reduce((s, x) => s + units(x.swap.amountOut, x.swap.buyDecimals ?? 6), 0) +
-    dex.reduce((s, x) => s + dexOut(x, false), 0);
+    dex.reduce((s, x) => s + dexOut(x, false), 0) +
+    kept;
   const amountOutMin =
     swaps.reduce((s, x) => s + units(x.swap.minAmountOut, x.swap.buyDecimals ?? 6), 0) +
-    dex.reduce((s, x) => s + dexOut(x, true), 0);
-  const dollars = into === 'USDC';
+    dex.reduce((s, x) => s + dexOut(x, true), 0) +
+    kept;
   return {
     jarId: jar.id,
     frac,
@@ -198,14 +219,27 @@ export async function quoteJarSell(
     usdOut: dollars
       ? amountOut
       : swaps.reduce((s, x) => s + usdExpected(x.swap), 0) +
-        dex.reduce((s, x) => s + (x.payout ? usdExpected(x.payout) : dexOut(x, false)), 0),
+        dex.reduce((s, x) => s + (x.payout ? usdExpected(x.payout) : dexOut(x, false)), 0) +
+        cash,
     usdOutMin: dollars
       ? amountOutMin
       : swaps.reduce((s, x) => s + usdMin(x.swap), 0) +
-        dex.reduce((s, x) => s + (x.payout ? usdMin(x.payout) : dexOut(x, true)), 0),
+        dex.reduce((s, x) => s + (x.payout ? usdMin(x.payout) : dexOut(x, true)), 0) +
+        cash,
     // copyFee: sellCopyFee(swaps.map((x) => x.swap.copyFee)),
     copyFee: sellCopyFee(swaps.flatMap((x) => x.swap.copyFees ?? [])),
+    cash,
   };
+}
+
+/** Takes `usd` of USDC out of a jar's cash (it was already in your wallet). */
+function releaseCash(jarId: string, usd: number) {
+  if (!(usd > 0)) return;
+  thesisJars.set((list) =>
+    list.map((j) =>
+      j.id === jarId ? { ...j, cash: Math.max(0, +(jarCash(j) - usd).toFixed(2)) } : j,
+    ),
+  );
 }
 
 /**
@@ -326,6 +360,8 @@ export async function executeJarSell(
     record(done.status);
     sent.push(done);
   }
+  // The jar's USDC: nothing to send, it's yours already. Released once the swaps went.
+  releaseCash(jar.id, q.cash);
   for (const sale of q.dex) {
     // const done = await sellDex(jar, sale, deps);
     // The same confirmation shows a re-quoted onward price before it's paid (nov14-c audit 3).

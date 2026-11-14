@@ -24,7 +24,7 @@ import { heldUsdc, isDexLeg } from '@/lib/jar-dex';
 import { livePrices } from '@/lib/market';
 import { usePolling } from '@/lib/polling';
 import { TEST_MODE } from '@/lib/test-mode';
-import { type JarSell, type ThesisJar, thesisJars } from '@/lib/thesis';
+import { type JarSell, jarCash, type ThesisJar, thesisJars } from '@/lib/thesis';
 
 const DAY = 86_400_000;
 /** About a year of daily marks, plus the first (the cost basis), is kept. */
@@ -85,11 +85,17 @@ export type PriceOf = (leg: BuyLeg) => { price: number; decimals: number } | nul
  * way counts at what it cost; one that came back counts for nothing either way.
  */
 export function valueJar(
-  jar: Pick<ThesisJar, 'buy' | 'sells'>,
+  // jar: Pick<ThesisJar, 'buy' | 'sells'>,
+  jar: Pick<ThesisJar, 'buy' | 'sells'> & Partial<Pick<ThesisJar, 'cash' | 'cashPct' | 'picks'>>,
   priceOf: PriceOf,
 ): { value: number; cost: number } | null {
-  let value = 0;
-  let cost = 0;
+  // let value = 0;
+  // let cost = 0;
+  // The USDC the jar keeps counts at what it is, in its value and its cost (2026-11-14:
+  // a $1 jar of $0.60 XAUT and $0.40 USDC read as $0.36 and -40%, not $0.76 and -24%).
+  const cash = jarCash({ picks: [], ...jar });
+  let value = cash;
+  let cost = cash;
   for (const leg of jar.buy ?? []) {
     if (LEG_RETURNED.has(leg.status)) continue;
     // USDC a DEX leg holds on the token's chain counts at what it is, so the jar total
@@ -160,6 +166,77 @@ export function pricer(
     return price && price > 0 ? { price, decimals } : null;
   };
 }
+
+/**
+ * What a real jar holds now, token by token (its symbol, as the jar names it): the units
+ * its swaps delivered less what was sold, and each one's value at `priceOf`. Legs still
+ * on their way count at what they cost; a DEX leg holding USDC at that USDC.
+ */
+export function jarHoldings(
+  jar: Pick<ThesisJar, 'buy' | 'sells'>,
+  priceOf: PriceOf,
+): Map<string, { units: number; usd: number | null }> {
+  const out = new Map<string, { units: number; usd: number | null }>();
+  const add = (symbol: string, units: number, usd: number | null) => {
+    const key = symbol.toUpperCase();
+    const was = out.get(key) ?? { units: 0, usd: 0 };
+    out.set(key, {
+      units: was.units + units,
+      usd: was.usd === null || usd === null ? null : was.usd + usd,
+    });
+  };
+  for (const leg of jar.buy ?? []) {
+    if (LEG_RETURNED.has(leg.status)) continue;
+    if (leg.status === 'HOLDING_USDC') {
+      add(leg.symbol, 0, heldUsdc(leg));
+      continue;
+    }
+    if (leg.status !== 'SUCCESS') {
+      add(leg.symbol, 0, leg.usd);
+      continue;
+    }
+    const held = heldUnits(leg, jar.sells);
+    if (held === 0n) continue;
+    const p = priceOf(leg);
+    const decimals = p?.decimals ?? leg.decimals;
+    if (decimals === undefined) continue;
+    const units = Number(held) / 10 ** decimals;
+    add(leg.symbol, units, p ? units * p.price : null);
+  }
+  return out;
+}
+
+/**
+ * Which of your jars hold each token (by symbol, upper case), for Home's token rows
+ * (2026-11-14: XAUT bought for a jar showed on Home with nothing saying so). A real jar
+ * holds what its swaps bought and haven't sold (or are still buying), and USDC when it
+ * keeps cash; a jar without swaps (test mode's samples) holds its picks.
+ */
+export function jarsHolding(jars: ThesisJar[]): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  const add = (symbol: string, name: string) => {
+    const key = symbol.toUpperCase();
+    const names = out.get(key) ?? [];
+    if (!names.includes(name)) out.set(key, [...names, name]);
+  };
+  for (const jar of jars) {
+    if (!jar.mine || jar.groupId || jar.sharedWallet) continue;
+    if (jar.buy?.length) {
+      for (const leg of jar.buy)
+        if (
+          !LEG_RETURNED.has(leg.status) &&
+          (leg.status !== 'SUCCESS' || heldUnits(leg, jar.sells) > 0n)
+        )
+          add(leg.symbol, jar.name);
+    } else if (TEST_MODE) for (const p of jar.picks) add(p.symbol, jar.name);
+    if (jarCash(jar) > 0) add('USDC', jar.name);
+  }
+  return out;
+}
+
+/** "In AI Bubble", or "In 2 jars": a token row's note for the jars holding it. */
+export const inJarsText = (names: string[] | undefined) =>
+  !names?.length ? null : names.length === 1 ? `In ${names[0]}` : `In ${names.length} jars`;
 
 /** Real jars of yours: bought with real swaps, not a group's or a shared wallet's. */
 const tracked = (j: ThesisJar) => j.mine && !!j.buy?.length && !j.groupId && !j.sharedWallet;

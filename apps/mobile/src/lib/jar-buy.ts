@@ -193,6 +193,53 @@ export type BuyLeg = {
 /** One leg that can't be quoted or paid, and why, in one plain line. */
 export type LegProblem = { symbol: string; reason: string };
 
+/**
+ * What one leg pays and what it gets, in dollars: what goes in, and the quote's
+ * guaranteed minimum out at 1Click's price (less the gas a DEX route pays).
+ */
+export type LegValue = { symbol: string; inUsd: number; outUsd: number };
+/** A leg losing more than this to fees and price impact is shown before Face ID. */
+export const WARN_LEG_LOSS = 0.05;
+/**
+ * A leg losing more than this doesn't go (2026-11-14: $0.60 of XAUT, only on Ethereum,
+ * came back as $0.36 and nothing said so). The review asks for an amount that keeps it
+ * under `WARN_LEG_LOSS` instead (lib/jar-minimum).
+ */
+export const MAX_LEG_LOSS = 0.15;
+/** The share of a leg lost to fees and price impact (0 when nothing goes in). */
+export const legLoss = (v: Pick<LegValue, 'inUsd' | 'outUsd'>) =>
+  v.inUsd > 0 ? Math.max(0, 1 - Math.max(0, v.outUsd) / v.inUsd) : 0;
+/** "You get ≈ $0.36 for $0.60": a leg's value, as the review says it. */
+export const legValueText = (v: Pick<LegValue, 'inUsd' | 'outUsd'>) =>
+  `You get ≈ $${Math.max(0, v.outUsd).toFixed(2)} for $${v.inUsd.toFixed(2)}`;
+
+/** Stops a buy, before anything is signed, when a leg would lose more than `MAX_LEG_LOSS`. */
+export function checkLegLoss(values: LegValue[]) {
+  const bad = values.filter((v) => legLoss(v) > MAX_LEG_LOSS);
+  if (bad.length)
+    throw new JarBuyError(
+      bad.map((v) => ({
+        symbol: v.symbol,
+        reason: `${legValueText(v)}. Buy more or pick another token.`,
+      })),
+    );
+}
+
+/**
+ * A jar's cash share as a route, for when another token pays: that share is bought as
+ * USDC on Base. Paid in USDC, the cash isn't routed at all; it stays where it is.
+ */
+export function cashRoute(usd: number): Route {
+  return {
+    symbol: 'USDC',
+    usd,
+    legs: [{ chain: 'Base', venue: 'NEAR Intents', usd, units: usd, assetId: USDC_BASE_ASSET }],
+    slippage: 0,
+    bridgeUsd: 0,
+    status: 'ok',
+  };
+}
+
 /** A jar buy that stopped: every leg that couldn't go, each with its reason. */
 export class JarBuyError extends Error {
   readonly legs: LegProblem[];
@@ -443,6 +490,11 @@ export async function quoteJarBuy(
   slippage: number,
   deps: Partial<JarBuyDeps> = {},
   payWith: TokenRef | null = null,
+  /**
+   * Dollars the jar keeps in USDC (its cash share), paid in USDC: never routed or
+   * swapped, but the wallet must hold them beside what the legs spend.
+   */
+  keepUsd = 0,
 ) {
   const d = { ...defaults, ...deps };
   const wallet = payer();
@@ -507,6 +559,15 @@ export async function quoteJarBuy(
   // Paid from whichever network holds the USDC (the wallet's live balances).
   const balances = await d.balances(wallet).catch(() => null);
   if (!balances) throw new Error('Couldn’t check your USDC. Try again in a moment.');
+  // The cash share stays in the wallet as USDC: it must be there too.
+  const keep = keepUsd > 0 ? toMicro(keepUsd) : 0n;
+  if (keep > 0n) {
+    const held = PAY_CHAINS.reduce((s, c) => s + (balances[c] ?? 0n), 0n);
+    if (held < total + keep)
+      throw new Error(
+        `You have ${usd(held)} in USDC; this buy needs ${usd(total + keep)}. Nothing was paid.`,
+      );
+  }
   // A DEX pick is paid from USDC on its own chain when the wallet holds enough there
   // (one swap, nothing crosses chains); the rest is carried there by NEAR Intents.
   const left: UsdcBalances = { ...balances };
@@ -662,10 +723,15 @@ export async function quoteJarBuy(
     throw new Error(`Buys are capped at $${capUsd > 0 ? capUsd.toFixed(0) : 0} for now.`);
   // The buy is signed without showing each quote, so a leg that would lose most of its
   // value to fees or a thin market stops it here, as a swap would be.
+  const values: LegValue[] = [];
   if (out.length) {
     const tokens = await withinTime(d.tokens(d.fetcher), STEP_MS, 'timed out').catch(() => null);
     if (!tokens) throw new Error('Couldn’t price this buy right now. Try again. Nothing was paid.');
-    checkValueKept(out, tokens);
+    // checkValueKept(out, tokens);
+    // Each leg's value for the review; a bridge carrying a DEX pick's USDC is valued by
+    // that pick's DEX swap below instead.
+    const kept = checkValueKept(out, tokens);
+    values.push(...kept.filter((_, i) => !legs[i]?.dex));
   }
   // DEX picks: a live quote for each (sold from the USDC that will be there: the bridge's
   // guaranteed minimum), checked, and held to the same floor.
@@ -714,6 +780,7 @@ export async function quoteJarBuy(
     const kept = price
       ? (Number(quoted.quote.minBuyAmount) / 10 ** p.decimals) * price
       : (p.planned?.best.minOutUsd ?? 0);
+    values.push({ symbol: p.symbol, inUsd: fromMicro(p.micro), outUsd: kept });
     if (!(kept >= fromMicro(p.micro) * MIN_VALUE_KEPT)) {
       dexProblems.push({
         symbol: p.symbol,
@@ -759,7 +826,10 @@ export async function quoteJarBuy(
     else out.push(leg);
   }
   if (dexProblems.length) throw new JarBuyError(dexProblems);
-  return { quote: quotes[0] as JarBuyQuote | undefined, quotes, legs: out };
+  // No leg may lose more than `MAX_LEG_LOSS`; each one's value goes to the review.
+  checkLegLoss(values);
+  // return { quote: quotes[0] as JarBuyQuote | undefined, quotes, legs: out };
+  return { quote: quotes[0] as JarBuyQuote | undefined, quotes, legs: out, values };
 }
 
 const notPayable = (ref: TokenRef) =>
@@ -904,8 +974,11 @@ async function quoteWithToken(
       pay,
     };
   });
-  checkValueKept(out, list, { decimals, price });
-  return { quote, quotes: [quote], legs: out };
+  // checkValueKept(out, list, { decimals, price });
+  // return { quote, quotes: [quote], legs: out };
+  const values = checkValueKept(out, list, { decimals, price });
+  checkLegLoss(values);
+  return { quote, quotes: [quote], legs: out, values };
 }
 
 /**
@@ -918,7 +991,8 @@ export function checkValueKept(
   tokens: PricedToken[],
   /** The paying token's decimals and price, when it isn't USDC. */
   paidIn?: { decimals: number; price: number },
-) {
+): LegValue[] {
+  const values: LegValue[] = [];
   for (const l of legs) {
     const token = tokens.find((t) => t.assetId === l.destinationAsset);
     const paid = atomic(l.amountIn);
@@ -931,7 +1005,9 @@ export function checkValueKept(
       throw new Error(
         `Fees would take more than half of the ${l.symbol} swap. Buy more or pick another token. Nothing was paid.`,
       );
+    values.push({ symbol: l.symbol, inUsd: paidUsd, outUsd: kept });
   }
+  return values;
 }
 
 /**

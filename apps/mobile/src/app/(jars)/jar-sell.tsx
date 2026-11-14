@@ -211,7 +211,16 @@ function JarSellSheet() {
           sell={{ available: cap }}
           initial={cap}
           header={
-            <StrategyCard split jar={jar} picks={jar.picks} name={jar.name} meta="Your jar" />
+            // <StrategyCard split jar={jar} picks={jar.picks} name={jar.name} meta="Your jar" />
+            // Its USDC share in the bar too (2026-11-14).
+            <StrategyCard
+              split
+              jar={jar}
+              picks={jar.picks}
+              cashPct={jar.cashPct}
+              name={jar.name}
+              meta="Your jar"
+            />
           }
           note="You pick what you get next"
           cta={(amount) => `Sell ${money.format(amount)}`}
@@ -270,6 +279,10 @@ function JarSellSheet() {
                       />
                     }
                   />
+                  {/* The jar's USDC isn't swapped: sold for something else, it stays USDC. */}
+                  {real && quote && quote.cash > 0 && into !== 'USDC' ? (
+                    <StatRow label="Kept in USDC" value={formatUsd(quote.cash)} />
+                  ) : null}
                   <StatRow
                     label="Network"
                     value={

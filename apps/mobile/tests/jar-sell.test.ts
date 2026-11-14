@@ -294,3 +294,39 @@ describe('executeJarSell', () => {
     expect(j?.sells?.map((s) => s.status)).toEqual(['KNOWN_DEPOSIT_TX', 'NOT_SENT']);
   });
 });
+
+describe('a jar that keeps USDC (2026-11-14)', () => {
+  // wNEAR and SOL bought for $10, and $4 kept in USDC: the jar is worth $17.
+  const withCash = (over: Partial<Jar> = {}) =>
+    jar({ picks: [], cashPct: 30, cash: 4, history: [14, 17], invested: 14, ...over });
+
+  it('sells its USDC as it is: nothing is swapped for it', async () => {
+    const all = await quoteJarSell(withCash(), 17, 17);
+    expect(all.cash).toBe(4);
+    // Two swaps (wNEAR, SOL), none for the USDC; it's part of what you get.
+    expect(quoteSwap).toHaveBeenCalledTimes(2);
+    expect(all.amountOut).toBeCloseTo(3.99 + 2.5 + 4, 6);
+    expect(all.amountOutMin).toBeCloseTo(3.95 + 2.475 + 4, 6);
+    const half = await quoteJarSell(withCash(), 8.5, 17);
+    expect(half.cash).toBe(2);
+  });
+
+  it('takes the USDC out of the jar once sold, and the jar goes when all of it is', async () => {
+    thesisJars.set([withCash()]);
+    const half = await quoteJarSell(withCash(), 8.5, 17);
+    await executeJarSell(withCash(), half, () => true, { confirm: async () => true });
+    expect(thesisJars.get()[0]?.cash).toBe(2);
+    thesisJars.set([withCash()]);
+    const all = await quoteJarSell(withCash(), 17, 17);
+    await executeJarSell(withCash(), all, () => true, { confirm: async () => true });
+    expect(thesisJars.get()).toEqual([]);
+  });
+
+  it('still sells the USDC when every token is gone', async () => {
+    const onlyCash = withCash({ buy: [leg({ status: 'REFUNDED' })] });
+    expect(sellUnits(onlyCash, 1, decimalsOf, true)).toEqual([]);
+    const q = await quoteJarSell(onlyCash, 4, 4);
+    expect(q.swaps).toEqual([]);
+    expect(q.usdOut).toBe(4);
+  });
+});

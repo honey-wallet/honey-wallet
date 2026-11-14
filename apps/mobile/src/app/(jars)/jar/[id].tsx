@@ -64,7 +64,8 @@ import {
 } from '@/lib/jar-chart';
 import { useDaoJar } from '@/lib/jar-dao';
 import { dexLegText } from '@/lib/jar-dex';
-import { useJarValues } from '@/lib/jar-holdings';
+// import { useJarValues } from '@/lib/jar-holdings';
+import { jarHoldings, pricer, useJarValues } from '@/lib/jar-holdings';
 import { livePrices, useLivePrices, useTokenChart } from '@/lib/market';
 import { formatUsd, RANGE_LABEL } from '@/lib/mock-wallet';
 import { approvalsLeft, useMultisig, useProposal } from '@/lib/multisig';
@@ -99,7 +100,20 @@ import {
 } from '@/lib/social';
 import { COPY_FEES, SOCIAL, SOON, SOON_OPACITY } from '@/lib/surface';
 import { TEST_MODE } from '@/lib/test-mode';
-import { jarReturn, jarValue, ME, type ThesisJar, updateJarBuy, useThesisJars } from '@/lib/thesis';
+// import { jarReturn, jarValue, ME, type ThesisJar, updateJarBuy, useThesisJars } from '@/lib/thesis';
+import {
+  CASH,
+  isCashSymbol,
+  type Pick as JarPick,
+  jarCash,
+  jarReturn,
+  jarSplit,
+  jarValue,
+  ME,
+  type ThesisJar,
+  updateJarBuy,
+  useThesisJars,
+} from '@/lib/thesis';
 import { showErrorToast } from '@/lib/toast';
 import { tokenColor } from '@/lib/token-colors';
 import { requireSignIn } from '@/lib/wallet-gate';
@@ -630,6 +644,31 @@ function JarBody({
   // Your jar's value at that point: today's value carried back along the line.
   const shown = last > 0 ? jarValue(jar) * (point / last) : jarValue(jar);
   const prices = useLivePrices();
+  // What it holds, slice by slice with its USDC (2026-11-14). Your real jar's rows are its
+  // swaps' tokens at live prices and the USDC it keeps; otherwise the slice of its value.
+  const held = jar.mine && jar.buy?.length ? jarHoldings(jar, pricer(null, prices)) : null;
+  const holdingRows = jarSplit(jar).map((slice) => {
+    const pick: JarPick = jar.picks.find((p) => p.symbol === slice.symbol) ?? {
+      symbol: CASH.symbol,
+      name: CASH.name,
+      chain: CASH.chain,
+      weight: slice.weight,
+      match: 'direct',
+      reason: '',
+      color: tokenColor(CASH.symbol),
+    };
+    const own = held?.get(slice.symbol.toUpperCase());
+    const cash = isCashSymbol(slice.symbol) ? jarCash(jar) : 0;
+    return {
+      pick: { ...pick, weight: slice.weight },
+      held: held
+        ? {
+            units: (own?.units ?? 0) + cash,
+            usd: own?.usd === null ? null : (own?.usd ?? 0) + cash,
+          }
+        : undefined,
+    };
+  });
   const period = active === 'All' ? 'since launch' : RANGE_LABEL[active];
   // The date under the finger: the line's points are spread evenly up to now.
   const dateAt = (i: number) =>
@@ -745,20 +784,26 @@ function JarBody({
           // The split everywhere else shows (Feed, How much?, Launch), then each holding.
           <>
             <View style={styles.split}>
+              {/* <SplitBar slices={jar.picks.map((p, i) => ({ symbol: p.symbol, weight: p.weight, color: tokenColor(p.symbol, i) }))} /> */}
+              {/* Its USDC is part of it (2026-11-14: a 60% XAUT, 40% USDC jar drew all gold). */}
               <SplitBar
-                slices={jar.picks.map((p, i) => ({
-                  symbol: p.symbol,
-                  weight: p.weight,
-                  color: tokenColor(p.symbol, i),
+                slices={holdingRows.map(({ pick }, i) => ({
+                  symbol: pick.symbol,
+                  weight: pick.weight,
+                  color: tokenColor(pick.symbol, i),
                 }))}
               />
             </View>
-            {jar.picks.map((p) => (
+            {/* {jar.picks.map((p) => (
+              <JarHoldingRow key={p.symbol} pick={p} total={shown} price={prices[p.symbol.toUpperCase()]} />
+            ))} */}
+            {holdingRows.map(({ pick, held }) => (
               <JarHoldingRow
-                key={p.symbol}
-                pick={p}
+                key={pick.symbol}
+                pick={pick}
                 total={shown}
-                price={prices[p.symbol.toUpperCase()]}
+                price={prices[pick.symbol.toUpperCase()]}
+                held={held}
               />
             ))}
           </>

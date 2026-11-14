@@ -28,7 +28,7 @@ import {
 } from '@/lib/share-links';
 import { createStore } from '@/lib/store';
 import { TEST_MODE } from '@/lib/test-mode';
-import { type Pick, type ThesisJar, thesisJars } from '@/lib/thesis';
+import { CASH, cashShare, isCashSymbol, type Pick, type ThesisJar, thesisJars } from '@/lib/thesis';
 import { tokenColor } from '@/lib/token-colors';
 
 /**
@@ -359,10 +359,30 @@ export async function toggleFollow(handle: string, followingNow?: boolean) {
 // ---------------------------------------------------------------------------
 // Jars
 
-/** Picks as the server wants them: symbol, chain and whole weights summing to 100. */
-export function socialPicks(picks: Pick[]) {
-  const total = picks.reduce((sum, p) => sum + p.weight, 0) || 1;
-  const scaled = picks.map((p) => ({
+/**
+ * Picks as the server wants them: symbol, chain and whole weights summing to 100. With
+ * `cashPct` (a jar's USDC share), the cash is published as a USDC pick on Base at its
+ * weight (2026-11-14: the picks were scaled up to 100%, so a copy bought 100% XAUT for a
+ * jar of 60% XAUT and 40% USDC). Without it, the picks are scaled to 100 as before.
+ */
+export function socialPicks(picks: Pick[], cashPct?: number) {
+  const cash = cashPct === undefined ? 0 : cashShare(picks, cashPct);
+  const withCash: { symbol: string; chain: string; weight: number }[] = cash
+    ? [
+        ...picks
+          .filter((p) => !isCashSymbol(p.symbol))
+          .map((p) => ({ symbol: p.symbol, chain: p.chain, weight: p.weight })),
+        {
+          symbol: CASH.symbol,
+          chain: CASH.chain,
+          weight:
+            cash +
+            picks.filter((p) => isCashSymbol(p.symbol)).reduce((sum, p) => sum + p.weight, 0),
+        },
+      ]
+    : picks;
+  const total = withCash.reduce((sum, p) => sum + p.weight, 0) || 1;
+  const scaled = withCash.map((p) => ({
     symbol: p.symbol,
     chain: p.chain,
     weight: Math.round((p.weight / total) * 100 * 100) / 100,
@@ -393,7 +413,8 @@ export async function publishJar(jar: ThesisJar): Promise<SocialJar | null> {
       clientId: jar.id,
       name: jar.name.slice(0, 60),
       thesis: jar.thesis.slice(0, 280),
-      picks: socialPicks(jar.picks),
+      // picks: socialPicks(jar.picks),
+      picks: socialPicks(jar.picks, jar.cashPct ?? 0),
       copyFee: Math.min(30, Math.max(0, Math.round(jar.copyFee))),
       // Only Everyone's jars are published now, and they show what they hold.
       // hidePicks: false,

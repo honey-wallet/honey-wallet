@@ -43,26 +43,36 @@ import { declaredCopyFees, REFRESH_FAILED } from '@/lib/intents-quote';
 // import { type BuyLeg, JarBuyError, payJarBuy, QuoteRanOut, quoteJarBuy } from '@/lib/jar-buy';
 import {
   type BuyLeg,
+  cashRoute,
   JarBuyError,
+  legValueText,
   payJarBuy,
   QuoteRanOut,
   quoteJarBuy,
   usdcByChain,
   wentOut,
 } from '@/lib/jar-buy';
-import { belowMinimum, useJarMinimum } from '@/lib/jar-minimum';
+// import { belowMinimum, useJarMinimum } from '@/lib/jar-minimum';
+import {
+  belowMinimum,
+  costlyLegs,
+  sampleCheck,
+  useJarMinimum,
+  withChoices,
+} from '@/lib/jar-minimum';
 import { blockedRoutes, describeRoute, useRoutes } from '@/lib/jar-routes';
 import { useBasketChart, useTokenChart } from '@/lib/market';
 import { formatUsd } from '@/lib/mock-wallet';
 import { memberName, propose, useActiveMultisig } from '@/lib/multisig';
 import { SHEET_EXIT } from '@/lib/navigation';
-import { jarPayWith, jarPayWithChosen } from '@/lib/pay-with';
+import { isUsdc, jarPayWith, jarPayWithChosen } from '@/lib/pay-with';
 import { refreshAfterChange } from '@/lib/portfolio';
 import { useProfile } from '@/lib/profile';
 import { JAR_VISIBILITY, settings, useSettings } from '@/lib/settings';
 import { COPY_FEES } from '@/lib/surface';
 import { TEST_MODE } from '@/lib/test-mode';
 import {
+  cashOut,
   copyProposal,
   createThesisJar,
   hostOf,
@@ -142,9 +152,16 @@ export default function NewThesisSheet() {
     if (!openAt) return null;
     const draft = chatDraft.get();
     if (copied) {
+      // const same =
+      //   draft?.thesis === copied.thesis &&
+      //   draft.picks.map((p) => p.symbol).join() === copied.picks.map((p) => p.symbol).join();
+      // A copy's draft keeps a USDC pick as cash (lib/thesis `copyProposal`).
       const same =
         draft?.thesis === copied.thesis &&
-        draft.picks.map((p) => p.symbol).join() === copied.picks.map((p) => p.symbol).join();
+        draft.picks.map((p) => p.symbol).join() ===
+          cashOut(copied.picks, copied.cashPct)
+            .picks.map((p) => p.symbol)
+            .join();
       return same && draft ? draft : copyProposal(copied, settings.get().copyAmount);
     }
     if (copy) return null;
@@ -218,10 +235,24 @@ export default function NewThesisSheet() {
   const { jarSlippage: maxSlip } = useSettings();
   // Edit split can take a token to 0%: it stays listed (to step back up) but isn't bought,
   // and is left out of the jar on Continue.
-  const kept = (proposal?.picks ?? []).filter((p) => p.weight > 0);
+  // const kept = (proposal?.picks ?? []).filter((p) => p.weight > 0);
+  // The cash share (the strategy's USDC, or a copied jar's USDC pick) is part of the jar
+  // but never swapped for itself: paid in USDC, it just stays in the wallet (2026-11-14).
+  const split = cashOut(
+    (proposal?.picks ?? []).filter((p) => p.weight > 0),
+    proposal?.cashPct,
+  );
+  const kept = split.picks;
+  const cashPct = split.cashPct;
+  const cashUsd = +((spend * cashPct) / 100).toFixed(2);
+  const payWith = jarPayWith.useValue();
+  const payingUsdc = !payWith || isUsdc(payWith);
   // Each pick's buy split across chains, for the amount on the keypad: live venues when
   // the server answers.
-  const { routes, live: liveRoutes } = useRoutes(kept, spend, maxSlip / 100);
+  // const { routes, live: liveRoutes } = useRoutes(kept, spend, maxSlip / 100);
+  const { routes: pickRoutes, live: liveRoutes } = useRoutes(kept, spend, maxSlip / 100);
+  // Paid with another token, the cash share is bought as USDC on Base like any leg.
+  const routes = cashUsd > 0 && !payingUsdc ? [...pickRoutes, cashRoute(cashUsd)] : pickRoutes;
   // Real money: every pick must have a payable route before review can go on. In test
   // mode the sample venues are always payable (nothing real is bought).
   const blocked = TEST_MODE ? [] : blockedRoutes(routes);
@@ -355,9 +386,21 @@ export default function NewThesisSheet() {
     balances: usdcByChain(held),
     wallet: activeWallet,
   });
-  const tooSmall = belowMinimum(proposal?.amount ?? 0, minimumCheck.minimum);
+  // Test mode quotes nothing: the sample routes' own costs stand in, so the review reads
+  // the same (each leg's value, its warning, Add at least).
+  const check =
+    TEST_MODE && step === 'jar' ? { checking: false, ...sampleCheck(routes) } : minimumCheck;
+  // Each pick bought on the chain that quoted the most (an L2 over Ethereum when small).
+  const buyRoutes = withChoices(routes, check.choices);
+  // Legs losing more than 5% to fees and price impact, said before Face ID.
+  const costly = costlyLegs(check.legs);
+  // const tooSmall = belowMinimum(proposal?.amount ?? 0, minimumCheck.minimum);
+  const tooSmall = belowMinimum(proposal?.amount ?? 0, check.minimum);
+  // The jar as it's saved: the picks bought, and the cash share kept in USDC.
+  const jarProposal = proposal ? { ...proposal, picks: kept, cashPct: cashPct || undefined } : null;
   const create = async () => {
-    if (!proposal || buying) return;
+    // if (!proposal || buying) return;
+    if (!proposal || !jarProposal || buying) return;
     tap();
     // Never pay (or propose) part of a jar: every pick needs a payable route first.
     if (blocked.length) {
@@ -374,13 +417,15 @@ export default function NewThesisSheet() {
         picks: proposal.picks.map((x) => x.symbol),
         usd: proposal.amount,
         // A shared jar on NEAR quotes and proposes these live routes.
-        legs: routes.flatMap((r) =>
+        // legs: routes.flatMap((r) =>
+        legs: buyRoutes.flatMap((r) =>
           r.legs
             .filter((l) => l.assetId && l.usd > 0)
             .map((l) => ({ destinationAsset: l.assetId as string, usd: l.usd })),
         ),
       });
-      createThesisJar(proposal, {
+      // createThesisJar(proposal, {
+      createThesisJar(jarProposal, {
         id,
         name: jarName,
         visibility,
@@ -461,11 +506,21 @@ export default function NewThesisSheet() {
           // const quoted = await quoteJarBuy(routes, maxSlip / 100, {}, jarPayWith.get()).catch(
           // A copy of someone's published jar: the server records its cost for their fee.
           const copyOf = copied && !copied.mine ? copiedJarId({ copiedFrom }) : undefined;
+          // const quoted = await quoteJarBuy(
+          //   routes,
+          //   maxSlip / 100,
+          //   copyOf ? { copyOf } : {},
+          //   jarPayWith.get(),
+          // ).catch((e: unknown) => {
+          // Each pick on the chain that quoted the most; paid in USDC, the cash share
+          // stays in the wallet (and must be there).
+          const paying = jarPayWith.get();
           const quoted = await quoteJarBuy(
-            routes,
+            buyRoutes,
             maxSlip / 100,
             copyOf ? { copyOf } : {},
-            jarPayWith.get(),
+            paying,
+            !paying || isUsdc(paying) ? cashUsd : 0,
           ).catch((e: unknown) => {
             throw again ? new Error(REFRESH_FAILED) : e;
           });
@@ -477,6 +532,16 @@ export default function NewThesisSheet() {
               key: `route-${l.symbol}`,
               text: `${l.holdAs ?? l.symbol}: ${l.why}`,
             }));
+          // A leg losing more than 5% to fees says what it gets, before Face ID (more than
+          // 15% stopped the quote already).
+          routeLines = [
+            ...routeLines,
+            ...costlyLegs(quoted.values).map((v) => ({
+              key: `value-${v.symbol}`,
+              text: `${v.symbol}: ${legValueText(v)}`,
+              error: true,
+            })),
+          ];
           // Paying with tokens copied from someone's jar pays their creator's fee: shown
           // before Face ID, and named in its prompt (audit H3).
           const copyFee = sellCopyFee(
@@ -541,7 +606,11 @@ export default function NewThesisSheet() {
       // The payment leaves now; the tokens follow as each swap settles (lib/in-flight).
       refreshAfterChange(activeWallet);
     }
-    const id = createThesisJar(proposal, { ...options, buy });
+    // const id = createThesisJar(proposal, { ...options, buy });
+    // Paid in USDC, the cash share was set aside, not swapped: the jar keeps it. Paid
+    // with another token, it was bought as a USDC leg, which the jar holds instead.
+    const paidInToken = real && !!buy?.some((l) => l.symbol === 'USDC' && l.pay);
+    const id = createThesisJar(jarProposal, { ...options, buy, cash: paidInToken ? 0 : cashUsd });
     showToast(toast);
     openJar(id);
     // A jar others can see is a post: once it's bought, ask for the words it leads with
@@ -625,6 +694,7 @@ export default function NewThesisSheet() {
                   split
                   jar={copied}
                   picks={proposal.picks}
+                  cashPct={proposal.cashPct}
                   name={copied?.name ?? proposal.thesis}
                   meta={
                     copied
@@ -721,7 +791,13 @@ export default function NewThesisSheet() {
           onDone={(amount) => {
             tap();
             // A token stepped down to 0% is left out of the jar.
-            setProposal({ ...withAmount(proposal, amount), picks: kept });
+            // setProposal({ ...withAmount(proposal, amount), picks: kept });
+            // A USDC pick goes on as the cash share it is.
+            setProposal({
+              ...withAmount(proposal, amount),
+              picks: kept,
+              cashPct: cashPct || undefined,
+            });
             setStep('jar');
           }}
         />
@@ -764,7 +840,7 @@ export default function NewThesisSheet() {
                       ? 'Name your jar'
                       : friends.length
                         ? inviteLabel(friends.length, share)
-                        : minimumCheck.checking
+                        : check.checking
                           ? 'Checking routes…'
                           : tooSmall
                             ? tooSmall.label
@@ -774,8 +850,11 @@ export default function NewThesisSheet() {
                               : `Buy ${usdText.format(proposal.amount).replace(/\.00$/, '')} and launch`
               }
               // disabled={!name.trim() || buying || blocked.length > 0}
+              // disabled={
+              //   !name.trim() || buying || blocked.length > 0 || minimumCheck.checking || !!tooSmall
+              // }
               disabled={
-                !name.trim() || buying || blocked.length > 0 || minimumCheck.checking || !!tooSmall
+                !name.trim() || buying || blocked.length > 0 || check.checking || !!tooSmall
               }
               onPress={() => void create()}
             />
@@ -790,7 +869,9 @@ export default function NewThesisSheet() {
         <View style={styles.gap}>
           {/* The split first, then its name in a field of its own: "Name your jar" is the
               field's own placeholder, so it reads as a box to fill without a heading. */}
-          <StrategyCard split picks={proposal.picks} name={name.trim()} />
+          {/* <StrategyCard split picks={proposal.picks} name={name.trim()} /> */}
+          {/* The cash share drawn and listed with the picks. */}
+          <StrategyCard split picks={kept} cashPct={cashPct} name={name.trim()} />
           <TextInput
             value={name}
             onChangeText={setName}
@@ -926,6 +1007,19 @@ export default function NewThesisSheet() {
           </View> */}
           {/* What it costs on top of the tokens, as review rows. */}
           <View style={styles.rows}>
+            {/* Each leg: what you get (the quote's minimum, in dollars) for what you pay,
+                from the dry quotes (2026-11-14: $0.60 of XAUT bought $0.36, unsaid). */}
+            {check.legs.map((v) => (
+              <StatRow
+                key={`value-${v.symbol}`}
+                label={v.symbol}
+                value={`≈ ${formatUsd(Math.max(0, v.outUsd))} for ${formatUsd(v.inUsd)}`}
+              />
+            ))}
+            {/* Paid in USDC, the cash share isn't swapped: it stays as it is. */}
+            {cashUsd > 0 && payingUsdc ? (
+              <StatRow label="Kept in USDC" value={formatUsd(cashUsd)} />
+            ) : null}
             {bridgeUsd > 0 ? <StatRow label="Network" value={`≈ ${formatUsd(bridgeUsd)}`} /> : null}
             {/* Real jars learn their fees from each swap's quote, after this step: say so
                 instead of a $0.00 that reads as "free". */}
@@ -949,6 +1043,15 @@ export default function NewThesisSheet() {
             ))}
             {liveRoutes ? null : <StatRow label="Routes" value="Sample" />}
             {tooSmall && !buying ? <Text style={styles.warn}>{tooSmall.line}</Text> : null}
+            {/* A leg losing more than 5% says so before Face ID; over 15% Buy asks for
+                more (Add at least) instead. */}
+            {buying
+              ? null
+              : costly.map((v) => (
+                  <Text key={`costly-${v.symbol}`} style={styles.warn}>
+                    {v.symbol}: {legValueText(v)}
+                  </Text>
+                ))}
             {warningOn('strategyFeesWarning') &&
             impactUsd + bridgeUsd > proposal.amount * 0.05 &&
             proposal.amount > 0 ? (

@@ -31,7 +31,15 @@ import { formatBalance, formatUsd, tokenName } from '@/lib/mock-wallet';
 import { useProfile } from '@/lib/profile';
 import { COPY_FEES } from '@/lib/surface';
 import { TEST_MODE } from '@/lib/test-mode';
-import { jarReturn, jarValue, type Pick, splitWithCash, type ThesisJar } from '@/lib/thesis';
+// import { jarReturn, jarValue, type Pick, splitWithCash, type ThesisJar } from '@/lib/thesis';
+import {
+  jarReturn,
+  jarSplit,
+  jarValue,
+  type Pick,
+  splitWithCash,
+  type ThesisJar,
+} from '@/lib/thesis';
 import { tokenColor } from '@/lib/token-colors';
 import { useTokenLogo } from '@/lib/token-logos';
 import { makeStyles, radius, useTheme } from '@/theme';
@@ -592,18 +600,34 @@ export function JarHoldingRow({
   pick,
   total,
   price,
+  held,
 }: {
   pick: Pick;
   /** The jar's value; this holding is its share of it. */
   total: number;
   /** The token's live price, for the amount; without one the share stands in. */
   price?: number;
+  /**
+   * What a real jar holds of it (lib/jar-holdings `jarHoldings`, plus its USDC): its units
+   * and their value. Before 14 Nov the row was always its share of the jar's value, so
+   * 0.000093 XAUT held read as 0.000056.
+   */
+  held?: { units: number; usd: number | null };
 }) {
   const info = useTokenInfo(pick.symbol, !TEST_MODE).info;
   const name =
     info?.name || (pick.name && pick.name !== pick.symbol ? pick.name : tokenName(pick.symbol));
-  const usd = (total * pick.weight) / 100;
-  const amount = price && price > 0 ? usd / price : null;
+  // const usd = (total * pick.weight) / 100;
+  // const amount = price && price > 0 ? usd / price : null;
+  const share = (total * pick.weight) / 100;
+  const usd = held?.usd ?? share;
+  const amount = held
+    ? held.units > 0
+      ? held.units
+      : null
+    : price && price > 0
+      ? usd / price
+      : null;
   return (
     <AssetRow
       icon={<PickIcon pick={pick} size={40} />}
@@ -695,7 +719,13 @@ export function JarRow({ jar, gutter, rank }: { jar: ThesisJar; gutter: number; 
   const styles = useStyles();
   const ret = jarReturn(jar);
   const hidden = !layersOf(jar);
-  const tokens = hidden ? 'Holdings hidden' : jar.picks.map((p) => p.symbol).join(', ');
+  // const tokens = hidden ? 'Holdings hidden' : jar.picks.map((p) => p.symbol).join(', ');
+  // Its USDC too (2026-11-14: "Just you · XAUT" for a jar that is 40% USDC).
+  const tokens = hidden
+    ? 'Holdings hidden'
+    : jarSplit(jar)
+        .map((p) => p.symbol)
+        .join(', ');
   return (
     <PressableRow
       accessibilityRole="button"
@@ -933,7 +963,8 @@ export function JarCard({ jar }: { jar: ThesisJar }) {
       {/* Cash included, so a jar holding some USDC never draws the rest wider. */}
       {hidden ? null : (
         <Mix
-          picks={splitWithCash(jar.picks).map((p, i) => ({
+          // picks={splitWithCash(jar.picks).map((p, i) => ({
+          picks={jarSplit(jar).map((p, i) => ({
             symbol: p.symbol,
             weight: p.weight,
             color: jar.picks.find((x) => x.symbol === p.symbol)?.color ?? tokenColor(p.symbol, i),

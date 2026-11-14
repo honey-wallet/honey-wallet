@@ -68,6 +68,7 @@ import { openBuy } from '@/lib/buy';
 import { SHOW_DEMO_LABELS } from '@/lib/demo-money-copy';
 import { useMoney } from '@/lib/fx';
 import { tap } from '@/lib/haptics';
+import { inJarsText, jarsHolding } from '@/lib/jar-holdings';
 import { LOADS } from '@/lib/loads';
 import { useHoldingsChart } from '@/lib/market';
 import { BALANCE_HISTORY, EARN } from '@/lib/mock-wallet';
@@ -210,7 +211,12 @@ function HomeScreen() {
   // An empty wallet, as on Uniswap's Home: Explore (the top tokens) instead of an empty
   // Tokens list, and only the sections that have something in them.
   const exploring = empty && !failed && !multisig;
-  const hasJars = useThesisJars().some((j) => j.mine);
+  // const hasJars = useThesisJars().some((j) => j.mine);
+  const jars = useThesisJars();
+  const hasJars = jars.some((j) => j.mine);
+  // Tokens one of your jars holds say which (a shared wallet's balances aren't a jar's).
+  const inJars = multisig ? null : jarsHolding(jars);
+  const inJarOf = (symbol: string) => inJarsText(inJars?.get(symbol.toUpperCase()));
   const pastActivity = (usePortfolio(wallet, exploring).activity?.length ?? 0) > 0;
   // const sections = SECTIONS.filter(
   //   (s) =>
@@ -651,7 +657,12 @@ function HomeScreen() {
                   )}
                   {visible.map((token, i) => (
                     <Rise key={token.symbol} index={8 + i}>
-                      <TokenRow token={token} onPress={() => open(tokenHref(token.symbol))} />
+                      {/* <TokenRow token={token} onPress={() => open(tokenHref(token.symbol))} /> */}
+                      <TokenRow
+                        token={token}
+                        inJar={inJarOf(token.symbol)}
+                        onPress={() => open(tokenHref(token.symbol))}
+                      />
                     </Rise>
                   ))}
                   {hidden.length > 0 && (
@@ -669,6 +680,7 @@ function HomeScreen() {
                               <TokenRow
                                 key={token.symbol}
                                 token={token}
+                                inJar={inJarOf(token.symbol)}
                                 onPress={() => open(tokenHref(token.symbol))}
                               />
                             ))}

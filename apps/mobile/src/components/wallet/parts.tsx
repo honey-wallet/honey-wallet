@@ -271,8 +271,19 @@ export function AssetRow({
   );
 }
 
-export function TokenRow({ token, onPress }: { token: Token; onPress?: () => void }) {
+// export function TokenRow({ token, onPress }: { token: Token; onPress?: () => void }) {
+export function TokenRow({
+  token,
+  onPress,
+  inJar,
+}: {
+  token: Token;
+  onPress?: () => void;
+  /** "In AI Bubble": the jars of yours holding it, after the amount (lib/jar-holdings). */
+  inJar?: string | null;
+}) {
   const money = useMoney();
+  const amount = `${token.amount.toLocaleString('en-US', { maximumFractionDigits: 6 })} ${token.symbol}`;
   return (
     <AssetRow
       // icon={<TokenIcon symbol={token.symbol} />}
@@ -284,7 +295,8 @@ export function TokenRow({ token, onPress }: { token: Token; onPress?: () => voi
         </View>
       }
       title={token.name}
-      subtitle={`${token.amount.toLocaleString('en-US', { maximumFractionDigits: 6 })} ${token.symbol}`}
+      // subtitle={`${token.amount.toLocaleString('en-US', { maximumFractionDigits: 6 })} ${token.symbol}`}
+      subtitle={inJar ? `${amount} · ${inJar}` : amount}
       value={money.format(token.usd)}
       detail={<Change value={token.change} />}
       onPress={onPress}
