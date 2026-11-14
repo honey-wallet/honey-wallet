@@ -961,7 +961,9 @@ function JarBody({
         <StatRow
           icon={<Icon name="layersOutline" size={15} color={c.textSecondary} />}
           label="Tokens"
-          value={jar.holdingsHidden ? '—' : String(jar.picks.length)}
+          /* Counts the jar's USDC too, as its rows above do (14 Nov). Was:
+             value={jar.holdingsHidden ? '—' : String(jar.picks.length)} */
+          value={jar.holdingsHidden ? '—' : String(holdingRows.length)}
         />
       </View>
 
