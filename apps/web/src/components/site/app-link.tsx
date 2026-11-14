@@ -7,7 +7,10 @@ import { LiquidButton } from '../liquid/components/ui/liquid-button';
  * Honey's public TestFlight link (14 Nov): on Apple devices the call to action opens it instead
  * of the waitlist. Empty until the link exists; set it here or with NEXT_PUBLIC_TESTFLIGHT_URL.
  */
-export const TESTFLIGHT_URL = process.env.NEXT_PUBLIC_TESTFLIGHT_URL ?? '';
+// export const TESTFLIGHT_URL = process.env.NEXT_PUBLIC_TESTFLIGHT_URL ?? '';
+/** Beta Users' public TestFlight link (created 14 Nov); the env var overrides it. */
+export const TESTFLIGHT_URL =
+  process.env.NEXT_PUBLIC_TESTFLIGHT_URL ?? 'https://testflight.apple.com/join/5krzqTCR';
 
 /** iPhone, iPad or Mac, where TestFlight runs. iPads report themselves as Macs. */
 function useApple() {
