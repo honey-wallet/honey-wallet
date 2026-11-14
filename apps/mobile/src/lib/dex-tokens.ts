@@ -126,6 +126,9 @@ export const validAddress = (chain: DexChain, a: unknown): a is string =>
   typeof a === 'string' && (chain === 'Solana' ? ADDRESS.test(a) : isAddress(a));
 export const text = (v: unknown, max = 256): v is string =>
   typeof v === 'string' && v.length > 0 && v.length <= max;
+/** Invisible, format or direction characters (zero-width, bidi overrides) or controls. */
+// biome-ignore lint/suspicious/noControlCharactersInRegex: intentional look-alike filter
+export const hasHidden = (s: string) => /[\p{Cf}\p{Cc}]/u.test(s.normalize('NFKC'));
 export const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
 
 /** Well-formed entries of `GET /dex/tokens`; anything else is dropped. */
@@ -142,6 +145,8 @@ export function parseDexTokens(body: unknown): DexToken[] {
       !chain ||
       !validAddress(chain, t.address) ||
       !text(t.symbol, 32) ||
+      // A ticker with invisible or direction characters can't be shown honestly (15 Nov).
+      hasHidden(t.symbol) ||
       typeof t.decimals !== 'number' ||
       !Number.isInteger(t.decimals) ||
       t.decimals < 0 ||
@@ -155,7 +160,9 @@ export function parseDexTokens(body: unknown): DexToken[] {
       chain,
       address: chain === 'Solana' ? t.address : getAddress(t.address),
       symbol: t.symbol,
-      name: text(t.name, 128) ? t.name : t.symbol,
+      // name: text(t.name, 128) ? t.name : t.symbol,
+      // A name with invisible or direction characters falls back to the ticker.
+      name: text(t.name, 128) && !hasHidden(t.name) ? t.name : t.symbol,
       decimals: t.decimals,
       ...(text(t.logoUrl, 512) && t.logoUrl.startsWith('https://') ? { logoUrl: t.logoUrl } : {}),
       priceUsd: t.priceUsd as number,
@@ -591,6 +598,8 @@ export function dexMarketRows(
     if (name) bump(`n:${name}`);
   }
   const shared = (t: DexToken) =>
+    hasHidden(t.symbol) ||
+    hasHidden(t.name) ||
     !isPlainAscii(foldName(t.symbol)) ||
     !isPlainAscii(foldName(t.name)) ||
     (count.get(`s:${foldName(t.symbol)}`) ?? 0) > 1 ||

@@ -65,11 +65,22 @@ describe('long-tail tokens in Search (15 Nov)', () => {
     ]);
   });
 
+  it('drops a ticker with hidden characters and shows the ticker for such a name', () => {
+    const tokens = dex.parseDexTokens({
+      tokens: [
+        row('base', AERO, 'US\u200BDC'),
+        row('base', GRAIL, '\u202EUSDC'),
+        { ...row('solana', JTO, 'JTO'), name: 'Jito\u202Egnp' },
+      ],
+    });
+    expect(tokens.map((t) => [t.symbol, t.name])).toEqual([['JTO', 'JTO']]);
+  });
+
   it('folds invisible characters and flags non-ASCII look-alikes', () => {
     const live = [{ symbol: 'USDC', name: 'USD Coin' }];
     const tokens = [
-      // A zero-width space and full-width letters fold to the listed ticker.
-      listed(row('base', AERO, 'US\u200BDＣ')),
+      // Full-width letters fold to the listed ticker.
+      listed(row('base', AERO, 'USDＣ')),
       // A Cyrillic С: never equal after folding, flagged as non-ASCII instead.
       listed(row('arbitrum', GRAIL, 'USD\u0421')),
       listed(row('solana', JTO, 'JTO')),
