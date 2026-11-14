@@ -62,7 +62,8 @@ fn universe_folds_wrappers_and_drops_junk() {
     assert!(u.iter().all(|c| shortlist::honey_chain(&c.asset.chain)));
     assert!(u.iter().all(|c| !c.ticker.contains("DEPRECATED")));
     let tiny = u.iter().find(|c| c.ticker == "TINY").unwrap();
-    assert!(!tiny.liquid(), "under $20M market cap");
+    // assert!(!tiny.liquid(), "under $20M market cap");
+    assert!(!tiny.liquid(), "$20k daily volume and no DEX pool figures");
     let usdc = u.iter().find(|c| c.ticker == "USDC").unwrap();
     assert!(usdc.liquid());
     let nvda = u.iter().find(|c| c.ticker == "NVDAON").unwrap();
@@ -1100,4 +1101,220 @@ async fn dex_picks_are_quoted_on_the_dex_and_the_rest_on_1click() {
         dex: None,
     };
     assert!(off.dry_quote(usdc, aero, 25_000_000).await.is_err());
+}
+
+/// A long-tail DEX token: no CoinGecko id, figures from its pools.
+fn long_tail_view(
+    chain: crate::dex::DexChain,
+    n: u32,
+    symbol: &str,
+    name: &str,
+    liquidity: f64,
+    volume: f64,
+) -> crate::dex::TokenView {
+    let address = match chain {
+        // One Solana token per test: a real mint, so the address parses.
+        crate::dex::DexChain::Solana => "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN".to_string(),
+        _ => format!("0x{n:040x}"),
+    };
+    let mut v = dex_view(chain, &address, symbol, None, None, true);
+    v.name = name.into();
+    v.liquidity_usd = Some(liquidity);
+    v.volume24h_usd = Some(volume);
+    v.market_cap_usd = None;
+    v
+}
+
+fn long_tail_universe(dex: &[crate::dex::TokenView]) -> Vec<shortlist::Coin> {
+    let merged = registry::merge_dex(assets(), dex);
+    assert_eq!(
+        merged.len(),
+        assets().len() + dex.len(),
+        "every token merged"
+    );
+    universe(&merged, Some(&coins()))
+}
+
+#[test]
+fn long_tail_dex_tokens_qualify_at_high_risk_on_their_pools() {
+    use crate::dex::DexChain::Base;
+    let u = long_tail_universe(&[
+        long_tail_view(Base, 1, "LAB", "Agent Lab", 30_000.0, 8_000.0),
+        long_tail_view(Base, 2, "THIN", "Thin Pool", 10_000.0, 8_000.0),
+        long_tail_view(Base, 3, "QUIET", "Quiet Pool", 30_000.0, 1_000.0),
+    ]);
+    let coin = |t: &str| u.iter().find(|c| c.ticker == t).unwrap();
+    let lab = coin("LAB");
+    assert!(lab.long_tail());
+    assert_eq!(lab.liquidity_usd, Some(30_000.0));
+    assert!(lab.allowed_at(Risk::High), "$30k liquidity, $8k volume");
+    assert!(!lab.allowed_at(Risk::Medium));
+    assert!(!lab.allowed_at(Risk::Low));
+    // Dust: too shallow, or barely traded.
+    assert!(!coin("THIN").allowed_at(Risk::High));
+    assert!(!coin("QUIET").allowed_at(Risk::High));
+
+    // A known market cap under $1M refuses it; from $1M it may pass on its pools.
+    let mut small = long_tail_view(Base, 4, "SMOL", "Smol", 30_000.0, 8_000.0);
+    small.market_cap_usd = Some(500_000.0);
+    let mut ok = long_tail_view(Base, 5, "MIDL", "Midl", 30_000.0, 8_000.0);
+    ok.market_cap_usd = Some(2_000_000.0);
+    let u = long_tail_universe(&[small, ok]);
+    let coin = |t: &str| u.iter().find(|c| c.ticker == t).unwrap();
+    assert!(!coin("SMOL").allowed_at(Risk::High));
+    assert!(coin("MIDL").allowed_at(Risk::High));
+    assert!(!coin("MIDL").allowed_at(Risk::Medium));
+
+    // The line the pick and critic steps read states chain, liquidity and volume.
+    let line = lab.line();
+    assert!(line.contains("bought on a DEX on Base"), "{line}");
+    assert!(line.contains("DEX liquidity $30K"), "{line}");
+    assert!(line.contains("24h volume $8K"), "{line}");
+    assert!(line.contains("not listed on CoinGecko"), "{line}");
+    // Coins CoinGecko knows keep their line.
+    let render = universe(&assets(), Some(&coins()))
+        .into_iter()
+        .find(|c| c.ticker == "RENDER")
+        .unwrap();
+    assert_eq!(
+        render.line(),
+        "RENDER | Render | token | price $7.00 | market cap $3.6B | 24h volume $100M | 24h +1.0%"
+    );
+}
+
+#[test]
+fn long_tail_tokens_are_found_by_name_symbol_and_chain() {
+    use crate::dex::DexChain::{Base, Solana};
+    let u = long_tail_universe(&[
+        long_tail_view(Base, 1, "LAB", "Agent Lab AI", 40_000.0, 9_000.0),
+        long_tail_view(Solana, 2, "SAGENT", "Solana AI Agent", 900_000.0, 90_000.0),
+        long_tail_view(Base, 3, "DUSTY", "AI Agent Dust", 4_000.0, 9_000.0),
+        long_tail_view(Base, 4, "BRUH", "Bruh", 60_000.0, 9_000.0),
+        long_tail_view(Base, 5, "AGENTS", "Swarm", 50_000.0, 9_000.0),
+        // Two long-tail tokens called AI: one candidate, the deeper one.
+        long_tail_view(Base, 6, "AI", "Shallow", 30_000.0, 9_000.0),
+        long_tail_view(Base, 7, "AI", "Deep", 3_000_000.0, 90_000.0),
+    ]);
+    let exposures = vec![
+        Exposure {
+            label: "Base AI agent tokens".into(),
+            instruments: vec!["AI".into()],
+            category: Some("ai".into()),
+            wrong_if: None,
+        },
+        Exposure {
+            label: "Base ecosystem".into(),
+            instruments: vec![],
+            category: None,
+            wrong_if: None,
+        },
+    ];
+    let (lists, _) = shortlist(&exposures, &u, Some(Risk::High));
+    let tickers: Vec<&str> = lists[0]
+        .candidates
+        .iter()
+        .map(|c| c.ticker.as_str())
+        .collect();
+    // Named first, then the curated category, then name and symbol matches: both words
+    // before one, Base before Solana; dust never.
+    assert_eq!(
+        tickers,
+        ["AI", "RENDER", "LAB", "SAGENT", "AGENTS"],
+        "{tickers:?}"
+    );
+    assert_eq!(lists[0].candidates[0].name, "Deep");
+    // A label naming only a chain takes that chain's DEX tokens, most liquid first.
+    let base: Vec<&str> = lists[1]
+        .candidates
+        .iter()
+        .map(|c| c.ticker.as_str())
+        .collect();
+    assert_eq!(base[0], "AI");
+    assert!(base.contains(&"BRUH") && !base.contains(&"SAGENT") && !base.contains(&"DUSTY"));
+    // Medium risk: the long tail is out.
+    let (medium, _) = shortlist(&exposures, &u, Some(Risk::Medium));
+    assert!(medium[0].candidates.iter().all(|c| !c.long_tail()));
+    assert!(medium[1].candidates.is_empty());
+    // The pick schema lists each ticker once.
+    let schema = strategy::pick_schema(&lists);
+    let allowed =
+        schema["properties"]["e1"]["properties"]["picks"]["items"]["properties"]["ticker"]["enum"]
+            .as_array()
+            .unwrap()
+            .len();
+    assert_eq!(allowed, tickers.len());
+}
+
+#[test]
+fn candidate_lists_and_the_menu_are_capped() {
+    use crate::dex::DexChain::Base;
+    // 500 coins CoinGecko knows and 300 long-tail tokens, all with long names.
+    let long = "A Very Long Token Name That Goes On And On Forever";
+    let mut dex: Vec<_> = (0..500u32)
+        .map(|i| {
+            let mut v = long_tail_view(
+                Base,
+                i + 1,
+                &format!("BIG{i}"),
+                &format!("Agent {i} {long}"),
+                5e6,
+                5e6,
+            );
+            v.coingecko_id = Some(format!("big-{i}"));
+            v.market_cap_usd = Some(1e8 + f64::from(i));
+            v
+        })
+        .collect();
+    dex.extend((0..300u32).map(|i| {
+        long_tail_view(
+            Base,
+            1000 + i,
+            &format!("LT{i}"),
+            &format!("Agent {long} {i}"),
+            30_000.0 + f64::from(i) * 1_000.0,
+            9_000.0,
+        )
+    }));
+    let u = long_tail_universe(&dex);
+    let menu = shortlist::buyable_menu(&u, Some(Risk::High));
+    let (listed, tail) = menu.split_once(" Smaller tokens").unwrap();
+    let entries = |s: &str| s.matches(" (").count() - 1;
+    assert_eq!(
+        entries(listed),
+        250,
+        "the rest of 400 after the long tail's share"
+    );
+    assert_eq!(entries(tail), 150);
+    let all = u
+        .iter()
+        .filter(|c| {
+            c.kind() != registry::InstrumentType::Stablecoin
+                && c.allowed_at(Risk::High)
+                && !c.long_tail()
+        })
+        .count();
+    assert!(all > 500);
+    assert!(
+        listed.contains(&format!("({all} in all")),
+        "{}",
+        &listed[..120]
+    );
+    assert!(tail.contains("(300 in all"));
+    // Most liquid first, with its chain.
+    assert!(
+        tail.contains(": LT299 (Agent A Very Long Token, Base), LT298 ("),
+        "{}",
+        &tail[..200]
+    );
+    // Names are cut, so even long ones keep the prompt bounded.
+    assert!(menu.len() < 16_000, "{} characters", menu.len());
+    // Every one matches "agent": the list stops at MAX_CANDIDATES.
+    let exposures = vec![Exposure {
+        label: "AI agent tokens".into(),
+        instruments: vec![],
+        category: None,
+        wrong_if: None,
+    }];
+    let (lists, _) = shortlist(&exposures, &u, Some(Risk::High));
+    assert_eq!(lists[0].candidates.len(), shortlist::MAX_CANDIDATES);
 }

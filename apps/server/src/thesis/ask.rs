@@ -636,6 +636,53 @@ mod tests {
     }
 
     #[test]
+    fn follow_ups_reach_long_tail_tokens_at_high_risk_only() {
+        let pool = |n: u8, symbol: &str, liquidity: f64| crate::dex::TokenView {
+            chain: crate::dex::DexChain::Base,
+            address: format!("0x{n:040x}"),
+            symbol: symbol.into(),
+            name: format!("{symbol} Agent"),
+            decimals: 18,
+            logo_url: None,
+            price_usd: 0.02,
+            liquidity_usd: Some(liquidity),
+            volume24h_usd: Some(8_000.0),
+            market_cap_usd: None,
+            change24h_pct: None,
+            coingecko_id: None,
+            metadata: "chain",
+            route: "dex",
+            safety: crate::dex::SafetyView {
+                ok: true,
+                flags: vec![],
+            },
+        };
+        let merged = super::super::registry::merge_dex(
+            assets(),
+            &[pool(1, "LAB", 30_000.0), pool(2, "DUST", 3_000.0)],
+        );
+        let universe = shortlist::universe(&merged, Some(&coins()));
+        let lab = find(&universe, "$lab", Risk::High, true).unwrap();
+        assert_eq!(lab.asset.asset_id, format!("dex:base:0x{:040x}", 1));
+        assert!(find(&universe, "LAB", Risk::Medium, true).is_none());
+        assert!(find(&universe, "LAB", Risk::Low, true).is_none());
+        assert!(find(&universe, "DUST", Risk::High, true).is_none());
+        // The menu the ask prompt reads names it, with its chain.
+        let menu = shortlist::buyable_menu(&universe, Some(Risk::High));
+        assert!(menu.contains("LAB (LAB Agent, Base)"), "{menu}");
+        assert!(!menu.contains("DUST"));
+        // A proposed pick of it is kept.
+        let answer = parse_answer(
+            &json!({"answer": "LAB is a small Base token.", "picks": [{"ticker": "LAB", "weightPct": 10, "reason": "Small agent bet."}]}),
+            Risk::High,
+            &universe,
+            true,
+            Vec::new(),
+        );
+        assert_eq!(answer.picks.unwrap()[0].symbol, "LAB");
+    }
+
+    #[test]
     fn sanitizes_what_the_app_sends() {
         let buyable: HashSet<String> = ["XAUT", "BTC", "PAXG"].map(String::from).into();
         // Unknown run: shapes and sizes are checked, nothing is matched to a run.

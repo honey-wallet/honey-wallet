@@ -38,7 +38,9 @@ pub const PICK: Prompt = Prompt {
     name: "pick",
     // version: "pick/4",
     // 14 Nov: no disclaimers or hedging lines.
-    version: "pick/5",
+    // version: "pick/5",
+    // pick/6 (2026-11-14): candidate lines of DEX tokens carry chain and pool liquidity.
+    version: "pick/6",
     file: include_str!("prompts/pick.md"),
 };
 
