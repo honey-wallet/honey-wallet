@@ -82,7 +82,7 @@ private jars exists but is off by default. Honey does not use TEE attestation.
 | 14 Nov | [`50496b0`](https://github.com/honey-wallet/honey-wallet/commit/50496b0) | Route planner: NEAR Intents first, DEX fallback |
 | 14 Nov | [`a88e310`](https://github.com/honey-wallet/honey-wallet/commit/a88e310) | Creator copy fees through 1Click `appFees` |
 
-## Demo script (about 2.5 minutes)
+## Demo script (about 3 minutes)
 
 Record on the TestFlight build with small amounts, or on a local test-mode build. Say
 which on screen: test-mode balances and receipts are samples.
@@ -94,10 +94,11 @@ which on screen: test-mode balances and receipts are samples.
 | 0:40 | Jar button → **Create a jar → Describe an idea** → type "AI data-centre spending keeps growing" | "The agent runs on NEAR AI Cloud." Show the stages as they appear. |
 | 1:05 | The proposal: picks, weights, the caution | "Models only choose from lists the code builds. Weights and amounts come from code. A critic writes the case against." |
 | 1:20 | **Launch your jar** → one approval → the jar page | "One approval pays every pick through NEAR Intents." |
-| 1:40 | Settings → **Your cut on copies** | "Creators set their cut here." |
-| 1:50 | Group jar: invite friends → a friend accepts → **Your share is in** | "Up to five friends, equal shares. The money sits in a Sputnik DAO on NEAR." |
-| 2:15 | Group jar page: **Changes need 2 of 3** | "Selling is a DAO proposal. It runs when the majority approves on their own phones." |
-| 2:30 | The group's DAO on a NEAR explorer | TODO(owner): a real DAO account to show, only if one was funded. |
+| 1:35 | Swap on Base → the review's network cost line → confirm | "Honey paid the gas. No ETH needed." |
+| 1:55 | Settings → **Your cut on copies** | "Creators set their cut here." |
+| 2:05 | Group jar: invite friends → a friend accepts → **Your share is in** | "Up to five friends, equal shares. The money sits in a Sputnik DAO on NEAR." |
+| 2:30 | Group jar page: **Changes need 2 of 3** | "Selling is a DAO proposal. It runs when the majority approves on their own phones." |
+| 2:45 | The group's DAO on a NEAR explorer | TODO(owner): a real DAO account to show, only if one was funded. |
 
 ## Judging notes
 
@@ -129,7 +130,8 @@ keyring. Table with file links: [README, How Honey uses NEAR](README.md#how-hone
 ### User experience
 
 - One approval buys a whole jar across chains.
-- Face ID confirms; the phone checks each quote before it signs.
+- Face ID confirms; the phone checks each quote, at its own prices, before it signs.
+- Honey pays the gas on Base, Arbitrum, Polygon and Optimism, within a per-person allowance.
 - When a trade can't go through NEAR Intents, the review says why in one line and that
   the swap is public.
 - Nothing is public until you claim a handle. Sharing trades is off by default.
@@ -144,7 +146,9 @@ Creators get paid when their picks make money for others.
 
 - NEAR Intents has no testnet, so live flows spend mainnet funds.
 - iOS only (TestFlight public beta). Android is not on a store yet.
-- Gas sponsorship and the DEX fallback are server switches, off by default.
+- The DEX fallback is a server switch, off by default. Solana and NEAR gas sponsorship
+  are supported by the server and off by default. EVM sponsorship (Base, Arbitrum,
+  Polygon, Optimism) is on.
 - Private jars (Confidential Intents) are experimental and off by default.
 - No card on-ramp or cash off-ramp. Earn shows rates only.
 - Test mode receipts and sample screens are not proof of settlement.

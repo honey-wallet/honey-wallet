@@ -87,6 +87,8 @@ Doing it together means screenshots, spreadsheets and trusting whoever holds the
 | NEAR Intents first | 1Click pays through one-time deposit addresses. A DEX (KyberSwap, Jupiter) is used only when 1Click doesn't list a token, refuses the amount, would keep less than half the value after fees, or fails twice. A cheaper DEX is not a reason. | [route_planner.rs](apps/server/src/route_planner.rs), [BEST-ROUTE.md](docs/routing/BEST-ROUTE.md) |
 | Private routes only | Settings → Swaps. Never falls back to a DEX; shows 1Click's error instead. | [best-route.ts](apps/mobile/src/lib/best-route.ts), [swap-settings.tsx](apps/mobile/src/app/(trade)/swap-settings.tsx) |
 | Checks on the phone | Before signing, the app checks that each quote matches what it asked for (chain, tokens, amount, payout floor, expiry) and decodes DEX transaction bytes itself. | [intents-quote.ts](apps/mobile/src/lib/intents-quote.ts), [dex.ts](apps/mobile/src/lib/dex.ts) |
+| The phone's own price | Every DEX buy, sell and swap is valued at a price the phone reads itself (1Click, or DexScreener for other tokens), never the server's. If it would keep less than the swap floor, or there is no price, nothing is signed. | [app-price.ts](apps/mobile/src/lib/app-price.ts) |
+| Long-tail tokens | Tokens 1Click doesn't list can trade on a DEX if they pass floors (pool liquidity at least $25k, 24 h volume at least $5k, oldest pool at least 2 days) and GoPlus scam checks. Search by contract address. | [universe.rs](apps/server/src/dex/universe.rs), [safety.rs](apps/server/src/dex/safety.rs), [routes/dex.rs](apps/server/src/routes/dex.rs) |
 
 ### AI jar builder
 
@@ -103,7 +105,8 @@ Code: [thesis/](apps/server/src/thesis), [near_ai.rs](apps/server/src/thesis/nea
 
 | Feature | What it does | Code |
 | --- | --- | --- |
-| Gas paid by Honey | EVM (Base, Arbitrum, Polygon, Optimism) through EIP-7702 and Uniswap's Calibur contract; Solana as fee payer; NEAR as a NEP-366 relayer. One shared allowance: $1 per person per 30 days, with daily caps per chain. Each sponsor is a server switch, off by default. | [evm_sponsor.rs](apps/server/src/evm_sponsor.rs), [solana_relayer.rs](apps/server/src/solana_relayer.rs), [near_relayer.rs](apps/server/src/near_relayer.rs), [gas_allowance.rs](apps/server/src/gas_allowance.rs) |
+| Gas paid by Honey | Live on Base, Arbitrum, Polygon and Optimism: the wallet delegates to Uniswap's Calibur contract (EIP-7702) and Honey's relayer sends the transaction and pays the gas. Never on Ethereum mainnet. Solana (Honey as fee payer) and NEAR (NEP-366 relayer) are supported by the server and off by default. | [evm_sponsor.rs](apps/server/src/evm_sponsor.rs) (`CHAINS`), [evm-sponsor.ts](packages/keyring/src/evm-sponsor.ts) (`SPONSORED_CHAIN_IDS`), [Optimism migration](apps/server/migrations/202611140007_evm_sponsor_optimism.sql), [solana_relayer.rs](apps/server/src/solana_relayer.rs), [near_relayer.rs](apps/server/src/near_relayer.rs) |
+| Gas allowance | One ledger for every chain Honey pays on. By default each signed-in person gets $1 per rolling 30 days across all chains, at most $0.10 per chain per day, and each chain has a daily total across everyone. Cost is reserved before signing and settled at the real cost. | [gas_allowance.rs](apps/server/src/gas_allowance.rs) |
 | Multichain wallet | One recovery phrase for EVM chains, Solana and NEAR implicit accounts. | [packages/keyring](packages/keyring), [NEAR.md](docs/NEAR.md) |
 | Keys on the phone | Keys live in the iOS Keychain or Android Keystore, on this device only. Signing happens on the phone. | [secure-store.ts](apps/mobile/src/lib/secure-store.ts), [sign.ts](packages/keyring/src/sign.ts) |
 
@@ -273,7 +276,8 @@ Report vulnerabilities privately: [SECURITY.md](SECURITY.md).
 
 - iOS only for now (TestFlight public beta). Android is not on a store yet.
 - Buying crypto with a card and selling for cash are not connected. Earn shows rates only.
-- Gas sponsorship and the DEX fallback are server switches, off by default.
+- The DEX fallback is a server switch, off by default. Solana and NEAR gas sponsorship
+  are supported by the server and off by default.
 - Private jars (Confidential Intents) are experimental and off by default.
 - Test mode is a demonstration, not proof of a settled trade. The captures above use
   sample data.
