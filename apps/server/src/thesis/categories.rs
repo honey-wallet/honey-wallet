@@ -2,6 +2,8 @@
 //! code treats as members of each. Curated and checked into the repo (like the registry's
 //! instrument types), never inferred by a model: the shortlist joins these with the live
 //! registry, so a listed ticker that NEAR Intents can't deliver simply doesn't appear.
+//! Since 2026-11-14 the registry also holds Honey's DEX list, so these name the tokens
+//! KyberSwap and Jupiter can buy on Honey's chains too (AERO, PENDLE, JTO …).
 
 use super::registry::InstrumentType;
 
@@ -18,9 +20,14 @@ pub const CATEGORIES: &[Category] = &[
     Category {
         id: "ai",
         about: "AI and decentralized compute tokens",
+        // tickers: &[
+        //     "TAO", "RENDER", "FET", "VIRTUAL", "AKT", "WLD", "GRT", "ARKM", "IO", "AIOZ", "VVV",
+        //     "KAITO", "AI16Z", "NEAR",
+        // ],
         tickers: &[
             "TAO", "RENDER", "FET", "VIRTUAL", "AKT", "WLD", "GRT", "ARKM", "IO", "AIOZ", "VVV",
-            "KAITO", "AI16Z", "NEAR",
+            "KAITO", "AI16Z", "NEAR", "WTAO", "OLAS", "AIXBT", "GRASS", "NMR", "PRIME", "ATH",
+            "COOKIE", "ZEREBRO", "GRIFFAIN", "ARC", "SWARMS", "NOS", "GOAT",
         ],
         kinds: &[],
     },
@@ -39,9 +46,14 @@ pub const CATEGORIES: &[Category] = &[
     Category {
         id: "solana_ecosystem",
         about: "Solana and tokens native to Solana",
+        // tickers: &[
+        //     "SOL", "JUP", "JTO", "PYTH", "RAY", "ORCA", "BONK", "WIF", "BOME", "PENGU", "RENDER",
+        //     "TRUMP", "SPX",
+        // ],
         tickers: &[
             "SOL", "JUP", "JTO", "PYTH", "RAY", "ORCA", "BONK", "WIF", "BOME", "PENGU", "RENDER",
-            "TRUMP", "SPX",
+            "TRUMP", "SPX", "KMNO", "DRIFT", "MET", "CLOUD", "TNSR", "W", "HNT", "MEW", "POPCAT",
+            "FARTCOIN", "JLP", "JUPSOL", "MSOL", "JITOSOL",
         ],
         kinds: &[],
     },
@@ -65,15 +77,25 @@ pub const CATEGORIES: &[Category] = &[
     Category {
         id: "ethereum_l2",
         about: "Ethereum scaling networks",
-        tickers: &["ARB", "OP", "STRK", "POL", "MATIC", "MNT", "MOVE"],
+        // tickers: &["ARB", "OP", "STRK", "POL", "MATIC", "MNT", "MOVE"],
+        tickers: &[
+            "ARB", "OP", "STRK", "POL", "MATIC", "MNT", "MOVE", "ZK", "IMX", "METIS", "MANTA",
+            "TAIKO", "SCR", "ZRO",
+        ],
         kinds: &[],
     },
     Category {
         id: "defi",
         about: "Lending, exchange and oracle protocols",
+        // tickers: &[
+        //     "AAVE", "UNI", "LINK", "GMX", "COW", "KNC", "CRV", "MKR", "SKY", "LDO", "PENDLE",
+        //     "JUP", "ASTER", "HYPE", "RHEA", "SAFE",
+        // ],
         tickers: &[
             "AAVE", "UNI", "LINK", "GMX", "COW", "KNC", "CRV", "MKR", "SKY", "LDO", "PENDLE",
-            "JUP", "ASTER", "HYPE", "RHEA", "SAFE",
+            "JUP", "ASTER", "HYPE", "RHEA", "SAFE", "MORPHO", "AERO", "VELO", "CVX", "SNX", "COMP",
+            "BAL", "1INCH", "SUSHI", "YFI", "ENA", "ETHFI", "EIGEN", "RAY", "ORCA", "JTO", "KMNO",
+            "DRIFT", "PYTH", "GRAIL", "RPL", "FXS", "SYRUP", "EUL", "SPK", "RSR",
         ],
         kinds: &[],
     },
@@ -98,16 +120,25 @@ pub const CATEGORIES: &[Category] = &[
     Category {
         id: "memecoins",
         about: "Meme coins (very high risk)",
+        // tickers: &[
+        //     "DOGE", "SHIB", "PEPE", "WIF", "BONK", "BOME", "BRETT", "MOG", "TURBO", "SPX", "PENGU",
+        //     "TRUMP", "MELANIA", "FLOKI", "CASHCAT",
+        // ],
         tickers: &[
             "DOGE", "SHIB", "PEPE", "WIF", "BONK", "BOME", "BRETT", "MOG", "TURBO", "SPX", "PENGU",
-            "TRUMP", "MELANIA", "FLOKI", "CASHCAT",
+            "TRUMP", "MELANIA", "FLOKI", "CASHCAT", "POPCAT", "MEW", "FARTCOIN", "PNUT", "GOAT",
+            "MOODENG", "CHILLGUY", "GIGA", "TOSHI", "DEGEN", "KEYCAT", "NEIRO", "PONKE", "MICHI",
+            "USELESS", "TROLL", "PIPPIN", "BIRB", "LMAO", "HAROLD", "NEET", "STONK", "ANTFUN",
+            "BAN", "ACT", "WOJAK", "ANDY", "LADYS", "BABYDOGE", "DOG", "SNEK", "PUMP", "BITCOIN",
+            "ZEREBRO", "GRIFFAIN", "SWARMS",
         ],
         kinds: &[],
     },
     Category {
         id: "gold",
         about: "Tokenized gold",
-        tickers: &["XAUT", "PAXG"],
+        // tickers: &["XAUT", "PAXG"],
+        tickers: &["XAUT", "PAXG", "XAUT0", "KAU", "CGO"],
         kinds: &[],
     },
     Category {
@@ -133,7 +164,10 @@ pub const CATEGORIES: &[Category] = &[
     Category {
         id: "real_world_assets",
         about: "Tokenized real-world assets and the platforms that issue them",
-        tickers: &["ONDO", "XAUT", "PAXG", "LINK", "PLUME"],
+        // tickers: &["ONDO", "XAUT", "PAXG", "LINK", "PLUME"],
+        tickers: &[
+            "ONDO", "XAUT", "PAXG", "LINK", "PLUME", "SYRUP", "CFG", "OM", "POLYX",
+        ],
         kinds: &[],
     },
 ];

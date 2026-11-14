@@ -232,8 +232,10 @@ pub fn seeded_picks(strategy: &Strategy, list: &[MarketListToken]) -> (Vec<Pick>
             symbol: p.symbol.to_string(),
             chain: p.chain.to_string(),
             weight: f64::from(p.weight),
+            // Honey's strategies hold NEAR Intents tokens only, never a DEX contract.
+            address: None,
         };
-        if buyable_picks(std::slice::from_ref(&pick), list).is_ok() {
+        if buyable_picks(std::slice::from_ref(&pick), list, &[]).is_ok() {
             kept.push((pick, p.weight));
         } else {
             skipped.push(format!("{} on {}", p.symbol, p.chain));
@@ -347,7 +349,7 @@ pub async fn seed(
                 hide_picks: false,
             };
             let user = account.user_id.unwrap_or_default();
-            match publish_with(pool, Some(market), user, &body, None).await {
+            match publish_with(pool, Some(market), None, user, &body, None).await {
                 Ok((id, _)) => account.jar_id = Some(id),
                 Err(error) => account.error = Some(format!("jar not published: {error:?}")),
             }
@@ -465,6 +467,7 @@ mod tests {
                     symbol: p.symbol.into(),
                     chain: p.chain.into(),
                     weight: f64::from(p.weight),
+                    address: None,
                 })
                 .collect();
             assert_eq!(s.picks.iter().map(|p| p.weight).sum::<u32>(), 100);

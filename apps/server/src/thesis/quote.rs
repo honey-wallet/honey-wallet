@@ -3,9 +3,10 @@
 //! no deposit address is ever requested. Both sides are NEAR Intents balances
 //! (`INTENTS`), so the quote needs no user address on any chain.
 
-use super::registry::RegistryAsset;
+use super::registry::{AssetRoute, RegistryAsset};
 use async_trait::async_trait;
 use serde_json::{Value, json};
+use std::sync::Arc;
 use std::time::Duration;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
@@ -159,6 +160,99 @@ impl Quoter for OneClickQuoter {
     }
 }
 
+/// Dry quotes on Honey's DEX route (KyberSwap or Jupiter, from the chain's USDC).
+#[async_trait]
+pub trait DexQuotes: Send + Sync {
+    /// Base units of `token` that `usdc_units` of the chain's USDC buys, or a plain reason.
+    async fn dry_dex(
+        &self,
+        chain: crate::dex::DexChain,
+        token: &str,
+        usdc_units: u128,
+    ) -> Result<u128, String>;
+}
+
+#[async_trait]
+impl DexQuotes for crate::dex::DexService {
+    async fn dry_dex(
+        &self,
+        chain: crate::dex::DexChain,
+        token: &str,
+        usdc_units: u128,
+    ) -> Result<u128, String> {
+        let out = self
+            .dry_quote(chain, token, alloy_primitives::U256::from(usdc_units))
+            .await
+            .map_err(|e| match e {
+                crate::error::AppError::BadRequest(m) => m,
+                _ => "the DEX couldn't quote right now".to_string(),
+            })?;
+        u128::try_from(out).map_err(|_| "the DEX quote was out of range".to_string())
+    }
+}
+
+/// `amount` base units as whole tokens ("0.006442"), trailing zeros dropped.
+pub fn whole_units(amount: u128, decimals: u8) -> String {
+    let digits = amount.to_string();
+    let d = decimals as usize;
+    let (int, frac) = if digits.len() > d {
+        (
+            digits[..digits.len() - d].to_string(),
+            digits[digits.len() - d..].to_string(),
+        )
+    } else {
+        ("0".to_string(), format!("{digits:0>d$}"))
+    };
+    let frac = frac.trim_end_matches('0');
+    if frac.is_empty() {
+        int
+    } else {
+        format!("{int}.{frac}")
+    }
+}
+
+/// 1Click for its own assets; Honey's DEX route for `dex:` assets (bought with the
+/// chain's USDC, which 1Click delivers there first when the money is elsewhere, so the
+/// DEX leg is what can fail). Every chain's USDC has 6 decimals.
+pub struct RoutedQuoter {
+    pub intents: Arc<dyn Quoter>,
+    pub dex: Option<Arc<dyn DexQuotes>>,
+}
+
+#[async_trait]
+impl Quoter for RoutedQuoter {
+    async fn dry_quote(
+        &self,
+        from: &RegistryAsset,
+        to: &RegistryAsset,
+        amount_in: u128,
+    ) -> Result<DryQuote, String> {
+        if to.route != AssetRoute::Dex {
+            return self.intents.dry_quote(from, to, amount_in).await;
+        }
+        let dex = self
+            .dex
+            .as_ref()
+            .ok_or_else(|| "DEX swaps are off right now".to_string())?;
+        let (chain, address) = to
+            .asset_id
+            .strip_prefix("dex:")
+            .and_then(|rest| rest.split_once(':'))
+            .and_then(|(c, a)| Some((crate::dex::DexChain::parse(c)?, a)))
+            .ok_or_else(|| "not a DEX asset".to_string())?;
+        // From the origin's units to USDC's 6 decimals.
+        let usdc = if from.decimals >= 6 {
+            amount_in / 10u128.pow(u32::from(from.decimals - 6))
+        } else {
+            amount_in * 10u128.pow(u32::from(6 - from.decimals))
+        };
+        let out = dex.dry_dex(chain, address, usdc).await?;
+        Ok(DryQuote {
+            amount_out: whole_units(out, to.decimals),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -185,5 +279,16 @@ mod tests {
         body["quote"]["depositAddress"] = Value::Null;
         body["quote"]["minAmountOut"] = json!("1");
         assert!(check(&body, &p).is_err());
+    }
+
+    #[test]
+    fn whole_units_reads_like_1click() {
+        assert_eq!(whole_units(6_442, 6), "0.006442");
+        assert_eq!(
+            whole_units(21_959_246_262_410_657_792, 18),
+            "21.959246262410657792"
+        );
+        assert_eq!(whole_units(5_000_000, 6), "5");
+        assert_eq!(whole_units(0, 6), "0");
     }
 }

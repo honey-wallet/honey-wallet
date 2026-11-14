@@ -885,3 +885,219 @@ async fn runs_are_shared_through_redis() {
         .await
         .unwrap();
 }
+
+fn dex_view(
+    chain: crate::dex::DexChain,
+    address: &str,
+    symbol: &str,
+    cg: Option<&str>,
+    cap: Option<f64>,
+    ok: bool,
+) -> crate::dex::TokenView {
+    crate::dex::TokenView {
+        chain,
+        address: address.into(),
+        symbol: symbol.into(),
+        name: format!("{symbol} token"),
+        decimals: 18,
+        logo_url: Some(format!("https://assets.coingecko.com/{symbol}.png")),
+        price_usd: 2.0,
+        liquidity_usd: Some(2e6),
+        volume24h_usd: Some(3e6),
+        market_cap_usd: cap,
+        change24h_pct: Some(1.5),
+        coingecko_id: cg.map(String::from),
+        metadata: "uniswap",
+        route: "dex",
+        safety: crate::dex::SafetyView {
+            ok,
+            flags: if ok { vec![] } else { vec!["honeypot".into()] },
+        },
+    }
+}
+
+#[test]
+fn the_registry_merges_safe_dex_tokens_by_chain_and_address() {
+    use crate::dex::DexChain;
+    use registry::{AssetRoute, merge_dex};
+    const PAXG: &str = "0x45804880De22913dAFE09f4980848ECE6EcbAf78";
+    const XAUT_ETH: &str = "0x68749665ff8d2d112fa859aa293f07a622782f38";
+    let mut base = assets();
+    base[11].address = Some(XAUT_ETH.into()); // 1Click's XAUT on Ethereum, by contract.
+    let dex = [
+        dex_view(
+            DexChain::Ethereum,
+            PAXG,
+            "PAXG",
+            Some("pax-gold"),
+            Some(1e9),
+            true,
+        ),
+        // The same contract 1Click lists (in another case): stays 1Click's.
+        dex_view(
+            DexChain::Ethereum,
+            &XAUT_ETH.to_uppercase().replace("0X", "0x"),
+            "XAUT",
+            None,
+            None,
+            true,
+        ),
+        // Unsafe, and a stablecoin: never merged.
+        dex_view(
+            DexChain::Base,
+            "0x4ed4e862860bed51a9570b96d89af5e1b0efefed",
+            "RUG",
+            None,
+            None,
+            false,
+        ),
+        dex_view(
+            DexChain::Base,
+            "0x50c5725949a6f0c72e6c4a641f24049a917db0cb",
+            "DAI",
+            None,
+            None,
+            true,
+        ),
+        // Two different tokens that share a symbol stay two assets.
+        dex_view(
+            DexChain::Solana,
+            "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
+            "AI",
+            None,
+            Some(5e7),
+            true,
+        ),
+        dex_view(
+            DexChain::Base,
+            "0x940181a94a35a4569e4529a3cdfb74e38fd98631",
+            "AI",
+            None,
+            Some(9e7),
+            true,
+        ),
+    ];
+    let merged = merge_dex(base.clone(), &dex);
+    let added: Vec<_> = merged[base.len()..].iter().collect();
+    assert_eq!(added.len(), 3, "{added:?}");
+    let paxg = added.iter().find(|a| a.symbol == "PAXG").unwrap();
+    assert_eq!(paxg.route, AssetRoute::Dex);
+    assert_eq!(paxg.chain, "eth");
+    assert_eq!(
+        paxg.asset_id,
+        format!("dex:ethereum:{}", PAXG.to_lowercase())
+    );
+    assert_eq!(paxg.address.as_deref(), Some(PAXG.to_lowercase().as_str()));
+    assert_eq!(paxg.name.as_deref(), Some("PAXG token"));
+    let json = serde_json::to_value(paxg).unwrap();
+    assert_eq!(json["route"], "dex");
+    assert!(json["logoUrl"].as_str().unwrap().starts_with("https://"));
+    assert!(json.get("dexMarket").is_none());
+    // The shortlist keys DEX tokens CoinGecko doesn't place by contract, never by symbol,
+    // and reads their market numbers from the DEX list.
+    let coins = coins();
+    let u = universe(&merged, Some(&coins));
+    let ais: Vec<_> = u.iter().filter(|c| c.ticker == "AI").collect();
+    assert_eq!(ais.len(), 2);
+    assert!(ais.iter().all(|c| c.key.starts_with("dex:")));
+    assert!(ais.iter().any(|c| c.market.market_cap_usd == Some(9e7)));
+    let gold = u.iter().find(|c| c.ticker == "PAXG").unwrap();
+    assert_eq!(gold.market.market_cap_usd, Some(1e9));
+    assert!(gold.allowed_at(Risk::Low));
+    // 1Click stays the route for a coin both carry.
+    let xaut = u.iter().find(|c| c.ticker == "XAUT").unwrap();
+    assert_eq!(xaut.asset.route, AssetRoute::Intents);
+}
+
+#[test]
+fn meme_coins_are_only_for_high_risk() {
+    let coins = coins();
+    let u = universe(&assets(), Some(&coins));
+    let doge = u.iter().find(|c| c.ticker == "DOGE").unwrap();
+    assert!(doge.is_meme());
+    assert!(!doge.allowed_at(Risk::Low));
+    assert!(
+        !doge.allowed_at(Risk::Medium),
+        "a $10B meme coin is still a meme coin"
+    );
+    assert!(doge.allowed_at(Risk::High));
+}
+
+#[tokio::test]
+async fn dex_picks_are_quoted_on_the_dex_and_the_rest_on_1click() {
+    use quote::{DexQuotes, Quoter, RoutedQuoter};
+    struct OneClick;
+    #[async_trait::async_trait]
+    impl Quoter for OneClick {
+        async fn dry_quote(
+            &self,
+            _: &RegistryAsset,
+            _: &RegistryAsset,
+            _: u128,
+        ) -> Result<DryQuote, String> {
+            Ok(DryQuote {
+                amount_out: "1click".into(),
+            })
+        }
+    }
+    struct Dex(std::sync::Mutex<Vec<(crate::dex::DexChain, String, u128)>>);
+    #[async_trait::async_trait]
+    impl DexQuotes for Dex {
+        async fn dry_dex(
+            &self,
+            chain: crate::dex::DexChain,
+            token: &str,
+            usdc: u128,
+        ) -> Result<u128, String> {
+            self.0.lock().unwrap().push((chain, token.into(), usdc));
+            Ok(12_500_000_000_000_000_000)
+        }
+    }
+    let dex = std::sync::Arc::new(Dex(Default::default()));
+    let q = RoutedQuoter {
+        intents: std::sync::Arc::new(OneClick),
+        dex: Some(dex.clone()),
+    };
+    let base = assets();
+    let usdc = &base[0];
+    let merged = registry::merge_dex(
+        base.clone(),
+        &[dex_view(
+            crate::dex::DexChain::Base,
+            "0x940181a94a35a4569e4529a3cdfb74e38fd98631",
+            "AERO",
+            None,
+            None,
+            true,
+        )],
+    );
+    let aero = merged.last().unwrap();
+    assert_eq!(
+        q.dry_quote(usdc, aero, 25_000_000)
+            .await
+            .unwrap()
+            .amount_out,
+        "12.5"
+    );
+    assert_eq!(
+        dex.0.lock().unwrap()[0],
+        (
+            crate::dex::DexChain::Base,
+            "0x940181a94a35a4569e4529a3cdfb74e38fd98631".to_string(),
+            25_000_000
+        )
+    );
+    assert_eq!(
+        q.dry_quote(usdc, &base[11], 25_000_000)
+            .await
+            .unwrap()
+            .amount_out,
+        "1click"
+    );
+    // DEX swaps off: a DEX pick can't be priced, so it leaves the proposal.
+    let off = RoutedQuoter {
+        intents: std::sync::Arc::new(OneClick),
+        dex: None,
+    };
+    assert!(off.dry_quote(usdc, aero, 25_000_000).await.is_err());
+}

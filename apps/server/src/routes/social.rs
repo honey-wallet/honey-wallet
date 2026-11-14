@@ -59,6 +59,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use crate::dex::{DexChain, DexService, TokenView};
 use axum::{
     Json, Router,
     extract::{ConnectInfo, Path, Query, State},
@@ -167,6 +168,8 @@ struct SocialState {
     trusted_proxy_cidrs: Arc<[TrustedProxyCidr]>,
     /// Whether Honey's strategy accounts are shown and boosted (`strategies`).
     honey: HoneyStrategies,
+    /// Honey's DEX list: picks bought on a DEX, and their prices.
+    dex: Option<Arc<DexService>>,
 }
 
 /// A jar as its owner sees it, with what's needed to serve it to anyone else: always
@@ -189,6 +192,7 @@ pub fn router(
     dao: Option<Arc<JarDao>>,
     trust_proxy: bool,
     trusted_proxy_cidrs: Vec<TrustedProxyCidr>,
+    dex: Option<Arc<DexService>>,
 ) -> Router {
     // build(
     //     identity,
@@ -206,6 +210,7 @@ pub fn router(
         trust_proxy,
         trusted_proxy_cidrs,
         HoneyStrategies::from_env(),
+        dex,
     )
 }
 
@@ -216,7 +221,16 @@ pub fn router_with_strategies(
     one_click: String,
     honey: HoneyStrategies,
 ) -> Router {
-    build(identity, market, one_click, None, false, Vec::new(), honey)
+    build(
+        identity,
+        market,
+        one_click,
+        None,
+        false,
+        Vec::new(),
+        honey,
+        None,
+    )
 }
 
 /// `router` with 1Click's status API somewhere else and no chain reads (tests).
@@ -245,6 +259,7 @@ pub fn router_with(
         false,
         Vec::new(),
         HoneyStrategies::default(),
+        None,
     )
 }
 
@@ -256,6 +271,7 @@ fn build(
     trust_proxy: bool,
     trusted_proxy_cidrs: Vec<TrustedProxyCidr>,
     honey: HoneyStrategies,
+    dex: Option<Arc<DexService>>,
 ) -> Router {
     let client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(3))
@@ -300,6 +316,7 @@ fn build(
             trust_proxy,
             trusted_proxy_cidrs: trusted_proxy_cidrs.into(),
             honey,
+            dex,
         })
 }
 
@@ -363,6 +380,31 @@ pub struct Pick {
     pub chain: String,
     /// Percent of the jar, the picks summing to 100.
     pub weight: f64,
+    /// The token's contract (mint on Solana) for a pick bought on a DEX (2026-11-14):
+    /// such a pick is matched by (chain, address) on Honey's DEX list, never by symbol.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+}
+
+/// The DEX chain a pick names: its 1Click code ("arb"), Honey's name ("Arbitrum") or
+/// the DEX wire name ("arbitrum").
+pub fn dex_chain_of(chain: &str) -> Option<DexChain> {
+    let c = chain.trim().to_ascii_lowercase();
+    crate::dex::chains::ALL
+        .into_iter()
+        .find(|d| d.name() == c || d.oneclick() == c)
+}
+
+/// The key a pick's prices go by: `dex:<chain>:<address>` for a DEX pick (so a
+/// look-alike symbol can't borrow another token's price), else its symbol.
+pub fn pick_key(pick: &Pick) -> String {
+    match (&pick.address, dex_chain_of(&pick.chain)) {
+        (Some(a), Some(chain)) => match chain.normalize(a) {
+            Some(a) => format!("dex:{}:{a}", chain.name()),
+            None => pick.symbol.to_ascii_uppercase(),
+        },
+        _ => pick.symbol.to_ascii_uppercase(),
+    }
 }
 
 /// `SocialJar`.
@@ -726,6 +768,13 @@ pub fn validate_picks(picks: &[Pick]) -> Result<(), AppError> {
         if !valid_symbol(&pick.symbol) || !valid_chain(&pick.chain) {
             return Err(AppError::BadRequest("invalid pick".into()));
         }
+        if let Some(address) = &pick.address
+            && dex_chain_of(&pick.chain)
+                .and_then(|c| c.normalize(address))
+                .is_none()
+        {
+            return Err(AppError::BadRequest("invalid pick".into()));
+        }
         if !pick.weight.is_finite() || pick.weight <= 0.0 || pick.weight > 100.0 {
             return Err(AppError::BadRequest("invalid pick weight".into()));
         }
@@ -743,8 +792,47 @@ pub fn validate_picks(picks: &[Pick]) -> Result<(), AppError> {
 /// Every pick must be a token NEAR Intents can deliver on one of Honey's chains, so a
 /// public jar can always be copied (bought) in full. Matched case-insensitively against
 /// the live 1Click list (`market_list`, which lists native NEAR as NEAR).
-pub fn buyable_picks(picks: &[Pick], list: &[MarketListToken]) -> Result<(), AppError> {
+// pub fn buyable_picks(picks: &[Pick], list: &[MarketListToken]) -> Result<(), AppError> {
+/// A pick with an `address` may instead be a token on Honey's safe DEX list
+/// (KyberSwap or Jupiter on its own chain, 1Click to that chain's USDC first): matched
+/// on (chain, address), with the symbol it is listed under.
+pub fn buyable_picks(
+    picks: &[Pick],
+    list: &[MarketListToken],
+    dex: &[TokenView],
+) -> Result<(), AppError> {
     for pick in picks {
+        // if let (Some(address), Some(chain)) = (&pick.address, dex_chain_of(&pick.chain))
+        //     && let Some(address) = chain.normalize(address)
+        //     && dex.iter().any(|t| { ... })
+        // {
+        //     continue;
+        // }
+        // (Security review, 2026-11-14: a pick whose DEX check failed fell through to the
+        // symbol check below while `pick_key` still priced it by its address, so "USDC on
+        // base" with any address passed and was priced from that address.)
+        // A pick with an address is a DEX pick: on the safe DEX list at that (chain,
+        // address) under that symbol, or refused. Never the symbol check.
+        if let Some(address) = &pick.address {
+            let listed = dex_chain_of(&pick.chain)
+                .and_then(|chain| Some((chain, chain.normalize(address)?)))
+                .is_some_and(|(chain, address)| {
+                    dex.iter().any(|t| {
+                        t.safety.ok
+                            && t.chain == chain
+                            && chain.normalize(&t.address).as_deref() == Some(address.as_str())
+                            && t.symbol.eq_ignore_ascii_case(&pick.symbol)
+                    })
+                });
+            if listed {
+                continue;
+            }
+            return Err(AppError::BadRequest(format!(
+                "{} on {} can't be bought with Honey yet. Remove it or pick another token.",
+                pick.symbol.to_ascii_uppercase(),
+                pick.chain
+            )));
+        }
         // A thesis jar names its chain by 1Click's code ("eth"), a hand-built one by name
         // ("Ethereum"): both mean the same network (2026-11-14: thesis jars couldn't post).
         let named = oneclick_chain_label(&pick.chain.to_ascii_lowercase()).unwrap_or(&pick.chain);
@@ -815,7 +903,8 @@ pub fn value_index(
     let mut weight = 0.0;
     let mut value = 0.0;
     for pick in picks {
-        let key = pick.symbol.to_ascii_uppercase();
+        // let key = pick.symbol.to_ascii_uppercase();
+        let key = pick_key(pick);
         let (Some(s), Some(n)) = (start.get(&key), now.get(&key)) else {
             continue;
         };
@@ -999,14 +1088,138 @@ async fn organic_jars(pool: &PgPool) -> Result<i64, AppError> {
 }
 
 /// Live 1Click prices by uppercase symbol (the median across chains, as Search shows).
-async fn prices(market: Option<&Arc<MarketData>>) -> Option<HashMap<String, f64>> {
+// async fn prices(market: Option<&Arc<MarketData>>) -> Option<HashMap<String, f64>> {
+/// Live prices by symbol (1Click), plus Honey's DEX list by `dex:<chain>:<address>`
+/// (`pick_key`), from lists already built.
+async fn prices(
+    market: Option<&Arc<MarketData>>,
+    dex: Option<&DexService>,
+) -> Option<HashMap<String, f64>> {
     let tokens = market?.tokens().await.ok()?;
-    Some(
-        market_list(&tokens)
-            .into_iter()
-            .map(|t| (t.symbol.to_ascii_uppercase(), t.price_usd))
-            .collect(),
-    )
+    let mut out: HashMap<String, f64> = market_list(&tokens)
+        .into_iter()
+        .map(|t| (t.symbol.to_ascii_uppercase(), t.price_usd))
+        .collect();
+    if let Some(dex) = dex {
+        for t in dex.safe_tokens_cached().await {
+            if t.price_usd.is_finite() && t.price_usd > 0.0 {
+                out.insert(format!("dex:{}:{}", t.chain.name(), t.address), t.price_usd);
+            }
+        }
+    }
+    Some(out)
+}
+
+/// The value new picks continue from when a jar is republished with other picks: the
+/// old picks' value now when every one of them is priced, else the latest mark, else
+/// `Busy`. Never renormalised over the priced subset (security review, 2026-11-14).
+pub fn republish_base(
+    old_picks: &[Pick],
+    old_start: &HashMap<String, f64>,
+    base: f64,
+    now: &HashMap<String, f64>,
+    latest_mark: Option<f64>,
+) -> Result<f64, AppError> {
+    fully_priced(old_picks, old_start, now)
+        .then(|| jar_index(old_picks, old_start, base, now))
+        .flatten()
+        .or(latest_mark)
+        .ok_or(AppError::Busy)
+}
+
+/// The leaderboard's ranking: $1 window days (or null), $2 minimum age in hours, $3
+/// `STALE_MARK_HOURS`, $4 Honey's strategies shown, $5 their `min_organic`.
+const LEADERBOARD_SQL: &str = "SELECT id, base FROM (
+                   SELECT r.*, count(*) FILTER (WHERE NOT r.official) OVER () AS organic
+                   FROM (
+                   SELECT j.id, p.official, cur.value AS cur,
+                          COALESCE(b.value, CASE WHEN $1::int IS NULL OR j.published_at
+                              > clock_timestamp() - make_interval(days => $1::int)
+                            THEN f.value END) AS base
+                   FROM social_jars j
+                   JOIN social_profiles p ON p.user_id = j.owner
+                   JOIN LATERAL (SELECT value, at FROM social_jar_marks m WHERE m.jar_id = j.id
+                                 ORDER BY m.at DESC LIMIT 1) cur ON true
+                   LEFT JOIN LATERAL (SELECT value FROM social_jar_marks m
+                                      WHERE m.jar_id = j.id
+                                        AND $1::int IS NOT NULL
+                                        AND m.at <= clock_timestamp() - make_interval(days => $1::int)
+                                      ORDER BY m.at DESC LIMIT 1) b ON true
+                   LEFT JOIN LATERAL (SELECT value FROM social_jar_marks m WHERE m.jar_id = j.id
+                                      ORDER BY m.at LIMIT 1) f ON true
+                   WHERE j.unpublished_at IS NULL
+                     -- Ranked by return: only public accounts that show returns.
+                     AND p.public_profile AND p.show_returns
+                     AND j.published_at <= clock_timestamp() - make_interval(hours => $2)
+                     -- A jar the marker couldn't price for a day (a pick lost its price,
+                     -- e.g. a rugged DEX token) leaves the board: its old mark isn't its value.
+                     AND cur.at > clock_timestamp() - make_interval(hours => $3)) r
+                   WHERE r.base IS NOT NULL) s
+                 WHERE NOT s.official OR ($4 AND s.organic < $5)
+                 ORDER BY s.cur / s.base DESC LIMIT 20";
+
+/// How old a jar's latest mark may be to stand in for its old picks' value when one
+/// of them has no price at republish (`republish_base`). The marker runs hourly.
+pub const REPUBLISH_MARK_HOURS: i32 = 2;
+
+/// A jar whose latest mark is older than this is off the leaderboard (and, being
+/// unmarked, gets no milestones): a pick has had no price for a day.
+pub const STALE_MARK_HOURS: i32 = 24;
+
+/// The longest a DEX pick's recorded price may be old (start price at publish, hourly
+/// marks). `DexService::price_now` reads within a minute; this bounds it regardless.
+pub const MAX_DEX_PRICE_AGE: Duration = Duration::from_secs(5 * 60);
+
+/// Fresh prices (DexScreener by address, read within `MAX_DEX_PRICE_AGE`) for the DEX
+/// picks among `picks`, keyed by `pick_key`, added to `cache` (one read per token per
+/// pass). A pick that can't be priced now is simply absent.
+async fn fresh_dex_prices(
+    dex: Option<&DexService>,
+    picks: &[Pick],
+    cache: &mut HashMap<String, f64>,
+) {
+    let Some(dex) = dex else { return };
+    for pick in picks {
+        let (Some(address), Some(chain)) = (&pick.address, dex_chain_of(&pick.chain)) else {
+            continue;
+        };
+        let key = pick_key(pick);
+        if cache.contains_key(&key) {
+            continue;
+        }
+        let asked = Instant::now();
+        if let Ok(price) = dex.price_now(chain, address).await
+            && price.is_finite()
+            && price > 0.0
+            && asked.elapsed() < MAX_DEX_PRICE_AGE
+        {
+            cache.insert(key, price);
+        }
+    }
+}
+
+/// Every pick has a positive start and current price: a mark is recorded only then,
+/// never renormalised over a priced subset.
+pub fn fully_priced(
+    picks: &[Pick],
+    start: &HashMap<String, f64>,
+    now: &HashMap<String, f64>,
+) -> bool {
+    picks.iter().all(|p| {
+        let key = pick_key(p);
+        start.get(&key).is_some_and(|s| s.is_finite() && *s > 0.0)
+            && now.get(&key).is_some_and(|n| n.is_finite() && *n > 0.0)
+    })
+}
+
+/// The DEX list for `buyable_picks` (empty without DEX routing).
+// async fn dex_tokens(state: &SocialState) -> Vec<TokenView> {
+//     match &state.dex {
+async fn dex_tokens(dex: Option<&DexService>) -> Vec<TokenView> {
+    match dex {
+        Some(dex) => dex.safe_tokens_cached().await,
+        None => Vec::new(),
+    }
 }
 
 type CardRow = (String, String, String);
@@ -1334,12 +1547,21 @@ pub struct MarkReport {
     pub marked: u64,
     pub milestones: u64,
     pub pruned: u64,
+    /// Jars left unmarked this hour because a pick had no start or current price.
+    pub unpriced: u64,
 }
 
 /// One pass: a mark for each live jar not marked in the last 55 minutes, a feed post
 /// for each newly reached milestone, and old marks dropped. Prices unavailable ⇒ no
 /// marks this hour (never an invented value).
-pub async fn mark_jars(pool: &PgPool, market: &Arc<MarketData>) -> Result<MarkReport, AppError> {
+// pub async fn mark_jars(pool: &PgPool, market: &Arc<MarketData>) -> Result<MarkReport, AppError> {
+/// DEX picks are priced now by address (`dex`), keyed as at publish; a jar with any pick
+/// unpriced is skipped this hour, never marked on the priced subset.
+pub async fn mark_jars(
+    pool: &PgPool,
+    market: &Arc<MarketData>,
+    dex: Option<&DexService>,
+) -> Result<MarkReport, AppError> {
     let pruned = sqlx::query(
         "DELETE FROM social_jar_marks WHERE at < clock_timestamp() - make_interval(days => $1)",
     )
@@ -1352,7 +1574,7 @@ pub async fn mark_jars(pool: &PgPool, market: &Arc<MarketData>) -> Result<MarkRe
         pruned,
         ..MarkReport::default()
     };
-    let Some(now) = prices(Some(market)).await else {
+    let Some(mut now) = prices(Some(market), None).await else {
         return Ok(report);
     };
     let mut after = Uuid::nil();
@@ -1372,6 +1594,11 @@ pub async fn mark_jars(pool: &PgPool, market: &Arc<MarketData>) -> Result<MarkRe
         for (id, owner, picks, start, base, announced) in rows {
             let picks: Vec<Pick> = serde_json::from_str(&picks).unwrap_or_default();
             let start: HashMap<String, f64> = serde_json::from_str(&start).unwrap_or_default();
+            fresh_dex_prices(dex, &picks, &mut now).await;
+            if !fully_priced(&picks, &start, &now) {
+                report.unpriced += 1;
+                continue;
+            }
             let Some(index) = jar_index(&picks, &start, base, &now) else {
                 continue;
             };
@@ -1424,16 +1651,22 @@ pub async fn mark_jars(pool: &PgPool, market: &Arc<MarketData>) -> Result<MarkRe
 
 /// Runs `mark_jars` a minute after start and then hourly, for as long as the process.
 /// A failed pass is logged and retried next hour; the task itself never ends.
-pub fn start_marker(pool: PgPool, market: Arc<MarketData>) -> tokio::task::JoinHandle<()> {
+// pub fn start_marker(pool: PgPool, market: Arc<MarketData>) -> tokio::task::JoinHandle<()> {
+pub fn start_marker(
+    pool: PgPool,
+    market: Arc<MarketData>,
+    dex: Option<Arc<DexService>>,
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_secs(60)).await;
         let mut every = tokio::time::interval(MARK_EVERY);
         every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             every.tick().await;
-            match mark_jars(&pool, &market).await {
+            match mark_jars(&pool, &market, dex.as_deref()).await {
                 Ok(report) => tracing::info!(
                     marked = report.marked,
+                    unpriced = report.unpriced,
                     milestones = report.milestones,
                     pruned = report.pruned,
                     "social jars marked"
@@ -1778,7 +2011,7 @@ async fn load_profile(
             posts: Vec::new(),
         });
     }
-    let now = prices(state.market.as_ref()).await;
+    let now = prices(state.market.as_ref(), state.dex.as_deref()).await;
     // Their own jars and the group jars they're in.
     let sql = format!(
         "{JAR_SELECT} WHERE j.unpublished_at IS NULL AND (j.owner = $1
@@ -2135,7 +2368,7 @@ async fn list_jars(
                 .await
                 .map_err(unavailable)?;
             let rows = ordered_rows(pool, &ids).await?;
-            let now = prices(state.market.as_ref()).await;
+            let now = prices(state.market.as_ref(), state.dex.as_deref()).await;
             let list = Arc::new(present_jars(pool, now.as_ref(), rows, None).await?);
             state.store_list(key, list.clone()).await;
             list
@@ -2153,7 +2386,7 @@ async fn jar(
     let me = viewer(&state, &headers).await?;
     let pool = pool(&state)?;
     let rows = jar_rows_by_id(pool, &[id]).await?;
-    let now = prices(state.market.as_ref()).await;
+    let now = prices(state.market.as_ref(), state.dex.as_deref()).await;
     // visible_jars(&present_jars(pool, now.as_ref(), rows, None).await?, me)
     state
         .shown(&present_jars(pool, now.as_ref(), rows, None).await?, me)
@@ -2205,7 +2438,15 @@ async fn publish_as(
     body: &PublishRequest,
     group: Option<Uuid>,
 ) -> Result<(Uuid, HashMap<String, f64>), AppError> {
-    let published = publish_with(pool(state)?, state.market.as_ref(), me, body, group).await?;
+    let published = publish_with(
+        pool(state)?,
+        state.market.as_ref(),
+        state.dex.as_deref(),
+        me,
+        body,
+        group,
+    )
+    .await?;
     state.forget_lists().await;
     Ok(published)
 }
@@ -2216,6 +2457,7 @@ async fn publish_as(
 async fn publish_with(
     pool: &PgPool,
     market: Option<&Arc<MarketData>>,
+    dex: Option<&DexService>,
     me: Uuid,
     body: &PublishRequest,
     group: Option<Uuid>,
@@ -2250,18 +2492,37 @@ async fn publish_with(
         .tokens()
         .await
         .map_err(|_| AppError::Busy)?;
-    buyable_picks(&body.picks, &market_list(&tokens))?;
-    // let now = prices(state.market.as_ref()).await.ok_or(AppError::Busy)?;
-    let now = prices(market).await.ok_or(AppError::Busy)?;
+    // buyable_picks(&body.picks, &market_list(&tokens))?;
+    buyable_picks(&body.picks, &market_list(&tokens), &dex_tokens(dex).await)?;
+    // let now = prices(state.market.as_ref(), state.dex.as_deref())
+    //     .await
+    //     .ok_or(AppError::Busy)?;
+    // DEX picks start at a price read now, never the six-hour list's (security review).
+    let mut now = prices(market, None).await.ok_or(AppError::Busy)?;
+    fresh_dex_prices(dex, &body.picks, &mut now).await;
+    if let Some(p) = body
+        .picks
+        .iter()
+        .find(|p| p.address.is_some() && !now.contains_key(&pick_key(p)))
+    {
+        return Err(AppError::BadRequest(format!(
+            "no live price for {} right now; try again in a minute",
+            p.symbol.to_ascii_uppercase()
+        )));
+    }
     let start: HashMap<String, f64> = body
         .picks
         .iter()
         .filter_map(|p| {
-            let key = p.symbol.to_ascii_uppercase();
+            // let key = p.symbol.to_ascii_uppercase();
+            let key = pick_key(p);
             now.get(&key).map(|price| (key, *price))
         })
         .collect();
-    if value_index(&body.picks, &start, &now).is_none() {
+    // if value_index(&body.picks, &start, &now).is_none() {
+    // Every pick needs a start price: marks are never renormalised over a priced subset.
+    if value_index(&body.picks, &start, &now).is_none() || !fully_priced(&body.picks, &start, &now)
+    {
         return Err(AppError::BadRequest("no prices for these tokens".into()));
     }
     let picks = serde_json::to_string(&body.picks).map_err(|_| AppError::Busy)?;
@@ -2349,18 +2610,32 @@ async fn publish_with(
             let base = if changed {
                 let old_start: HashMap<String, f64> =
                     serde_json::from_str(&old_start).unwrap_or_default();
-                let reached = match jar_index(&old_picks, &old_start, base, &now) {
-                    Some(v) => Some(v),
-                    None => sqlx::query_scalar(
-                        "SELECT value FROM social_jar_marks WHERE jar_id = $1
-                         ORDER BY at DESC LIMIT 1",
-                    )
-                    .bind(id)
-                    .fetch_optional(&mut *tx)
-                    .await
-                    .map_err(unavailable)?,
-                };
-                reached.unwrap_or(base)
+                // The old picks' DEX prices read now too (`now` has the new picks' only),
+                // and the old value only from every old pick (security review): else the
+                // latest mark, else Busy. Never renormalised over a subset.
+                fresh_dex_prices(dex, &old_picks, &mut now).await;
+                // let reached = match jar_index(&old_picks, &old_start, base, &now) {
+                //     Some(v) => Some(v),
+                //     None => <latest mark>,
+                // };
+                // reached.unwrap_or(base)
+                // Only a mark from the marker's last runs: an old one is a value from
+                // before a pick lost its price, and carrying it forward as a fresh mark
+                // would hide the loss and reset the leaderboard's staleness (security
+                // review). Older than that, Busy: the owner can try again later.
+                // "SELECT value FROM social_jar_marks WHERE jar_id = $1
+                //  ORDER BY at DESC LIMIT 1",
+                let latest: Option<f64> = sqlx::query_scalar(
+                    "SELECT value FROM social_jar_marks WHERE jar_id = $1
+                       AND at > clock_timestamp() - make_interval(hours => $2)
+                     ORDER BY at DESC LIMIT 1",
+                )
+                .bind(id)
+                .bind(REPUBLISH_MARK_HOURS)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(unavailable)?;
+                republish_base(&old_picks, &old_start, base, &now, latest)?
             } else {
                 base
             };
@@ -2615,9 +2890,11 @@ async fn create_post(
             symbol: symbol.clone(),
             chain: chain.clone(),
             weight: 1.0,
+            address: None,
         })
         .collect();
-    buyable_picks(&picks, &list)?;
+    // buyable_picks(&picks, &list)?;
+    buyable_picks(&picks, &list, &[])?;
     // Each token as 1Click spells it (cbBTC, not CBBTC), so it reads right everywhere.
     let tokens: Vec<(String, String)> = tokens
         .into_iter()
@@ -2629,7 +2906,9 @@ async fn create_post(
             (canonical, chain)
         })
         .collect();
-    let now = prices(state.market.as_ref()).await.ok_or(AppError::Busy)?;
+    let now = prices(state.market.as_ref(), state.dex.as_deref())
+        .await
+        .ok_or(AppError::Busy)?;
     let mut snapshot = Vec::with_capacity(tokens.len());
     for (symbol, chain) in &tokens {
         let price = now
@@ -2711,7 +2990,7 @@ async fn get_post(
 ) -> Result<Json<Post>, AppError> {
     let me = viewer(&state, &headers).await?;
     let rows = posts_where(pool(&state)?, me, "s.id = $2", Some(id), None, 1).await?;
-    let now = prices(state.market.as_ref()).await;
+    let now = prices(state.market.as_ref(), state.dex.as_deref()).await;
     present_posts(rows, now.as_ref(), me)
         .pop()
         .map(Json)
@@ -2778,7 +3057,7 @@ async fn list_posts(
             return Err(AppError::BadRequest("pass symbol or handle".into()));
         }
     };
-    let now = prices(state.market.as_ref()).await;
+    let now = prices(state.market.as_ref(), state.dex.as_deref()).await;
     Ok(Json(present_posts(rows, now.as_ref(), me)))
 }
 
@@ -2908,7 +3187,7 @@ async fn load_feed_page(
     let mut jars: HashMap<Uuid, PublicJar> = HashMap::new();
     if !jar_ids.is_empty() {
         let jar_rows = jar_rows_by_id(pool, &jar_ids).await?;
-        let now = prices(state.market.as_ref()).await;
+        let now = prices(state.market.as_ref(), state.dex.as_deref()).await;
         // for jar in visible_jars(&present_jars(pool, now.as_ref(), jar_rows, None).await?, me) {
         for jar in state.shown(&present_jars(pool, now.as_ref(), jar_rows, None).await?, me) {
             jars.insert(jar.id, jar);
@@ -2925,7 +3204,7 @@ async fn load_feed_page(
                 .fetch_all(pool)
                 .await
                 .map_err(unavailable)?;
-        let now = prices(state.market.as_ref()).await;
+        let now = prices(state.market.as_ref(), state.dex.as_deref()).await;
         for post in present_posts(post_rows, now.as_ref(), me) {
             posts.insert(post.id, post);
         }
@@ -3028,46 +3307,21 @@ async fn leaderboard(
             .map_err(unavailable)?;
             */
             // Honey's strategy jars rank on their real returns like anyone's, until the
-            // board has `min_organic` jars of people's own ($4), and never while
-            // switched off ($3).
-            let ranked: Vec<(Uuid, f64)> = sqlx::query_as(
-                "SELECT id, base FROM (
-                   SELECT r.*, count(*) FILTER (WHERE NOT r.official) OVER () AS organic
-                   FROM (
-                   SELECT j.id, p.official, cur.value AS cur,
-                          COALESCE(b.value, CASE WHEN $1::int IS NULL OR j.published_at
-                              > clock_timestamp() - make_interval(days => $1::int)
-                            THEN f.value END) AS base
-                   FROM social_jars j
-                   JOIN social_profiles p ON p.user_id = j.owner
-                   JOIN LATERAL (SELECT value FROM social_jar_marks m WHERE m.jar_id = j.id
-                                 ORDER BY m.at DESC LIMIT 1) cur ON true
-                   LEFT JOIN LATERAL (SELECT value FROM social_jar_marks m
-                                      WHERE m.jar_id = j.id
-                                        AND $1::int IS NOT NULL
-                                        AND m.at <= clock_timestamp() - make_interval(days => $1::int)
-                                      ORDER BY m.at DESC LIMIT 1) b ON true
-                   LEFT JOIN LATERAL (SELECT value FROM social_jar_marks m WHERE m.jar_id = j.id
-                                      ORDER BY m.at LIMIT 1) f ON true
-                   WHERE j.unpublished_at IS NULL
-                     -- Ranked by return: only public accounts that show returns.
-                     AND p.public_profile AND p.show_returns
-                     AND j.published_at <= clock_timestamp() - make_interval(hours => $2)) r
-                   WHERE r.base IS NOT NULL) s
-                 WHERE NOT s.official OR ($3 AND s.organic < $4)
-                 ORDER BY s.cur / s.base DESC LIMIT 20",
-            )
-            .bind(days)
-            .bind(LEADERBOARD_MIN_AGE_HOURS)
-            .bind(state.honey.enabled)
-            .bind(state.honey.min_organic)
-            .fetch_all(pool)
-            .await
-            .map_err(unavailable)?;
+            // board has `min_organic` jars of people's own ($5), and never while
+            // switched off ($4); a jar unmarked for a day is off the board ($3).
+            let ranked: Vec<(Uuid, f64)> = sqlx::query_as(LEADERBOARD_SQL)
+                .bind(days)
+                .bind(LEADERBOARD_MIN_AGE_HOURS)
+                .bind(STALE_MARK_HOURS)
+                .bind(state.honey.enabled)
+                .bind(state.honey.min_organic)
+                .fetch_all(pool)
+                .await
+                .map_err(unavailable)?;
             let ids: Vec<Uuid> = ranked.iter().map(|r| r.0).collect();
             let bases: HashMap<Uuid, f64> = ranked.into_iter().collect();
             let rows = ordered_rows(pool, &ids).await?;
-            let now = prices(state.market.as_ref()).await;
+            let now = prices(state.market.as_ref(), state.dex.as_deref()).await;
             let mut list = present_jars(pool, now.as_ref(), rows, Some(&bases)).await?;
             // Shown at live prices, so re-sort by what's shown.
             list.sort_by(|a, b| {
@@ -3109,7 +3363,7 @@ async fn suggestions(
                     .fetch_all(pool)
                     .await
                     .map_err(unavailable)?;
-                let now = prices(state.market.as_ref()).await;
+                let now = prices(state.market.as_ref(), state.dex.as_deref()).await;
                 present_jars(pool, now.as_ref(), rows, None).await?
             } else {
                 Vec::new()
@@ -3346,16 +3600,209 @@ mod tests {
             symbol: symbol.into(),
             chain: chain.into(),
             weight: 50.0,
+            address: None,
         };
-        assert!(buyable_picks(&[pick("eth", "base"), pick("XAUT", "Ethereum")], &list).is_ok());
-        assert!(buyable_picks(&[pick("NEAR", "NEAR")], &list).is_ok());
+        let none: &[TokenView] = &[];
+        assert!(
+            buyable_picks(
+                &[pick("eth", "base"), pick("XAUT", "Ethereum")],
+                &list,
+                none
+            )
+            .is_ok()
+        );
+        assert!(buyable_picks(&[pick("NEAR", "NEAR")], &list, none).is_ok());
         // PAXG isn't sold by NEAR Intents; ETH isn't delivered on Solana.
-        let err = buyable_picks(&[pick("PAXG", "Ethereum")], &list).unwrap_err();
+        let err = buyable_picks(&[pick("PAXG", "Ethereum")], &list, none).unwrap_err();
         assert!(matches!(err, AppError::BadRequest(ref m) if m.starts_with("PAXG on Ethereum")));
-        assert!(buyable_picks(&[pick("ETH", "Solana")], &list).is_err());
+        assert!(buyable_picks(&[pick("ETH", "Solana")], &list, none).is_err());
         // A thesis jar's picks name their chain by 1Click's code (2026-11-14).
-        assert!(buyable_picks(&[pick("XAUT", "eth")], &list).is_ok());
-        assert!(buyable_picks(&[pick("XAUT", "sol")], &list).is_err());
+        assert!(buyable_picks(&[pick("XAUT", "eth")], &list, none).is_ok());
+        assert!(buyable_picks(&[pick("XAUT", "sol")], &list, none).is_err());
+    }
+
+    fn dex_token(chain: DexChain, address: &str, symbol: &str, ok: bool) -> TokenView {
+        TokenView {
+            chain,
+            address: address.into(),
+            symbol: symbol.into(),
+            name: symbol.into(),
+            decimals: 18,
+            logo_url: None,
+            price_usd: 2.0,
+            liquidity_usd: Some(1e6),
+            volume24h_usd: Some(1e6),
+            market_cap_usd: None,
+            change24h_pct: None,
+            coingecko_id: None,
+            metadata: "uniswap",
+            route: "dex",
+            safety: crate::dex::SafetyView { ok, flags: vec![] },
+        }
+    }
+
+    #[test]
+    fn republishing_continues_from_every_old_pick_or_the_latest_mark() {
+        // Security review 4: the old picks' value counts only when all are priced now.
+        const AERO: &str = "0x940181a94a35a4569e4529a3cdfb74e38fd98631";
+        let p = |symbol: &str, address: Option<&str>| Pick {
+            symbol: symbol.into(),
+            chain: "base".into(),
+            weight: 50.0,
+            address: address.map(String::from),
+        };
+        let old = [p("AERO", Some(AERO)), p("ETH", None)];
+        let key = format!("dex:base:{AERO}");
+        let start = HashMap::from([(key.clone(), 1.0), ("ETH".into(), 100.0)]);
+        let both = HashMap::from([(key, 0.5), ("ETH".into(), 150.0)]);
+        // (0.5 + 1.5) / 2 = 1.0 of base 2.0.
+        assert!((republish_base(&old, &start, 2.0, &both, Some(9.0)).unwrap() - 2.0).abs() < 1e-9);
+        // AERO unpriced: never ETH alone (which would read 1.5 × 2 = 3.0); the last mark.
+        let eth_only = HashMap::from([("ETH".to_string(), 150.0)]);
+        assert_eq!(
+            republish_base(&old, &start, 2.0, &eth_only, Some(1.7)).unwrap(),
+            1.7
+        );
+        assert!(matches!(
+            republish_base(&old, &start, 2.0, &eth_only, None),
+            Err(AppError::Busy)
+        ));
+    }
+
+    #[test]
+    fn a_jar_unmarked_for_a_day_is_off_the_leaderboard() {
+        // Security review 5: an unpriceable pick (a rugged DEX token) stops the marks; its
+        // last mark is not its value, so after `STALE_MARK_HOURS` the jar isn't ranked.
+        assert_eq!(STALE_MARK_HOURS, 24);
+        let sql = LEADERBOARD_SQL
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(sql.contains("SELECT value, at FROM social_jar_marks m WHERE m.jar_id = j.id ORDER BY m.at DESC LIMIT 1) cur"));
+        assert!(sql.contains("AND cur.at > clock_timestamp() - make_interval(hours => $3)"));
+    }
+
+    #[test]
+    fn a_jar_is_marked_only_when_every_pick_has_both_prices() {
+        // Security review 2: a jar with an unpriced pick is skipped, never marked on the
+        // priced subset (which would hide a DEX pick's fall).
+        const AERO: &str = "0x940181a94a35a4569e4529a3cdfb74e38fd98631";
+        let p = |symbol: &str, address: Option<&str>| Pick {
+            symbol: symbol.into(),
+            chain: "base".into(),
+            weight: 50.0,
+            address: address.map(String::from),
+        };
+        let picks = [p("AERO", Some(AERO)), p("ETH", None)];
+        let dex_key = format!("dex:base:{AERO}");
+        let start = HashMap::from([(dex_key.clone(), 1.0), ("ETH".into(), 100.0)]);
+        let all = HashMap::from([(dex_key.clone(), 0.5), ("ETH".into(), 100.0)]);
+        assert!(fully_priced(&picks, &start, &all));
+        // The cached symbol price for AERO doesn't count: only the address key does.
+        let no_dex = HashMap::from([("AERO".into(), 0.9), ("ETH".into(), 100.0)]);
+        assert!(!fully_priced(&picks, &start, &no_dex));
+        let zero = HashMap::from([(dex_key, 0.0), ("ETH".into(), 100.0)]);
+        assert!(!fully_priced(&picks, &start, &zero));
+        assert!(!fully_priced(&picks, &HashMap::new(), &all));
+    }
+
+    #[tokio::test]
+    async fn dex_picks_are_priced_now_or_not_at_all() {
+        // Security review 3: without a live DEX price a DEX pick gets none (publish then
+        // refuses it), never the list's six-hour-old one.
+        const AERO: &str = "0x940181a94a35a4569e4529a3cdfb74e38fd98631";
+        let picks = [Pick {
+            symbol: "AERO".into(),
+            chain: "base".into(),
+            weight: 100.0,
+            address: Some(AERO.into()),
+        }];
+        let mut prices = HashMap::from([("AERO".to_string(), 0.9)]);
+        fresh_dex_prices(None, &picks, &mut prices).await;
+        assert!(!prices.contains_key(&pick_key(&picks[0])));
+        // DEX routing off: `price_now` refuses, so still no price.
+        let off = DexService::new(crate::dex::DexConfig::default()).unwrap();
+        fresh_dex_prices(Some(&off), &picks, &mut prices).await;
+        assert!(!prices.contains_key(&pick_key(&picks[0])));
+        assert!(MAX_DEX_PRICE_AGE <= Duration::from_secs(5 * 60));
+    }
+
+    #[test]
+    fn dex_picks_are_buyable_by_chain_and_address_only() {
+        const PAXG: &str = "0x45804880de22913dafe09f4980848ece6ecbaf78";
+        const AERO: &str = "0x940181a94a35a4569e4529a3cdfb74e38fd98631";
+        let dex = [
+            dex_token(DexChain::Ethereum, PAXG, "PAXG", true),
+            dex_token(DexChain::Base, AERO, "AERO", true),
+            dex_token(
+                DexChain::Base,
+                "0x4ed4e862860bed51a9570b96d89af5e1b0efefed",
+                "DEGEN",
+                false,
+            ),
+        ];
+        let pick = |symbol: &str, chain: &str, address: Option<&str>| Pick {
+            symbol: symbol.into(),
+            chain: chain.into(),
+            weight: 50.0,
+            address: address.map(String::from),
+        };
+        // PAXG isn't on 1Click, but Honey's DEX list has it on Ethereum: by any chain name,
+        // in any address case.
+        for chain in ["eth", "Ethereum", "ethereum"] {
+            assert!(buyable_picks(&[pick("PAXG", chain, Some(PAXG))], &[], &dex).is_ok());
+        }
+        let upper = format!("0x{}", PAXG[2..].to_uppercase());
+        assert!(buyable_picks(&[pick("paxg", "eth", Some(&upper))], &[], &dex).is_ok());
+        // Never by symbol alone, never on another chain, never under another symbol.
+        assert!(buyable_picks(&[pick("PAXG", "eth", None)], &[], &dex).is_err());
+        assert!(buyable_picks(&[pick("PAXG", "base", Some(PAXG))], &[], &dex).is_err());
+        assert!(buyable_picks(&[pick("GOLD", "eth", Some(PAXG))], &[], &dex).is_err());
+        // A token that failed the safety checks isn't buyable.
+        let degen = "0x4ed4e862860bed51a9570b96d89af5e1b0efefed";
+        assert!(buyable_picks(&[pick("DEGEN", "base", Some(degen))], &[], &dex).is_err());
+        assert!(buyable_picks(&[pick("AERO", "Base", Some(AERO))], &[], &dex).is_ok());
+        // Security review 1: an address that isn't on the DEX list is refused, even when
+        // the symbol is one NEAR Intents sells on that chain (no symbol fallback).
+        let usdc = [MarketListToken {
+            symbol: "USDC".into(),
+            price_usd: 1.0,
+            chains: vec!["Base"],
+        }];
+        assert!(buyable_picks(&[pick("USDC", "base", None)], &usdc, &dex).is_ok());
+        let err = buyable_picks(&[pick("USDC", "base", Some(AERO))], &usdc, &dex).unwrap_err();
+        assert!(matches!(err, AppError::BadRequest(ref m) if m.starts_with("USDC on base")));
+        let stranger = "0x1111111111111111111111111111111111111111";
+        assert!(buyable_picks(&[pick("USDC", "base", Some(stranger))], &usdc, &dex).is_err());
+        // A malformed address is refused before any lookup.
+        assert!(
+            validate_picks(&[
+                pick("AERO", "base", Some("0x12")),
+                pick("ETH", "base", None)
+            ])
+            .is_err()
+        );
+        assert!(
+            validate_picks(&[pick("AERO", "near", Some(AERO)), pick("ETH", "base", None)]).is_err()
+        );
+        // Prices go by (chain, address) for DEX picks.
+        assert_eq!(
+            pick_key(&pick(
+                "AERO",
+                "Base",
+                Some(&AERO.to_uppercase().replace("0X", "0x"))
+            )),
+            format!("dex:base:{AERO}")
+        );
+        assert_eq!(pick_key(&pick("eth", "base", None)), "ETH");
+        let p = [pick("AERO", "base", Some(AERO)), pick("ETH", "base", None)];
+        let start = HashMap::from([(format!("dex:base:{AERO}"), 1.0), ("ETH".into(), 100.0)]);
+        let now = HashMap::from([
+            (format!("dex:base:{AERO}"), 2.0),
+            ("ETH".into(), 100.0),
+            ("AERO".into(), 50.0),
+        ]);
+        assert!((value_index(&p, &start, &now).unwrap() - 1.5).abs() < 1e-9);
     }
 
     /// 2026-11-14: a jar's cash is published as a USDC pick on Base at its weight
@@ -3379,15 +3826,17 @@ mod tests {
                 symbol: "XAUT".into(),
                 chain: "eth".into(),
                 weight: 60.0,
+                address: None,
             },
             Pick {
                 symbol: "USDC".into(),
                 chain: "Base".into(),
                 weight: 40.0,
+                address: None,
             },
         ];
         assert!(validate_picks(&picks).is_ok());
-        assert!(buyable_picks(&picks, &list).is_ok());
+        assert!(buyable_picks(&picks, &list, &[]).is_ok());
     }
 
     use super::*;
@@ -3497,6 +3946,7 @@ mod tests {
 
     fn pick(symbol: &str, weight: f64) -> Pick {
         Pick {
+            address: None,
             symbol: symbol.into(),
             chain: "Base".into(),
             weight,

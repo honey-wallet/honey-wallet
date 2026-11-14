@@ -39,6 +39,7 @@ import { TEST_MODE } from '@/lib/test-mode';
 import {
   clearRecentPicks,
   coinName,
+  isDexEntry,
   onSupportedNetworks,
   pickerLists,
   quickPicks,
@@ -194,6 +195,11 @@ function LiveTokens({
     for (const alias of m.aliases ?? [])
       if (!marketRank.has(alias.toUpperCase())) marketRank.set(alias.toUpperCase(), i + 0.5);
   });
+  // Sub-dollar prices keep three significant digits (a $0.00042 token isn't "$0.00").
+  const priceText = (usd: number) => {
+    const local = money.fromUsd(usd);
+    return local >= 1 ? money.format(usd) : `${money.sign}${Number(local.toPrecision(3))}`;
+  };
   // "Arbitrum ETH", "Base ETH": a coin away from its own network, named as Uniswap does.
   const nameOf = (t: OneClickToken) => {
     const known = tokenName(t.symbol);
@@ -248,17 +254,33 @@ function LiveTokens({
     const ref = tokenRef(t);
     const held = heldOf(t);
     const own = !!held && held.amount > 0;
-    const category = tokenCategory(t.symbol);
+    // const category = tokenCategory(t.symbol);
+    // A DEX token is never tagged by its symbol (a look-alike "USDC" isn't a stablecoin).
+    const category = isDexEntry(t) ? null : tokenCategory(t.symbol);
+    // Not held and untagged: its price, so a long-tail or DEX token shows what it costs.
+    const price =
+      right === 'tag' && !own && !category && t.price !== null && t.price > 0
+        ? priceText(t.price)
+        : undefined;
     return (
       <TokenRow
         key={`${key}-${t.assetId}`}
         icon={
-          <TokenIcon symbol={t.symbol} chain={chainName(t.blockchain)} size={ICON} ring={c.sheet} />
+          // <TokenIcon symbol={t.symbol} chain={chainName(t.blockchain)} size={ICON} ring={c.sheet} />
+          <TokenIcon
+            symbol={t.symbol}
+            chain={chainName(t.blockchain)}
+            size={ICON}
+            ring={c.sheet}
+            uri={t.logoUrl}
+            assetId={t.assetId}
+          />
         }
         title={nameOf(t)}
         symbol={t.symbol}
         detail={shortAddress(t.contractAddress)}
-        value={right !== 'none' && own ? money.format(held.usd) : undefined}
+        // value={right !== 'none' && own ? money.format(held.usd) : undefined}
+        value={right !== 'none' && own ? money.format(held.usd) : price}
         amount={right !== 'none' && own ? formatBalance(held.amount) : undefined}
         tag={right === 'tag' && !own && category ? category : undefined}
         selected={!!picked && sameToken(picked, ref)}

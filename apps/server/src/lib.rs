@@ -240,6 +240,12 @@ fn router(config: &Config, health: runtime::RuntimeHealth, services: RouterServi
     );
     // What the app shows: DEX tokens and routes only when `DEX_ENABLED`, free gas on
     // swaps only when `DEX_SPONSOR_ENABLED` too.
+    // Builds every chain's DEX list in the background and keeps it fresh (and GoPlus's
+    // verdicts with it), so the token list, the thesis registry and jar prices never
+    // wait on a build.
+    if let Some(dex) = &dex {
+        dex.spawn_refresh();
+    }
     capability_adapters.dex = dex.as_ref().is_some_and(|d| d.enabled());
     capability_adapters.dex_sponsor = dex.as_ref().is_some_and(|d| d.sponsor_enabled());
     let public_markets = public_markets.merge(portfolio).merge(
@@ -353,6 +359,7 @@ fn router(config: &Config, health: runtime::RuntimeHealth, services: RouterServi
             identity.clone(),
             market.clone(),
             redis.clone(),
+            dex.clone(),
         ))
         .merge(confidential_intents_router(
             identity.clone(),
@@ -394,6 +401,7 @@ fn router(config: &Config, health: runtime::RuntimeHealth, services: RouterServi
                 jar_dao,
                 config.trust_proxy_headers,
                 config.trusted_proxy_cidrs.clone(),
+                dex.clone(),
             ),
             push_sender(identity.as_ref()),
         ))
@@ -640,9 +648,17 @@ fn theses_router(
     identity: Option<identity::Identity>,
     market: Option<std::sync::Arc<market_data::MarketData>>,
     redis: Option<redis_store::RedisStore>,
+    dex: Option<std::sync::Arc<dex::DexService>>,
 ) -> Router {
     let pool = identity.as_ref().map(|i| i.pool().clone());
-    match thesis::ThesisService::new(thesis::Settings::from_env(), market, redis, pool) {
+    // match thesis::ThesisService::new(thesis::Settings::from_env(), market, redis, pool) {
+    match thesis::ThesisService::new_with_dex(
+        thesis::Settings::from_env(),
+        market,
+        redis,
+        pool,
+        dex,
+    ) {
         Ok(service) => routes::theses::router(identity, std::sync::Arc::new(service)),
         Err(error) => {
             tracing::error!(%error, "thesis runs disabled");

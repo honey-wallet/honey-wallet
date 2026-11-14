@@ -4,7 +4,12 @@
  * from lib/dex (quotes and sends) so route planning and pickers can read it without the
  * signing stack.
  */
-import { type Capabilities, DEX_CAPABILITIES, isFeatureAvailable } from '@honey-wallet/api-client';
+import {
+  type Capabilities,
+  DEX_CAPABILITIES,
+  type DexTokenMetadata,
+  isFeatureAvailable,
+} from '@honey-wallet/api-client';
 import { EVM_USDC, SOLANA_USDC_MINT } from '@honey-wallet/keyring';
 import { getAddress, isAddress } from 'viem';
 import { createStore } from '@/lib/store';
@@ -100,9 +105,21 @@ export type DexToken = {
   priceUsd: number;
   liquidityUsd?: number;
   volume24hUsd?: number;
+  /** CoinGecko's, else GeckoTerminal's or Jupiter's. */
+  marketCapUsd?: number;
+  /** Where symbol, name, decimals and logo came from (a curated list, or the chain). */
+  metadata?: DexTokenMetadata;
   route: 'dex';
   safety: { ok: boolean; flags: string[] };
 };
+
+const METADATA: readonly DexTokenMetadata[] = [
+  'uniswap',
+  'coingecko',
+  'jupiter',
+  'chain',
+  'intents',
+];
 
 export const ADDRESS = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 export const validAddress = (chain: DexChain, a: unknown): a is string =>
@@ -144,6 +161,10 @@ export function parseDexTokens(body: unknown): DexToken[] {
       priceUsd: t.priceUsd as number,
       ...(num(t.liquidityUsd) !== undefined ? { liquidityUsd: t.liquidityUsd as number } : {}),
       ...(num(t.volume24hUsd) !== undefined ? { volume24hUsd: t.volume24hUsd as number } : {}),
+      ...(num(t.marketCapUsd) !== undefined ? { marketCapUsd: t.marketCapUsd as number } : {}),
+      ...(METADATA.includes(t.metadata as DexTokenMetadata)
+        ? { metadata: t.metadata as DexTokenMetadata }
+        : {}),
       route: 'dex',
       safety: {
         ok: safety.ok,
@@ -286,6 +307,28 @@ export function findDexToken(tokens: readonly DexToken[], symbol: string, chain?
   );
 }
 
+/**
+ * The DEX token at exactly (chain, address): the chain by the app's name ("Base"), the
+ * server's code ("base") or NEAR Intents' ("arb"); only tokens the server marked safe.
+ * A symbol never finds a token here.
+ */
+export function findDexTokenByAddress(
+  tokens: readonly DexToken[],
+  chain: string,
+  address: string,
+): DexToken | null {
+  const c = chain.trim().toLowerCase();
+  const wanted = DEX_CHAINS.find(
+    (d) => d.toLowerCase() === c || CODE[d] === c || ONE_CLICK_CODE[d] === c,
+  );
+  if (!wanted) return null;
+  return (
+    tokens.find(
+      (t) => t.safety.ok && t.chain === wanted && sameToken(wanted, t.address, address),
+    ) ?? null
+  );
+}
+
 export const dexTokenByAsset = (tokens: readonly DexToken[], assetId: string) =>
   tokens.find((t) => dexAssetId(t.chain, t.address) === assetId) ?? null;
 
@@ -332,6 +375,8 @@ export function dexPickerEntries(
       contractAddress: t.address,
       price: t.priceUsd,
       name: t.name,
+      ...(t.logoUrl ? { logoUrl: t.logoUrl } : {}),
+      ...(t.liquidityUsd !== undefined ? { liquidityUsd: t.liquidityUsd } : {}),
     }));
 }
 
@@ -340,8 +385,23 @@ export const dexTokenList = createStore<{ tokens: DexToken[] | null }>({ tokens:
 
 export function loadDexTokens() {
   void fetchAllDexTokens()
-    .then((tokens) => dexTokenList.set({ tokens }))
+    .then((tokens) => {
+      dexTokenList.set({ tokens });
+      // Their logos, kept by (chain, address) so a look-alike symbol never borrows one.
+      void import('@/lib/token-logos')
+        .then(({ addAssetLogos }) => addAssetLogos(dexLogos(tokens)))
+        .catch(() => undefined);
+    })
     .catch(() => undefined);
+}
+
+/** Each safe DEX token's https logo by its `dex:` asset id. */
+export function dexLogos(tokens: readonly DexToken[]): Record<string, string> {
+  return Object.fromEntries(
+    tokens
+      .filter((t) => t.safety.ok && t.logoUrl?.startsWith('https://'))
+      .map((t) => [dexAssetId(t.chain, t.address), t.logoUrl as string]),
+  );
 }
 
 /** Search's rows for DEX tokens whose symbol the market list doesn't have yet. */

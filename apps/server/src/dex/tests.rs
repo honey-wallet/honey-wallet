@@ -153,12 +153,21 @@ async fn order(
 
 async fn rpc(State(m): State<Mock>, Json(body): Json<Value>) -> Json<Value> {
     let result = match body["method"].as_str().unwrap() {
-        "eth_call" => {
-            assert_eq!(body["params"][0]["data"], "0x313ce567");
-            let mut word = [0u8; 32];
-            word[31] = *m.decimals.lock().unwrap();
-            json!(format!("0x{}", alloy_primitives::hex::encode(word)))
-        }
+        "eth_call" => match body["params"][0]["data"].as_str().unwrap() {
+            "0x313ce567" => {
+                let mut word = [0u8; 32];
+                word[31] = *m.decimals.lock().unwrap();
+                json!(format!("0x{}", alloy_primitives::hex::encode(word)))
+            }
+            // symbol() / name(): an ABI string, "SCAM".
+            "0x95d89b41" | "0x06fdde03" => json!(format!(
+                "0x{}{}{}",
+                format!("{:064x}", 32),
+                format!("{:064x}", 4),
+                format!("{:0<64}", alloy_primitives::hex::encode(b"SCAM"))
+            )),
+            other => panic!("unexpected eth_call {other}"),
+        },
         "getAccountInfo" => {
             let mut mint = [0u8; 82];
             mint[44] = 6;
@@ -313,6 +322,17 @@ async fn serve() -> (String, Mock) {
                 }]))
             }),
         )
+        // Uniswap's default list has AERO (with its logo); CoinGecko's lists are down.
+        .route(
+            "/uniswap",
+            get(|| async {
+                Json(json!({"name": "Uniswap Labs Default", "tokens": [{
+                    "chainId": 8453, "address": format!("{AERO:#x}"), "symbol": "AERO",
+                    "name": "Aerodrome Finance", "decimals": 18,
+                    "logoURI": "https://assets.coingecko.com/coins/images/31745/large/token.png"
+                }]}))
+            }),
+        )
         .route("/swap/v2/order", get(order))
         .route("/rpc", post(rpc))
         .with_state(mock.clone());
@@ -339,6 +359,9 @@ async fn service_with(edit: impl FnOnce(&mut DexConfig)) -> (DexService, Mock) {
         coingecko: base.clone(),
         geckoterminal: base.clone(),
         dexscreener: base.clone(),
+        uniswap_list: format!("{base}/uniswap"),
+        coingecko_lists: format!("{base}/cg"),
+        build_interval: Some(Duration::from_millis(1)),
         goplus: base,
         goplus_interval: Duration::from_millis(1),
         ..DexConfig::default()
@@ -504,6 +527,40 @@ async fn without_usd_from_kyber_impact_is_measured_against_honeys_prices() {
     // 21.068 AERO × $0.4747 = $10.0011 for $10: no impact.
     assert_eq!(q.price_impact_pct, Some(0.0));
     assert!(!q.warnings.iter().any(|w| w.contains("unknown")));
+}
+
+#[tokio::test]
+async fn every_listed_token_has_list_or_chain_metadata() {
+    let (dex, _) = service().await;
+    let all = dex.tokens(DexChain::Base, true).await.unwrap();
+    // AERO from Uniswap's list (name, decimals, logo); SCAM, on no list, from the chain.
+    let aero = all.iter().find(|t| t.symbol == "AERO").unwrap();
+    assert_eq!(aero.metadata, "uniswap");
+    assert_eq!(aero.name, "Aerodrome Finance");
+    assert!(aero.logo_url.as_deref().unwrap().starts_with("https://"));
+    let scam = all.iter().find(|t| t.address == SCAM).unwrap();
+    assert_eq!(scam.metadata, "chain");
+    assert_eq!((scam.symbol.as_str(), scam.decimals), ("SCAM", 18));
+    // Solana's come from Jupiter's verified list.
+    let sol = dex.tokens(DexChain::Solana, true).await.unwrap();
+    assert_eq!(sol[0].metadata, "jupiter");
+}
+
+#[tokio::test]
+async fn every_chain_gets_its_goplus_checks_not_just_the_first_built() {
+    let (dex, _) = service().await;
+    // Both lists built back to back: before, the second chain's warm-up was dropped while
+    // the first ran, so its tokens stayed `unchecked` (hidden) until the next build.
+    dex.tokens(DexChain::Base, true).await.unwrap();
+    dex.tokens(DexChain::Solana, true).await.unwrap();
+    for _ in 0..200 {
+        let base = dex.safe_tokens_cached().await;
+        if base.iter().any(|t| t.symbol == "AERO") && base.iter().any(|t| t.symbol == "JUP") {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("{:?}", dex.safe_tokens_cached().await);
 }
 
 #[tokio::test]
@@ -724,6 +781,20 @@ async fn honey_never_pays_a_new_token_accounts_rent_in_a_swap() {
 }
 
 #[tokio::test]
+async fn price_now_reads_dexscreener_not_the_list() {
+    // A jar's recorded DEX prices (start, marks) come from DexScreener now, not from the
+    // universe's six-hour-old price (security review 3).
+    let (dex, mock) = service().await;
+    dex.tokens(DexChain::Base, true).await.unwrap();
+    *mock.fresh.lock().unwrap() = Some(0.61);
+    let aero = format!("{AERO:#x}");
+    assert_eq!(dex.price_now(DexChain::Base, &aero).await.unwrap(), 0.61);
+    assert!(dex.price_now(DexChain::Base, "0x12").await.is_err());
+    let (off, _) = service_with(|c| c.enabled = false).await;
+    assert!(off.price_now(DexChain::Base, &aero).await.is_err());
+}
+
+#[tokio::test]
 async fn a_failed_universe_build_is_remembered_for_a_minute() {
     // Finding 3: while GeckoTerminal is down, the public token list doesn't rebuild the
     // universe (10–30 s of provider calls) on every request.
@@ -732,7 +803,9 @@ async fn a_failed_universe_build_is_remembered_for_a_minute() {
     for _ in 0..5 {
         assert!(dex.tokens(DexChain::Base, true).await.is_err());
     }
-    assert_eq!(*mock.gecko_calls.lock().unwrap(), 1);
+    // assert_eq!(*mock.gecko_calls.lock().unwrap(), 1);
+    // One build: its one page of tokens, asked twice (a retry a slot later).
+    assert_eq!(*mock.gecko_calls.lock().unwrap(), 2);
     // Another chain is its own build (one lock per chain).
     assert!(dex.tokens(DexChain::Solana, true).await.is_ok());
 }
@@ -932,5 +1005,115 @@ async fn live_quotes() {
                 t.safety.flags
             );
         }
+    }
+}
+
+/// Live, read-only: builds every chain's list from the real providers (CoinGecko,
+/// GeckoTerminal, DexScreener, Jupiter, the token lists, GoPlus; nothing signed or sent)
+/// and prints counts and samples per chain. `DEX_LIVE_OUT=<file>` writes the safe tokens
+/// as JSON (the thesis eval's frozen DEX snapshot).
+/// `cargo test -p honey-server --lib dex::tests::live_universe -- --ignored --nocapture`
+#[tokio::test]
+#[ignore = "live: calls the real providers for several minutes"]
+async fn live_universe() {
+    let dex = Arc::new(
+        DexService::new(DexConfig {
+            enabled: true,
+            ..DexConfig::default()
+        })
+        .unwrap(),
+    );
+    let mut built = Vec::new();
+    for chain in chains::ALL {
+        let started = std::time::Instant::now();
+        let tokens = match dex.universe(chain).await {
+            Ok(t) => t,
+            Err(error) => {
+                println!("{}: build failed: {error}", chain.name());
+                Default::default()
+            }
+        };
+        println!(
+            "{}: built {} in {:?}",
+            chain.name(),
+            tokens.len(),
+            started.elapsed()
+        );
+        built.push((chain, tokens));
+    }
+    // GoPlus, paced: wait until every floor-passing token has a verdict (or 30 minutes).
+    let deadline = std::time::Instant::now() + Duration::from_secs(30 * 60);
+    loop {
+        let pending: usize = built
+            .iter()
+            .map(|(chain, tokens)| {
+                dex.warm_unchecked(*chain, tokens);
+                tokens
+                    .iter()
+                    .filter(|t| {
+                        t.flags.is_empty() && dex.safety().cached(*chain, &t.address).is_none()
+                    })
+                    .count()
+            })
+            .sum();
+        if pending == 0 || std::time::Instant::now() > deadline {
+            println!("GoPlus pending: {pending}");
+            break;
+        }
+        tokio::time::sleep(Duration::from_secs(10)).await;
+    }
+    let mut out = Vec::new();
+    for (chain, tokens) in &built {
+        let views: Vec<TokenView> = tokens
+            .iter()
+            .map(|t| dex.view(t, dex.safety().cached(*chain, &t.address)))
+            .collect();
+        let safe: Vec<&TokenView> = views.iter().filter(|v| v.safety.ok).collect();
+        let floors = tokens.iter().filter(|t| t.flags.is_empty()).count();
+        let logo = safe.iter().filter(|v| v.logo_url.is_some()).count();
+        let complete = safe
+            .iter()
+            .filter(|v| {
+                v.logo_url.is_some()
+                    && !v.name.is_empty()
+                    && !v.symbol.is_empty()
+                    && matches!(v.metadata, "uniswap" | "coingecko" | "jupiter" | "chain")
+            })
+            .count();
+        let mut sources: HashMap<&str, usize> = HashMap::new();
+        for v in &safe {
+            *sources.entry(v.metadata).or_default() += 1;
+        }
+        let mut flags: HashMap<&str, usize> = HashMap::new();
+        for v in &views {
+            for f in &v.safety.flags {
+                *flags.entry(f.as_str()).or_default() += 1;
+            }
+        }
+        let mut flags: Vec<_> = flags.into_iter().collect();
+        flags.sort_by(|a, b| b.1.cmp(&a.1));
+        println!(
+            "{}: {} listed, {} past the floors, {} safe; {} with a logo, {} complete; metadata {:?}; flags {:?}",
+            chain.name(),
+            views.len(),
+            floors,
+            safe.len(),
+            logo,
+            complete,
+            sources,
+            &flags[..flags.len().min(8)]
+        );
+        println!(
+            "  sample: {}",
+            safe.iter()
+                .take(10)
+                .map(|v| format!("{} ({})", v.symbol, v.name))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        out.extend(safe.into_iter().cloned());
+    }
+    if let Ok(path) = std::env::var("DEX_LIVE_OUT") {
+        std::fs::write(path, serde_json::to_string_pretty(&out).unwrap()).unwrap();
     }
 }

@@ -1,8 +1,12 @@
 //! Asset registry: the only place an asset address can come from (spec Stage 4–5,
 //! R-AU-1..3, R-MAP-3). The universe is the NEAR Intents 1Click token list, refreshed
-//! every 15 minutes. Models never supply an address; they name instruments, and code
-//! resolves them here.
+//! every 15 minutes, merged (2026-11-14) with Honey's DEX list: tokens 1Click doesn't
+//! carry that KyberSwap (EVM) or Jupiter (Solana) can buy on Honey's chains, past the
+//! liquidity, volume, age and GoPlus checks (`dex::universe`). Both are keyed by (chain,
+//! address); where 1Click lists the same contract, its asset is kept (privacy first).
+//! Models never supply an address; they name instruments, and code resolves them here.
 
+use crate::dex::{DexChain, TokenView};
 use serde::{Deserialize, Serialize};
 use std::{
     sync::Arc,
@@ -37,6 +41,25 @@ pub struct OneClickToken {
     pub coingecko_id: Option<String>,
 }
 
+/// How Honey buys an asset: NEAR Intents 1Click, or a DEX on the asset's own chain
+/// (1Click to that chain's USDC first when the money is elsewhere).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AssetRoute {
+    #[default]
+    Intents,
+    Dex,
+}
+
+/// Market numbers a DEX asset carries from its own sources, used when CoinGecko's
+/// market rows (keyed by the 1Click list's ids) don't have the coin.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DexMarket {
+    pub market_cap_usd: Option<f64>,
+    pub volume24h_usd: Option<f64>,
+    pub change24h_pct: Option<f64>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RegistryAsset {
@@ -52,6 +75,18 @@ pub struct RegistryAsset {
     /// CoinGecko's id for the coin, from the 1Click list; joins market data.
     #[serde(default)]
     pub coingecko_id: Option<String>,
+    /// `intents` (1Click) or `dex`. A `dex` asset's id is `dex:<chain>:<address>` (the
+    /// app's own form; never sent to 1Click).
+    #[serde(default)]
+    pub route: AssetRoute,
+    /// The token's name, when its source gives one (DEX assets).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logo_url: Option<String>,
+    /// DEX assets' own market numbers (not part of the API).
+    #[serde(skip)]
+    pub dex_market: Option<DexMarket>,
 }
 
 const STABLES: &[&str] = &[
@@ -120,9 +155,98 @@ pub fn parse_tokens(body: &serde_json::Value) -> Vec<RegistryAsset> {
                 coingecko_id: t
                     .coingecko_id
                     .filter(|id| safe(id, 128) && !id.starts_with("custom:")),
+                route: AssetRoute::Intents,
+                name: None,
+                logo_url: None,
+                dex_market: None,
             }
         })
         .collect()
+}
+
+/// A DEX asset's id: `dex:<chain>:<address>`, as the app's `dexAssetId` writes it.
+fn dex_asset_id(chain: DexChain, address: &str) -> String {
+    format!("dex:{}:{address}", chain.name())
+}
+
+/// Merges Honey's safe DEX tokens into the 1Click assets, keyed by (chain, address):
+/// a token 1Click lists at the same contract on the same chain stays a 1Click asset;
+/// anything else (unsafe, malformed, a stablecoin, a duplicate address) is left out.
+/// Symbols are never matched: two tokens called AI on two chains stay two assets.
+pub fn merge_dex(mut assets: Vec<RegistryAsset>, dex: &[TokenView]) -> Vec<RegistryAsset> {
+    let mut taken: std::collections::HashSet<(String, String)> = assets
+        .iter()
+        .filter_map(|a| {
+            let chain = crate::dex::chains::ALL
+                .into_iter()
+                .find(|c| c.oneclick() == a.chain)?;
+            Some((a.chain.clone(), chain.normalize(a.address.as_deref()?)?))
+        })
+        .collect();
+    for t in dex {
+        if !t.safety.ok || !safe(&t.symbol, 32) || t.decimals > 38 {
+            continue;
+        }
+        let Some(address) = t.chain.normalize(&t.address) else {
+            continue;
+        };
+        let chain = t.chain.oneclick().to_string();
+        if !taken.insert((chain.clone(), address.clone())) {
+            continue;
+        }
+        let (instrument_type, issuer) = classify(&t.symbol);
+        // Dollar stablecoins are never picks; USDC itself is the other side of a DEX buy.
+        if instrument_type == InstrumentType::Stablecoin {
+            continue;
+        }
+        assets.push(RegistryAsset {
+            asset_id: dex_asset_id(t.chain, &address),
+            chain,
+            symbol: t.symbol.clone(),
+            decimals: t.decimals,
+            address: Some(address),
+            price_usd: Some(t.price_usd).filter(|p| p.is_finite() && *p > 0.0),
+            instrument_type,
+            issuer,
+            coingecko_id: t
+                .coingecko_id
+                .clone()
+                .filter(|id| safe(id, 128) && !id.starts_with("custom:")),
+            route: AssetRoute::Dex,
+            name: Some(t.name.clone()).filter(|n| safe(n, 64)),
+            logo_url: t.logo_url.clone(),
+            dex_market: Some(DexMarket {
+                market_cap_usd: t.market_cap_usd,
+                volume24h_usd: t.volume24h_usd,
+                change24h_pct: t.change24h_pct,
+            }),
+        });
+    }
+    assets
+}
+
+/// Where the registry reads Honey's DEX list from (the live `DexService`, or a fixed list
+/// in tests and evals).
+#[async_trait::async_trait]
+pub trait DexSource: Send + Sync {
+    async fn safe_tokens(&self) -> Vec<TokenView>;
+}
+
+#[async_trait::async_trait]
+impl DexSource for crate::dex::DexService {
+    async fn safe_tokens(&self) -> Vec<TokenView> {
+        self.safe_tokens_cached().await
+    }
+}
+
+/// A fixed DEX list (tests, evals on a frozen snapshot).
+pub struct FixedDex(pub Vec<TokenView>);
+
+#[async_trait::async_trait]
+impl DexSource for FixedDex {
+    async fn safe_tokens(&self) -> Vec<TokenView> {
+        self.0.clone()
+    }
 }
 
 struct Snapshot {
@@ -135,6 +259,8 @@ pub struct Registry {
     client: reqwest::Client,
     base_url: String,
     snapshot: RwLock<Snapshot>,
+    /// Honey's DEX list, merged in on every read (it keeps its own cache).
+    dex: Option<Arc<dyn DexSource>>,
 }
 
 impl Registry {
@@ -146,6 +272,7 @@ impl Registry {
                 assets: Arc::new(Vec::new()),
                 fetched_at: None,
             }),
+            dex: None,
         }
     }
 
@@ -158,12 +285,35 @@ impl Registry {
                 assets: Arc::new(assets),
                 fetched_at: Some(Instant::now()),
             }),
+            dex: None,
         }
     }
 
-    /// The current assets, refreshed when older than 15 minutes. A failed refresh keeps
-    /// the last good list (an empty registry just means nothing can be proposed).
+    /// Merges Honey's DEX list into every read.
+    pub fn with_dex(mut self, dex: Option<Arc<dyn DexSource>>) -> Self {
+        self.dex = dex;
+        self
+    }
+
+    /// The 1Click assets plus Honey's safe DEX tokens ([`merge_dex`]).
     pub async fn assets(&self) -> Arc<Vec<RegistryAsset>> {
+        let oneclick = self.oneclick_assets().await;
+        match &self.dex {
+            Some(dex) => {
+                let tokens = dex.safe_tokens().await;
+                if tokens.is_empty() {
+                    oneclick
+                } else {
+                    Arc::new(merge_dex(oneclick.as_ref().clone(), &tokens))
+                }
+            }
+            None => oneclick,
+        }
+    }
+
+    /// The current 1Click assets, refreshed when older than 15 minutes. A failed refresh
+    /// keeps the last good list (an empty registry just means nothing can be proposed).
+    async fn oneclick_assets(&self) -> Arc<Vec<RegistryAsset>> {
         {
             let snap = self.snapshot.read().await;
             let fresh = snap.fetched_at.is_some_and(|t| t.elapsed() < REFRESH);
