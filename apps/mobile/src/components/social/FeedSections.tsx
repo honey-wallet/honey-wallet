@@ -1,4 +1,4 @@
-import type { SocialFeedScope } from '@honey-wallet/api-client';
+import type { SocialFeedScope, SocialJar } from '@honey-wallet/api-client';
 import { router } from 'expo-router';
 import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import { ScrollView, Text, useWindowDimensions, View } from 'react-native';
@@ -25,14 +25,16 @@ import {
   openProfile,
   ReturnText,
   SocialAvatar,
+  TokenStack,
 } from '@/components/social/parts';
-import { EmptyState, SCREEN } from '@/components/wallet/parts';
+import { EmptyState, SCREEN, Sparkline } from '@/components/wallet/parts';
 import {
   BOARD_RANGES,
   type BoardRange,
   RANGE_SAYS,
   RANGE_TABS,
   RANGE_WINDOW,
+  rangeLine,
   rankFor,
 } from '@/lib/board';
 import { tap } from '@/lib/haptics';
@@ -443,6 +445,93 @@ export function Leaderboard({
 const boardFadeIn = lazy(() => FadeIn.duration(DURATION.medium).easing(EASE.ease));
 const boardFadeOut = lazy(() => FadeOut.duration(DURATION.quick).easing(EASE.ease));
 
+/** Your place on the board, laid out as FindPeople's "Who to follow" rows. */
+function YourRank({
+  rank,
+  jar,
+  range,
+  label,
+  onShare,
+}: {
+  rank: number;
+  jar: SocialJar;
+  range: BoardRange;
+  label: string;
+  onShare: () => void;
+}) {
+  const styles = useStyles();
+  const c = useTheme();
+  const value = jar.periodReturn ?? jar.returnSincePublish ?? null;
+  // Ends where the % says, as the board's tiles draw it.
+  const line = useMemo(() => rangeLine(jar, range, value), [jar, range, value]);
+  const who = jar.owner;
+  return (
+    <View>
+      <Text style={styles.rankLabel}>Your rank {label}</Text>
+      <PressableRow
+        accessibilityRole="button"
+        accessibilityLabel={`Rank ${rank}, ${jar.name}`}
+        onPress={() => {
+          tap();
+          router.push({ pathname: '/jar/[id]', params: { id: openSocialJar(jar) } });
+        }}
+        style={styles.rankRow}
+      >
+        <Text style={styles.rankNumber}>{rank}</Text>
+        <SocialAvatar who={who} size={44} />
+        <View style={styles.flex}>
+          <View style={styles.rankWho}>
+            <Text style={styles.rankName} numberOfLines={1}>
+              {who.displayName}
+            </Text>
+            <HoneyBadge who={who} />
+            <Text style={styles.rankHandle} numberOfLines={1}>
+              @{who.handle}
+            </Text>
+          </View>
+          <View style={styles.rankJar}>
+            {jar.holdingsHidden ? (
+              <Icon name="lock" size={13} color={c.textSecondary} />
+            ) : (
+              <TokenStack
+                symbols={jar.picks.map((p) => p.symbol)}
+                size={16}
+                ring={c.canvas}
+                max={3}
+              />
+            )}
+            <Text style={styles.rankJarName} numberOfLines={1}>
+              {jar.name}
+            </Text>
+          </View>
+        </View>
+        <View style={styles.rankSpark}>
+          {line.length > 2 ? (
+            <Sparkline
+              data={line}
+              width={44}
+              height={16}
+              fade={false}
+              smooth
+              up={(value ?? 0) >= 0}
+            />
+          ) : null}
+        </View>
+        <ReturnText value={value} size={15} weight="700" />
+        <PressableScale
+          accessibilityRole="button"
+          accessibilityLabel="Share your rank"
+          hitSlop={10}
+          scaleTo={0.9}
+          onPress={onShare}
+        >
+          <Icon name="share" size={18} color={c.textSecondary} />
+        </PressableScale>
+      </PressableRow>
+    </View>
+  );
+}
+
 export function BoardView({
   tabs,
 }: {
@@ -450,7 +539,7 @@ export function BoardView({
   tabs?: ReactNode;
 }) {
   const styles = useStyles();
-  const c = useTheme();
+  // const c = useTheme(); (its share icon moved into YourRank, 15 Nov)
   const [range, setRange] = useState<BoardRange>('week');
   const window = RANGE_WINDOW[range];
   const { jars: loaded, error } = useBoard(window);
@@ -472,27 +561,43 @@ export function BoardView({
           labels={RANGE_TABS}
         />
       </View>
-      {mine ? (
-        <View style={styles.yourRank}>
+      {/* Your place as a "Who to follow" row (15 Nov): the rank, your face, name and
+          @handle over the jar, its line and return, then Share. */}
+      {/* Before 15 Nov, a card:
+          {mine ? (
+          <View style={styles.yourRank}>
           <SocialAvatar who={mine.owner} size={40} />
           <View style={styles.flex}>
-            <Text style={styles.yourRankLabel}>Your rank {says}</Text>
-            <Text style={styles.yourRankNumber}>{mineAt + 1}</Text>
+          <Text style={styles.yourRankLabel}>Your rank {says}</Text>
+          <Text style={styles.yourRankNumber}>{mineAt + 1}</Text>
           </View>
           <ReturnText value={mine.periodReturn ?? mine.returnSincePublish} size={20} weight="700" />
           <PressableScale
-            accessibilityRole="button"
-            accessibilityLabel="Share your rank"
-            hitSlop={10}
-            scaleTo={0.9}
-            onPress={() => {
-              tap();
-              void shareRank(mineAt + 1, mine, range === 'today' ? 'today' : window);
-            }}
+          accessibilityRole="button"
+          accessibilityLabel="Share your rank"
+          hitSlop={10}
+          scaleTo={0.9}
+          onPress={() => {
+          tap();
+          void shareRank(mineAt + 1, mine, range === 'today' ? 'today' : window);
+          }}
           >
-            <Icon name="share" size={18} color={c.textSecondary} />
+          <Icon name="share" size={18} color={c.textSecondary} />
           </PressableScale>
-        </View>
+          </View>
+          ) : null}
+      */}
+      {mine ? (
+        <YourRank
+          rank={mineAt + 1}
+          jar={mine}
+          range={range}
+          label={says}
+          onShare={() => {
+            tap();
+            void shareRank(mineAt + 1, mine, range === 'today' ? 'today' : window);
+          }}
+        />
       ) : null}
       {/* The map fills the rest of the page; the skeleton cross-fades into it. */}
       {jars === null && !error ? (
@@ -585,6 +690,23 @@ const useStyles = makeStyles((c) => ({
   note: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 16 },
   noteText: { flex: 1, color: c.textSecondary, fontSize: 15 },
   noteRetry: { color: c.accentText, fontSize: 15, fontWeight: '600' },
+  // Your place as a Who to follow row (FindPeople's sizes): label, then the row.
+  rankLabel: { marginBottom: 6, color: c.textSecondary, fontSize: 15 },
+  rankRow: { flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 64 },
+  rankNumber: {
+    minWidth: 18,
+    color: c.text,
+    fontSize: 20,
+    fontWeight: '800',
+    fontVariant: ['tabular-nums'],
+    textAlign: 'center',
+  },
+  rankWho: { flexDirection: 'row', alignItems: 'baseline', gap: 5 },
+  rankName: { flexShrink: 0, maxWidth: '70%', color: c.text, fontSize: 16, fontWeight: '700' },
+  rankHandle: { flexShrink: 1, color: c.textSecondary, fontSize: 15 },
+  rankJar: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 },
+  rankJarName: { flex: 1, color: c.textSecondary, fontSize: 14, fontWeight: '500' },
+  rankSpark: { width: 44, height: 16 },
   // Your place: a plain card, the same surface as every other card.
   yourRank: {
     flexDirection: 'row',
