@@ -14,8 +14,10 @@ catalogs:
       version: 5.1.0
 
 overrides:
-  query-string>decode-uri-component: 0.5.0
-  node-forge: 1.4.1
+  query-string>decode-uri-component: 0.5.1
+  node-forge: 1.4.3
+  minimatch@>=7 <11.0.1: 11.0.5
+  glob@>=9 <14.0.2: 14.0.4
   '@grpc/grpc-js': ^1.13.6
   zod@<4.6.6: ^4.6.6
   '@walletconnect/core': 2.26.0
@@ -29,9 +31,9 @@ patchedDependencies:
   braces@3.0.3:
     hash: 1881ab0d22afc6409e3da19bd8c5c112d84663f4e2ba7085ad86139af9052bcb
     path: patches/braces@3.0.3.patch
-  decode-uri-component@0.5.0:
-    hash: beca5eea14a48da38a363e59b6663611458a31d9ddcbfbb0c295ce4a124c3670
-    path: patches/decode-uri-component@0.5.0.patch
+  decode-uri-component@0.5.1:
+    hash: 1e7e30c375dcd77d720b2c3429ef4536b51534612ac8938e8867019302e1ab54
+    path: patches/decode-uri-component@0.5.1.patch
   expo-alternate-app-icons@8.0.0:
     hash: 50c8979d6b9867b90899702a93f3d80985db7292900648cfaa0ac4c4a77e830f
     path: patches/expo-alternate-app-icons@8.0.0.patch
@@ -3222,8 +3224,8 @@ packages:
   decimal.js@10.6.0:
     resolution: {integrity: sha512-YpgQiITW3JXGntzdUmyUR1V812Hn8T1YVXhCu+wO3OpS4eU9l4YdD3qjyiKdV6mvV29zapkMeD390UVEf2lkUg==}
 
-  decode-uri-component@0.5.0:
-    resolution: {integrity: sha512-1BiQVoK8C9gUbQU6NzAtO/tkz2qOFpEObMWpcFvhx4fYnj4Oc5yzaJN/LD36ihkVUdXyh5ZekzX+yM+ty/SrPg==}
+  decode-uri-component@0.5.1:
+    resolution: {integrity: sha512-vWHQkXgg2cE3BB4rR0c+PYw9BCQzLoNIRMI7AunIkZst74tw/vpPp7VLoYtsR/cy1f55g3XDWUslfeCZjiZJyA==}
     engines: {node: '>=14.16'}
 
   defaults@1.0.4:
@@ -3811,10 +3813,6 @@ packages:
     resolution: {integrity: sha512-VilgtJj/ALgGY77fiLam5iD336eSWi96Q15JSAG1zi8NRBysm3LXKdGnHb4m5cuyxvOLQQKWpBZAT6ni4FI2iQ==}
     engines: {node: '>=6'}
 
-  glob@13.0.6:
-    resolution: {integrity: sha512-Wjlyrolmm8uDpm/ogGyXZXb1Z+Ca2B8NbJwqBVg0axK9GbBeoS7yGV6vjXnYdGm6X53iehEuxxbyiKp8QmN4Vw==}
-    engines: {node: 18 || 20 || >=22}
-
   glob@14.0.4:
     resolution: {integrity: sha512-mMiwNKoJZ4HAIRVJxotO6LsNRReA30gQwP9E2/p94tfLv+jygCNpKDjhhSL6OLY6LE371EZm5EAf7RpYuUqlsw==}
     engines: {node: 18 || 20 || >=22}
@@ -4368,10 +4366,6 @@ packages:
     resolution: {integrity: sha512-I9jwMn07Sy/IwOj3zVkVik2JTvgpaykDZEigL6Rx6N9LbMywwUSMtxET+7lVoDLLd3O3IXwJwvuuns8UB/HeAg==}
     engines: {node: '>=4'}
 
-  minimatch@10.2.6:
-    resolution: {integrity: sha512-vpLQEs+VLCr1nU0BXS07maYoFwlDAH0gngQuuttxIwutDFEMHq2blX+8vpgxDdK3J1PwjCJiep77OitTZ4Ll1A==}
-    engines: {node: 18 || 20 || >=22}
-
   minimatch@11.0.5:
     resolution: {integrity: sha512-snPlVppFcYWfLLFQGhDxUyBcHNtMlWmn3jtj7pEaO+DP8pqL0IvAzXhMYmn1z9ASNtgmwLBdFxSf4tMUB0OTKA==}
     engines: {node: 20 || >=22}
@@ -4462,8 +4456,8 @@ packages:
       encoding:
         optional: true
 
-  node-forge@1.4.1:
-    resolution: {integrity: sha512-w5/MfWaeMrpR/5ba6fZyAUTLSuE6aYz7H/3cYrqwZEmf5eQS3IaaLgJt4MBv7HglGFWmV22K8h4U18RJQmw/ow==}
+  node-forge@1.4.3:
+    resolution: {integrity: sha512-P6wzfh6t70avmV8FrVEAd/36sOPJQ+hkaJVX1Laap9J/77m7M0eyozDvc8SwnDf4P7MP94gwbAAo0rg3YVXT+g==}
     engines: {node: '>= 6.13.0'}
 
   node-int64@0.4.0:
@@ -4582,10 +4576,6 @@ packages:
 
   path-parse@1.0.7:
     resolution: {integrity: sha512-LDJzPVEEEPR+y48z93A0Ed0yXb8pAByGWo/k5YYdYgpY2/2EsOsksJrq7lOHxryrVOn1ejG6oAp8ahvOIQD8sw==}
-
-  path-scurry@2.0.2:
-    resolution: {integrity: sha512-3O/iVVsJAPsOnpwWIeD+d6z/7PmqApyQePUtCndjatj/9I5LylHvt5qluFaBT3I5h3r1ejfR056c+FCv+NnNXg==}
-    engines: {node: 18 || 20 || >=22}
 
   path-scurry@3.0.0:
     resolution: {integrity: sha512-1pTbQqH1wIwMi/eleQ5leFTTCkzFsPcgXNjwOA8YGGW/W4/kHT3dssE7Z6NH+zuqNLOzOB0uaD61yl7cAcVhgg==}
@@ -6382,7 +6372,7 @@ snapshots:
       glob: 14.0.4
       lan-network: 0.2.1
       multitars: 1.0.2
-      node-forge: 1.4.1
+      node-forge: 1.4.3
       npm-package-arg: 11.0.3
       ora: 3.4.0
       picomatch: 4.0.7
@@ -6418,7 +6408,7 @@ snapshots:
 
   '@expo/code-signing-certificates@0.0.6':
     dependencies:
-      node-forge: 1.4.1
+      node-forge: 1.4.3
 
   '@expo/config-plugins@57.0.12(typescript@6.0.3)':
     dependencies:
@@ -6500,9 +6490,9 @@ snapshots:
       chalk: 4.1.2
       debug: 4.4.3
       getenv: 2.0.0
-      glob: 13.0.6
+      glob: 14.0.4
       ignore: 5.3.2
-      minimatch: 10.2.6
+      minimatch: 11.0.5
       resolve-from: 5.0.0
       semver: 7.8.5
     transitivePeerDependencies:
@@ -9134,7 +9124,7 @@ snapshots:
 
   decimal.js@10.6.0: {}
 
-  decode-uri-component@0.5.0(patch_hash=beca5eea14a48da38a363e59b6663611458a31d9ddcbfbb0c295ce4a124c3670): {}
+  decode-uri-component@0.5.1(patch_hash=1e7e30c375dcd77d720b2c3429ef4536b51534612ac8938e8867019302e1ab54): {}
 
   defaults@1.0.4:
     dependencies:
@@ -9777,12 +9767,6 @@ snapshots:
       es-object-atoms: 1.1.2
 
   getenv@2.0.0: {}
-
-  glob@13.0.6:
-    dependencies:
-      minimatch: 10.2.6
-      minipass: 7.1.3
-      path-scurry: 2.0.2
 
   glob@14.0.4:
     dependencies:
@@ -10563,10 +10547,6 @@ snapshots:
 
   min-indent@1.0.1: {}
 
-  minimatch@10.2.6:
-    dependencies:
-      brace-expansion: 5.0.12
-
   minimatch@11.0.5:
     dependencies:
       '@isaacs/nonrecursive-glob-match': 1.1.0
@@ -10669,7 +10649,7 @@ snapshots:
     dependencies:
       whatwg-url: 5.0.0
 
-  node-forge@1.4.1: {}
+  node-forge@1.4.3: {}
 
   node-int64@0.4.0: {}
 
@@ -10800,11 +10780,6 @@ snapshots:
 
   path-parse@1.0.7: {}
 
-  path-scurry@2.0.2:
-    dependencies:
-      lru-cache: 11.5.3
-      minipass: 7.1.3
-
   path-scurry@3.0.0:
     dependencies:
       lru-cache: 11.5.3
@@ -10911,7 +10886,7 @@ snapshots:
 
   query-string@7.1.3:
     dependencies:
-      decode-uri-component: 0.5.0(patch_hash=beca5eea14a48da38a363e59b6663611458a31d9ddcbfbb0c295ce4a124c3670)
+      decode-uri-component: 0.5.1(patch_hash=1e7e30c375dcd77d720b2c3429ef4536b51534612ac8938e8867019302e1ab54)
       filter-obj: 1.1.0
       split-on-first: 1.1.0
       strict-uri-encode: 2.0.0
