@@ -277,6 +277,7 @@
     white-space: normal;
   }
   .picks li {
-    grid-template-columns: auto minmax(0, 1fr) 90px;
+    /* Keep chain badges clear of the allocation track on narrow phones. */
+    grid-template-columns: auto minmax(0, 1fr) clamp(3.25rem, 16vw, 5.625rem);
   }
 }

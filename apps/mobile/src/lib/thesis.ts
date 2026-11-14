@@ -8,9 +8,9 @@ import { tokenColor } from '@/lib/token-colors';
  * Thesis jars: say what you believe, the agent turns it into tokens you can actually buy,
  * and you buy them alone or with friends (docs/thesis-agent/REQUIREMENTS.md).
  *
- * The agent harness isn't wired in yet: `runThesis` plays a fixed, staged answer so the
- * screens can be built and reviewed. Swap it for the harness API (POST /theses, streamed
- * stages) without changing the screens.
+ * `runThesis` uses staged sample output only in client test mode. Otherwise it calls
+ * the authenticated server harness (POST /theses and progress polling); failures stay
+ * failures. The server separately labels its no-AI-key fixture path as DRY_RUN.
  */
 
 export type Risk = 'Low' | 'Medium' | 'High';
@@ -644,6 +644,7 @@ export async function runThesis(
   signal?: AbortSignal,
 ): Promise<Proposal> {
   checkStopped(signal);
+  // Sample output is explicit test mode only; real mode requires a server session.
   // Loaded on demand, so the pure helpers here don't pull in the network stack.
   if (TEST_MODE) return sampleThesis(input, onStage, signal);
   // Real money: only the live agent, which picks from what NEAR Intents can deliver.

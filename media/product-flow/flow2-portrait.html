@@ -1,0 +1,75 @@
+<!doctype html><meta charset="utf-8">
+<style>html,body{margin:0;background:#131313}canvas{display:block}</style>
+<canvas id="c"></canvas>
+<script src="motion.js"></script>
+<script src="inco-portrait.js"></script>
+<script src="screen-frame.js"></script>
+<script>
+// PORTRAIT cut of flow2 (dark) for the landing page on phones: 1000 x 1250, same 14 s loop
+// and beats; the input, the proposal and the jar take the whole width one after another.
+const DUR = 14; setupFilm(DUR);
+let I, CN;
+const IDEA = 'AI data-centre spending keeps growing';
+const PROPOSAL = [48, 570, 1110, 1450];
+const APPROVAL = [48, 215, 1110, 2300];    // the proposal card, through the Buy button (screenshot px)
+// The approval tap is mapped to the actual launch button below.               // Buy $500 centre, inside that crop
+const HOLDINGS = [48, 1440, 1110, 810];     // the launched jar's holdings
+function inputCard(t, a) {
+  if (a <= 0) return; g.save(); g.globalAlpha = a;
+  // Two lines at 54px, so the idea reads on a phone; it types across both.
+  const w = 900, h = 230, x = W / 2 - w / 2, y = 480;
+  const L1 = 'AI data-centre spending ', size = 54;
+  card(x, y, w, h, { r: 44 });
+  const n = Math.floor(c01((t - 0.8) / 1.6) * IDEA.length);
+  const line1 = IDEA.slice(0, Math.min(n, L1.length)), line2 = n > L1.length ? IDEA.slice(L1.length, n) : '';
+  const y1 = y + 82, y2 = y + 152;
+  if (n === 0) text('An idea, or a link to a post', x + 48, y1, { size, color: HC.faint });
+  else { text(line1, x + 48, y1, { size, weight: 500 }); if (line2) text(line2, x + 48, y2, { size, weight: 500 }); }
+  if (n > 0 && n < IDEA.length) {
+    g.font = `500 ${size}px ${UI}`; g.fillStyle = HC.honey;
+    const onTwo = n > L1.length, cw = g.measureText(onTwo ? line2 : line1).width;
+    g.fillRect(x + 50 + cw, (onTwo ? y2 : y1) - 30, 4, 60);
+  }
+  const sx = x + w - 84, sy = y2;
+  g.beginPath(); g.arc(sx, sy, 50 * (1 - 0.1 * Math.sin(Math.PI * c01((t - 2.6) / 0.25))), 0, 7); g.fillStyle = n === IDEA.length ? HC.honey : '#2a2a2a'; g.fill();
+  g.strokeStyle = n === IDEA.length ? '#131313' : HC.muted; g.lineWidth = 6; g.lineCap = 'round'; g.lineJoin = 'round';
+  g.beginPath(); g.moveTo(sx, sy + 18); g.lineTo(sx, sy - 18); g.moveTo(sx - 15, sy - 3); g.lineTo(sx, sy - 18); g.lineTo(sx + 15, sy - 3); g.stroke();
+  tap(sx, sy, t - 2.6);
+  text('Honey can be wrong.', W / 2, y + h + 62, { size: 34, color: HC.muted, align: 'center' });
+  text('You review and sign every order.', W / 2, y + h + 108, { size: 34, color: HC.muted, align: 'center' });
+  const st = c01((t - 2.9) / 0.3);
+  if (st > 0) { g.save(); g.globalAlpha *= st; text('Researched your idea', W / 2, y - 86, { size: 36, font: MONO, color: HC.text, align: 'center' }); g.restore(); }
+  g.restore();
+}
+function draw(t) {
+  fog(t); grid(0.9);
+  inputCard(t, win(t, 0.3, 3.9, 0.4, 0.35));
+  // the proposal, full width; it lifts away after Buy is tapped
+  const pa = win(t, 4.1, 9.7, 0.4, 0.4), lift = sp(t - 9.3);
+  const ph = 900, pcx = W / 2, pcy = 690 - 120 * lift;
+  const approving = t >= 8.3;
+  const crop = approving ? APPROVAL : PROPOSAL;
+  const pw = shot(approving ? I.approval : I.proposal, ...crop, pcx, pcy, ph, { a: pa, s: 1 - 0.05 * lift, blur: (1 - pa) * 12 });
+  if (pa > 0) {
+    const { inset, contentHeight } = screenFrame(crop[2], crop[3], ph);
+    const k = contentHeight / crop[3], scale = 1 - 0.05 * lift;
+    const bx = pcx + (-pw / 2 + inset + (600 - crop[0]) * k) * scale;
+    const by = pcy + (-ph / 2 + inset + (2430 - crop[1]) * k) * scale;
+    tap(bx, by, t - 9.0);
+  }
+  // the jar
+  const ja = win(t, 9.8, 13.3, 0.35, 0.45), js = 0.94 + 0.06 * sp(t - 9.8);
+  if (ja > 0) {
+    pill(W / 2, 360, 'In your jar', { a: ja, honey: true, coins: [CN.honey], size: 34 });
+    shot(I.jar, ...HOLDINGS, W / 2, 680, 460, { a: ja, s: js });
+    g.save(); g.globalAlpha = ja * c01((t - 10.4) / 0.3);
+    pill(W / 2, 1000, 'Bought on 3 chains', { coins: [CN.eth, CN.sol, CN.near], size: 30 });
+    g.restore();
+  }
+  feather(100);
+  head('Write an *idea.', t, 0.2, 3.7, { y: 150, size: 76 });
+  head('Review the *jar.', t, 4.2, 9.4, { y: 150, size: 76 });
+  head('Approve *once.', t, 9.5, 13.1, { y: 150, size: 76 });
+}
+loadKit({ ...COIN_FILES, proposal: 'assets/proposal-dark.png', approval: 'assets/approval-dark.png', jar: 'assets/jar.png' }).then((im) => { I = im; CN = COINS(I); live(draw, DUR); });
+</script>

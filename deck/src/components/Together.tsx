@@ -17,7 +17,6 @@ const VISIBILITY = [
   { id: 'returns', icon: 'eyeSlash', title: 'Returns only' },
   { id: 'public', icon: 'globe', title: 'Everyone' },
 ] as const;
-const FEES = [5, 10, 15, 20];
 
 const ICON: Record<string, ReactNode> = {
   lock: (
@@ -114,23 +113,17 @@ export default function Together() {
                     <motion.span
                       className="tg-sel"
                       aria-hidden
-                      initial={animate ? { opacity: 0 } : false}
-                      animate={{ opacity: 1 }}
-                      transition={{ delay: at(after(1, 0.7)), duration: 0.52 }}
+                      initial={animate ? { opacity: 0, scale: 0.96 } : false}
+                      animate={{ opacity: 1, scale: 1 }}
+                      transition={{ delay: at(after(1, 0.6)), duration: 0.6, ease: EASE }}
                     />
                   )}
                   <span className="tg-badge">
                     <Icon name={v.icon} />
                   </span>
                   <b>{v.title}</b>
-                  <span className="tg-radio">
-                    {on && (
-                      <motion.i
-                        initial={animate ? { scale: 0 } : false}
-                        animate={{ scale: 1 }}
-                        transition={{ delay: at(after(1, 0.8)), duration: 0.45, ease: EASE }}
-                      />
-                    )}
+                  <span className="tg-radio" aria-hidden>
+                    {on && <i />}
                   </span>
                 </div>
               );
@@ -148,24 +141,25 @@ export default function Together() {
         <div className="tg-card">
           <div className="tg-visual tg-cut">
             <div className="tg-label">Your cut when people copy</div>
-            <div className="tg-fees">
-              {FEES.map((f) => (
-                <span key={f} className={f === 15 ? 'on' : ''}>
-                  {f === 15 && (
-                    <motion.i
-                      className="tg-fee-sel"
-                      aria-hidden
-                      initial={animate ? { x: '-200%', opacity: 0 } : false}
-                      animate={{ x: '0%', opacity: 1 }}
-                      transition={{ delay: at(after(2, 0.6)), duration: 1.05, ease: EASE }}
-                    />
-                  )}
-                  <b>{f}%</b>
-                </span>
-              ))}
+            <div className="tg-cut-value">
+              15<span>%</span>
+            </div>
+            <div className="tg-range" aria-hidden>
+              <motion.i
+                initial={animate ? { scaleX: 0 } : false}
+                animate={{ scaleX: 1 }}
+                transition={{ delay: at(after(2, 0.6)), duration: 1.05, ease: EASE }}
+              />
+              <span />
+            </div>
+            <div className="tg-range-ends">
+              <span>1%</span>
+              <span>30%</span>
             </div>
           </div>
-          <p className="tg-note">Of copiers’ profit only, never of a loss. Honey keeps 1.5%.</p>
+          <p className="tg-note">
+            Your chosen share of copiers’ profit, never of a loss. Prototype controls.
+          </p>
         </div>
       </motion.section>
     </div>

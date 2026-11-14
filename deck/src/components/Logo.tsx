@@ -103,6 +103,45 @@ export function Brand({ id, children, size }: { id: LogoId; children?: ReactNode
   );
 }
 
+/* The chain a mark is shown as a token of: NEAR on NEAR needs no badge. */
+const SAME: Record<string, string> = { NEAR: 'NEAR', SOL: 'Solana', ETH: 'Ethereum' };
+
+/* A token (or venue) on its chain, as wallets show it and as the landing page does
+   (apps/web/src/components/site/token.tsx OnChain): the mark, with the chain's mark as a small
+   badge on its bottom-right corner, ringed in `ring` (the colour it sits on). A square badge
+   (Base) is drawn at 80% and centred where a round one would sit. */
+export function OnChain({
+  id,
+  chain,
+  size,
+  ring = '#131313',
+  className,
+}: {
+  id: string;
+  chain: string;
+  size: string;
+  ring?: string;
+  /** Applied to the main mark. */
+  className?: string;
+}) {
+  const main = logoFor(id);
+  const badge = logoFor(chain);
+  if (!main) return null;
+  const square = badge ? 'square' in LOGOS[badge] : false;
+  const scale = square ? 0.46 * 0.8 : 0.46;
+  const inset = square ? `calc(-3px + ${size} * 0.046)` : '-3px';
+  return (
+    <span className="lo-on" style={{ '--lo-ring': ring } as CSSProperties}>
+      <Logo id={main} size={size} className={className} />
+      {badge && SAME[id] !== chain && (
+        <span className="lo-badge" style={{ right: inset, bottom: inset }}>
+          <Logo id={badge} size={`calc(${size} * ${scale})`} />
+        </span>
+      )}
+    </span>
+  );
+}
+
 /* Overlapping marks, e.g. a token sitting on its chain. */
 export function LogoStack({ ids, size }: { ids: LogoId[]; size?: string }) {
   return (

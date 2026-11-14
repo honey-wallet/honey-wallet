@@ -6,24 +6,29 @@ test mode; every outside number is cited on its slide and listed on the Referenc
 
 ## Slides
 
-1. **Honey.** What it is.
-2. **The problem.** Eight icon-only steps on a tangled path today; one straight line through Honey to every chain.
-3. **The market.** 741M crypto owners, 62% juggling wallets, $33B+ through NEAR Intents.
-4. **Jars.** Write an idea, review the proposal, buy in one approval.
-5. **The agent.** Its six real progress steps, then the proposal with the critic's warning.
-6. **Routes.** The app's route planner output for a $5,000 jar across four chains.
-7. **NEAR.** What NEAR AI Cloud, NEAR Intents, the 1Click token list and NEAR accounts do, with code paths.
-8. **Safety.** The agent suggests, you sign.
-9. **Friends.** Shared, public and copyable jars.
-10. Close. 11. References.
+1. **Honey.** The product and its promise.
+2. **The problem.** Fragmented research, bridges and swaps.
+3. **The market.** Referenced market context.
+4. **Jars.** The original idea → review → approval → holdings film, with current screen captures.
+5. **The agent.** Research stages, proposal and caution.
+6. **Routes.** Illustrative route planner output.
+7. **NEAR.** NEAR AI Cloud, Intents and native accounts.
+8. **Friends.** The original three-panel story: invest together, visibility, and the updated copy-fee slider.
+9. **The wallet.** Current Wallet and Feed screens.
+10. References. 11. Thank you.
 
-Honey's dark theme (colours from `apps/mobile/src/theme/index.ts`, the logo from `apps/web/public/honey-mark.svg`)
-is in `src/styles/tokens.css` and `src/components/honey.css`.
+`public/screens/current/` contains unedited native simulator captures in both themes.
+The sample-data notice and provenance are in `public/screens/current/SOURCES.md`.
+`ProductShowcase.tsx` and `product-showcase.css` place these in CSS device frames;
+the dedicated Wallet slide uses these native mockups. The Jars film and
+Friends frame retain their original composition and storytelling.
+The landing page uses matching captures in `apps/web/public/screens/current/`.
+Update both copies when the product changes.
 
-The three films in `public/video/` (Jars flow, NEAR route, friends) are made in `~/video-harness/films/honey-deck/`
-from real screenshots of the app in test mode (`capture/step.mjs`, `capture/record.mjs`). To change one, edit its
-`*.html` there, then render: `node render.mjs films/honey-deck/flow.html --fps 60 --sub 2 --out …` and copy the MP4
-and a poster still into `public/video/`. Then bump `V` in `src/components/Clip.tsx` so browsers skip their cached copy.
+The remaining `public/video/` clips explain the problem, architecture and safety.
+They are conceptual diagrams, not recordings of current transaction settlement.
+The active Jars flow has been re-rendered with current UI in both themes and
+aspect ratios. Its editable source and rendering notes are in `media/product-flow/`.
 
 ---
 

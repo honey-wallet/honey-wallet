@@ -3,6 +3,7 @@ import { JoinWaitlist } from './app-link';
 import { Friends } from './friends';
 import styles from './hero.module.css';
 import { JarGlyph } from './jar';
+import { ProductPhone } from './product-phone';
 import { Display } from './type';
 
 /*
@@ -33,6 +34,17 @@ export function Hero() {
             <JarGlyph className="-my-1 size-8!" />
           </JoinWaitlist>
         </div>
+      </div>
+      <div className={styles.product}>
+        <div aria-hidden="true" className={styles.halo} />
+        <figure className={styles.feedPhone}>
+          <ProductPhone eager screen="feed" />
+          <figcaption>The feed. Find your next idea.</figcaption>
+        </figure>
+        <figure className={styles.walletPhone}>
+          <ProductPhone eager screen="wallet" />
+          <figcaption>Your wallet. Always in your hands.</figcaption>
+        </figure>
       </div>
     </section>
   );

@@ -5,7 +5,7 @@ Guidance for AI coding agents working in this repository. Humans should start wi
 ## Layout
 
 - `apps/server`: Rust API server (axum). Router is built in `src/lib.rs`; routes in `src/routes/`; integration tests in `tests/`.
-- `apps/web`: React + Vite.
+- `apps/web`: Next.js product site and public share pages (port 3200).
 - `apps/mobile`: Expo Router app. See `apps/mobile/AGENTS.md` for Expo-specific rules.
 - `apps/extension`: Chrome extension (Vite + React, MV3). `pnpm build`, then load `apps/extension/dist` unpacked in `chrome://extensions`.
 - `packages/api-client`: typed fetch client shared by web and mobile. Types in `src/types.ts` mirror the server's response structs.
@@ -29,3 +29,7 @@ Run `pnpm lint && pnpm typecheck && pnpm test` before declaring a task done.
 - If you change a server response type, update `packages/api-client/src/types.ts` in the same change.
 - Don't add ESLint or Prettier: Biome is the single JS/TS formatter and linter.
 - Don't commit `.env` files; document new variables in the relevant `.env.example`.
+- `docs/hackathon/` is private reference material. Never stage, force-add, commit,
+  or publish its contents. Keep public documentation independent of these files.
+- The phone opens on `/feed`; the browser build is the wallet extension and hides
+  social/Jars routes. Do not use `expo start --web` to verify the hackathon Jars demo.

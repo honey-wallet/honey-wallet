@@ -396,7 +396,7 @@
   margin: 0;
 }
 
-/* "Coming to [iPhone] [Android] [Chrome]" with each platform's mark. */
+/* "Coming to [iPhone] [Android]" with each platform's mark. */
 .platforms {
   display: flex;
   flex-wrap: wrap;

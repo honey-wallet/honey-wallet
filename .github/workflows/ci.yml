@@ -70,7 +70,8 @@ jobs:
             --test submissions --test redis_application --test price_stream \
             --test trace_export --test rpc_budget --test auth_cleanup --test recovery_auth \
             --test swap_quotes --test polymarket_catalog \
-            --test api --test stealth_jar_boxes --test waitlist --test waitlist_invites --test arrivals_db -- --ignored
+            --test api --test stealth_jar_boxes --test waitlist --test waitlist_invites \
+            --test arrivals_db --test social -- --ignored
           cargo test --locked --lib providers::transport::integration -- --ignored
           cargo test --locked --lib earn_catalog::tests -- --ignored
           cargo test --locked --lib providers::uniswap:: -- --ignored

@@ -36,6 +36,9 @@ pnpm-debug.log*
 # Local design reference screenshots (large; not part of the app)
 inspiration/
 
+# Private submission planning and research; keep local, never publish.
+/docs/hackathon/
+
 # Python bytecode caches
 __pycache__/
 *.pyc

@@ -29,6 +29,18 @@
   gap: 0.38em;
   white-space: nowrap;
 }
+.lo-on {
+  position: relative;
+  flex: none;
+  display: inline-flex;
+}
+.lo-badge {
+  position: absolute;
+  display: inline-flex;
+}
+.lo-badge .lo {
+  box-shadow: 0 0 0 2px var(--lo-ring);
+}
 .lo-stack {
   display: inline-flex;
   align-items: center;

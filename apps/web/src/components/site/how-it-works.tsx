@@ -18,6 +18,9 @@ export function HowItWorks() {
     >
       <figure className={styles.filmFigure}>
         <Film label="The Honey app: write an idea, review the jar, approve once" name="flow" />
+        <figcaption className="mt-3 text-center text-fg-muted text-xs">
+          Current app preview · sample data
+        </figcaption>
       </figure>
     </StorySection>
   );

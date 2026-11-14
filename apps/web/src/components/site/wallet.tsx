@@ -74,23 +74,23 @@ export function Wallet() {
           >
             <span className={styles.screen}>
               <Image
-                alt="The Honey app's home: a $25.25 balance, Send, Receive, Buy and Sell, and Ethereum, Solana, NEAR and USD Coin."
+                alt="Honey’s current wallet: token balances, Send, Receive, Buy, Sell, and Tokens, Jars, NFTs and Activity. Sample data."
                 className={styles.light}
-                height={1564}
+                height={2622}
                 loading="lazy"
                 quality={96}
-                src="/screens/screen-home-light.jpg"
-                width={739}
+                src="/screens/current/wallet-light.png"
+                width={1206}
               />
               <Image
                 alt=""
                 aria-hidden="true"
                 className={styles.dark}
-                height={1564}
+                height={2622}
                 loading="lazy"
                 quality={96}
-                src="/screens/screen-home-dark.jpg"
-                width={739}
+                src="/screens/current/wallet-dark.png"
+                width={1206}
               />
             </span>
             <Image
