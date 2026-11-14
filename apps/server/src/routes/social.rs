@@ -2993,6 +2993,38 @@ mod tests {
         assert!(buyable_picks(&[pick("XAUT", "sol")], &list).is_err());
     }
 
+    /// 2026-11-14: a jar's cash is published as a USDC pick on Base at its weight
+    /// (lib/social `socialPicks`), beside a thesis pick named by 1Click's code.
+    #[test]
+    fn a_jars_cash_publishes_as_usdc_on_base() {
+        let list = vec![
+            MarketListToken {
+                symbol: "USDC".into(),
+                price_usd: 1.0,
+                chains: vec!["Ethereum", "Base", "Arbitrum", "Solana", "NEAR"],
+            },
+            MarketListToken {
+                symbol: "XAUT".into(),
+                price_usd: 3900.0,
+                chains: vec!["Ethereum"],
+            },
+        ];
+        let picks = [
+            Pick {
+                symbol: "XAUT".into(),
+                chain: "eth".into(),
+                weight: 60.0,
+            },
+            Pick {
+                symbol: "USDC".into(),
+                chain: "Base".into(),
+                weight: 40.0,
+            },
+        ];
+        assert!(validate_picks(&picks).is_ok());
+        assert!(buyable_picks(&picks, &list).is_ok());
+    }
+
     use super::*;
 
     fn shown_jar() -> PublicJar {

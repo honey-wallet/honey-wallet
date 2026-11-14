@@ -24,6 +24,22 @@ const MAX_DOWNWEIGHTS: usize = 2;
 /// Minimum order so fees stay a small share of each order (R-RK-2).
 /// Small enough that a $5 test run can still split into a few picks.
 pub const MIN_ORDER_USD: f64 = 1.0;
+/// Least order for a pick NEAR Intents delivers only on Ethereum itself: its gas comes out
+/// of the swap, about $0.25, so a smaller order loses more than 5% (2026-11-14: $0.60 of
+/// XAUT came back as $0.36). The dry quotes can't see it (they settle inside NEAR Intents),
+/// so such a pick is left out below this, and its share kept in USDC.
+pub const L1_MIN_ORDER_USD: f64 = 5.0;
+/// 1Click's code for Ethereum mainnet.
+const L1_CHAIN: &str = "eth";
+
+/// Why a pick sized at `amount_usd` is too small for its chain, if it is.
+pub fn too_small_for_chain(asset: &RegistryAsset, amount_usd: f64) -> Option<String> {
+    (asset.chain == L1_CHAIN && amount_usd < L1_MIN_ORDER_USD).then(|| {
+        format!(
+            "at ${amount_usd:.2} it would lose too much to Ethereum's network fees (orders there need at least ${L1_MIN_ORDER_USD:.0})"
+        )
+    })
+}
 /// Quote rounds: a pick that can't be quoted is dropped and the rest re-sized and re-quoted.
 const QUOTE_ROUNDS: usize = 3;
 pub const ISSUE_TYPES: &[&str] = &[
@@ -678,6 +694,8 @@ pub struct QuoteLog {
 fn build(
     base: &[StrategyPick],
     failed: &BTreeMap<String, (String, String)>,
+    // Picks too small for their chain's fees (`too_small_for_chain`), with why.
+    small: &BTreeMap<String, (String, String)>,
     amount_usd: f64,
     risk: Risk,
 ) -> Variant {
@@ -685,6 +703,15 @@ fn build(
     let picks: Vec<StrategyPick> = base
         .iter()
         .filter(|p| {
+            if let Some((_, why)) = small.get(&p.coin_key) {
+                if p.keep > 0.0 {
+                    unmatched.push(Unmatched {
+                        idea: p.exposure.clone(),
+                        note: format!("{} was left out: {why}.", p.ticker),
+                    });
+                }
+                return false;
+            }
             if let Some((_, why)) = failed.get(&p.coin_key) {
                 if p.keep > 0.0 {
                     unmatched.push(Unmatched {
@@ -738,10 +765,31 @@ pub async fn variants(
     let mut quotes: HashMap<(String, u64), Result<super::quote::DryQuote, String>> = HashMap::new();
     let mut log = QuoteLog::default();
     let mut tokens: HashSet<String> = HashSet::new();
+    // Before any quote: a pick only Ethereum delivers, sized under what its fees allow at
+    // any level, leaves every level and the rest are re-sized (its share stays in USDC).
+    let mut small: BTreeMap<String, (String, String)> = BTreeMap::new();
+    loop {
+        let mut grew = false;
+        for r in RISKS {
+            for p in build(base, &failed, &small, amount_usd, r).picks {
+                if small.contains_key(&p.coin_key) {
+                    continue;
+                }
+                if let Some(why) = too_small_for_chain(&p.asset, p.amount_usd) {
+                    small.insert(p.coin_key.clone(), (p.ticker.clone(), why));
+                    grew = true;
+                }
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
     for _ in 0..QUOTE_ROUNDS {
         let out: Vec<Variant> = RISKS
             .iter()
-            .map(|r| build(base, &failed, amount_usd, *r))
+            // .map(|r| build(base, &failed, amount_usd, *r))
+            .map(|r| build(base, &failed, &small, amount_usd, *r))
             .collect();
         let (Some(quoter), Some(origin)) = (quoter, origin) else {
             break;
@@ -787,7 +835,8 @@ pub async fn variants(
     log.tokens = tokens.len();
     let mut out: Vec<Variant> = RISKS
         .iter()
-        .map(|r| build(base, &failed, amount_usd, *r))
+        // .map(|r| build(base, &failed, amount_usd, *r))
+        .map(|r| build(base, &failed, &small, amount_usd, *r))
         .collect();
     if quoter.is_some() {
         for p in out.iter_mut().flat_map(|v| v.picks.iter_mut()) {

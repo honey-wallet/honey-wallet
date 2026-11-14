@@ -337,6 +337,55 @@ fn banned_phrases_are_whole_words() {
     assert_eq!(banned_phrase("plain words"), None);
 }
 
+/// 2026-11-14: a $1 idea got XAUT, which NEAR Intents delivers only on Ethereum; its
+/// $0.60 came back as $0.36. Below the L1 minimum it's left out (kept in USDC) at every
+/// level, saying why; a pick on another chain stays, and so does XAUT at a size that works.
+#[tokio::test]
+async fn small_orders_skip_picks_only_ethereum_delivers() {
+    let origin = assets().into_iter().find(|a| a.symbol == "USDC").unwrap();
+    let quoter = CountingQuoter(Default::default());
+    let gold_only = vec![pick("XAUT", Conviction::High)];
+    let (variants, log) = strategy::variants(&gold_only, 1.0, Some(&origin), Some(&quoter)).await;
+    for v in &variants {
+        assert!(v.picks.is_empty());
+        assert!(
+            v.unmatched
+                .iter()
+                .any(|u| u.note.starts_with("XAUT was left out: at $")
+                    && u.note.contains("Ethereum's network fees"))
+        );
+    }
+    // Not a price failure, and never quoted.
+    assert!(log.failed.is_empty());
+    assert_eq!(quoter.0.load(std::sync::atomic::Ordering::SeqCst), 0);
+    // With a pick off Ethereum, that one stays and the gold's share is re-sized onto it.
+    let mixed = vec![
+        pick("XAUT", Conviction::High),
+        pick("RENDER", Conviction::High),
+    ];
+    let (variants, _) = strategy::variants(&mixed, 4.0, Some(&origin), Some(&quoter)).await;
+    let high = variants.iter().find(|v| v.risk == Risk::High).unwrap();
+    assert_eq!(
+        high.picks
+            .iter()
+            .map(|p| p.ticker.as_str())
+            .collect::<Vec<_>>(),
+        vec!["RENDER"]
+    );
+    // At $100 XAUT's order is well above it.
+    let (variants, _) = strategy::variants(&gold_only, 100.0, Some(&origin), Some(&quoter)).await;
+    assert!(
+        variants
+            .iter()
+            .all(|v| v.picks.iter().any(|p| p.ticker == "XAUT"))
+    );
+    assert_eq!(
+        strategy::too_small_for_chain(&high.picks[0].asset, 1.0),
+        None,
+        "RENDER is on Solana"
+    );
+}
+
 #[test]
 fn intent_records_assumptions() {
     let i = build_intent("AI", vec![], &Params::default());
