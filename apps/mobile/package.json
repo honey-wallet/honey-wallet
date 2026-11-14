@@ -95,5 +95,19 @@
     "sharp": "^0.35.5",
     "typescript": "catalog:",
     "vitest": "catalog:"
+  },
+  "expo": {
+    "install": {
+      "exclude": [
+        "expo",
+        "expo-auth-session",
+        "expo-constants",
+        "expo-contacts",
+        "expo-linking",
+        "expo-router",
+        "expo-sharing",
+        "expo-updates"
+      ]
+    }
   }
 }

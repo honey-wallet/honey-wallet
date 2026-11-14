@@ -5,60 +5,35 @@ tokens), share it, let friends copy it, or buy one together from a shared treasu
 
 [![CI](https://github.com/honey-wallet/honey-wallet/actions/workflows/ci.yml/badge.svg)](https://github.com/honey-wallet/honey-wallet/actions/workflows/ci.yml)
 [![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-blue.svg)](LICENSE)
-[![iOS: coming soon](https://img.shields.io/badge/iOS-coming%20soon-black.svg)](#try-it)
-[![Android: coming soon](https://img.shields.io/badge/Android-coming%20soon-lightgrey.svg)](#limitations)
-
-<p>
-  <a href="https://youtu.be/T4bECnY5kW0"><img src="https://img.youtube.com/vi/T4bECnY5kW0/maxresdefault.jpg" height="300" alt="Honey demo video on YouTube"></a>
-  <a href="https://www.youtube.com/shorts/gY5JyJx0dT4"><img src="https://img.youtube.com/vi/gY5JyJx0dT4/oardefault.jpg" height="300" alt="Honey screen recording on a phone, on YouTube"></a>
-</p>
-
-[Demo video](https://youtu.be/T4bECnY5kW0) · [Screen recording on a phone](https://www.youtube.com/shorts/gY5JyJx0dT4) · [Demo post on X](https://x.com/0xabhii/status/2121714135209820197)
-
-<p>
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/screens/feed-dark.png">
-    <img src="docs/screens/feed-light.png" width="190" alt="Feed, Everyone: jars people posted, each with Copy">
-  </picture>
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/screens/leaderboard-dark.png">
-    <img src="docs/screens/leaderboard-light.png" width="190" alt="Leaderboard: this week's best and worst jars">
-  </picture>
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/screens/jar-dark.png">
-    <img src="docs/screens/jar-light.png" width="190" alt="A jar: its chart since launch, what it holds, Copy">
-  </picture>
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/screens/profile-dark.png">
-    <img src="docs/screens/profile-light.png" width="190" alt="A profile: posts and trades">
-  </picture>
-</p>
-<p>
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/screens/agent-dark.png">
-    <img src="docs/screens/agent-light.png" width="190" alt="The thesis agent: what do you believe in?">
-  </picture>
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/screens/token-dark.png">
-    <img src="docs/screens/token-light.png" width="190" alt="A token page with its live chart">
-  </picture>
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/screens/search-dark.png">
-    <img src="docs/screens/search-light.png" width="190" alt="Search: favourite tokens, people to follow, top tokens">
-  </picture>
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/screens/trade-dark.png">
-    <img src="docs/screens/trade-light.png" width="190" alt="Swap">
-  </picture>
-</p>
-
-<sub>Native iPhone simulator captures of `apps/mobile` on 15 Nov 2026, running against the
-production API (signed out). Jars, prices, charts, returns and people are live data.</sub>
 
 Built at [NEAR HACKATHON](https://nearhackathon.com/) (1 to 14 Nov 2026). Honey existed
 before as an EVM wallet; the hackathon work is the diff from the baseline commit:
 [f20e914...main](https://github.com/honey-wallet/honey-wallet/compare/f20e914...main).
 Tracks, a dated list of what was built and the demo script are in [HACKATHON.md](HACKATHON.md).
+
+## Watch
+
+<table>
+<tr><th>▶ Demo video · 2 min</th><th>▶ Screen recording on a phone</th></tr>
+<tr>
+<td><a href="https://youtu.be/T4bECnY5kW0"><img src="docs/video/demo.jpg" width="400" alt="Play the Honey demo video on YouTube"></a></td>
+<td><a href="https://www.youtube.com/shorts/gY5JyJx0dT4"><img src="docs/video/phone.jpg" width="400" alt="Play the Honey screen recording on YouTube"></a></td>
+</tr>
+</table>
+
+Also posted on X: [the demo post](https://x.com/0xabhii/status/2121714135209820197).
+
+## Screens
+
+<table>
+<tr><th>Feed</th><th>Leaderboard</th><th>A jar</th><th>Profile</th></tr>
+<tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/screens/feed-dark.png"><img src="docs/screens/feed-light.png" width="180" alt="Feed, Everyone: jars people posted, each with Copy"></picture></td><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/screens/leaderboard-dark.png"><img src="docs/screens/leaderboard-light.png" width="180" alt="Leaderboard: this week's best and worst"></picture></td><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/screens/jar-dark.png"><img src="docs/screens/jar-light.png" width="180" alt="A jar: its chart, what it holds, Copy"></picture></td><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/screens/profile-dark.png"><img src="docs/screens/profile-light.png" width="180" alt="A profile: posts and trades"></picture></td></tr>
+<tr><th>AI agent</th><th>Token</th><th>Search</th><th>Swap</th></tr>
+<tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/screens/agent-dark.png"><img src="docs/screens/agent-light.png" width="180" alt="The thesis agent: what do you believe in?"></picture></td><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/screens/token-dark.png"><img src="docs/screens/token-light.png" width="180" alt="A token page with its live chart"></picture></td><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/screens/search-dark.png"><img src="docs/screens/search-light.png" width="180" alt="Search: tokens, people to follow"></picture></td><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/screens/trade-dark.png"><img src="docs/screens/trade-light.png" width="180" alt="Swap"></picture></td></tr>
+</table>
+
+<sub>Native iPhone simulator captures of `apps/mobile` on 14 Nov 2026 (UTC), running against the
+production API, signed out. Jars, prices, charts, returns and people are live data.</sub>
 
 ## Try it
 
@@ -110,11 +85,12 @@ Doing it together means screenshots, spreadsheets and trusting whoever holds the
 
 | Feature | What it does | Code |
 | --- | --- | --- |
-| NEAR Intents first | 1Click pays through one-time deposit addresses. A DEX (KyberSwap, Jupiter) is used only when 1Click doesn't list a token, refuses the amount, would keep less than half the value after fees, or fails twice. A cheaper DEX is not a reason. | [route_planner.rs](apps/server/src/route_planner.rs), [BEST-ROUTE.md](docs/routing/BEST-ROUTE.md) |
+| NEAR Intents first | 1Click pays through one-time deposit addresses. A DEX (KyberSwap, Jupiter) is used only when 1Click doesn't list a token, refuses the amount, fails after a retry, or keeps under 90% of the value while a DEX nets at least 2% more. At 90% or above, 1Click is kept even when a DEX is cheaper. | [route_planner.rs](apps/server/src/route_planner.rs), [BEST-ROUTE.md](docs/routing/BEST-ROUTE.md) |
 | Private routes only | Settings → Swaps. Never falls back to a DEX; shows 1Click's error instead. | [best-route.ts](apps/mobile/src/lib/best-route.ts), [swap-settings.tsx](apps/mobile/src/app/(trade)/swap-settings.tsx) |
 | Checks on the phone | Before signing, the app checks that each quote matches what it asked for (chain, tokens, amount, payout floor, expiry) and decodes DEX transaction bytes itself. | [intents-quote.ts](apps/mobile/src/lib/intents-quote.ts), [dex.ts](apps/mobile/src/lib/dex.ts) |
 | The phone's own price | Every DEX buy, sell and swap is valued at a price the phone reads itself (1Click, or DexScreener for other tokens), never the server's. If it would keep less than the swap floor, or there is no price, nothing is signed. | [app-price.ts](apps/mobile/src/lib/app-price.ts) |
 | Long-tail tokens | Tokens 1Click doesn't list can trade on a DEX if they pass floors (pool liquidity at least $25k, 24 h volume at least $5k, oldest pool at least 2 days) and GoPlus scam checks. Search by contract address. | [universe.rs](apps/server/src/dex/universe.rs), [safety.rs](apps/server/src/dex/safety.rs), [routes/dex.rs](apps/server/src/routes/dex.rs) |
+| Tokenized stocks | xStocks, Ondo and Backpack stock tokens on Solana, admitted by on-chain mint checks and traded through Jupiter. | [stocks.rs](apps/server/src/dex/stocks.rs) |
 
 ### AI jar builder
 
@@ -144,9 +120,9 @@ Code: [thesis/](apps/server/src/thesis), [near_ai.rs](apps/server/src/thesis/nea
 | `intents.near` | Where a group jar's money sits: NEAR Intents balances owned by the group's DAO. | [sputnik.ts](packages/keyring/src/sputnik.ts), [jar_dao.rs](apps/server/src/jar_dao.rs) |
 | Sputnik DAO v2 (`sputnik-dao.near`) | One DAO per group jar: members, majority threshold, proposals to buy or sell, votes. The server reads the DAO and checks its code and policy; it never signs for the jar. | [jar_dao.rs](apps/server/src/jar_dao.rs), [routes/jar_dao.rs](apps/server/src/routes/jar_dao.rs), [jar-dao.ts](apps/mobile/src/lib/jar-dao.ts) |
 | Meta transactions (NEP-366) | Honey's relayer pays gas for members' own DAO calls, and pays the factory deposit to create a group's DAO. It only carries calls a group jar makes. | [near_relayer.rs](apps/server/src/near_relayer.rs) |
-| NEAR accounts | Implicit accounts derived from the phrase (`m/44'/397'/n'`). Transfers signed on the phone. | [near.ts](packages/keyring/src/near.ts), [NEAR.md](docs/NEAR.md) |
+| NEAR accounts | Implicit accounts derived from the phrase (`m/44'/397'/n'`). Transfers signed on the phone. | [keyring index.ts](packages/keyring/src/index.ts), [NEAR.md](docs/NEAR.md) |
 | NEAR AI Cloud | Every model call in the thesis agent (DeepSeek V4.1 Flash): JSON-schema replies, one retry, a call budget per run. | [near_ai.rs](apps/server/src/thesis/near_ai.rs) |
-| Confidential Intents | Private jars: a FROST threshold key over a NEAR account, spending through NEAR Confidential Intents via Honey's server proxy. On in the app. | [confidential_intents.rs](apps/server/src/routes/confidential_intents.rs), [stealth-jar.ts](packages/keyring/src/stealth-jar.ts) |
+| Confidential Intents | Private jars: a FROST threshold key over a NEAR account, spending through NEAR Confidential Intents via Honey's server proxy. Switched on in the app; reached from New jar in Savings, not yet linked from the main tabs. | [confidential_intents.rs](apps/server/src/routes/confidential_intents.rs), [stealth-jar.ts](packages/keyring/src/stealth-jar.ts) |
 
 Honey does not use Chain Signatures.
 
@@ -217,6 +193,8 @@ cd honey-wallet
 corepack enable
 pnpm install --frozen-lockfile
 ```
+
+On Node 25 or newer, `corepack` is not bundled: install pnpm 10.26.0 directly, or `nvm use` for Node 24.
 
 Terminal 1, the API with throwaway Postgres and Redis (ports 35432 and 36379):
 

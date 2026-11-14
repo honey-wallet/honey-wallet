@@ -16,10 +16,10 @@ plus a DEX) is used **only when 1Click can't do the trade**:
 |---|---|---|
 | (a) | `not_listed` | 1Click doesn't list one of the tokens |
 | (b) | `amount` | 1Click refuses the amount ("Amount is too low…", a minimum) |
-| (c) | `fees` | 1Click's guaranteed output is worth less than half the input (the app's `MIN_VALUE_KEPT`, Swap's "too small" floor) |
+| (c) | `fees` | 1Click's guaranteed output is worth less than half the input (the app's `MIN_VALUE_KEPT`, Swap's "too small" floor), or under 90% (`SWITCH_BELOW`) while a DEX keeps at least 2% more (`SWITCH_GAIN`, since 14 Nov) |
 | (d) | `failed` | 1Click's quote fails or times out, after one retry |
 
-A DEX that is merely cheaper is **not** used. Every candidate is still quoted and
+At 90% kept or above, a DEX that is merely cheaper is **not** used. Every candidate is still quoted and
 returned (`alternatives`, `dropped`) and logged (`best route` log line with each
 candidate's net value), so the price gap is visible: see the live results below.
 

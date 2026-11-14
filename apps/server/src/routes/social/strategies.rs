@@ -10,9 +10,8 @@
 //!   isn't is skipped and logged), its start prices are 1Click's prices at seed time
 //!   (never backdated), and its return, marks, milestones and copy count are computed
 //!   like any jar's; there are no stored numbers to fake;
-//! - copies go through the same copy path as any jar's (`copy_fees`): free while
-//!   `HONEY_COPY_FEE_ACCOUNT` is unset (users pay no fees, 2026-11-14), and otherwise
-//!   paying Honey's fee exactly as any jar's copies would.
+//! - copies go through the same copy path as any jar's (`copy_fees`): the creator's own
+//!   cut of a copier's profit, paid to the creator as any jar's copies are.
 //!
 //! Only `honey-server seed-honey-strategies` creates or changes them; re-running it is
 //! safe, and with changed picks it rebalances each jar the way republishing does (the

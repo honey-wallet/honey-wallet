@@ -7,10 +7,11 @@
 //! - (a) `not_listed`: 1Click doesn't list one of the tokens;
 //! - (b) `amount`: 1Click refuses the amount (too small, below its minimum);
 //! - (c) `fees`: 1Click's guaranteed output is worth less than half of the input
-//!   ([`MIN_VALUE_KEPT`], the app's own "swap too small" floor);
+//!   ([`MIN_VALUE_KEPT`], the app's own "swap too small" floor), or under
+//!   [`SWITCH_BELOW`] (90%) while a fallback keeps [`SWITCH_GAIN`] (2%) more;
 //! - (d) `failed`: 1Click's quote fails or times out, after one retry.
 //!
-//! A DEX that is merely cheaper is not used. Every candidate is still quoted (in
+//! At or above 90% kept, a DEX that is merely cheaper is not used. Every candidate is still quoted (in
 //! parallel, each call under [`LEG_TIMEOUT`]; a slow provider drops out) and returned
 //! as an alternative with its net value, and logged, so the price gap is visible.
 //! With `privateOnly` (Settings → Swaps), nothing falls back: 1Click's own error is the

@@ -2233,7 +2233,13 @@ async fn a_quote_past_the_goplus_budget_uses_the_last_verdict_still_standing() {
     );
     // ...an older one is not: the trade waits (security review, 15 Nov).
     safety.backdate(DexChain::Base, &aero, Duration::from_secs(3 * 3_600));
-    assert!(!safety.check_fresh(DexChain::Base, &aero).await.unwrap().checked);
+    assert!(
+        !safety
+            .check_fresh(DexChain::Base, &aero)
+            .await
+            .unwrap()
+            .checked
+    );
     assert_eq!(*mock.goplus_calls.lock().unwrap(), 2);
     // A token with no standing verdict stays unchecked (blocked).
     assert!(

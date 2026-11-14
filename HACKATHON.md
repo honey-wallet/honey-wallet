@@ -46,7 +46,7 @@ custodian.
 
 | Track idea | What Honey built | Evidence |
 | --- | --- | --- |
-| Trading through NEAR Intents | Every swap, jar buy and jar sell is quoted on 1Click first. A DEX is used only when 1Click can't do the trade, and "Private routes only" turns that off. | [route_planner.rs](apps/server/src/route_planner.rs), [BEST-ROUTE.md](docs/routing/BEST-ROUTE.md) |
+| Trading through NEAR Intents | Every swap, jar buy and jar sell is quoted on 1Click first. A DEX is used only when 1Click doesn't list a token, refuses the amount, fails after a retry, or keeps under 90% of the value while a DEX nets at least 2% more. "Private routes only" turns DEX routes off. | [route_planner.rs](apps/server/src/route_planner.rs), [BEST-ROUTE.md](docs/routing/BEST-ROUTE.md) |
 | Cross-chain baskets | A jar's picks can sit on different chains; one approval pays every 1Click deposit. | [jar_buys.rs](apps/server/src/jar_buys.rs), [jar-buy.ts](apps/mobile/src/lib/jar-buy.ts) |
 | No custodian | Keys stay on the phone. Deposits go from the wallet to 1Click; unfilled swaps refund to the user's address. | [packages/keyring](packages/keyring), [intents-swap.ts](apps/mobile/src/lib/intents-swap.ts) |
 | Trading agent | The thesis agent on NEAR AI Cloud turns an idea into a jar and dry-quotes every pick on 1Click before proposing it. | [thesis/](apps/server/src/thesis), [EVAL.md](docs/thesis-agent/EVAL.md) |
@@ -62,7 +62,7 @@ Not used: Chain Signatures.
   (20 Oct 2026), imports Honey's existing EVM wallet: keyring, server, savings and sign-in.
   We treat it as the baseline (rules Q-002, Q-004). It contains no NEAR Intents, Sputnik
   DAO or NEAR AI code: `git grep -il '1click\|sputnik\|near ai' f20e914` finds nothing.
-- After it: 5 commits from 20 to 22 Oct, then 369 commits from 8 to 14 Nov.
+- After it (UTC): 5 commits from 20 to 22 Oct, 2 on 7 Nov, then 396 from 8 to 14 Nov; the last at 21:48 on 14 Nov.
 - Full diff: [f20e914...main](https://github.com/honey-wallet/honey-wallet/compare/f20e914...main).
 
 | Date | Commit | What landed |
@@ -73,7 +73,7 @@ Not used: Chain Signatures.
 | 9 Nov | [`eb0350e`](https://github.com/honey-wallet/honey-wallet/commit/eb0350e) | Shared jars on NEAR as Sputnik DAOs |
 | 10 Nov | [`c5007d1`](https://github.com/honey-wallet/honey-wallet/commit/c5007d1) | Swaps through 1Click: quote, verify, pay, follow |
 | 13 Nov | [`675f97c`](https://github.com/honey-wallet/honey-wallet/commit/675f97c) | Group jars v1 and the NEP-366 relayer |
-| 13 Nov | [`b7ec79e`](https://github.com/honey-wallet/honey-wallet/commit/b7ec79e) | Gas sponsorship for Base, Arbitrum, Polygon, Solana and NEAR (EVM on in production) |
+| 13 Nov | [`b7ec79e`](https://github.com/honey-wallet/honey-wallet/commit/b7ec79e) | Gas sponsorship for Base, Arbitrum, Polygon, Solana and NEAR (all on in production) |
 | 13 Nov | [`a214349`](https://github.com/honey-wallet/honey-wallet/commit/a214349) | Social: one jar flow, profile privacy |
 | 14 Nov | [`50496b0`](https://github.com/honey-wallet/honey-wallet/commit/50496b0) | Route planner: NEAR Intents first, DEX fallback |
 | 14 Nov | [`a88e310`](https://github.com/honey-wallet/honey-wallet/commit/a88e310) | Creator copy fees through 1Click `appFees` |
@@ -101,8 +101,7 @@ which on screen: test-mode balances and receipts are samples.
 
 - **Route planner.** 1Click is quoted first. Only when it keeps under 90% (or fails, or
   hasn't answered in 1.5 s) are the DEX candidates quoted, in parallel under a timeout, so a
-  normal trade costs one provider call. A DEX wins only on a stated reason, never on price
-  alone ([route_planner.rs](apps/server/src/route_planner.rs)).
+  normal trade costs one provider call. At 90% or above, 1Click is kept even when a DEX is cheaper ([route_planner.rs](apps/server/src/route_planner.rs)).
 - **The phone's own checks.** Every DEX trade is valued at a price the phone reads itself
   (1Click or DexScreener, decimals read on chain), never the server's
   ([app-price.ts](apps/mobile/src/lib/app-price.ts)).
@@ -123,14 +122,15 @@ which on screen: test-mode balances and receipts are samples.
 
 NEAR Intents 1Click for all trading and for copy fees; `intents.near` balances as the
 group treasury; Sputnik DAO v2 for group ownership and votes; NEP-366 meta transactions
-so members pay no gas; NEAR AI Cloud for every model call; NEAR implicit accounts in the
-keyring. Table with file links: [README, How Honey uses NEAR](README.md#how-honey-uses-near).
+so members pay no gas; NEAR AI Cloud for every model call; NEAR Confidential Intents for private jars (a FROST
+threshold key over a NEAR account; switched on, not yet linked from the main tabs); NEAR
+implicit accounts in the keyring. Table with file links: [README, How Honey uses NEAR](README.md#how-honey-uses-near).
 
 ### User experience
 
 - One approval buys a whole jar across chains.
 - Face ID confirms; the phone checks each quote, at its own prices, before it signs.
-- Honey pays the gas on Base, Arbitrum, Polygon and Optimism, within a per-person allowance.
+- Honey pays the gas on Base, Arbitrum, Polygon, Optimism, Solana and NEAR, within a per-person allowance.
 - When a trade can't go through NEAR Intents, the review says why in one line and that
   the swap is public.
 - Nothing is public until you claim a handle. Sharing trades is off by default.
