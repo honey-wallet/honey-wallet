@@ -122,7 +122,7 @@ Code: [thesis/](apps/server/src/thesis), [near_ai.rs](apps/server/src/thesis/nea
 | Meta transactions (NEP-366) | Honey's relayer pays gas for members' own DAO calls, and pays the factory deposit to create a group's DAO. It only carries calls a group jar makes. | [near_relayer.rs](apps/server/src/near_relayer.rs) |
 | NEAR accounts | Implicit accounts derived from the phrase (`m/44'/397'/n'`). Transfers signed on the phone. | [keyring index.ts](packages/keyring/src/index.ts), [NEAR.md](docs/NEAR.md) |
 | NEAR AI Cloud | Every model call in the thesis agent (DeepSeek V4.1 Flash): JSON-schema replies, one retry, a call budget per run. | [near_ai.rs](apps/server/src/thesis/near_ai.rs) |
-| Confidential Intents | Private jars: a FROST threshold key over a NEAR account, spending through NEAR Confidential Intents via Honey's server proxy. Switched on in the app; reached from New jar in Savings, not yet linked from the main tabs. | [confidential_intents.rs](apps/server/src/routes/confidential_intents.rs), [stealth-jar.ts](packages/keyring/src/stealth-jar.ts) |
+| Confidential Intents | Private jars: a FROST threshold key over a NEAR account, spending through NEAR Confidential Intents via Honey's server proxy. On in the app: Create a jar → Private jar. | [confidential_intents.rs](apps/server/src/routes/confidential_intents.rs), [stealth-jar.ts](packages/keyring/src/stealth-jar.ts) |
 
 Honey does not use Chain Signatures.
 

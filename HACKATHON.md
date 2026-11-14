@@ -95,6 +95,16 @@ which on screen: test-mode balances and receipts are samples.
 | 2:05 | Group jar: invite friends → a friend accepts → **Your share is in** | "Up to five friends, equal shares. The money sits in a Sputnik DAO on NEAR." |
 | 2:30 | Group jar page: **Changes need 2 of 3** | "Selling is a DAO proposal. It runs when the majority approves on their own phones." |
 
+## On mainnet
+
+Accounts Honey runs in production, with what each has done so far (checked 14 Nov, 22:30 UTC):
+
+| What | Account | Activity |
+| --- | --- | --- |
+| NEAR relayer (DAO creation, NEP-366 relays) | [`e86c4a09…094c`](https://nearblocks.io/address/e86c4a09d2498bbe573160b44c0c1002854f19d5439928ca766be8b135bc094c) | Created a group jar's DAO: [tx `3YPvsoiH…ZLv`](https://nearblocks.io/txns/3YPvsoiHBFuNd4vbZyuE51QMZYE8XzdQZxRkj8Gv1ZLv) (14 Nov) |
+| A group jar (Sputnik DAO v2) | [`privacy-is-normal-6c4a2d7b.sputnik-dao.near`](https://nearblocks.io/address/privacy-is-normal-6c4a2d7b.sputnik-dao.near) | Created by the relayer above; no proposals yet |
+| EVM gas relayer (Base, Arbitrum, Optimism, Polygon) | [`0xc5e286D4…8C8e92eBf`](https://basescan.org/address/0xc5e286D4F3eBf6F02A49dD706e99bdC8C8e92eBf) | Funded; no sponsored transactions yet |
+
 ## Judging notes
 
 ### Technical depth
@@ -123,7 +133,7 @@ which on screen: test-mode balances and receipts are samples.
 NEAR Intents 1Click for all trading and for copy fees; `intents.near` balances as the
 group treasury; Sputnik DAO v2 for group ownership and votes; NEP-366 meta transactions
 so members pay no gas; NEAR AI Cloud for every model call; NEAR Confidential Intents for private jars (a FROST
-threshold key over a NEAR account; switched on, not yet linked from the main tabs); NEAR
+threshold key over a NEAR account; Create a jar → Private jar); NEAR
 implicit accounts in the keyring. Table with file links: [README, How Honey uses NEAR](README.md#how-honey-uses-near).
 
 ### User experience

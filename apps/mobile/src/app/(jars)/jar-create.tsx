@@ -4,11 +4,17 @@ import { Icon, type IconName } from '@/components/Icon';
 import { PressableScale } from '@/components/motion/PressableScale';
 import { SheetScreen } from '@/components/sheets/Sheet';
 import { tap } from '@/lib/haptics';
+import { stealthJarsEnabled } from '@/lib/stealth-jar';
 import { requireWallet } from '@/lib/wallet-gate';
 import { makeStyles, radius, useTheme } from '@/theme';
 
-/** The two ways to make a jar, from Jars' Create jar button. */
-const WAYS: { icon: IconName; title: string; hint: string; to: '/thesis-chat' | '/jar-build' }[] = [
+/** The ways to make a jar, from Jars' Create jar button; a private jar when they're on. */
+const WAYS: {
+  icon: IconName;
+  title: string;
+  hint: string;
+  to: '/thesis-chat' | '/jar-build' | '/stealth-jar';
+}[] = [
   {
     icon: 'chat',
     title: 'Describe an idea',
@@ -21,6 +27,16 @@ const WAYS: { icon: IconName; title: string; hint: string; to: '/thesis-chat' | 
     hint: 'Choose the tokens and the split yourself.',
     to: '/jar-build',
   },
+  ...(stealthJarsEnabled
+    ? [
+        {
+          icon: 'shieldLock' as const,
+          title: 'Private jar',
+          hint: 'Invest with friends without showing what the jar holds.',
+          to: '/stealth-jar' as const,
+        },
+      ]
+    : []),
 ];
 
 export default function JarCreateSheet() {
