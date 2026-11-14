@@ -28,10 +28,18 @@ const CHAIN_ORDER: &[&str] = &[
 ];
 
 /// Whether the wallet can receive on this 1Click chain.
+// Replaced (owner, 14 Nov): only chains Honey shows balances on, so a pick never lands
+// where Home can't show it (BNB Chain, Avalanche).
+// pub fn honey_chain(chain: &str) -> bool {
+//     oneclick_chain_label(chain)
+//         .and_then(crate::market_data::gecko_network)
+//         .is_some()
+// }
 pub fn honey_chain(chain: &str) -> bool {
-    oneclick_chain_label(chain)
-        .and_then(crate::market_data::gecko_network)
-        .is_some()
+    crate::portfolio::SHOWN_ONECLICK.contains(&chain)
+        && oneclick_chain_label(chain)
+            .and_then(crate::market_data::gecko_network)
+            .is_some()
 }
 
 /// Wrappers and staked forms that count as the coin itself here (on top of

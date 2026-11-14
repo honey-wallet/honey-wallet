@@ -1,6 +1,6 @@
 //! DEX routing (`crate::dex`).
 //!
-//! - `GET /dex/tokens?chain=base|arbitrum|polygon|ethereum|solana[&all=1]`: the DEX
+//! - `GET /dex/tokens?chain=base|arbitrum|optimism|polygon|ethereum|solana[&all=1]`: the DEX
 //!   universe with safety verdicts (public, cached).
 //! - `POST /dex/quote` (signed in): a KyberSwap or Jupiter quote, stored so the gas
 //!   sponsors can bind execution to it.

@@ -1,7 +1,7 @@
 //! What a wallet holds and what it did, read straight from public chain nodes and
 //! keyless explorers. Balances: the chain's coin, plus every token NEAR Intents (1Click)
 //! lists on that chain, matched by contract or mint (never by symbol) and priced by
-//! 1Click: ERC-20s on Ethereum, Base, Arbitrum and Polygon by one Multicall3 `balanceOf`
+//! 1Click: ERC-20s on Ethereum, Base, Arbitrum, Optimism and Polygon by one Multicall3 `balanceOf`
 //! batch (Blockscout's token list when the node refuses it), SPL and Token-2022 accounts on
 //! Solana, and NEP-141s on NEAR (FastNEAR's keyless index). Anything 1Click doesn't list is
 //! unpriced and usually spam, so it's left out. Names come from CoinGecko's coin list
@@ -85,6 +85,12 @@ impl EvmNetwork {
     }
 }
 
+/// 1Click ids of every chain Honey shows balances on: the EVM networks of
+/// [`Endpoints::from_env`], then Solana and NEAR. The app keeps the same list
+/// (apps/mobile/src/lib/mock-wallet.ts `CHAINS`); payouts Honey plans (jar picks) land
+/// only on these, so nothing arrives where Home can't show it.
+pub const SHOWN_ONECLICK: [&str; 7] = ["eth", "base", "arb", "op", "pol", "sol", "near"];
+
 /// Where every read goes. Tests point these at a local server.
 #[derive(Clone, Debug)]
 pub struct Endpoints {
@@ -99,7 +105,7 @@ pub struct Endpoints {
 const SOLANA_USDC: &str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const SPL_TOKEN: &str = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 const SPL_TOKEN_2022: &str = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
-/// Multicall3, at the same address on Ethereum, Base, Arbitrum and Polygon.
+/// Multicall3, at the same address on Ethereum, Base, Arbitrum, Optimism and Polygon.
 const MULTICALL3: &str = "0xca11bde05977b3631167028862be2a173976ca11";
 
 fn env_or(name: &str, default: &str) -> String {
@@ -155,6 +161,20 @@ impl Endpoints {
                     )),
                     alchemy: Some("https://arb-mainnet.g.alchemy.com/v2".into()),
                     explorer_tx: "https://arbiscan.io/tx/",
+                },
+                EvmNetwork {
+                    chain: "Optimism",
+                    oneclick: "op",
+                    chain_id: 10,
+                    rpc: env_or("PORTFOLIO_OPTIMISM_RPC_URL", "https://mainnet.optimism.io"),
+                    // Circle's native USDC (not the bridged USDC.e).
+                    usdc: Some("0x0b2c639c533813f4aa9d7837caf62653d097ff85"),
+                    blockscout: Some(env_or(
+                        "PORTFOLIO_OPTIMISM_BLOCKSCOUT_URL",
+                        "https://optimism.blockscout.com",
+                    )),
+                    alchemy: Some("https://opt-mainnet.g.alchemy.com/v2".into()),
+                    explorer_tx: "https://optimistic.etherscan.io/tx/",
                 },
                 EvmNetwork {
                     chain: "Polygon",
@@ -2810,5 +2830,31 @@ mod tests {
         assert_eq!(items[2].explorer_url, "https://basescan.org/tx/0xa");
         assert!(alchemy_has_internal(1) && alchemy_has_internal(8453));
         assert!(!alchemy_has_internal(42161));
+    }
+
+    #[test]
+    fn reads_optimism_like_the_other_l2s() {
+        let endpoints = Endpoints::from_env();
+        let chains: Vec<&str> = endpoints.evm.iter().map(|n| n.chain).collect();
+        assert_eq!(
+            chains,
+            ["Ethereum", "Base", "Arbitrum", "Optimism", "Polygon"]
+        );
+        let op = endpoints
+            .evm
+            .iter()
+            .find(|n| n.chain == "Optimism")
+            .unwrap();
+        assert_eq!((op.chain_id, op.oneclick), (10, "op"));
+        assert_eq!(op.native(), ("ETH", "Ether"));
+        assert_eq!(op.usdc, Some("0x0b2c639c533813f4aa9d7837caf62653d097ff85"));
+        assert_eq!(op.explorer_tx, "https://optimistic.etherscan.io/tx/");
+        assert!(op.blockscout.is_some() && op.alchemy.is_some());
+        let mut read: Vec<&str> = endpoints.evm.iter().map(|n| n.oneclick).collect();
+        read.extend(["sol", "near"]);
+        assert_eq!(read, SHOWN_ONECLICK);
+        let service = PortfolioService::with_endpoints(reqwest::Client::new(), endpoints, None);
+        let evm = Addresses::parse(Some(&format!("0x{}", "1".repeat(40))), None, None).unwrap();
+        assert!(service.chains(&evm).contains(&"Optimism"));
     }
 }

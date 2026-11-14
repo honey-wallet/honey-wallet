@@ -694,7 +694,8 @@
       "JAMBO",
       "ABG"
     ],
-    "minPicks": 3
+    "note": "Was minPicks 3: BNB and AVAX live only on chains Honey doesn't show (BNB Chain, Avalanche), so since 14 Nov a pick can't land there and ETH and SOL are what the frozen registry leaves.",
+    "minPicks": 2
   },
   {
     "id": "liquid-staking",

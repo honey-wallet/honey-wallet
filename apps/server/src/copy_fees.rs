@@ -382,6 +382,7 @@ fn chain_name(blockchain: &str) -> Option<&'static str> {
         "eth" => "Ethereum",
         "base" => "Base",
         "arb" => "Arbitrum",
+        "op" => "Optimism",
         "pol" => "Polygon",
         "sol" => "Solana",
         "near" => "NEAR",

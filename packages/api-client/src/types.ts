@@ -1413,7 +1413,7 @@ export interface PortfolioAddresses {
 
 /** One balance on one chain. Mirrors `portfolio::Holding`. */
 export interface PortfolioHolding {
-  /** Ethereum, Base, Arbitrum, Polygon, Solana or NEAR. Polygon's own coin is POL. */
+  /** Ethereum, Base, Arbitrum, Optimism, Polygon, Solana or NEAR. Polygon's own coin is POL. */
   chain: string;
   symbol: string;
   name: string;
@@ -1958,7 +1958,8 @@ export interface SocialInboxItem {
 }
 
 /** A chain DEX routing quotes on. */
-export type DexChain = 'base' | 'arbitrum' | 'polygon' | 'ethereum' | 'solana';
+// export type DexChain = 'base' | 'arbitrum' | 'polygon' | 'ethereum' | 'solana';
+export type DexChain = 'base' | 'arbitrum' | 'optimism' | 'polygon' | 'ethereum' | 'solana';
 
 /**
  * Why a token is or isn't tradable. Blocking flags include `unchecked`, `honeypot`,
