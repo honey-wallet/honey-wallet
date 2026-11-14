@@ -1,11 +1,13 @@
 import type { Metadata } from 'next';
 import { PostHead, StrategyWell } from '@/components/site/share-card';
 import { Missing, SharePage } from '@/components/site/share-page';
-import { jarMetadata, loadJar, loadLogos, REVALIDATE } from '@/lib/share';
+import { jarMetadata, loadJar, loadLogos } from '@/lib/share';
 
 type Props = { params: Promise<{ id: string }> };
 
-export const revalidate = REVALIDATE;
+// export const revalidate = REVALIDATE;
+// Next needs a literal here (segment config is read at build time); keep in step with REVALIDATE.
+export const revalidate = 300;
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { id } = await params;
