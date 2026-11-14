@@ -767,7 +767,9 @@ function HomeScreen() {
           tab bar, where the eye already is (14 Nov), as wallets show a pending send. */}
       <View
         pointerEvents="box-none"
-        style={[styles.floatBars, { bottom: Math.max(insets.bottom, 12) + 8 + 58 }]}
+        // style={[styles.floatBars, { bottom: Math.max(insets.bottom, 12) + 8 + 58 }]}
+        // A clear gap above the tab bar: flush on it, the bar read as part of it (14 Nov).
+        style={[styles.floatBars, { bottom: Math.max(insets.bottom, 12) + 8 + 58 + FLOAT_GAP }]}
       >
         <UpdateReadyBar />
         <InFlightBar walletId={wallet.id} />
@@ -778,7 +780,10 @@ function HomeScreen() {
 
 /** The pinned profile row: space above it (under the status bar), its height, below. */
 /** Room a floating bar above the tab bar takes (its height and gap). */
-const FLOAT_BAR = 66;
+// const FLOAT_BAR = 66;
+/** Space between the floating bars and the tab bar's top. */
+const FLOAT_GAP = 14;
+const FLOAT_BAR = 66 + FLOAT_GAP;
 const HEADER_TOP = 12;
 const HEADER_ROW = 48;
 const HEADER_BOTTOM = 10;
