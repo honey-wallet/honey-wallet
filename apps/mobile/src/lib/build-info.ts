@@ -1,6 +1,7 @@
 import * as Application from 'expo-application';
 import Constants from 'expo-constants';
 import * as Updates from 'expo-updates';
+import { useState } from 'react';
 import { AppState, Platform } from 'react-native';
 import { TEST_MODE } from '@/lib/test-mode';
 
@@ -75,4 +76,54 @@ export function startUpdateWatcher(): () => void {
     // else if (state === 'background' && pending) void Updates.reloadAsync().catch(() => {});
   });
   return () => sub.remove();
+}
+
+/** Whether this build takes over-the-air updates at all (not on web or in development). */
+export const UPDATES_ON = Platform.OS !== 'web' && Updates.isEnabled;
+
+export type UpdateState = 'idle' | 'checking' | 'downloading' | 'latest' | 'ready' | 'failed';
+
+/** Downloaded beats downloading beats checking; then the last check's answer. */
+export function updateState(
+  u: { isUpdatePending: boolean; isDownloading: boolean; isChecking: boolean },
+  result: 'latest' | 'failed' | null,
+): UpdateState {
+  if (u.isUpdatePending) return 'ready';
+  if (u.isDownloading) return 'downloading';
+  if (u.isChecking) return 'checking';
+  return result ?? 'idle';
+}
+
+/**
+ * The update the way people see it (14 Nov: "make check for updates more obvious"):
+ * Settings' row and Home's bar read it, the background watcher feeds it. `check` looks
+ * for a newer update and downloads it, without restarting: the person taps Restart,
+ * as in other wallets, so nothing they're doing is lost.
+ */
+export function useAppUpdate(): {
+  state: UpdateState;
+  check: () => Promise<void>;
+  restart: () => void;
+} {
+  const u = Updates.useUpdates();
+  const [result, setResult] = useState<'latest' | 'failed' | null>(null);
+  const state = updateState(u, result);
+  const check = async () => {
+    if (!UPDATES_ON) {
+      setResult('latest');
+      return;
+    }
+    setResult(null);
+    try {
+      const found = await Updates.checkForUpdateAsync();
+      if (found.isAvailable) await Updates.fetchUpdateAsync();
+      else setResult('latest');
+    } catch {
+      setResult('failed');
+    }
+  };
+  const restart = () => {
+    void Updates.reloadAsync().catch(() => {});
+  };
+  return { state, check, restart };
 }

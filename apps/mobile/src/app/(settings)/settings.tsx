@@ -12,10 +12,12 @@ import { SkeletonBar } from '@/components/motion/Skeleton';
 import { TextSwap } from '@/components/motion/TextSwap';
 import { Toggle } from '@/components/motion/Toggle';
 import { SheetRow, SheetSection } from '@/components/sheets/Sheet';
+import { Spinner } from '@/components/trade/SwapReview';
 import { PushedScreen } from '@/components/wallet/parts';
 import { api } from '@/lib/api';
 import { lockNow } from '@/lib/app-lock';
-import { applyLatestUpdate, buildInfo } from '@/lib/build-info';
+// import { applyLatestUpdate, buildInfo } from '@/lib/build-info';
+import { buildInfo, useAppUpdate } from '@/lib/build-info';
 import { expandView, inPopup } from '@/lib/dapp';
 import { useMoney } from '@/lib/fx';
 import { useGasAllowance } from '@/lib/gas';
@@ -26,7 +28,8 @@ import { setProfile, useProfile } from '@/lib/profile';
 import { JAR_VISIBILITY, updateSettings, useSettings } from '@/lib/settings';
 import { privacyOf, type SocialProfile, setPrivacy, socialError, useSocialMe } from '@/lib/social';
 import { COPY_FEES, SOCIAL, UNWIRED_SETTINGS } from '@/lib/surface';
-import { showErrorToast, showToast } from '@/lib/toast';
+// import { showErrorToast, showToast } from '@/lib/toast';
+import { showErrorToast } from '@/lib/toast';
 import { requireSignIn } from '@/lib/wallet-gate';
 import { useActiveWallet } from '@/lib/wallets';
 import { makeStyles, radius, useTheme } from '@/theme';
@@ -405,6 +408,7 @@ export default function SettingsScreen() {
         />
         <SheetRow icon="book" title="About" onPress={open('/settings-about')} accessory="chevron" />
         <SheetRow icon="info" title="Version" value={Constants.expoConfig?.version ?? '—'} />
+        <UpdateRow />
         <SheetRow
           icon="server"
           title="Server"
@@ -531,30 +535,87 @@ function PrivacyRows({
   ));
 }
 
-/** Version, build, running update and mode, for testers' bug reports; tap to update now. */
+/* The footer was also the hidden way to update (tap it); Settings has a row for that
+   now (14 Nov). Was:
+*/
+// /** Version, build, running update and mode, for testers' bug reports; tap to update now. */
+// function BuildFooter() {
+//   const styles = useStyles();
+//   const [checking, setChecking] = useState(false);
+//   const check = async () => {
+//     if (checking) return;
+//     tap();
+//     setChecking(true);
+//     try {
+//       if (!(await applyLatestUpdate())) showToast('You have the latest version');
+//     } catch {
+//       showToast('Couldn’t check for updates', 1800, true);
+//     } finally {
+//       setChecking(false);
+//     }
+//   };
+//   return (
+//     <Text accessibilityRole="button" style={styles.build} onPress={check}>
+//       {checking ? 'Checking for updates…' : buildInfo()}
+//     </Text>
+//   );
+// }
+
+/** Version, build, running update and mode, for testers' bug reports. */
 function BuildFooter() {
   const styles = useStyles();
-  const [checking, setChecking] = useState(false);
-  const check = async () => {
-    if (checking) return;
-    tap();
-    setChecking(true);
-    try {
-      if (!(await applyLatestUpdate())) showToast('You have the latest version');
-    } catch {
-      showToast('Couldn’t check for updates', 1800, true);
-    } finally {
-      setChecking(false);
-    }
-  };
+  return <Text style={styles.build}>{buildInfo()}</Text>;
+}
+
+/**
+ * Check for updates, as wallets do it: the row says where it is (checking, downloading,
+ * up to date) and turns into Restart once a newer Honey has downloaded (14 Nov).
+ */
+function UpdateRow() {
+  const styles = useStyles();
+  const { state, check, restart } = useAppUpdate();
+  const ready = state === 'ready';
+  const busy = state === 'checking' || state === 'downloading';
+  const label =
+    state === 'latest'
+      ? 'Up to date'
+      : state === 'failed'
+        ? 'Try again'
+        : state === 'downloading'
+          ? 'Downloading'
+          : null;
   return (
-    <Text accessibilityRole="button" style={styles.build} onPress={check}>
-      {checking ? 'Checking for updates…' : buildInfo()}
-    </Text>
+    <SheetRow
+      icon="refresh"
+      title={ready ? 'Restart to update' : 'Check for updates'}
+      onPress={() => {
+        if (busy) return;
+        tap();
+        if (ready) restart();
+        else void check();
+      }}
+      accessory={
+        busy ? (
+          <View style={styles.updateAccessory}>
+            {label ? <Text style={styles.value}>{label}</Text> : null}
+            <Spinner />
+          </View>
+        ) : ready ? (
+          <Text style={styles.restart}>Restart</Text>
+        ) : label ? (
+          <Text style={state === 'failed' ? styles.updateFailed : styles.value}>{label}</Text>
+        ) : (
+          'chevron'
+        )
+      }
+    />
   );
 }
 
 const useStyles = makeStyles((c) => ({
+  updateAccessory: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  restart: { color: c.accentText, fontSize: 15, fontWeight: '600' },
+  updateFailed: { color: c.error, fontSize: 15 },
   build: {
     marginTop: 18,
     color: c.textSecondary,

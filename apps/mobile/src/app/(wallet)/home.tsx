@@ -53,7 +53,7 @@ import { SwipeDismiss } from '@/components/motion/SwipeDismiss';
 import { UnderlineTabs } from '@/components/motion/UnderlineTabs';
 // import { expandView, inPopup } from '@/lib/dapp';
 import { PillButton } from '@/components/onboarding/PillButton';
-import { InFlightBar } from '@/components/wallet/InFlightBar';
+import { InFlightBar, UpdateReadyBar } from '@/components/wallet/InFlightBar';
 import {
   BalanceAmount,
   EmptyState,
@@ -367,6 +367,7 @@ function HomeScreen() {
 
           {/* A swap or jar buy still moving: here, since history is a section below. */}
           <View style={styles.gutter}>
+            <UpdateReadyBar />
             <InFlightBar walletId={wallet.id} />
           </View>
 

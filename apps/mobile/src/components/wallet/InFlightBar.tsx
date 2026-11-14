@@ -7,6 +7,7 @@ import { PressableScale } from '@/components/motion/PressableScale';
 import { fadeIn, fadeOut } from '@/components/motion/reducedFade';
 import { Spinner } from '@/components/trade/SwapReview';
 import { TokenIcon } from '@/components/wallet/parts';
+import { useAppUpdate } from '@/lib/build-info';
 import { tap } from '@/lib/haptics';
 import { useInFlight } from '@/lib/in-flight';
 import { makeStyles, radius, useTheme } from '@/theme';
@@ -75,6 +76,37 @@ export function InFlightBar({
   );
 }
 
+/**
+ * A newer Honey has downloaded: one tap restarts into it (14 Nov). Shown where swaps in
+ * progress show, in the same bar; without a tap it's used on the next long return.
+ */
+export function UpdateReadyBar() {
+  const styles = useStyles();
+  const c = useTheme();
+  const { state, restart } = useAppUpdate();
+  if (state !== 'ready') return null;
+  return (
+    <Animated.View entering={fadeIn()} exiting={fadeOut()}>
+      <PressableScale
+        accessibilityRole="button"
+        accessibilityLabel="Update ready. Restart"
+        scaleTo={0.98}
+        onPress={() => {
+          tap();
+          restart();
+        }}
+        style={styles.bar}
+      >
+        <Icon name="refresh" size={22} color={c.text} />
+        <Text style={[styles.title, styles.flex]} numberOfLines={1}>
+          Update ready
+        </Text>
+        <Text style={styles.action}>Restart</Text>
+      </PressableScale>
+    </Animated.View>
+  );
+}
+
 const useStyles = makeStyles((c) => ({
   bar: {
     flexDirection: 'row',
@@ -89,4 +121,5 @@ const useStyles = makeStyles((c) => ({
   flex: { flex: 1 },
   title: { color: c.text, fontSize: 15, fontWeight: '600' },
   detail: { marginTop: 1, color: c.textSecondary, fontSize: 13 },
+  action: { color: c.accentText, fontSize: 15, fontWeight: '600' },
 }));
