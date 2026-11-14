@@ -263,6 +263,7 @@ pub fn router_with(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build(
     identity: Option<Identity>,
     market: Option<Arc<MarketData>>,

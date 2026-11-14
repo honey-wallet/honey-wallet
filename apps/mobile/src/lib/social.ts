@@ -393,11 +393,19 @@ export async function toggleFollow(handle: string, followingNow?: boolean) {
  */
 export function socialPicks(picks: Pick[], cashPct?: number) {
   const cash = cashPct === undefined ? 0 : cashShare(picks, cashPct);
-  const withCash: { symbol: string; chain: string; weight: number }[] = cash
+  // const withCash: { symbol: string; chain: string; weight: number }[] = cash
+  const withCash: { symbol: string; chain: string; weight: number; address?: string }[] = cash
     ? [
         ...picks
           .filter((p) => !isCashSymbol(p.symbol))
-          .map((p) => ({ symbol: p.symbol, chain: p.chain, weight: p.weight })),
+          // .map((p) => ({ symbol: p.symbol, chain: p.chain, weight: p.weight })),
+          // A DEX pick keeps its contract, or the server can't match it.
+          .map((p) => ({
+            symbol: p.symbol,
+            chain: p.chain,
+            weight: p.weight,
+            ...(p.address ? { address: p.address } : {}),
+          })),
         {
           symbol: CASH.symbol,
           chain: CASH.chain,

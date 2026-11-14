@@ -99,6 +99,22 @@ describe('the cash share', () => {
     ]);
   });
 
+  it('keeps the contract of a DEX pick next to the cash share', () => {
+    const aero = {
+      ...pick('AERO', 60, 'base'),
+      address: '0x940181a94a35a4569e4529a3cdfb74e38fd98631',
+    };
+    expect(socialPicks([aero], 40)).toEqual([
+      {
+        symbol: 'AERO',
+        chain: 'base',
+        weight: 60,
+        address: '0x940181a94a35a4569e4529a3cdfb74e38fd98631',
+      },
+      { symbol: 'USDC', chain: 'Base', weight: 40 },
+    ]);
+  });
+
   it('comes back as cash when a published jar is copied: nothing swaps USDC for itself', () => {
     const published = {
       ...thesisJars.get()[0],
