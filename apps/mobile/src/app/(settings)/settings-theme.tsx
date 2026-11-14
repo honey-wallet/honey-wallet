@@ -3,10 +3,16 @@ import { closeSheet, SheetRow, SheetScreen } from '@/components/sheets/Sheet';
 import { tap } from '@/lib/haptics';
 import { setTheme, type ThemePreference, useSettings } from '@/lib/settings';
 
-const OPTIONS: { value: ThemePreference; label: string; hint: string; icon: IconName }[] = [
-  { value: 'auto', label: 'Auto', hint: "Adapts to your device's settings.", icon: 'theme' },
-  { value: 'light', label: 'Light', hint: 'Always use light theme.', icon: 'sun' },
-  { value: 'dark', label: 'Dark', hint: 'Always use dark theme.', icon: 'moon' },
+// Hints taken off on 14 Nov: each restated its option's name.
+// const OPTIONS: { value: ThemePreference; label: string; hint: string; icon: IconName }[] = [
+//   { value: 'auto', label: 'Auto', hint: "Adapts to your device's settings.", icon: 'theme' },
+//   { value: 'light', label: 'Light', hint: 'Always use light theme.', icon: 'sun' },
+//   { value: 'dark', label: 'Dark', hint: 'Always use dark theme.', icon: 'moon' },
+// ];
+const OPTIONS: { value: ThemePreference; label: string; hint?: string; icon: IconName }[] = [
+  { value: 'auto', label: 'Auto', icon: 'theme' },
+  { value: 'light', label: 'Light', icon: 'sun' },
+  { value: 'dark', label: 'Dark', icon: 'moon' },
 ];
 
 /** Theme picker: Auto follows the device, Light and Dark override it. */

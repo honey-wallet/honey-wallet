@@ -38,10 +38,12 @@ export function Cta() {
           {/* Fine print where the reader commits: what the examples are, and the risk. */}
           <p className={styles.fine}>
             <InfoIcon aria-hidden="true" />
-            <span>
+            {/* <span>
               Examples on this page use sample prices. Crypto prices go down as well as up; never
               put in more than you&rsquo;d be fine losing.
-            </span>
+            </span> */}
+            {/* The risk line is off (14 Nov, owner); the sample-prices note stays. */}
+            {/* <span>Examples on this page use sample prices.</span> (off 14 Nov, owner) */}
           </p>
         </div>
         <CtaScene className={styles.ctaArt} />

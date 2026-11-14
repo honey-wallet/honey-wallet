@@ -3,7 +3,6 @@ import { type ReactElement, type ReactNode, useEffect, useId, useMemo, useState 
 import {
   type AccessibilityState,
   Image,
-  Pressable,
   type RefreshControlProps,
   type StyleProp,
   StyleSheet,
@@ -328,7 +327,9 @@ export function LabeledDivider({
   const styles = useStyles();
   const c = useTheme();
   return (
-    <Pressable
+    // Before: a plain Pressable, with no sign it was pressed.
+    // <Pressable accessibilityRole="button" accessibilityState={{ expanded: open }} onPress={…} style={styles.divider} hitSlop={8}>
+    <PressableScale
       accessibilityRole="button"
       accessibilityState={{ expanded: open }}
       onPress={() => {
@@ -342,7 +343,7 @@ export function LabeledDivider({
       <Text style={styles.dividerLabel}>{label}</Text>
       <AccordionChevron open={open} size={11} color={c.textSecondary} />
       <View style={styles.rule} />
-    </Pressable>
+    </PressableScale>
   );
 }
 
@@ -840,7 +841,7 @@ export function EmptyState({
         id={title}
         align="center"
         first={<Text style={styles.emptyTitle}>{title}</Text>}
-        second={<Text style={styles.emptyHint}>{hint}</Text>}
+        second={hint ? <Text style={styles.emptyHint}>{hint}</Text> : null}
       />
       {action && (
         <PressableScale

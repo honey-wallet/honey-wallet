@@ -31,9 +31,11 @@ import Animated, {
 } from 'react-native-reanimated';
 import Svg, { Circle, Defs, Line, Path, Pattern, Rect } from 'react-native-svg';
 import { scheduleOnRN } from 'react-native-worklets';
+import { Icon } from '@/components/Icon';
+import { PickIcon } from '@/components/jars/JarParts';
 import { NumberPopIn } from '@/components/motion/NumberPopIn';
 import { SkeletonChart } from '@/components/motion/Skeleton';
-import { TokenIcon } from '@/components/wallet/parts';
+// import { TokenIcon } from '@/components/wallet/parts';
 import {
   buildConverge,
   type ConvergeModel,
@@ -46,11 +48,23 @@ import { signedPct } from '@/lib/format';
 import { tap } from '@/lib/haptics';
 import { isDollar, useChartSeries } from '@/lib/market';
 import { formatUsd } from '@/lib/mock-wallet';
+import type { Pick } from '@/lib/thesis';
 import { tokenColor } from '@/lib/token-colors';
 import { makeStyles, useTheme } from '@/theme';
 import { DURATION, EASE } from '@/theme/motion';
 
 const AnimatedPath = Animated.createAnimatedComponent(Path);
+
+/** A token as a pick, for its logo (PickIcon reads only the symbol and colour). */
+const asPick = (symbol: string, color: string): Pick => ({
+  symbol,
+  name: symbol,
+  chain: '',
+  weight: 0,
+  match: 'direct',
+  reason: '',
+  color,
+});
 
 /** PriceChart's look: the same height, padding, room on the right and stroke. */
 export const CONVERGE_HEIGHT = 230;
@@ -68,7 +82,9 @@ const HOLD = 700;
 const CONVERGE = 900;
 const DOT = DURATION.medium;
 const MORPH = DURATION.slow;
-const LABEL_GAP = 14;
+// const LABEL_GAP = 14;
+/** A label row's height (logo 12 + text 11), the least room between two labels. */
+const LABEL_GAP = 16;
 
 /** Jars (by key) whose converge already played this app session. */
 const played = new Set<string>();
@@ -198,8 +214,10 @@ function ConvergeView({
   footer,
   compare,
   headline = true,
-  legend = true,
-  caption = 'Past prices, not a forecast.',
+  // Legend and caption taken off on 14 Nov: each line wears its name and move at its end
+  // instead (owner: "Past prices, not a forecast." is filler).
+  // legend = true,
+  // caption = 'Past prices, not a forecast.',
 }: Props & { model: ConvergeModel | null | undefined; loading: boolean }) {
   const styles = useStyles();
   const c = useTheme();
@@ -242,6 +260,7 @@ function ConvergeView({
         )}
       </View>
       {footer}
+      {/* Taken off on 14 Nov: the legend chips and the caption under the chart.
       {legend && model ? (
         <View style={[styles.legend, { paddingHorizontal: gutter }]}>
           {model.lines.map((l) => (
@@ -270,7 +289,7 @@ function ConvergeView({
       ) : null}
       {caption && model ? (
         <Text style={[styles.caption, { paddingHorizontal: gutter }]}>{caption}</Text>
-      ) : null}
+      ) : null} */}
     </View>
   );
 }
@@ -327,7 +346,7 @@ function Plot({
   const labelTops = useMemo(
     () =>
       spreadLabels(
-        pickYs.map((ys) => (ys.at(-1) ?? 0) - LABEL_GAP - 4),
+        pickYs.map((ys) => (ys.at(-1) ?? 0) - LABEL_GAP - 2),
         LABEL_GAP,
         0,
         height - LABEL_GAP,
@@ -498,13 +517,14 @@ function Plot({
     const last = ys.length - 1;
     const y = ys[last] ?? 0;
     // Above the dot or below it, whichever band the line just before it crosses less
-    // (the label is about 14 points of line wide), kept inside the chart.
+    // (the label is about 30 points of line wide), kept inside the chart.
     const clamp = (top: number) => Math.min(Math.max(top, 0), height - 18);
     const above = clamp(y - 24);
     const below = clamp(y + 8);
     let hitsAbove = y < 28 ? 99 : 0;
     let hitsBelow = 0;
-    for (let i = Math.max(0, last - 14); i < last; i++) {
+    // for (let i = Math.max(0, last - 14); i < last; i++) {
+    for (let i = Math.max(0, last - 30); i < last; i++) {
       const p = ys[i] ?? 0;
       if (p > above - 2 && p < above + 18) hitsAbove++;
       if (p > below - 2 && p < below + 18) hitsBelow++;
@@ -604,6 +624,7 @@ function Plot({
               <EndLabel
                 key={l.symbol}
                 text={l.symbol}
+                pct={l.missing ? null : signedPct(l.change)}
                 color={l.missing ? c.textSecondary : l.color}
                 top={labelTops[i] ?? 0}
                 right={width - lastX}
@@ -620,12 +641,26 @@ function Plot({
         >
           <Animated.View style={[styles.dotRing, ringStyle]} />
         </Animated.View>
-        <Animated.Text
+        {/* The jar's line wears its name and move at its end, like each pick's before it. */}
+        <Animated.View
+          pointerEvents="none"
+          accessibilityLabel={`Jar, ${signedPct(model.change)}`}
+          style={[styles.endValue, styles.endRow, { right: width - lastX + 6 }, valueStyle]}
+        >
+          <Icon name="jar" size={12} color={resultColor} />
+          <Animated.Text style={[styles.endValueText, valueColor]}>
+            Jar {signedPct(model.change)}
+          </Animated.Text>
+          <Animated.Text style={[styles.endValueText, valueColor]}>
+            {formatUsd(endValue)}
+          </Animated.Text>
+        </Animated.View>
+        {/* <Animated.Text
           pointerEvents="none"
           style={[styles.endValue, { right: width - lastX + 6 }, valueStyle, valueColor]}
         >
           {formatUsd(endValue)}
-        </Animated.Text>
+        </Animated.Text> */}
 
         <Animated.View pointerEvents="none" style={[styles.cursor, cursorStyle]} />
         <Animated.View pointerEvents="none" style={[styles.scrubDot, scrubDotStyle]} />
@@ -701,9 +736,13 @@ function PickLine({
   );
 }
 
-/** A pick's symbol by its line's end: fades in once drawn, out as the lines merge. */
+/**
+ * A pick's logo, symbol and move by its line's end: fades in once drawn, out as the
+ * lines merge.
+ */
 function EndLabel({
   text,
+  pct,
   color,
   top,
   right,
@@ -712,6 +751,8 @@ function EndLabel({
   merge,
 }: {
   text: string;
+  /** Its move ("-15.3%"), or null without price history. */
+  pct: string | null;
   color: string;
   top: number;
   right: number;
@@ -729,14 +770,28 @@ function EndLabel({
     opacity: shown.value * Math.max(0, 1 - merge.value * 4),
   }));
   return (
-    <Animated.Text
+    <Animated.View
       pointerEvents="none"
-      style={[styles.endLabel, { top, right, color }, style]}
-      numberOfLines={1}
+      accessibilityLabel={pct ? `${text}, ${pct}` : text}
+      style={[styles.endLabelRow, { top, right }, style]}
     >
-      {text}
-    </Animated.Text>
+      {/* <TokenIcon symbol={text} size={12} /> */}
+      <PickIcon pick={asPick(text, color)} size={12} />
+      <Text style={[styles.endLabel, { color }]} numberOfLines={1}>
+        {text}
+        {pct ? ` ${pct}` : ''}
+      </Text>
+    </Animated.View>
   );
+  // return (
+  //   <Animated.Text
+  //     pointerEvents="none"
+  //     style={[styles.endLabel, { top, right, color }, style]}
+  //     numberOfLines={1}
+  //   >
+  //     {text}
+  //   </Animated.Text>
+  // );
 }
 
 const useStyles = makeStyles((c) => ({
@@ -759,7 +814,18 @@ const useStyles = makeStyles((c) => ({
     fontSize: 11,
     fontVariant: ['tabular-nums'],
   },
-  endLabel: { position: 'absolute', fontSize: 11, fontWeight: '600' },
+  // endLabel: { position: 'absolute', fontSize: 11, fontWeight: '600' },
+  // On the canvas colour, so another line never runs through the name.
+  endLabelRow: {
+    position: 'absolute',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: 3,
+    borderRadius: 4,
+    backgroundColor: c.canvas,
+  },
+  endLabel: { fontSize: 11, fontWeight: '600', fontVariant: ['tabular-nums'] },
   dot: { position: 'absolute', top: 0, width: 8, height: 8, borderRadius: 4 },
   dotRing: { position: 'absolute', width: 8, height: 8, borderRadius: 4 },
   // On the canvas colour, so the line never runs through the number.
@@ -774,6 +840,8 @@ const useStyles = makeStyles((c) => ({
     fontWeight: '600',
     fontVariant: ['tabular-nums'],
   },
+  endRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  endValueText: { fontSize: 12, fontWeight: '600', fontVariant: ['tabular-nums'] },
   cursor: {
     position: 'absolute',
     top: 0,
