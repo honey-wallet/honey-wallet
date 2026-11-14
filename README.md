@@ -11,6 +11,8 @@ before as an EVM wallet; the hackathon work is the diff from the baseline commit
 [pre-hackathon...hackathon-submission](https://github.com/honey-wallet/honey-wallet/compare/pre-hackathon...hackathon-submission).
 Tracks, a dated list of what was built and the demo script are in [HACKATHON.md](HACKATHON.md).
 
+**Contents:** [The problem](#the-problem) · [How Honey uses NEAR](#how-honey-uses-near) · [Features](#features) · [Run it locally](#run-it-locally) · [Architecture](#architecture) · [Security and privacy](#security-and-privacy) · [Limitations](#limitations)
+
 ## Watch
 
 <table>
@@ -35,20 +37,6 @@ Also posted on X: [the demo post](https://x.com/0xabhii/status/21217141352098201
 <sub>Native iPhone simulator captures of `apps/mobile` on 14 Nov 2026 (UTC), running against the
 production API, signed out. Jars, prices, charts, returns and people are live data.</sub>
 
-## Try it
-
-iPhone and Android apps are coming soon: the public TestFlight beta is waiting for Apple's
-review. Join the waitlist at [honeywallet.org](https://honeywallet.org). Until then:
-
-1. Run the app locally in test mode: [Run it locally](#run-it-locally). No funds needed.
-2. Open Honey → **Create a new wallet**. The keys are made on the phone.
-3. Feed → **Everyone** → tap **Copy** on a jar. Or tap the jar button → **Create a jar →
-   Describe an idea**, type a market view, and review the jar the agent proposes.
-
-Builds that point at the production API use real money on mainnet. Use small amounts.
-Website: [honeywallet.org](https://honeywallet.org). Pitch deck: [honeywallet.org/deck](https://honeywallet.org/deck).
-To try it locally without funds, see [Run it locally](#run-it-locally).
-
 ## The problem
 
 People pick crypto with friends: in group chats, by copying someone they trust, by
@@ -67,6 +55,22 @@ Doing it together means screenshots, spreadsheets and trusting whoever holds the
 - **An AI jar builder.** Describe an idea; an agent on NEAR AI Cloud proposes tokens,
   weights and the case against.
 - **Keys on the phone.** The server never holds keys or user funds.
+
+## How Honey uses NEAR
+
+| NEAR component | What Honey uses it for | Code |
+| --- | --- | --- |
+| NEAR Intents 1Click | Default route for swaps, jar buys, jar sells and group jar buys: quotes, deposit addresses, status. Creator copy fees through `appFees`. | [route_planner.rs](apps/server/src/route_planner.rs), [jar_buys.rs](apps/server/src/jar_buys.rs), [copy_fees.rs](apps/server/src/copy_fees.rs), [intents-swap.ts](apps/mobile/src/lib/intents-swap.ts) |
+| `intents.near` | Where a group jar's money sits: NEAR Intents balances owned by the group's DAO. | [sputnik.ts](packages/keyring/src/sputnik.ts), [jar_dao.rs](apps/server/src/jar_dao.rs) |
+| Sputnik DAO v2 (`sputnik-dao.near`) | One DAO per group jar: members, majority threshold, proposals to buy or sell, votes. The server reads the DAO and checks its code and policy; it never signs for the jar. | [jar_dao.rs](apps/server/src/jar_dao.rs), [routes/jar_dao.rs](apps/server/src/routes/jar_dao.rs), [jar-dao.ts](apps/mobile/src/lib/jar-dao.ts) |
+| Meta transactions (NEP-366) | Honey's relayer pays gas for members' own DAO calls, and pays the factory deposit to create a group's DAO. It only carries calls a group jar makes. | [near_relayer.rs](apps/server/src/near_relayer.rs) |
+| NEAR accounts | Implicit accounts derived from the phrase (`m/44'/397'/n'`). Transfers signed on the phone. | [keyring index.ts](packages/keyring/src/index.ts), [NEAR.md](docs/NEAR.md) |
+| NEAR AI Cloud | Every model call in the thesis agent (DeepSeek V4.1 Flash): JSON-schema replies, one retry, a call budget per run. | [near_ai.rs](apps/server/src/thesis/near_ai.rs) |
+| Confidential Intents | Private jars: a FROST threshold key over a NEAR account, spending through NEAR Confidential Intents via Honey's server proxy. On in the app: Create a jar → Private jar. | [confidential_intents.rs](apps/server/src/routes/confidential_intents.rs), [stealth-jar.ts](packages/keyring/src/stealth-jar.ts) |
+
+Honey does not use Chain Signatures.
+
+On mainnet: the production relayers, a group jar DAO and a team wallet's transactions, with explorer links, in [HACKATHON.md](HACKATHON.md#on-mainnet).
 
 ## Features
 
@@ -112,74 +116,19 @@ Code: [thesis/](apps/server/src/thesis), [near_ai.rs](apps/server/src/thesis/nea
 | Multichain wallet | One recovery phrase for EVM chains, Solana and NEAR implicit accounts. | [packages/keyring](packages/keyring), [NEAR.md](docs/NEAR.md) |
 | Keys on the phone | Keys live in the iOS Keychain or Android Keystore, on this device only. Signing happens on the phone. | [secure-store.ts](apps/mobile/src/lib/secure-store.ts), [sign.ts](packages/keyring/src/sign.ts) |
 
-## How Honey uses NEAR
+## Try it
 
-| NEAR component | What Honey uses it for | Code |
-| --- | --- | --- |
-| NEAR Intents 1Click | Default route for swaps, jar buys, jar sells and group jar buys: quotes, deposit addresses, status. Creator copy fees through `appFees`. | [route_planner.rs](apps/server/src/route_planner.rs), [jar_buys.rs](apps/server/src/jar_buys.rs), [copy_fees.rs](apps/server/src/copy_fees.rs), [intents-swap.ts](apps/mobile/src/lib/intents-swap.ts) |
-| `intents.near` | Where a group jar's money sits: NEAR Intents balances owned by the group's DAO. | [sputnik.ts](packages/keyring/src/sputnik.ts), [jar_dao.rs](apps/server/src/jar_dao.rs) |
-| Sputnik DAO v2 (`sputnik-dao.near`) | One DAO per group jar: members, majority threshold, proposals to buy or sell, votes. The server reads the DAO and checks its code and policy; it never signs for the jar. | [jar_dao.rs](apps/server/src/jar_dao.rs), [routes/jar_dao.rs](apps/server/src/routes/jar_dao.rs), [jar-dao.ts](apps/mobile/src/lib/jar-dao.ts) |
-| Meta transactions (NEP-366) | Honey's relayer pays gas for members' own DAO calls, and pays the factory deposit to create a group's DAO. It only carries calls a group jar makes. | [near_relayer.rs](apps/server/src/near_relayer.rs) |
-| NEAR accounts | Implicit accounts derived from the phrase (`m/44'/397'/n'`). Transfers signed on the phone. | [keyring index.ts](packages/keyring/src/index.ts), [NEAR.md](docs/NEAR.md) |
-| NEAR AI Cloud | Every model call in the thesis agent (DeepSeek V4.1 Flash): JSON-schema replies, one retry, a call budget per run. | [near_ai.rs](apps/server/src/thesis/near_ai.rs) |
-| Confidential Intents | Private jars: a FROST threshold key over a NEAR account, spending through NEAR Confidential Intents via Honey's server proxy. On in the app: Create a jar → Private jar. | [confidential_intents.rs](apps/server/src/routes/confidential_intents.rs), [stealth-jar.ts](packages/keyring/src/stealth-jar.ts) |
+iPhone and Android apps are coming soon: the public TestFlight beta is waiting for Apple's
+review. Join the waitlist at [honeywallet.org](https://honeywallet.org). Until then:
 
-Honey does not use Chain Signatures.
+1. Run the app locally in test mode: [Run it locally](#run-it-locally). No funds needed.
+2. Open Honey → **Create a new wallet**. The keys are made on the phone.
+3. Feed → **Everyone** → tap **Copy** on a jar. Or tap the jar button → **Create a jar →
+   Describe an idea**, type a market view, and review the jar the agent proposes.
 
-## Architecture
-
-```mermaid
-flowchart LR
-  subgraph Phone["Honey app: Expo, iOS and Android"]
-    Keys["Keyring: keys stay on the phone"]
-  end
-  subgraph Cloud["Google Cloud"]
-    API["Rust API, axum, on Cloud Run"]
-    PG[("PostgreSQL, Cloud SQL")]
-    RD[("Redis, Memorystore")]
-  end
-  Phone -->|"feed, jars, groups, quotes"| API
-  API --> PG
-  API --> RD
-  API -->|"quotes, deposit addresses, appFees"| OneClick["NEAR Intents 1Click"]
-  API -->|"thesis agent"| NearAI["NEAR AI Cloud"]
-  API -->|"fallback quotes"| Dex["KyberSwap, Jupiter"]
-  API -->|"DAO reads, relayed NEP-366 calls"| Near["NEAR: Sputnik DAO, intents.near"]
-  API -->|"sponsored gas"| Chains["EVM and Solana"]
-  Phone -->|"signed deposits"| Chains
-  Phone -->|"signed proposals and votes"| Near
-  Phone -->|"swap status"| OneClick
-```
-
-The phone signs everything that moves user money. The server prepares quotes, checks
-chain state, keeps the social data and runs the agent. Postgres holds profiles, jars,
-groups and the gas ledger; Redis holds agent runs, rate limits and caches. Firebase
-Authentication (Apple, Google) gives identity; a server-issued wallet challenge proves
-wallet ownership. Deployment notes: [GOOGLE-CLOUD-SETUP.md](docs/launch/GOOGLE-CLOUD-SETUP.md).
-
-## Tech stack
-
-| Layer | Tools |
-| --- | --- |
-| Mobile | Expo SDK 57, React Native 0.86, Expo Router, Reanimated 4, viem |
-| Keys | `@scure/bip39`, `@scure/bip32`, `@noble/curves`, expo-secure-store |
-| Server | Rust, axum 0.8, tokio, sqlx (PostgreSQL), Redis |
-| NEAR | NEAR Intents 1Click, Sputnik DAO v2, NEAR AI Cloud, NEP-366 relayer |
-| Other providers | KyberSwap, Jupiter, Linkup (news for the agent), CoinGecko (token pages) |
-| Website | Next.js 16 on Vercel: landing page, public profile, jar and post pages, the deck |
-| Hosting | Cloud Run, Cloud SQL, Memorystore, Secret Manager, Firebase Authentication |
-| Tooling | pnpm, Turborepo, Biome, rustfmt, clippy, Vitest |
-
-| Path | What it is |
-| --- | --- |
-| [apps/mobile](apps/mobile) | The product: Feed, Jars, Wallet, Swap |
-| [apps/server](apps/server) | Rust API: auth, social, jars, groups, agent, routing, gas |
-| [apps/web](apps/web) | Website and public share pages |
-| [apps/extension](apps/extension) | Chrome wallet build; no Feed or Jars |
-| [apps/console](apps/console) | Internal backend console |
-| [packages/keyring](packages/keyring) | Phrases, address derivation, signing, Sputnik and NEAR transactions |
-| [packages/api-client](packages/api-client) | Typed API client and response types |
-| [deck](deck) | The hackathon pitch deck |
+Builds that point at the production API use real money on mainnet. Use small amounts.
+Website: [honeywallet.org](https://honeywallet.org). Pitch deck: [honeywallet.org/deck](https://honeywallet.org/deck).
+To try it locally without funds, see [Run it locally](#run-it-locally).
 
 ## Run it locally
 
@@ -258,6 +207,37 @@ pnpm lint && pnpm typecheck && pnpm test
 
 More setup: [CONTRIBUTING.md](CONTRIBUTING.md).
 
+## Architecture
+
+```mermaid
+flowchart LR
+  subgraph Phone["Honey app: Expo, iOS and Android"]
+    Keys["Keyring: keys stay on the phone"]
+  end
+  subgraph Cloud["Google Cloud"]
+    API["Rust API, axum, on Cloud Run"]
+    PG[("PostgreSQL, Cloud SQL")]
+    RD[("Redis, Memorystore")]
+  end
+  Phone -->|"feed, jars, groups, quotes"| API
+  API --> PG
+  API --> RD
+  API -->|"quotes, deposit addresses, appFees"| OneClick["NEAR Intents 1Click"]
+  API -->|"thesis agent"| NearAI["NEAR AI Cloud"]
+  API -->|"fallback quotes"| Dex["KyberSwap, Jupiter"]
+  API -->|"DAO reads, relayed NEP-366 calls"| Near["NEAR: Sputnik DAO, intents.near"]
+  API -->|"sponsored gas"| Chains["EVM and Solana"]
+  Phone -->|"signed deposits"| Chains
+  Phone -->|"signed proposals and votes"| Near
+  Phone -->|"swap status"| OneClick
+```
+
+The phone signs everything that moves user money. The server prepares quotes, checks
+chain state, keeps the social data and runs the agent. Postgres holds profiles, jars,
+groups and the gas ledger; Redis holds agent runs, rate limits and caches. Firebase
+Authentication (Apple, Google) gives identity; a server-issued wallet challenge proves
+wallet ownership. Deployment notes: [GOOGLE-CLOUD-SETUP.md](docs/launch/GOOGLE-CLOUD-SETUP.md).
+
 ## Security and privacy
 
 - **Keys stay on the phone.** Recovery phrases and keys are stored in the iOS Keychain or
@@ -275,6 +255,30 @@ More setup: [CONTRIBUTING.md](CONTRIBUTING.md).
   review screen says so.
 
 Report vulnerabilities privately: [SECURITY.md](SECURITY.md).
+
+## Tech stack
+
+| Layer | Tools |
+| --- | --- |
+| Mobile | Expo SDK 57, React Native 0.86, Expo Router, Reanimated 4, viem |
+| Keys | `@scure/bip39`, `@scure/bip32`, `@noble/curves`, expo-secure-store |
+| Server | Rust, axum 0.8, tokio, sqlx (PostgreSQL), Redis |
+| NEAR | NEAR Intents 1Click, Sputnik DAO v2, NEAR AI Cloud, NEP-366 relayer |
+| Other providers | KyberSwap, Jupiter, Linkup (news for the agent), CoinGecko (token pages) |
+| Website | Next.js 16 on Vercel: landing page, public profile, jar and post pages, the deck |
+| Hosting | Cloud Run, Cloud SQL, Memorystore, Secret Manager, Firebase Authentication |
+| Tooling | pnpm, Turborepo, Biome, rustfmt, clippy, Vitest |
+
+| Path | What it is |
+| --- | --- |
+| [apps/mobile](apps/mobile) | The product: Feed, Jars, Wallet, Swap |
+| [apps/server](apps/server) | Rust API: auth, social, jars, groups, agent, routing, gas |
+| [apps/web](apps/web) | Website and public share pages |
+| [apps/extension](apps/extension) | Chrome wallet build; no Feed or Jars |
+| [apps/console](apps/console) | Internal backend console |
+| [packages/keyring](packages/keyring) | Phrases, address derivation, signing, Sputnik and NEAR transactions |
+| [packages/api-client](packages/api-client) | Typed API client and response types |
+| [deck](deck) | The hackathon pitch deck |
 
 ## Limitations
 
