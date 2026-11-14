@@ -236,9 +236,10 @@ export async function appPriceOf(
     dexScreenerPrice(chain, address, d),
     d.decimals(chain, address).catch(() => null),
   ]);
-  // Decimals read on chain win, and a row that disagrees with them is refused; when the
-  // chain can't be read, the row's are used.
-  const decimals = onChain ?? ref.decimals ?? null;
+  // Decimals read on chain win, and a row that disagrees with them is refused.
+  // const decimals = onChain ?? ref.decimals ?? null;
+  // Unreadable on chain: refused, never the server's (15 Nov).
+  const decimals = onChain;
   if (!(price && price > 0) || decimals === null || !agrees(decimals)) return null;
   return { price, decimals };
 }

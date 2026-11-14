@@ -551,7 +551,10 @@ export function dexLogos(tokens: readonly DexToken[]): Record<string, string> {
  * tokens sharing a ticker all show. A row whose symbol another row has is `exact`: it
  * wears its network on its logo and opens by its own asset, never by the symbol.
  */
-export function dexMarketRows(rows: readonly { symbol: string }[], tokens: readonly DexToken[]) {
+export function dexMarketRows(
+  rows: readonly { symbol: string; name?: string }[],
+  tokens: readonly DexToken[],
+) {
   const seen = new Set<string>();
   const safe = tokens.filter((t) => {
     const id = dexAssetId(t.chain, t.address);
@@ -559,12 +562,26 @@ export function dexMarketRows(rows: readonly { symbol: string }[], tokens: reado
     seen.add(id);
     return true;
   });
+  // const count = new Map<string, number>();
+  // for (const r of [...rows, ...safe]) {
+  //   const key = r.symbol.toUpperCase();
+  //   count.set(key, (count.get(key) ?? 0) + 1);
+  // }
+  // return safe.map((t) => dexMarketRow(t, (count.get(t.symbol.toUpperCase()) ?? 0) > 1));
+  // A shared ticker or name (a look-alike "USDC" too) marks the row `exact`: it stays out
+  // of Top tokens, ranks below the listed one and shows its contract (security review,
+  // 15 Nov).
   const count = new Map<string, number>();
+  const bump = (key: string) => count.set(key, (count.get(key) ?? 0) + 1);
   for (const r of [...rows, ...safe]) {
-    const key = r.symbol.toUpperCase();
-    count.set(key, (count.get(key) ?? 0) + 1);
+    bump(`s:${r.symbol.toUpperCase()}`);
+    const name = (r as { name?: string }).name?.trim().toLowerCase();
+    if (name) bump(`n:${name}`);
   }
-  return safe.map((t) => dexMarketRow(t, (count.get(t.symbol.toUpperCase()) ?? 0) > 1));
+  const shared = (t: DexToken) =>
+    (count.get(`s:${t.symbol.toUpperCase()}`) ?? 0) > 1 ||
+    (count.get(`n:${t.name.trim().toLowerCase()}`) ?? 0) > 1;
+  return safe.map((t) => dexMarketRow(t, shared(t)));
 }
 
 /** One DEX token as a market row (Search); `exact` when it must open by its own asset. */

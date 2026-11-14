@@ -49,6 +49,7 @@ import {
   formatCompactUsd,
   formatPrice,
   type MarketToken,
+  shortAddress,
 } from '@/lib/mock-wallet';
 import { isWeb } from '@/lib/platform';
 import { reorderSavedTokens, toggleSavedToken, useSavedTokens } from '@/lib/saved';
@@ -259,6 +260,8 @@ export default function SearchScreen() {
         .filter((t) => matchesQuery(t, q))
         .sort(
           (a, b) =>
+            // A look-alike sharing a listed ticker or name sits below every listed token.
+            Number(!!a.exact) - Number(!!b.exact) ||
             Number(b.symbol.toLowerCase() === q) - Number(a.symbol.toLowerCase() === q) ||
             Number(b.name.toLowerCase().startsWith(q)) - Number(a.name.toLowerCase().startsWith(q)),
         );
@@ -274,8 +277,11 @@ export default function SearchScreen() {
   }, [!!q]);
   // Dollars aren't something to discover: stablecoins stay findable by search but sit out
   // of Top tokens, or they'd hold the top places on volume.
+  // const top = marketList
+  //   .filter((t) => (chain === 'All' || t.chain === chain) && !isDollar(t))
+  // Look-alikes (a shared ticker or name) are found by search only, never ranked.
   const top = marketList
-    .filter((t) => (chain === 'All' || t.chain === chain) && !isDollar(t))
+    .filter((t) => (chain === 'All' || t.chain === chain) && !isDollar(t) && !t.exact)
     .sort(COMPARE[sort]);
 
   return (
@@ -630,7 +636,12 @@ function MarketRow({ token, rank }: { token: MarketToken; rank?: number }) {
         <Text style={styles.rowTitle} numberOfLines={1}>
           {token.name}
         </Text>
-        <Text style={styles.rowMeta}>{formatCompactUsd(token.volume)} Vol</Text>
+        {/* <Text style={styles.rowMeta}>{formatCompactUsd(token.volume)} Vol</Text> */}
+        {/* A look-alike shows its contract, so it can't pass for the listed token. */}
+        <Text style={styles.rowMeta} numberOfLines={1}>
+          {token.exact && token.address ? `${shortAddress(token.address)} · ` : ''}
+          {formatCompactUsd(token.volume)} Vol
+        </Text>
       </View>
       <View style={styles.rowEnd}>
         <Text style={styles.rowTitle}>{formatPrice(token.price)}</Text>

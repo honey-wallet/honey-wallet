@@ -55,6 +55,16 @@ describe('long-tail tokens in Search (15 Nov)', () => {
     expect(rows[0]?.assetId).toBe(`dex:base:${AERO.toLowerCase()}`);
   });
 
+  it('marks a look-alike sharing a listed name, not only a ticker (security review)', () => {
+    const live = [{ symbol: 'USDC', name: 'USD Coin' }];
+    const fake = { ...row('base', AERO, 'USDCX'), name: 'USD Coin' };
+    const rows = dex.dexMarketRows(live, [listed(fake), listed(row('solana', JTO, 'JTO'))]);
+    expect(rows.map((r) => [r.symbol, r.exact ?? false])).toEqual([
+      ['USDCX', true],
+      ['JTO', false],
+    ]);
+  });
+
   it('matches a contract only to the token at it, and a NEAR Intents token by its contract', () => {
     const rows: MarketToken[] = [
       {
