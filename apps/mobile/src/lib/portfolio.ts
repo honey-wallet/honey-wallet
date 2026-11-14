@@ -236,7 +236,10 @@ export function heldNow(wallet: AddedWallet): SendHolding[] {
 /** Holdings as Home's token list: one row per symbol, summed over chains, largest first. */
 export function toTokens(holdings: PortfolioHolding[]): Token[] {
   const bySymbol = new Map<string, Token>();
+  // The networks each symbol is held on, for the count badge on its logo.
+  const networks = new Map<string, Set<string>>();
   for (const h of holdings) {
+    if (h.amount > 0) networks.set(h.symbol, (networks.get(h.symbol) ?? new Set()).add(h.chain));
     const t = bySymbol.get(h.symbol);
     if (t) {
       t.amount += h.amount;
@@ -252,7 +255,10 @@ export function toTokens(holdings: PortfolioHolding[]): Token[] {
       });
     }
   }
-  return [...bySymbol.values()].sort((a, b) => b.usd - a.usd || b.amount - a.amount);
+  // return [...bySymbol.values()].sort((a, b) => b.usd - a.usd || b.amount - a.amount);
+  return [...bySymbol.values()]
+    .map((t) => ({ ...t, chains: networks.get(t.symbol)?.size ?? 0 }))
+    .sort((a, b) => b.usd - a.usd || b.amount - a.amount);
 }
 
 const CHAINS: Chain[] = ['Ethereum', 'Base', 'Arbitrum', 'Polygon', 'Solana', 'NEAR'];

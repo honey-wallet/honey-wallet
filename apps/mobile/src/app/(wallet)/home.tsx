@@ -1,7 +1,14 @@
 import { type Href, router, useLocalSearchParams } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useState } from 'react';
-import { RefreshControl, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import {
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  useWindowDimensions,
+  View,
+} from 'react-native';
 import Animated, {
   Extrapolation,
   interpolate,
@@ -21,6 +28,7 @@ import {
   SharedWalletCard,
   useApprovalsNudgeShown,
 } from '@/components/home/ApprovalsCard';
+import { ExploreTokens } from '@/components/home/ExploreTokens';
 import { NftGallery } from '@/components/home/NftGallery';
 import { TradesList, useHasTrades } from '@/components/home/PositionsList';
 import { Icon, type IconName } from '@/components/Icon';
@@ -61,11 +69,12 @@ import { SHOW_DEMO_LABELS } from '@/lib/demo-money-copy';
 import { useMoney } from '@/lib/fx';
 import { tap } from '@/lib/haptics';
 import { LOADS } from '@/lib/loads';
+import { useHoldingsChart } from '@/lib/market';
 import { BALANCE_HISTORY, EARN } from '@/lib/mock-wallet';
 import { useMultisig } from '@/lib/multisig';
 import { setupComplete, useOnboarding } from '@/lib/onboarding';
 import { isWeb } from '@/lib/platform';
-import { refreshNow } from '@/lib/portfolio';
+import { refreshNow, usePortfolio } from '@/lib/portfolio';
 import { HIDDEN_AMOUNT, updateSettings, useSettings } from '@/lib/settings';
 import { EXTENSION, SHARED_WALLETS, SOCIAL, WALLET } from '@/lib/surface';
 import { useTabReselect } from '@/lib/tab-reselect';
@@ -77,10 +86,17 @@ import { useWalletView } from '@/lib/wallet-view';
 import { isMainWallet, useActiveWallet } from '@/lib/wallets';
 import { makeStyles, radius, useTheme } from '@/theme';
 
+// const ACTIONS: { label: string; icon: IconName; href: Href }[] = [
+//   { label: 'Send', icon: 'send', href: '/send' },
+//   { label: 'Receive', icon: 'receive', href: '/receive' },
+//   { label: 'Buy', icon: 'buy', href: '/buy' },
+//   { label: 'Sell', icon: 'sell', href: { pathname: '/buy', params: { mode: 'sell' } } },
+// ];
+/** Honey's four, in Uniswap's order (Buy, Send, Receive, Sell) (2026-11-14). */
 const ACTIONS: { label: string; icon: IconName; href: Href }[] = [
+  { label: 'Buy', icon: 'buy', href: '/buy' },
   { label: 'Send', icon: 'send', href: '/send' },
   { label: 'Receive', icon: 'receive', href: '/receive' },
-  { label: 'Buy', icon: 'buy', href: '/buy' },
   { label: 'Sell', icon: 'sell', href: { pathname: '/buy', params: { mode: 'sell' } } },
 ];
 
@@ -89,10 +105,13 @@ const ACTIONS: { label: string; icon: IconName; href: Href }[] = [
 /** Jars lead the app for now: no Earn promo on Home. */
 const JARS_FOCUS = true;
 // 2026-11-12: Activity (transaction history) moved here from its own tab.
-const SECTIONS = ['Tokens', 'Jars', 'NFTs', 'Activity', 'Trades'] as const;
+// const SECTIONS = ['Tokens', 'Jars', 'NFTs', 'Activity', 'Trades'] as const;
+// 2026-11-14: Explore, an empty wallet's top tokens, as on Uniswap's empty Home.
+const SECTIONS = ['Tokens', 'Jars', 'NFTs', 'Activity', 'Trades', 'Explore'] as const;
 
-/** An empty wallet's day: a flat line where the balance chart goes. */
-const FLAT_DAY = [0, 0];
+// An empty wallet has no line beside its balance now (2026-11-14), as Uniswap's.
+// /** An empty wallet's day: a flat line where the balance chart goes. */
+// const FLAT_DAY = [0, 0];
 
 /** The tokens a Honey Jar earns on, best rate first. */
 const EARN_BY_RATE = [...EARN].sort((a, b) => b.apy - a.apy);
@@ -188,13 +207,28 @@ function HomeScreen() {
   // NFTs: Honey doesn't read collectibles from chain yet (no NFT indexer), so only test
   // mode's sample wallets have any; a real wallet gets no empty NFTs tab.
   const sampleNfts = TEST_MODE && !('live' in view) && !multisig && !empty;
-  const sections = SECTIONS.filter(
-    (s) =>
-      s !== 'Trades' && (s !== 'Jars' || (!multisig && SOCIAL)) && (s !== 'NFTs' || sampleNfts),
+  // An empty wallet, as on Uniswap's Home: Explore (the top tokens) instead of an empty
+  // Tokens list, and only the sections that have something in them.
+  const exploring = empty && !failed && !multisig;
+  const hasJars = useThesisJars().some((j) => j.mine);
+  const pastActivity = (usePortfolio(wallet, exploring).activity?.length ?? 0) > 0;
+  // const sections = SECTIONS.filter(
+  //   (s) =>
+  //     s !== 'Trades' && (s !== 'Jars' || (!multisig && SOCIAL)) && (s !== 'NFTs' || sampleNfts),
+  // );
+  const sections = SECTIONS.filter((s) =>
+    exploring
+      ? s === 'Explore' || (s === 'Jars' && SOCIAL && hasJars) || (s === 'Activity' && pastActivity)
+      : s !== 'Trades' &&
+        s !== 'Explore' &&
+        (s !== 'Jars' || (!multisig && SOCIAL)) &&
+        (s !== 'NFTs' || sampleNfts),
   );
   void hasTrades;
   // Switching to a shared wallet (which can't trade) hides Trades; fall back to Tokens.
-  const shownSection = sections.includes(section) ? section : 'Tokens';
+  // const shownSection = sections.includes(section) ? section : 'Tokens';
+  // (or Explore, an empty wallet's first section).
+  const shownSection = sections.includes(section) ? section : sections[0];
   // The promo lists Honey Jar rates, which come with Savings' Earn rates.
   const ratesLoading = useFirstLoad(LOADS.earnRates);
   const onboarding = useOnboarding();
@@ -228,6 +262,19 @@ function HomeScreen() {
     // .slice(0, 2);
     .slice(0, isWeb ? 1 : 2);
   const changeColor = view.change < 0 ? c.error : c.success;
+  // The sparkline beside the balance: a real wallet's holdings along their 24h prices;
+  // sample wallets keep their sample day. Nothing to draw for an empty wallet.
+  const live = 'live' in view;
+  const holdingsDay = useHoldingsChart(live ? view.tokens : [], '1D', live && !empty);
+  const liveDay = holdingsDay.history?.values;
+  const dayLine =
+    failed || empty || !(view.usd > 0)
+      ? null
+      : live
+        ? liveDay && liveDay.length > 1
+          ? liveDay
+          : null
+        : BALANCE_HISTORY;
   const canvas = c.canvas;
   const divider = c.divider;
   const hidden = view.tokens.filter((t) => t.hidden);
@@ -310,7 +357,8 @@ function HomeScreen() {
                   </View>
                   {'live' in view ? null : (
                     <View style={styles.sparkSkeleton}>
-                      <SkeletonChart height={60} inset={4} />
+                      {/* <SkeletonChart height={60} inset={4} /> */}
+                      <SkeletonChart height={SPARK_HEIGHT} inset={4} />
                     </View>
                   )}
                 </View>
@@ -347,7 +395,7 @@ function HomeScreen() {
                 </View>
                 {/* A real wallet has no balance history yet (no indexer): no sparkline
                     rather than a flat line. Today's change above is real (24h prices). */}
-                {'live' in view ? null : (
+                {/* {'live' in view ? null : (
                   <PressableScale
                     accessibilityLabel="Portfolio"
                     scaleTo={0.97}
@@ -355,7 +403,25 @@ function HomeScreen() {
                   >
                     <Sparkline data={empty ? FLAT_DAY : BALANCE_HISTORY} width={116} height={60} />
                   </PressableScale>
-                )}
+                )} */}
+                {/* 2026-11-14, as Uniswap's: a real wallet's day too, what it holds now
+                    priced along each token's last 24h (Portfolio's chart, lib/market
+                    useHoldingsChart), coloured by the day's move. None without a
+                    history or with nothing in the wallet. */}
+                {dayLine ? (
+                  <PressableScale
+                    accessibilityLabel="Portfolio"
+                    scaleTo={0.97}
+                    onPress={() => openPortfolio()}
+                  >
+                    <Sparkline
+                      data={dayLine}
+                      up={view.change >= 0}
+                      width={SPARK_WIDTH}
+                      height={SPARK_HEIGHT}
+                    />
+                  </PressableScale>
+                ) : null}
               </View>
             </SkeletonReveal>
           </Rise>
@@ -370,9 +436,18 @@ function HomeScreen() {
 
           {/* Send / Receive / Buy / Sell, rising one after another. An empty wallet keeps
               them too, so the layout is familiar from day one. */}
-          <View style={[styles.actions, styles.gutter]}>
+          {/* <View style={[styles.actions, styles.gutter]}> */}
+          {/* Buy / Send / Receive / Sell as Uniswap's: a row of fixed-width tiles that
+              scrolls sideways, the last one running off the edge (2026-11-14). */}
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={styles.actions}
+            contentContainerStyle={styles.actionsRow}
+          >
             {ACTIONS.map((action, i) => (
-              <Rise key={action.label} index={2 + i} style={styles.flex}>
+              // <Rise key={action.label} index={2 + i} style={styles.flex}>
+              <Rise key={action.label} index={2 + i}>
                 <PressableScale
                   accessibilityRole="button"
                   accessibilityState={{ disabled: watchBlocked(action.label) }}
@@ -383,7 +458,8 @@ function HomeScreen() {
                   }
                   style={[styles.action, watchBlocked(action.label) && styles.actionOff]}
                 >
-                  <Icon name={action.icon} size={28} color={c.accentText} />
+                  {/* <Icon name={action.icon} size={28} color={c.accentText} /> */}
+                  <Icon name={action.icon} size={24} color={c.accentText} />
                   {/* "Receive" is the widest: it shrinks a little on small phones, never wraps. */}
                   <Text
                     style={styles.actionLabel}
@@ -396,7 +472,8 @@ function HomeScreen() {
                 </PressableScale>
               </Rise>
             ))}
-          </View>
+            {/* </View> */}
+          </ScrollView>
 
           {/* At most two cards here, the two that matter most (see `cards` above). A
               shared wallet's members, rule and what's waiting; elsewhere, a nudge if any
@@ -497,8 +574,23 @@ function HomeScreen() {
           <Rise index={7} style={styles.sectionsGap}>
             <Sticky id="sections">
               {/* The same tabs as Trade: the honey underline slides to the one picked. */}
+              {/* 2026-11-14: plain text tabs from the left instead, as Uniswap's. */}
               <View style={[styles.sections, styles.gutter]}>
-                <UnderlineTabs options={sections} value={shownSection} onChange={setSection} />
+                {/* <UnderlineTabs options={sections} value={shownSection} onChange={setSection} /> */}
+                {/* Uniswap's: tabs as wide as their names, from the left. A lone section
+                    (an empty wallet's Explore) is a label, as Uniswap's lone tab is grey. */}
+                {sections.length > 1 ? (
+                  <UnderlineTabs
+                    fit
+                    options={sections}
+                    value={shownSection}
+                    onChange={setSection}
+                  />
+                ) : (
+                  <View style={styles.sectionLabelRow}>
+                    <Text style={styles.sectionLabel}>{shownSection}</Text>
+                  </View>
+                )}
               </View>
             </Sticky>
           </Rise>
@@ -530,13 +622,14 @@ function HomeScreen() {
                   )}
                   {/* A new shared wallet starts empty: say how to fund it. */}
                   {/* A new wallet: the Add money card above is how tokens get here. */}
-                  {visible.length === 0 && empty && (
+                  {/* An empty wallet shows Explore instead of Tokens (2026-11-14). */}
+                  {/* {visible.length === 0 && empty && (
                     <EmptyState
                       icon="receive"
                       title="No tokens yet"
                       hint="Tokens you buy or receive will show up here."
                     />
-                  )}
+                  )} */}
                   {/* {visible.length === 0 && !empty && ( */}
                   {visible.length === 0 && !empty && !failed && (
                     <EmptyState
@@ -590,6 +683,7 @@ function HomeScreen() {
               {shownSection === 'NFTs' && <NftGallery />}
               {shownSection === 'Jars' && <HomeJars />}
               {shownSection === 'Activity' && <ActivitySection />}
+              {shownSection === 'Explore' && <ExploreTokens />}
               {/* {shownSection === 'Trades' && <TradesList />} */}
               {/* review: no trading in the extension. */}
               {shownSection === 'Trades' && !isWeb && <TradesList />}
@@ -604,6 +698,8 @@ function HomeScreen() {
           <Rise index={0}>
             <WalletHeader
               style={styles.gutter}
+              deposit={false}
+              address
               crossfade={{
                 scrollY,
                 // balance: loading ? '' : hideBalance ? HIDDEN_AMOUNT : money.format(view.usd),
@@ -624,6 +720,9 @@ const HEADER_ROW = 48;
 const HEADER_BOTTOM = 10;
 /** The Tokens · NFTs · Trades row's height. */
 const TABS_ROW = 52;
+/** Uniswap's collapsed portfolio chart beside the balance. */
+const SPARK_WIDTH = 100;
+const SPARK_HEIGHT = 70;
 
 const useStyles = makeStyles((c) => ({
   noWallet: {
@@ -700,7 +799,9 @@ const useStyles = makeStyles((c) => ({
     backgroundColor: c.canvas,
   },
   balanceRow: {
-    marginTop: 16,
+    // marginTop: 16,
+    // Uniswap's 20pt above and below the balance.
+    marginTop: 20,
     alignItems: 'flex-end',
   },
   balance: {
@@ -719,8 +820,10 @@ const useStyles = makeStyles((c) => ({
     gap: 10,
   },
   sparkSkeleton: {
-    width: 116,
-    height: 60,
+    // width: 116,
+    // height: 60,
+    width: SPARK_WIDTH,
+    height: SPARK_HEIGHT,
     justifyContent: 'center',
   },
   changeRow: {
@@ -740,22 +843,45 @@ const useStyles = makeStyles((c) => ({
     color: c.textSecondary,
     fontSize: 15,
   },
+  // actions: {
+  //   marginTop: 18,
+  //   flexDirection: 'row',
+  //   gap: 8,
+  // },
+  // // 1.25× the first size (2026-11-13): the four ways in read at a glance.
+  // action: {
+  //   height: 102,
+  //   padding: 12,
+  //   ...radius(20),
+  //   justifyContent: 'space-between',
+  //   backgroundColor: c.accentSurface,
+  // },
+  // actionLabel: {
+  //   color: c.accentText,
+  //   fontSize: 18,
+  //   fontWeight: '600',
+  // },
+  // Uniswap's quick actions (2026-11-14): 102pt tiles 8pt apart in a sideways row, the
+  // icon over the label, 16pt above and below, 12pt at the sides and between.
   actions: {
-    marginTop: 18,
-    flexDirection: 'row',
+    marginTop: 20,
+    flexGrow: 0,
+  },
+  actionsRow: {
+    paddingHorizontal: 18,
     gap: 8,
   },
-  // 1.25× the first size (2026-11-13): the four ways in read at a glance.
   action: {
-    height: 102,
-    padding: 12,
+    width: 102,
+    paddingVertical: 16,
+    paddingHorizontal: 12,
+    gap: 12,
     ...radius(20),
-    justifyContent: 'space-between',
     backgroundColor: c.accentSurface,
   },
   actionLabel: {
     color: c.accentText,
-    fontSize: 18,
+    fontSize: 17,
     fontWeight: '600',
   },
   // One line that opens into the ways to earn, on the same filled card as the
@@ -836,6 +962,16 @@ const useStyles = makeStyles((c) => ({
   },
   sections: {
     paddingBottom: 8,
+  },
+  // A lone section's name, in the tabs' place and height (Honey's section label).
+  sectionLabelRow: {
+    height: 46,
+    justifyContent: 'flex-end',
+    paddingBottom: 2,
+  },
+  sectionLabel: {
+    color: c.textSecondary,
+    fontSize: 15,
   },
 }));
 

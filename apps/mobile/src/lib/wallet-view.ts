@@ -1,10 +1,23 @@
 import { dayChange, useTokenMarkets } from '@/lib/market';
-import { BALANCE, BALANCE_CHANGE, TOKENS, type Token, tokenName } from '@/lib/mock-wallet';
+import {
+  BALANCE,
+  BALANCE_CHANGE,
+  TOKEN_INFO,
+  TOKENS,
+  type Token,
+  tokenName,
+} from '@/lib/mock-wallet';
 import { useMultisig } from '@/lib/multisig';
 import { useOnboarding } from '@/lib/onboarding';
 import { toHoldings, toTokens, usePortfolio } from '@/lib/portfolio';
 import { TEST_MODE } from '@/lib/test-mode';
 import { useActiveWallet } from '@/lib/wallets';
+
+/** The sample tokens with the networks each is held on (Home's count badge), made once. */
+const SAMPLE_TOKENS: Token[] = TOKENS.map((t) => ({
+  ...t,
+  chains: TOKEN_INFO[t.symbol]?.holdings.filter((h) => h.amount > 0).length ?? 0,
+}));
 
 /**
  * What the wallet in use holds, for every screen that shows a balance: a shared
@@ -52,7 +65,8 @@ export function useWalletView() {
     return { wallet, multisig, usd: 0, change: 0, tokens: [] as Token[], empty: true };
   }
   if (!multisig) {
-    return { wallet, multisig, usd: BALANCE, change: BALANCE_CHANGE, tokens: TOKENS };
+    // return { wallet, multisig, usd: BALANCE, change: BALANCE_CHANGE, tokens: TOKENS };
+    return { wallet, multisig, usd: BALANCE, change: BALANCE_CHANGE, tokens: SAMPLE_TOKENS };
   }
   const tokens: Token[] = multisig.holdings.map((h) => ({
     symbol: h.symbol,

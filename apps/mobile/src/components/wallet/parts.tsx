@@ -275,13 +275,30 @@ export function TokenRow({ token, onPress }: { token: Token; onPress?: () => voi
   const money = useMoney();
   return (
     <AssetRow
-      icon={<TokenIcon symbol={token.symbol} />}
+      // icon={<TokenIcon symbol={token.symbol} />}
+      icon={
+        <View>
+          <TokenIcon symbol={token.symbol} />
+          {/* Held on several networks: how many, on the logo's corner (as Uniswap's). */}
+          {(token.chains ?? 0) > 1 ? <NetworkCount count={token.chains ?? 0} /> : null}
+        </View>
+      }
       title={token.name}
       subtitle={`${token.amount.toLocaleString('en-US', { maximumFractionDigits: 6 })} ${token.symbol}`}
       value={money.format(token.usd)}
       detail={<Change value={token.change} />}
       onPress={onPress}
     />
+  );
+}
+
+/** The number of networks a token is held on, as a small tile on its logo's corner. */
+function NetworkCount({ count }: { count: number }) {
+  const styles = useStyles();
+  return (
+    <View style={styles.networkCount} accessibilityLabel={`On ${count} networks`}>
+      <Text style={styles.networkCountText}>{count}</Text>
+    </View>
   );
 }
 
@@ -855,6 +872,26 @@ const useStyles = makeStyles((c) => ({
   rowEnd: {
     alignItems: 'flex-end',
     gap: 2,
+  },
+  // On the logo's bottom-right corner, ringed in the page colour so it reads apart.
+  networkCount: {
+    position: 'absolute',
+    right: -4,
+    bottom: -3,
+    minWidth: 18,
+    height: 18,
+    paddingHorizontal: 3,
+    ...radius(6),
+    borderWidth: 2,
+    borderColor: c.canvas,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: c.raised,
+  },
+  networkCountText: {
+    color: c.text,
+    fontSize: 10,
+    fontWeight: '700',
   },
   // As Change's figure, for a detail that's plain text (a share).
   rowDetail: {
