@@ -56,11 +56,16 @@ function ReceiveSheet() {
 
   return (
     <SheetScreen title="Receive crypto">
-      <SheetText lead>
+      {/* <SheetText lead>
         {perChain
           ? 'Which network are you sending on? Each one has its own address.'
           : 'Fund your wallet by transferring crypto from another wallet or account'}
-      </SheetText>
+      </SheetText> */}
+      {/* The one-address intro is off (14 Nov: it restated the title); the network
+          question stays, since each network has its own address. */}
+      {perChain ? (
+        <SheetText lead>Which network are you sending on? Each one has its own address.</SheetText>
+      ) : null}
 
       {perChain ? (
         // The network first, then its address and QR code (My QR), so the address you

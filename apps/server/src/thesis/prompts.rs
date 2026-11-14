@@ -23,26 +23,34 @@ impl Prompt {
 
 pub const UNDERSTAND: Prompt = Prompt {
     name: "understand",
-    version: "understand/7",
+    // version: "understand/7",
+    // 14 Nov: no disclaimers or hedging lines.
+    version: "understand/8",
     file: include_str!("prompts/understand.md"),
 };
 
 pub const PICK: Prompt = Prompt {
     name: "pick",
-    version: "pick/4",
+    // version: "pick/4",
+    // 14 Nov: no disclaimers or hedging lines.
+    version: "pick/5",
     file: include_str!("prompts/pick.md"),
 };
 
 pub const CRITIC: Prompt = Prompt {
     name: "critic",
-    version: "critic/6",
+    // version: "critic/6",
+    // 14 Nov: no disclaimers or hedging lines.
+    version: "critic/7",
     file: include_str!("prompts/critic.md"),
 };
 
 /// Follow-up questions on a finished strategy (`POST /theses/ask`).
 pub const ASK: Prompt = Prompt {
     name: "ask",
-    version: "ask/1",
+    // version: "ask/1",
+    // 14 Nov: no disclaimers or hedging lines.
+    version: "ask/2",
     file: include_str!("prompts/ask.md"),
 };
 
