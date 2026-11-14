@@ -8,7 +8,7 @@ import { closeSheet, SheetScreen } from '@/components/sheets/Sheet';
 import { Chip } from '@/components/wallet/Chip';
 import { applyKey, Keypad, TypedAmount } from '@/components/wallet/Keypad';
 import { TokenIcon } from '@/components/wallet/parts';
-import { tap } from '@/lib/haptics';
+import { success } from '@/lib/haptics';
 import { addJar, JAR_TOKENS, usdValue } from '@/lib/jars';
 import { formatUsd } from '@/lib/mock-wallet';
 import { useSectionPrefs } from '@/lib/section-prefs';
@@ -35,7 +35,8 @@ function NewJarSheetContent() {
   const label = !name.trim() ? 'Name your jar' : !value ? 'Set a goal' : 'Create jar';
 
   const create = () => {
-    tap();
+    // tap(); a created jar is a completed action, so it gets the success haptic.
+    success();
     addJar({ name: name.trim(), symbol, goal: value });
     showToast('Jar created');
     closeSheet();

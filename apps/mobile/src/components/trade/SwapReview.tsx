@@ -28,6 +28,7 @@ import { success, tap } from '@/lib/haptics';
 import type { Chain } from '@/lib/mock-wallet';
 import { type ProposalAction, propose, useSigner } from '@/lib/multisig';
 import { followFix, useFailure } from '@/lib/outcomes';
+import { TEST_MODE } from '@/lib/test-mode';
 import { makeStyles, radius, useTheme } from '@/theme';
 
 export type SwapLeg = { amount: string; symbol: string; chain: Chain; usd: string };
@@ -67,7 +68,8 @@ export function SwapReview({
   const [step, setStep] = useState<Step>('review');
   const [more, setMore] = useState(false);
   // The network cost is re-estimated each time the review opens.
-  const [estimating, setEstimating] = useState(true);
+  // const [estimating, setEstimating] = useState(true);
+  const [estimating, setEstimating] = useState(TEST_MODE);
   // From a shared wallet the swap (and any token approval, batched in) is proposed.
   const signer = useSigner();
   const [proposalId, setProposalId] = useState<string | null>(null);
@@ -96,6 +98,13 @@ export function SwapReview({
     if (!visible) return;
     setStep('review');
     setMore(false);
+    // setEstimating(true);
+    // const timer = setTimeout(() => setEstimating(false), LOAD_DELAY);
+    // The network cost is already a prop: only test mode's pretend fetch waits for it.
+    if (!TEST_MODE) {
+      setEstimating(false);
+      return;
+    }
     setEstimating(true);
     const timer = setTimeout(() => setEstimating(false), LOAD_DELAY);
     return () => clearTimeout(timer);

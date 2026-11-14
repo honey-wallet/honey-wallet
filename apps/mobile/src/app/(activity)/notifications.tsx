@@ -81,10 +81,12 @@ export default function NotificationsScreen() {
   });
   const firstLoad = useFirstLoad(LOADS.notifications);
   const wallet = useWalletNotifications();
-  const loading = TEST_MODE ? firstLoad : wallet.loading;
+  // const loading = TEST_MODE ? firstLoad : wallet.loading;
   // Group jars' news (invites, "add your share", votes) from Honey, kept fresh while here.
   useInboxPolling();
   const group = useInbox();
+  // Both feeds, so "No notifications yet" can't show before the group news has arrived.
+  const loading = TEST_MODE ? firstLoad : wallet.loading || !group.loaded;
   // Seen once they're on screen, as opening the screen clears the bell's dot.
   const unread = group.items.filter((i) => !i.read).map((i) => i.id);
   const unreadKey = unread.join();

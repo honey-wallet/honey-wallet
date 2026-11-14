@@ -97,6 +97,20 @@ describe('haptic feedback contract', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
 
+  it('plays a repeated outcome once, then again after a pause', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.now() + 10_000);
+    success();
+    success();
+    expect(native.notification).toHaveBeenCalledTimes(1);
+    failure();
+    expect(native.notification).toHaveBeenCalledTimes(2);
+    vi.setSystemTime(Date.now() + 1_000);
+    failure();
+    expect(native.notification).toHaveBeenCalledTimes(3);
+    vi.useRealTimers();
+  });
+
   it('contains synchronous failures from an unavailable native module', () => {
     native.selection.mockImplementation(() => {
       throw new Error('Unavailable');

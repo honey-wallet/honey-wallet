@@ -10,7 +10,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { Avatar } from '@/components/Avatar';
 import { Icon } from '@/components/Icon';
-import { Swap } from '@/components/motion/IconSwap';
+import { IconSwap, Swap } from '@/components/motion/IconSwap';
 import { PressableScale } from '@/components/motion/PressableScale';
 import { ChainIcons } from '@/components/wallet/ChainIcons';
 import { HeaderActions } from '@/components/wallet/HeaderActions';
@@ -136,7 +136,7 @@ function FullHeader({
   // The chains this wallet has addresses on, as icons under its name: one copies
   // straight away; several open Copy address to pick which.
   const addresses = receiveAddresses(wallet);
-  const { copy: copyAddress } = useCopy(addresses[0]?.address ?? '', 'Address copied');
+  const { copy: copyAddress, copied } = useCopy(addresses[0]?.address ?? '', 'Address copied');
   // A shared wallet lives on one chain with its own address there; the same members on
   // other chains are one wallet with several deployments, so Copy address lists them.
   const deployments = useMultisigDeployments(wallet.id);
@@ -231,7 +231,9 @@ function FullHeader({
                   style={styles.addressRow}
                 >
                   <Text style={styles.address}>{shortAddress(shown)}</Text>
-                  <Icon name="copy" size={13} color={c.textSecondary} />
+                  {/* <Icon name="copy" size={13} color={c.textSecondary} /> */}
+                  {/* Turns into a check for a moment after copying. */}
+                  <IconSwap name={copied ? 'check' : 'copy'} size={13} color={c.textSecondary} />
                 </PressableScale>
               ) : (
                 <PressableScale

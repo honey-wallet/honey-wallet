@@ -22,7 +22,10 @@ async fn reads_real_balances_on_every_chain_without_pushing() {
     let chains = service.chains(&addresses);
     assert_eq!(
         chains,
-        ["Ethereum", "Base", "Arbitrum", "Polygon", "Solana", "NEAR"]
+        // ["Ethereum", "Base", "Arbitrum", "Polygon", "Solana", "NEAR"]
+        [
+            "Ethereum", "Base", "Arbitrum", "Optimism", "Polygon", "Solana", "NEAR"
+        ]
     );
     let reading = service.balances(&addresses, false).await;
     for chain in &chains {
