@@ -210,18 +210,16 @@ fn router(config: &Config, health: runtime::RuntimeHealth, services: RouterServi
     if let Some(market) = &market {
         market.share_pacer(redis.clone());
     }
-    let portfolio = portfolio_router(
-        market.clone(),
-        redis.clone().map(|redis| {
-            routes::identity::AuthenticatedApiAdmission::new(
-                redis,
-                config.trust_proxy_headers,
-                config.trusted_proxy_cidrs.clone(),
-            )
-            // Signed-in readers are counted by account (many phones share a carrier's address).
-            .with_identity(identity.clone())
-        }),
-    );
+    // 15 Nov: built after the DEX service (below), which tells tokenized stocks apart.
+    let portfolio_admission = redis.clone().map(|redis| {
+        routes::identity::AuthenticatedApiAdmission::new(
+            redis,
+            config.trust_proxy_headers,
+            config.trusted_proxy_cidrs.clone(),
+        )
+        // Signed-in readers are counted by account (many phones share a carrier's address).
+        .with_identity(identity.clone())
+    });
     // Honey's Solana fee payer; off unless switched on with its key.
     let solana_relayer = solana_relayer::SolanaRelayer::from_env()
         .map_err(|error| tracing::error!(%error, "Solana fee payer disabled"))
@@ -250,6 +248,7 @@ fn router(config: &Config, health: runtime::RuntimeHealth, services: RouterServi
     if let Some(dex) = &dex {
         dex.spawn_refresh();
     }
+    let portfolio = portfolio_router(market.clone(), portfolio_admission, dex.clone());
     capability_adapters.dex = dex.as_ref().is_some_and(|d| d.enabled());
     capability_adapters.dex_sponsor = dex.as_ref().is_some_and(|d| d.sponsor_enabled());
     let public_markets = public_markets.merge(portfolio).merge(
@@ -482,8 +481,10 @@ fn market_data() -> Option<std::sync::Arc<market_data::MarketData>> {
 fn portfolio_router(
     market: Option<std::sync::Arc<market_data::MarketData>>,
     fresh_admission: Option<routes::identity::AuthenticatedApiAdmission>,
+    dex: Option<std::sync::Arc<dex::DexService>>,
 ) -> Router {
-    match portfolio::PortfolioService::new(market) {
+    // match portfolio::PortfolioService::new(market) {
+    match portfolio::PortfolioService::new_with_dex(market, dex) {
         Ok(service) => {
             let router = routes::portfolio::router(service);
             match fresh_admission {

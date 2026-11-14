@@ -21,6 +21,9 @@ const LINK_ETH: &str = "0x514910771af9ca656af840dff83e8264ecf986ca";
 const LINK_ARB: &str = "0xf97f4df75117a78c1a5a0dbb814af92458539fb4";
 const LINK_BASE: &str = "0x88fb150bdc53a65fe94dea0c9ba0a6daf8c6e196";
 const LINK_OP: &str = "0x350a791bfc2c21f9ed5d10980dad2e2638ffa7f6";
+/// A tokenized stock (15 Nov): AAPLx, a Token-2022 mint in Honey's issuer registry.
+const AAPLX: &str = "XsbEhLAtcf6HdfpFZ5xEMdqW8nfAvcsP5bdudRLJzJp";
+const SOLANA_WALLET: &str = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM";
 
 fn token(
     id: &str,
@@ -106,6 +109,8 @@ fn same(
             ok: true,
             flags: Vec::new(),
         },
+        issuer: None,
+        ui_multiplier: None,
     }
 }
 
@@ -146,6 +151,8 @@ struct Fake {
     asks: Mutex<Vec<IntentsAsk>>,
     /// Live prices by token (15 Nov); without one, a same-coin token's list price.
     live: Vec<(&'static str, f64)>,
+    /// More 1Click listings (15 Nov: USDC on Solana).
+    extra_listings: Vec<OneClickToken>,
 }
 
 impl Fake {
@@ -162,6 +169,7 @@ impl Fake {
             same: Vec::new(),
             asks: Mutex::new(Vec::new()),
             live: Vec::new(),
+            extra_listings: Vec::new(),
         }
     }
 }
@@ -187,7 +195,10 @@ impl Sources for Fake {
         self.dex_on
     }
     async fn listings(&self) -> Result<Arc<Vec<OneClickToken>>, AppError> {
-        Ok(Arc::new(listings()))
+        // Ok(Arc::new(listings()))
+        let mut all = listings();
+        all.extend(self.extra_listings.iter().cloned());
+        Ok(Arc::new(all))
     }
     async fn intents(&self, ask: IntentsAsk) -> Result<DryQuote, AppError> {
         self.intents_calls.fetch_add(1, AtomicOrdering::SeqCst);
@@ -246,7 +257,13 @@ impl Sources for Fake {
         if chain.is_usdc(token) {
             return Some((1.0, 6));
         }
-        (token == AERO).then_some((0.5, 18))
+        // (token == AERO).then_some((0.5, 18))
+        match token {
+            AERO => Some((0.5, 18)),
+            // Per 10^8 base units, as the DEX list keeps it (15 Nov).
+            AAPLX => Some((356.75, 8)),
+            _ => None,
+        }
     }
     async fn dex_price_now(&self, chain: DexChain, token: &str) -> Option<f64> {
         if let Some((_, p)) = self.live.iter().find(|(t, _)| *t == token) {
@@ -1298,4 +1315,52 @@ async fn a_hedged_plan_takes_the_longer_of_1click_and_the_fallbacks_not_their_su
     assert_eq!(r.best.kind, RouteKind::Dex);
     assert!(took < Duration::from_millis(1_300), "{took:?}");
     assert_eq!(p.sources().dex_calls.load(AtomicOrdering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn a_tokenized_stock_is_bought_through_near_intents_then_jupiter() {
+    // 15 Nov: USDC on Arbitrum into AAPLx on Solana. 1Click doesn't list it, so the plan
+    // is 1Click USDC to the wallet's Solana USDC, then Jupiter (once the DEX's safety
+    // gate passes, which the registry makes it do for a registry mint).
+    let mut fake = Fake::new(
+        vec![Answer::Out("9990000", "9950000")],
+        vec![(AAPLX, Answer::Out("2790000", "2760000"))],
+    );
+    fake.extra_listings.push(token(
+        &format!("nep141:sol-{}.omft.near", chains::USDC_SOLANA),
+        "sol",
+        "USDC",
+        6,
+        1.0,
+        Some(chains::USDC_SOLANA),
+    ));
+    let p = planner(fake);
+    let ask = BestRouteRequest {
+        from_chain: "arbitrum".into(),
+        from_token: USDC_ARB.into(),
+        amount: "10000000".into(),
+        to_chain: Some("solana".into()),
+        to_token: AAPLX.into(),
+        taker: SOLANA_WALLET.into(),
+        from_address: Some(TAKER.into()),
+        slippage_bps: Some(100),
+        private_only: false,
+        wrapped: false,
+    };
+    let r = p.best(Uuid::new_v4(), ask).await.unwrap();
+    assert_eq!(r.best.kind, RouteKind::IntentsDex, "{r:?}");
+    assert_eq!(r.best.buy_token, AAPLX);
+    assert_eq!(r.best.buy_chain, "solana");
+    assert_eq!(r.best.legs.len(), 2);
+    assert_eq!(r.best.legs[0].kind, LegKind::Intents);
+    assert_eq!(r.fallback, Some(Fallback::NotListed));
+    // 0.0276 AAPLx (8 decimals) at the list's $356.75 per 10^8 base units.
+    assert!((r.best.min_out_usd - 0.0276 * 356.75).abs() < 1e-6);
+    // The 1Click leg pays the wallet's own Solana address, in USDC there.
+    let asks = p.sources().asks.lock().unwrap();
+    assert!(
+        asks.iter()
+            .any(|a| a.recipient == SOLANA_WALLET
+                && a.destination_asset.contains(chains::USDC_SOLANA))
+    );
 }

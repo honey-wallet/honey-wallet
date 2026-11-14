@@ -1062,6 +1062,9 @@ mod tests {
             contract: None,
             decimals: None,
             asset_id: None,
+            raw_amount: None,
+            issuer: None,
+            ui_multiplier: None,
         }
     }
 

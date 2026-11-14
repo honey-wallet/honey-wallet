@@ -31,6 +31,20 @@ const WETH_BASE: &str = "0x4200000000000000000000000000000000000006";
 const ONECLICK_BASE: &str = "0x5555555555555555555555555555555555555555";
 /// A contract GoPlus has no data for (15 Nov: `unchecked`, asked again a day later).
 const NODATA: &str = "0x6666666666666666666666666666666666666666";
+/// A tokenized stock (15 Nov): AAPLx, its live mint account as the fixture.
+const AAPLX: &str = "XsbEhLAtcf6HdfpFZ5xEMdqW8nfAvcsP5bdudRLJzJp";
+
+/// How the double serves tokenized stocks (15 Nov).
+#[derive(Clone, Copy, Default)]
+struct StockMode {
+    /// AAPLx is on the xStocks list and Jupiter's verified list.
+    listed: bool,
+    /// Jupiter's order pays into the classic-program account (the wrong one).
+    classic_ata: bool,
+    /// The mint is paused, or its multiplier changes ten minutes from now.
+    paused: bool,
+    change_soon: bool,
+}
 
 #[derive(Clone)]
 struct Mock {
@@ -65,6 +79,27 @@ struct Mock {
     coin_list_calls: Arc<Mutex<u32>>,
     pair_calls: Arc<Mutex<u32>>,
     latest_calls: Arc<Mutex<u32>>,
+    stocks: Arc<Mutex<StockMode>>,
+}
+
+/// AAPLx's mint account as the double serves it now.
+fn aaplx_mint(mode: StockMode) -> Vec<u8> {
+    let mut data = stocks::tests::aaplx();
+    let mut at = 166;
+    while at + 4 <= data.len() {
+        let kind = u16::from_le_bytes([data[at], data[at + 1]]);
+        let len = usize::from(u16::from_le_bytes([data[at + 2], data[at + 3]]));
+        let body = at + 4;
+        if kind == 26 && mode.paused {
+            data[body + 32] = 1;
+        }
+        if kind == 25 && mode.change_soon {
+            let soon = unix_now() as i64 + 600;
+            data[body + 40..body + 48].copy_from_slice(&soon.to_le_bytes());
+        }
+        at = body + len;
+    }
+    data
 }
 
 /// Sponsored swaps for everyone (`true`) or no one.
@@ -81,6 +116,23 @@ impl SponsorGate for Gate {
 /// optionally an associated token account the first signer funds, and one
 /// `shared_accounts_route_v2` selling 10 USDC for at least 38,218,540 JUP.
 fn order_tx(payer: Option<[u8; 32]>, taker: [u8; 32], opens_account: bool) -> String {
+    order_tx_for(
+        payer,
+        taker,
+        opens_account,
+        JUP,
+        crate::solana_relayer::TOKEN_PROGRAM,
+    )
+}
+
+/// [`order_tx`] buying `buy`, whose account is derived under `buy_program` (15 Nov).
+fn order_tx_for(
+    payer: Option<[u8; 32]>,
+    taker: [u8; 32],
+    opens_account: bool,
+    buy: &str,
+    buy_program: &str,
+) -> String {
     let program = |p: &str| solana::decode_key(p).unwrap();
     let mut keys: Vec<[u8; 32]> = payer.into_iter().collect();
     // keys.extend([
@@ -91,11 +143,13 @@ fn order_tx(payer: Option<[u8; 32]>, taker: [u8; 32], opens_account: bool) -> St
     // ]);
     // The route names the taker's own USDC and JUP accounts and both mints (money audit 11).
     let token = program(crate::solana_relayer::TOKEN_PROGRAM);
-    let (usdc, jup) = (program(chains::USDC_SOLANA), program(JUP));
+    // let (usdc, jup) = (program(chains::USDC_SOLANA), program(JUP));
+    let (usdc, jup) = (program(chains::USDC_SOLANA), program(buy));
     keys.extend([
         taker,
         solana::associated_token_address(&taker, &usdc, &token).unwrap(),
-        solana::associated_token_address(&taker, &jup, &token).unwrap(),
+        // solana::associated_token_address(&taker, &jup, &token).unwrap(),
+        solana::associated_token_address(&taker, &jup, &program(buy_program)).unwrap(),
         usdc,
         jup,
         program(crate::solana_relayer::ATA_PROGRAM),
@@ -163,16 +217,25 @@ async fn order(
         0
     };
     let fee_payer = payer.clone().unwrap_or_else(|| q["taker"].clone());
+    // A tokenized stock's account is a Token-2022 one (unless the double gets it wrong).
+    let mode = *m.stocks.lock().unwrap();
+    let buy_program = if q["outputMint"] == AAPLX && !mode.classic_ata {
+        crate::solana_relayer::TOKEN_2022_PROGRAM
+    } else {
+        crate::solana_relayer::TOKEN_PROGRAM
+    };
     Json(json!({
         "router": "metis", "swapMode": "ExactIn", "inputMint": q["inputMint"],
         "outputMint": q["outputMint"], "taker": q["taker"], "inAmount": q["amount"],
         "outAmount": "38410593", "otherAmountThreshold": "38218540",
         "priceImpactPct": "0", "signatureFeePayer": fee_payer,
         "rentFeeLamports": rent, "rentFeePayer": fee_payer,
-        "transaction": order_tx(
+        "transaction": order_tx_for(
             payer.map(|p| solana::decode_key(&p).unwrap()),
             taker,
             rent > 0,
+            &q["outputMint"],
+            buy_program,
         ),
     }))
 }
@@ -204,6 +267,27 @@ async fn rpc(State(m): State<Mock>, Json(body): Json<Value>) -> Json<Value> {
                 "owner": crate::solana_relayer::TOKEN_PROGRAM,
                 "data": [base64::engine::general_purpose::STANDARD.encode(mint), "base64"],
             }})
+        }
+        // Tokenized stocks (15 Nov): AAPLx's live mint, nothing else.
+        "getMultipleAccounts" => {
+            let mode = *m.stocks.lock().unwrap();
+            let accounts: Vec<Value> = body["params"][0]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|a| {
+                    if a == AAPLX {
+                        json!({
+                            "owner": crate::solana_relayer::TOKEN_2022_PROGRAM,
+                            "data": [base64::engine::general_purpose::STANDARD
+                                .encode(aaplx_mint(mode)), "base64"],
+                        })
+                    } else {
+                        Value::Null
+                    }
+                })
+                .collect();
+            json!({ "context": { "slot": 1 }, "value": accounts })
         }
         other => panic!("unexpected {other}"),
     };
@@ -280,6 +364,8 @@ async fn pairs(State(m): State<Mock>) -> Json<Value> {
         pair(FROZEN.into(), 0.4),
         pair(WETH_BASE.into(), 3_000.0),
         pair(ONECLICK_BASE.into(), 5.0),
+        // Per raw unit (15 Nov): Jupiter's $355.40 a shown share × 1.0038.
+        pair(AAPLX.into(), 356.75),
     ]))
 }
 
@@ -309,6 +395,7 @@ async fn serve() -> (String, Mock) {
         coin_list_calls: Arc::default(),
         pair_calls: Arc::default(),
         latest_calls: Arc::default(),
+        stocks: Arc::default(),
     };
     let app = Router::new()
         .route("/base/api/v1/routes", get(routes))
@@ -384,7 +471,20 @@ async fn serve() -> (String, Mock) {
         .route(
             "/api/v1/solana/token_security",
             get(|Query(q): Query<std::collections::HashMap<String, String>>| async move {
-                Json(json!({ "code": 1, "result": { q["contract_addresses"].clone(): {
+                let address = q["contract_addresses"].clone();
+                // A tokenized stock's shape (15 Nov): mintable, freezable, a permanent
+                // delegate, and a hook and default state its issuer could change.
+                if address == AAPLX {
+                    return Json(json!({ "code": 1, "result": { address: {
+                        "mintable": {"status": "1"}, "freezable": {"status": "1"},
+                        "balance_mutable_authority": {"status": "1"},
+                        "transfer_fee": {}, "transfer_hook": [],
+                        "transfer_hook_upgradable": {"status": "1"},
+                        "default_account_state": "1",
+                        "default_account_state_upgradable": {"status": "1"}
+                    }}}));
+                }
+                Json(json!({ "code": 1, "result": { address: {
                     "mintable": {"status": "0"}, "freezable": {"status": "0"},
                     "transfer_fee": {}, "transfer_hook": [], "default_account_state": "1"
                 }}}))
@@ -392,15 +492,42 @@ async fn serve() -> (String, Mock) {
         )
         .route(
             "/tokens/v2/tag",
-            get(|| async {
-                Json(json!([{
+            get(|State(m): State<Mock>| async move {
+                let mut list = vec![json!({
                     "id": JUP, "name": "Jupiter", "symbol": "JUP", "decimals": 6,
                     "usdPrice": 0.26, "tokenProgram": crate::solana_relayer::TOKEN_PROGRAM,
                     "liquidity": 5_558_819.6,
                     "stats24h": {"buyVolume": 6_439_766.2, "sellVolume": 6_645_235.3},
                     "firstPool": {"createdAt": "2024-01-29T17:33:29Z"},
                     "audit": {"mintAuthorityDisabled": true, "freezeAuthorityDisabled": true}
-                }]))
+                })];
+                if m.stocks.lock().unwrap().listed {
+                    list.push(json!({
+                        "id": AAPLX, "name": "Apple xStock", "symbol": "AAPLx", "decimals": 8,
+                        "usdPrice": 355.40, "tokenProgram": crate::solana_relayer::TOKEN_2022_PROGRAM,
+                        "tags": ["verified", "xstocks", "token-2022", "stocks", "rwa"],
+                        "liquidity": 673_805.4,
+                        "stats24h": {"buyVolume": 200_000.0, "sellVolume": 180_000.0},
+                        "firstPool": {"createdAt": "2025-06-27T14:21:12Z"},
+                        "organicScoreLabel": "medium",
+                        "audit": {"mintAuthorityDisabled": false, "freezeAuthorityDisabled": false}
+                    }));
+                }
+                Json(Value::Array(list))
+            }),
+        )
+        // The xStocks list (15 Nov): one page.
+        .route(
+            "/api/v2/public/assets",
+            get(|State(m): State<Mock>| async move {
+                let nodes = if m.stocks.lock().unwrap().listed {
+                    json!([{"symbol": "AAPLx", "name": "Apple xStock", "deployments": [
+                        {"network": "Solana", "address": AAPLX}
+                    ]}])
+                } else {
+                    json!([])
+                };
+                Json(json!({"nodes": nodes, "page": {"currentPage": 0, "hasNextPage": false}}))
             }),
         )
         // Uniswap's default list has AERO (with its logo); CoinGecko's lists are down.
@@ -482,8 +609,9 @@ async fn service_cold(edit: impl FnOnce(&mut DexConfig)) -> (DexService, Mock) {
         uniswap_list: format!("{base}/uniswap"),
         coingecko_lists: format!("{base}/cg"),
         build_interval: Some(Duration::from_millis(1)),
-        goplus: base,
+        goplus: base.clone(),
         goplus_interval: Duration::from_millis(1),
+        xstocks: base,
         ..DexConfig::default()
     };
     edit(&mut config);
@@ -995,6 +1123,14 @@ async fn upgradeable_tokens_are_blocked_unless_allowlisted() {
     // Finding 7: a proxy can be upgraded into a honeypot after it was checked.
     let (dex, mock) = service().await;
     *mock.aero_proxy.lock().unwrap() = true;
+    // 15 Nov: the build's warm-up may have checked AERO before it became a proxy (the
+    // Solana build now reads the stock registry too, so it often has); a verdict over
+    // an hour old is asked again, as in production.
+    dex.safety().backdate(
+        DexChain::Base,
+        &format!("{AERO:#x}"),
+        Duration::from_secs(2 * 60 * 60),
+    );
     let r = dex
         .quote(Uuid::new_v4(), request(&AERO.to_string(), "10000000"))
         .await;
@@ -1857,4 +1993,317 @@ async fn live_universe() {
     if let Ok(path) = std::env::var("DEX_LIVE_OUT") {
         std::fs::write(path, serde_json::to_string_pretty(&out).unwrap()).unwrap();
     }
+}
+
+// Tokenized stocks (15 Nov, `dex::stocks`)
+
+/// A service whose Solana list (and stock registry) is built with the double serving
+/// tokenized stocks as `mode` says.
+async fn stock_service(mode: StockMode) -> (DexService, Mock) {
+    let (dex, mock) = service_cold(|_| {}).await;
+    *mock.stocks.lock().unwrap() = mode;
+    dex.universe(DexChain::Solana).await.unwrap();
+    (dex, mock)
+}
+
+fn listed() -> StockMode {
+    StockMode {
+        listed: true,
+        ..StockMode::default()
+    }
+}
+
+fn stock_request() -> QuoteRequest {
+    QuoteRequest {
+        buy_token: AAPLX.into(),
+        ..solana_request()
+    }
+}
+
+#[tokio::test]
+async fn a_tokenized_stock_is_listed_priced_per_share_and_its_shape_waived() {
+    let (dex, _) = stock_service(listed()).await;
+    // Admitted from the issuer's list after its mint was read on chain.
+    let entry = dex.stock(AAPLX).expect("in the registry");
+    assert_eq!(entry.issuer, stocks::Issuer::Xstocks);
+    assert_eq!(entry.decimals, 8);
+    // On the list at Honey's per-raw-unit price (Jupiter's per-share price × the
+    // multiplier), which agrees with DexScreener's.
+    let tokens = dex.universe(DexChain::Solana).await.unwrap();
+    let t = tokens.iter().find(|t| t.address == AAPLX).unwrap();
+    let multiplier = entry.multiplier(unix_now() as i64);
+    assert!((multiplier - 1.003_802_303_058_803_2).abs() < 1e-12);
+    assert!((t.price_usd - 355.40 * multiplier).abs() < 1e-9);
+    let mut agree = t.clone();
+    universe::second_price(&mut agree, Some(356.75));
+    assert!(!agree.flags.contains(&"price_mismatch".to_string()));
+    // Jupiter's and GoPlus's Token-2022, authority and upgradable flags are waived for
+    // it; the API shows the price per shown share, the multiplier and the issuer.
+    let v = dex.lookup(DexChain::Solana, AAPLX).await.unwrap();
+    assert!(v.safety.ok, "{:?}", v.safety.flags);
+    assert!(v.safety.flags.is_empty(), "{:?}", v.safety.flags);
+    assert_eq!(v.issuer, Some("xstocks"));
+    assert_eq!(v.ui_multiplier, Some(multiplier));
+    assert!((v.price_usd - 355.40).abs() < 1e-9, "{}", v.price_usd);
+    let body = serde_json::to_value(&v).unwrap();
+    assert_eq!(body["issuer"], "xstocks");
+    assert!(body["uiMultiplier"].is_number());
+    // Ordinary tokens carry neither field.
+    let jup = serde_json::to_value(dex.lookup(DexChain::Solana, JUP).await.unwrap()).unwrap();
+    assert!(jup.get("issuer").is_none() && jup.get("uiMultiplier").is_none());
+}
+
+#[tokio::test]
+async fn the_waivers_are_for_registry_mints_only() {
+    // The same Token-2022 shape on a mint the registry doesn't hold is blocked.
+    let (dex, _) = stock_service(StockMode::default()).await;
+    assert!(dex.stock(AAPLX).is_none());
+    let token = DexToken {
+        chain: DexChain::Solana,
+        address: AAPLX.into(),
+        symbol: "AAPLx".into(),
+        name: "Apple xStock".into(),
+        decimals: 8,
+        logo_url: None,
+        price_usd: 356.75,
+        liquidity_usd: Some(673_805.0),
+        volume24h_usd: Some(380_000.0),
+        coingecko_id: None,
+        market_cap_usd: None,
+        change24h_pct: None,
+        first_pool_at: Some(0),
+        metadata: "jupiter",
+        flags: vec![
+            "token_2022".into(),
+            "owner_can_mint".into(),
+            "freezable".into(),
+        ],
+    };
+    let goplus = || safety::Verdict {
+        flags: vec![
+            "owner_can_change_balance".into(),
+            "transfer_hook_upgradable".into(),
+        ],
+        checked: true,
+    };
+    let v = dex.view(&token, Some(goplus()));
+    assert!(!v.safety.ok);
+    assert_eq!(v.issuer, None);
+    assert_eq!(v.price_usd, 356.75);
+    // In the registry: waived, but never the floors, an active hook or a transfer fee.
+    let (dex, _) = stock_service(listed()).await;
+    assert!(dex.view(&token, Some(goplus())).safety.ok);
+    for kept in [
+        "low_liquidity",
+        "transfer_hook",
+        "transfer_fee",
+        "suspicious",
+    ] {
+        let mut t = token.clone();
+        t.flags.push(kept.into());
+        let mut verdict = goplus();
+        if kept == "transfer_fee" {
+            verdict.flags.push(kept.into());
+        }
+        let v = dex.view(&t, Some(verdict));
+        if kept == "transfer_hook" {
+            // GoPlus's pre-15 Nov name for the upgradable hook: the mint read decides.
+            assert!(v.safety.ok);
+        } else {
+            assert!(!v.safety.ok, "{kept}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_tokenized_stock_quotes_into_its_token_2022_account() {
+    let (dex, mock) = stock_service(listed()).await;
+    let q = dex.quote(Uuid::new_v4(), stock_request()).await.unwrap();
+    assert_eq!(q.buy_token, AAPLX);
+    assert_eq!(q.aggregator, "jupiter");
+    // Decimals came from the Token-2022 mint (8), not a classic-only read.
+    assert_eq!(
+        dex.onchain_decimals(DexChain::Solana, AAPLX).await.unwrap(),
+        8
+    );
+    // An order paying into the classic-program account names an account the route
+    // can't pay: refused.
+    mock.stocks.lock().unwrap().classic_ata = true;
+    assert!(dex.quote(Uuid::new_v4(), stock_request()).await.is_err());
+}
+
+#[tokio::test]
+async fn a_quote_reads_the_mint_again_and_refuses_a_pause_or_a_multiplier_change() {
+    for (mode, why) in [
+        (
+            StockMode {
+                listed: true,
+                change_soon: true,
+                ..StockMode::default()
+            },
+            "multiplier",
+        ),
+        (
+            StockMode {
+                listed: true,
+                paused: true,
+                ..StockMode::default()
+            },
+            "paused",
+        ),
+    ] {
+        // Listed while all was well (the registry's daily read), then the mint changes.
+        let (dex, mock) = stock_service(listed()).await;
+        *mock.stocks.lock().unwrap() = mode;
+        let error = dex
+            .quote(Uuid::new_v4(), stock_request())
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&error, AppError::BadRequest(m) if m.contains(why)),
+            "{error:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn token_2022_mints_give_their_decimals() {
+    use base64::Engine as _;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(stocks::tests::aaplx());
+    let t22 = crate::solana_relayer::TOKEN_2022_PROGRAM;
+    assert_eq!(mint_decimals(Some(t22), Some(&b64)), Some(8));
+    let mut classic = [0u8; 82];
+    classic[44] = 6;
+    classic[45] = 1;
+    let classic = base64::engine::general_purpose::STANDARD.encode(classic);
+    assert_eq!(
+        mint_decimals(Some(crate::solana_relayer::TOKEN_PROGRAM), Some(&classic)),
+        Some(6)
+    );
+    // Token-2022 data under the classic program, or another owner: unreadable.
+    assert_eq!(
+        mint_decimals(Some(crate::solana_relayer::TOKEN_PROGRAM), Some(&b64)),
+        None
+    );
+    assert_eq!(mint_decimals(Some("x"), Some(&b64)), None);
+}
+
+#[tokio::test]
+async fn a_quote_past_the_goplus_budget_uses_the_last_verdict_still_standing() {
+    // 15 Nov (security review): lookups spent the day's budget; a quote whose verdict
+    // is over an hour old (but within the list's three days) still trades on it.
+    let (_, mock) = serve().await;
+    let safety = safety::Safety::new(
+        reqwest::Client::new(),
+        mock.base.clone(),
+        Duration::from_millis(1),
+        Vec::new(),
+    )
+    .with_budgets(safety::Budgets {
+        warm: 1,
+        lookup: 1,
+        quote_reserve: 1,
+        all: 2,
+    });
+    let aero = format!("{AERO:#x}");
+    assert!(safety.check(DexChain::Base, &aero).await.checked);
+    // The lookups' share is spent: a second lookup is unchecked, nothing asked.
+    let other = format!("0x{:040x}", 0x7777);
+    assert!(!safety.check(DexChain::Base, &other).await.checked);
+    assert_eq!(*mock.goplus_calls.lock().unwrap(), 1);
+    // A quote spends the reserve, then reuses AERO's stored verdict past the cap.
+    safety.backdate(DexChain::Base, &aero, Duration::from_secs(2 * 3_600));
+    assert!(
+        safety
+            .check_fresh(DexChain::Base, &aero)
+            .await
+            .unwrap()
+            .checked
+    );
+    assert_eq!(*mock.goplus_calls.lock().unwrap(), 2);
+    safety.backdate(DexChain::Base, &aero, Duration::from_secs(2 * 3_600));
+    let v = safety.check_fresh(DexChain::Base, &aero).await.unwrap();
+    assert!(v.checked && v.flags.is_empty(), "{v:?}");
+    assert_eq!(
+        *mock.goplus_calls.lock().unwrap(),
+        2,
+        "no call past the cap"
+    );
+    // A token with no standing verdict stays unchecked (blocked).
+    assert!(
+        !safety
+            .check_fresh(DexChain::Base, &other)
+            .await
+            .unwrap()
+            .checked
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires isolated TEST_REDIS_URL"]
+async fn the_goplus_budget_split_holds_across_replicas_in_redis() {
+    // 15 Nov: the counters are shared (one Lua call reserves all of a purpose's or none).
+    let namespace = format!("dex-goplus-budget-test:{}", Uuid::new_v4().simple());
+    let (_, mock) = serve().await;
+    let replica = || {
+        let s = safety::Safety::new(
+            reqwest::Client::new(),
+            mock.base.clone(),
+            Duration::from_millis(1),
+            Vec::new(),
+        )
+        .with_budgets(safety::Budgets {
+            warm: 5,
+            lookup: 1,
+            quote_reserve: 1,
+            all: 3,
+        });
+        s.share(test_redis(&namespace));
+        s
+    };
+    let (a, b) = (replica(), replica());
+    let token = |i: u32| format!("0x{:040x}", 0x9000 + i);
+    // One lookup between both replicas.
+    assert!(a.check(DexChain::Base, &token(1)).await.checked);
+    assert!(!b.check(DexChain::Base, &token(2)).await.checked);
+    // The quotes' reserve and the rest of the cap: two quotes, then none.
+    assert!(
+        b.check_fresh(DexChain::Base, &token(3))
+            .await
+            .unwrap()
+            .checked
+    );
+    assert!(
+        a.check_fresh(DexChain::Base, &token(4))
+            .await
+            .unwrap()
+            .checked
+    );
+    assert!(
+        !b.check_fresh(DexChain::Base, &token(5))
+            .await
+            .unwrap()
+            .checked
+    );
+    assert_eq!(*mock.goplus_calls.lock().unwrap(), 3);
+}
+
+#[tokio::test]
+#[ignore = "requires isolated TEST_REDIS_URL"]
+async fn the_stock_registry_comes_back_from_redis_after_a_restart() {
+    let namespace = format!("dex-stocks-test:{}", Uuid::new_v4().simple());
+    let (first, mock) = service_cold(|_| {}).await;
+    *mock.stocks.lock().unwrap() = listed();
+    let first = first.with_redis(Some(test_redis(&namespace)));
+    first.universe(DexChain::Solana).await.unwrap();
+    assert!(first.stock(AAPLX).is_some());
+    // A deploy: the list and the registry come back without reading the xStocks list.
+    // (The second double doesn't list AAPLx: a rebuild would have dropped it.)
+    let (second, _) = service_cold(|_| {}).await;
+    let second = second.with_redis(Some(test_redis(&namespace))).shared();
+    let _ = second.tokens(DexChain::Solana, true).await.unwrap();
+    assert_eq!(
+        second.stock(AAPLX).map(|s| s.issuer),
+        Some(stocks::Issuer::Xstocks)
+    );
 }

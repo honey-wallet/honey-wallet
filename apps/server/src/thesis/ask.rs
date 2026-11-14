@@ -656,6 +656,8 @@ mod tests {
                 ok: true,
                 flags: vec![],
             },
+            issuer: None,
+            ui_multiplier: None,
         };
         let merged = super::super::registry::merge_dex(
             assets(),

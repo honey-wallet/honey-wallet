@@ -688,8 +688,9 @@ fn rfc3339_unix(text: &str) -> Option<i64> {
 }
 
 /// Jupiter's verified list → tokens with floor and authority flags. Only classic SPL
-/// tokens (Token-2022 extensions such as transfer fees and hooks are refused for now),
-/// never USDC or wrapped SOL (1Click covers SOL). Jupiter's organic score (real,
+/// tokens (Token-2022 extensions such as transfer fees and hooks are refused for now;
+/// 15 Nov: but for tokenized stocks, whose `token_2022` and authority flags
+/// `dex::stocks` waives by mint, and whose prices it turns per raw unit), never USDC or wrapped SOL (1Click covers SOL). Jupiter's organic score (real,
 /// unbotted activity) must not be `low`. `ids` joins CoinGecko's id by mint, so the
 /// thesis agent folds a coin's copies and reads its market cap.
 // pub fn solana_tokens(list: &Value, now: i64) -> Vec<DexToken> {

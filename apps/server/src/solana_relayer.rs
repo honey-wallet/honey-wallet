@@ -120,7 +120,11 @@ pub fn token_2022_account_size(mint: &[u8]) -> Result<u64, &'static str> {
             14 => TLV + 1,
             // Mint-only extensions: close authority, default state, interest, permanent
             // delegate, metadata and group pointers and data, scaled UI amount.
-            3 | 6 | 10 | 12 | 18 | 19 | 20 | 21 | 22 | 23 | 25 => 0,
+            // 3 | 6 | 10 | 12 | 18 | 19 | 20 | 21 | 22 | 23 | 25 => 0,
+            // 15 Nov: and ConfidentialTransferMint (4), which every tokenized stock has: an
+            // account only gets ConfidentialTransferAccount when its owner configures it,
+            // never when the Associated Token program opens it.
+            3 | 4 | 6 | 10 | 12 | 18 | 19 | 20 | 21 | 22 | 23 | 25 => 0,
             _ => return Err("Honey can't open an account for this token"),
         };
         at = at
@@ -898,12 +902,26 @@ impl SolanaRelayer {
                 json!([quote.buy_token, { "encoding": "base64", "commitment": "processed" }]),
             )
             .await?;
-        if mint_info["value"]["owner"].as_str() != Some(TOKEN_PROGRAM) {
-            return Err(AppError::Unsupported(
-                "Honey pays for swaps into classic SPL tokens only".into(),
-            ));
-        }
-        let program = decode_key(TOKEN_PROGRAM).ok_or(AppError::Busy)?;
+        // if mint_info["value"]["owner"].as_str() != Some(TOKEN_PROGRAM) {
+        //     return Err(AppError::Unsupported(
+        //         "Honey pays for swaps into classic SPL tokens only".into(),
+        //     ));
+        // }
+        // let program = decode_key(TOKEN_PROGRAM).ok_or(AppError::Busy)?;
+        // 15 Nov: or into a tokenized stock (`dex::stocks`), a Token-2022 mint whose
+        // account is derived under Token-2022. Any other Token-2022 mint is still refused.
+        let owner = match mint_info["value"]["owner"].as_str() {
+            Some(TOKEN_PROGRAM) => TOKEN_PROGRAM,
+            Some(TOKEN_2022_PROGRAM) if quotes.stock(&quote.buy_token).is_some() => {
+                TOKEN_2022_PROGRAM
+            }
+            _ => {
+                return Err(AppError::Unsupported(
+                    "Honey pays for swaps into classic SPL tokens and listed stocks only".into(),
+                ));
+            }
+        };
+        let program = decode_key(owner).ok_or(AppError::Busy)?;
         let ata = associated_token_address(&taker, &mint, &program).ok_or(AppError::Busy)?;
         let ata_text = b58(&ata);
         let held = self
@@ -1609,8 +1627,24 @@ pub(crate) mod tests {
         // Non-transferable and pausable add an empty TLV each.
         assert_eq!(token_2022_account_size(&with(&[(9, 0), (26, 33)])), Ok(178));
         // Confidential transfers or an unknown extension: refused.
-        assert!(token_2022_account_size(&with(&[(4, 65)])).is_err());
+        // assert!(token_2022_account_size(&with(&[(4, 65)])).is_err());
+        // 15 Nov: a confidential-transfer mint (4) adds nothing to a new account (it is
+        // configured per account, by its owner); an unknown extension is still refused.
+        assert_eq!(token_2022_account_size(&with(&[(4, 65)])), Ok(170));
         assert!(token_2022_account_size(&with(&[(99, 0)])).is_err());
+        // The live tokenized stocks (15 Nov): ImmutableOwner, TransferHookAccount and
+        // PausableAccount, 179 bytes, for each issuer's mint.
+        use base64::Engine as _;
+        for mint in [
+            include_str!("dex/fixtures/mint_xstocks_aaplx.b64"),
+            include_str!("dex/fixtures/mint_ondo_nvdaon.b64"),
+            include_str!("dex/fixtures/mint_backpack_nvda.b64"),
+        ] {
+            let data = base64::engine::general_purpose::STANDARD
+                .decode(mint.trim())
+                .unwrap();
+            assert_eq!(token_2022_account_size(&data), Ok(179));
+        }
         // Truncated TLV, or not a mint.
         let mut cut = with(&[(1, 108)]);
         cut.truncate(cut.len() - 1);

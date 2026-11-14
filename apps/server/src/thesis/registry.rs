@@ -73,7 +73,9 @@ pub struct RegistryAsset {
     pub address: Option<String>,
     pub price_usd: Option<f64>,
     pub instrument_type: InstrumentType,
-    /// Ondo or Backed (xStocks) for tokenized stocks.
+    // /// Ondo or Backed (xStocks) for tokenized stocks.
+    /// For tokenized stocks (15 Nov, by mint from Honey's issuer registry): `xStocks`,
+    /// `Ondo` or `Backpack`.
     pub issuer: Option<&'static str>,
     /// CoinGecko's id for the coin, from the 1Click list; joins market data.
     #[serde(default)]
@@ -92,34 +94,52 @@ pub struct RegistryAsset {
     pub dex_market: Option<DexMarket>,
 }
 
+// const STABLES: &[&str] = &[
+//     "USDC", "USDT", "DAI", "USDE", "FRAX", "PYUSD", "USD1", "EURC", "USDS", "RLUSD",
+// ];
+// 15 Nov: USDCx (USDC on Aleo and Movement, as 1Click lists them) is a dollar stablecoin;
+// the old suffix rule read it as a tokenized "USDC" stock.
 const STABLES: &[&str] = &[
-    "USDC", "USDT", "DAI", "USDE", "FRAX", "PYUSD", "USD1", "EURC", "USDS", "RLUSD",
+    "USDC", "USDT", "DAI", "USDE", "FRAX", "PYUSD", "USD1", "EURC", "USDS", "RLUSD", "USDCX",
 ];
 
 /// Curated instrument-type rules (spec registry table). Checked into the repo, not
-/// inferred by a model.
+/// inferred by a model. 15 Nov: by symbol only stablecoins; a tokenized stock is known by
+/// its mint from Honey's issuer registry ([`stock_issuer`]), so a token anyone names
+/// NVDAx is an ordinary token.
 pub fn classify(symbol: &str) -> (InstrumentType, Option<&'static str>) {
     let upper = symbol.to_ascii_uppercase();
     if STABLES.contains(&upper.as_str()) {
         return (InstrumentType::Stablecoin, None);
     }
-    // Ondo Global Markets: NVDAon, MSFTon, QQQon … (lowercase "on" suffix on a ticker).
-    if let Some(ticker) = symbol.strip_suffix("on")
-        && is_ticker(ticker)
-    {
-        return (InstrumentType::TokenizedStock, Some("Ondo"));
-    }
-    // Backed xStocks: NVDAx, TSLAx … (lowercase "x" suffix on a ticker).
-    if let Some(ticker) = symbol.strip_suffix('x')
-        && is_ticker(ticker)
-    {
-        return (InstrumentType::TokenizedStock, Some("Backed"));
-    }
+    // // Ondo Global Markets: NVDAon, MSFTon, QQQon … (lowercase "on" suffix on a ticker).
+    // if let Some(ticker) = symbol.strip_suffix("on")
+    //     && is_ticker(ticker)
+    // {
+    //     return (InstrumentType::TokenizedStock, Some("Ondo"));
+    // }
+    // // Backed xStocks: NVDAx, TSLAx … (lowercase "x" suffix on a ticker).
+    // if let Some(ticker) = symbol.strip_suffix('x')
+    //     && is_ticker(ticker)
+    // {
+    //     return (InstrumentType::TokenizedStock, Some("Backed"));
+    // }
     (InstrumentType::Token, None)
 }
 
-fn is_ticker(s: &str) -> bool {
-    (1..=5).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_uppercase())
+// fn is_ticker(s: &str) -> bool {
+//     (1..=5).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_uppercase())
+// }
+
+/// A DEX token's issuer as the registry admitted its mint (`TokenView.issuer`), in the
+/// form people read: `xStocks`, `Ondo`, `Backpack`.
+pub fn stock_issuer(issuer: Option<&str>) -> Option<&'static str> {
+    match issuer? {
+        "xstocks" => Some("xStocks"),
+        "ondo" => Some("Ondo"),
+        "backpack" => Some("Backpack"),
+        _ => None,
+    }
 }
 
 fn safe(s: &str, max: usize) -> bool {
@@ -197,11 +217,26 @@ pub fn merge_dex(mut assets: Vec<RegistryAsset>, dex: &[TokenView]) -> Vec<Regis
         if !taken.insert((chain.clone(), address.clone())) {
             continue;
         }
-        let (instrument_type, issuer) = classify(&t.symbol);
+        // let (instrument_type, issuer) = classify(&t.symbol);
+        // A tokenized stock by its mint (15 Nov), named "Apple (xStocks)"; anything else
+        // by the symbol rules (stablecoins).
+        let stock = if t.chain == DexChain::Solana {
+            stock_issuer(t.issuer)
+        } else {
+            None
+        };
+        let (instrument_type, issuer) = match stock {
+            Some(issuer) => (InstrumentType::TokenizedStock, Some(issuer)),
+            None => classify(&t.symbol),
+        };
         // Dollar stablecoins are never picks; USDC itself is the other side of a DEX buy.
         if instrument_type == InstrumentType::Stablecoin {
             continue;
         }
+        let name = match stock {
+            Some(label) => Some(stock_name(&t.name, label)),
+            None => Some(t.name.clone()),
+        };
         assets.push(RegistryAsset {
             asset_id: dex_asset_id(t.chain, &address),
             chain,
@@ -216,7 +251,8 @@ pub fn merge_dex(mut assets: Vec<RegistryAsset>, dex: &[TokenView]) -> Vec<Regis
                 .clone()
                 .filter(|id| safe(id, 128) && !id.starts_with("custom:")),
             route: AssetRoute::Dex,
-            name: Some(t.name.clone()).filter(|n| safe(n, 64)),
+            // name: Some(t.name.clone()).filter(|n| safe(n, 64)),
+            name: name.filter(|n| safe(n, 64)),
             logo_url: t.logo_url.clone(),
             dex_market: Some(DexMarket {
                 market_cap_usd: t.market_cap_usd,
@@ -227,6 +263,16 @@ pub fn merge_dex(mut assets: Vec<RegistryAsset>, dex: &[TokenView]) -> Vec<Regis
         });
     }
     assets
+}
+
+/// "Apple xStock" → "Apple (xStocks)" (the company, then who issues it).
+fn stock_name(name: &str, label: &'static str) -> String {
+    let issuer = match label {
+        "xStocks" => crate::dex::stocks::Issuer::Xstocks,
+        "Ondo" => crate::dex::stocks::Issuer::Ondo,
+        _ => crate::dex::stocks::Issuer::Backpack,
+    };
+    crate::dex::stocks::display_name(issuer, name)
 }
 
 /// Where the registry reads Honey's DEX list from (the live `DexService`, or a fixed list
@@ -392,14 +438,13 @@ mod tests {
     #[test]
     fn classifies_stables_and_tokenized_stocks() {
         assert_eq!(classify("USDC").0, InstrumentType::Stablecoin);
-        assert_eq!(
-            classify("NVDAon"),
-            (InstrumentType::TokenizedStock, Some("Ondo"))
-        );
-        assert_eq!(
-            classify("TSLAx"),
-            (InstrumentType::TokenizedStock, Some("Backed"))
-        );
+        // assert_eq!(classify("NVDAon"), (InstrumentType::TokenizedStock, Some("Ondo")));
+        // assert_eq!(classify("TSLAx"), (InstrumentType::TokenizedStock, Some("Backed")));
+        // 15 Nov: a symbol never makes a stock (the issuer registry does, by mint), and
+        // USDCx is USDC.
+        assert_eq!(classify("NVDAon"), (InstrumentType::Token, None));
+        assert_eq!(classify("TSLAx"), (InstrumentType::Token, None));
+        assert_eq!(classify("USDCx"), (InstrumentType::Stablecoin, None));
         // Not tickers: lowercase words that happen to end in "on" or "x".
         assert_eq!(classify("Moon").0, InstrumentType::Token);
         assert_eq!(classify("wNEARon").0, InstrumentType::Token);
@@ -418,11 +463,11 @@ mod tests {
         ]);
         let assets = parse_tokens(&body);
         assert_eq!(assets.len(), 2);
-        assert_eq!(assets[1].issuer, Some("Ondo"));
-        assert_eq!(
-            registry_search(&assets, "nvdaON", Some(InstrumentType::TokenizedStock)).len(),
-            1
-        );
+        // assert_eq!(assets[1].issuer, Some("Ondo"));
+        // assert_eq!(registry_search(&assets, "nvdaON", Some(InstrumentType::TokenizedStock)).len(), 1);
+        // 15 Nov: 1Click's NVDAon isn't a stock by its symbol alone.
+        assert_eq!(assets[1].issuer, None);
+        assert_eq!(registry_search(&assets, "nvdaON", None).len(), 1);
         assert!(registry_search(&assets, "NVDA", None).is_empty());
     }
 }
