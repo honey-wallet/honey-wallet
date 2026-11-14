@@ -16,8 +16,8 @@ The organizers' rules live at [nearhackathon.com/HACKATHON.md](https://nearhacka
 | App | iPhone and Android coming soon (the TestFlight beta is waiting for Apple's review); waitlist at [honeywallet.org](https://honeywallet.org). Run it locally: [README](README.md#run-it-locally). |
 | Website and deck | [honeywallet.org](https://honeywallet.org), [honeywallet.org/deck](https://honeywallet.org/deck) |
 | API | [api.honeywallet.org](https://api.honeywallet.org/health) |
-| Demo post on X | TODO(owner): link to the published post with the demo video. |
-| Demo video | TODO(owner): link. |
+| Demo post on X | [x.com/0xabhii/status/2121714135209820197](https://x.com/0xabhii/status/2121714135209820197) |
+| Demo video | Attached to the [X post](https://x.com/0xabhii/status/2121714135209820197). |
 | License | [PolyForm Noncommercial 1.0.0](LICENSE) |
 
 ## Tracks

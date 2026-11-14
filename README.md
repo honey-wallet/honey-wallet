@@ -31,6 +31,8 @@ tokens), share it, let friends copy it, or buy one together from a shared treasu
 sample people and balances. They are not usage or return figures.
 [How they were taken](apps/web/public/screens/current/SOURCES.md).</sub>
 
+**Demo video:** [watch it on X](https://x.com/0xabhii/status/2121714135209820197).
+
 Built at [NEAR HACKATHON](https://nearhackathon.com/) (1 to 14 Nov 2026). Honey existed
 before as an EVM wallet; the hackathon work is the diff from the baseline commit:
 [f20e914...main](https://github.com/honey-wallet/honey-wallet/compare/f20e914...main).
