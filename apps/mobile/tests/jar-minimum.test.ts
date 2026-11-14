@@ -311,6 +311,20 @@ describe('what each leg gets, and where it is bought (2026-11-14)', () => {
     // $0.24 of fees: under 5% from $4.80, the whole jar.
     expect(check?.minimum).toEqual({ usd: 5, symbol: 'XAUT', legUsd: expect.closeTo(4.8, 6) });
     expect(belowMinimum(0.6, check?.minimum ?? null)?.label).toBe('Add at least $5.00');
+    // The owner's $1 jar keeps 40% in USDC: XAUT is 60% of it, so the jar needs $8.
+    const withCash = await checkJarLegs(
+      {
+        routes: [route_('XAUT', 0.6)],
+        slippage: 0.01,
+        payWith: null,
+        balances: { Arbitrum: 1_000_000n },
+        wallet: WALLET,
+        amount: 1,
+      },
+      { route },
+    );
+    expect(withCash?.minimum?.usd).toBe(8);
+    expect(belowMinimum(1, withCash?.minimum ?? null)?.label).toBe('Add at least $8.00');
   });
 
   it('warns from 5% lost, and the sample routes say the same in test mode', async () => {

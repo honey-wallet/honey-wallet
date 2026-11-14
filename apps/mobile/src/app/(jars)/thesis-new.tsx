@@ -389,7 +389,9 @@ export default function NewThesisSheet() {
   // Test mode quotes nothing: the sample routes' own costs stand in, so the review reads
   // the same (each leg's value, its warning, Add at least).
   const check =
-    TEST_MODE && step === 'jar' ? { checking: false, ...sampleCheck(routes) } : minimumCheck;
+    TEST_MODE && step === 'jar'
+      ? { checking: false, ...sampleCheck(routes, proposal?.amount) }
+      : minimumCheck;
   // Each pick bought on the chain that quoted the most (an L2 over Ethereum when small).
   const buyRoutes = withChoices(routes, check.choices);
   // Legs losing more than 5% to fees and price impact, said before Face ID.

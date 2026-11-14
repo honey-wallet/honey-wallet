@@ -144,6 +144,11 @@ type CheckInput = {
   /** USDC per network (micro-USDC), from the wallet's balances. */
   balances: UsdcBalances;
   wallet: { id: string; addresses: { evm?: string; solana?: string; near?: string } };
+  /**
+   * The jar's whole amount, cash share included: each leg's share is of this, so the
+   * minimum leaves room for the USDC kept. Without it, the routed legs' total.
+   */
+  amount?: number;
 };
 
 /** Where a pick is bought instead of its planned chain, because it quoted more there. */
@@ -188,8 +193,10 @@ export function withChoices(routes: Route[], choices: Record<string, RouteChoice
  * Sample routes' legs as the review shows them (test mode, where nothing is quoted): what
  * goes in, less the route's modelled price impact, pool fee and bridge cost.
  */
-export function sampleCheck(routes: Route[]): JarCheck {
-  const total = routes.reduce((s, r) => s + (r.status === 'ok' ? r.usd : 0), 0);
+export function sampleCheck(routes: Route[], amount?: number): JarCheck {
+  const routed = routes.reduce((s, r) => s + (r.status === 'ok' ? r.usd : 0), 0);
+  // Shares of the whole jar, cash included (see `CheckInput.amount`).
+  const total = amount && amount >= routed ? amount : routed;
   const legs: LegValue[] = [];
   const probes: { symbol: string; weight: number; probe: LegProbe }[] = [];
   for (const r of routes) {
@@ -318,7 +325,9 @@ export async function checkJarLegs(
       const p = paid[i];
       const from = p ? recipientOn(p.chain, wallet.addresses) : undefined;
       const inUsd = Number(l.micro) / 1e6;
-      const weight = Number(l.micro) / Number(total);
+      // A share of the whole jar, its USDC included (the buy's minimum is for the jar).
+      const whole = input.amount && toMicro(input.amount) >= total ? toMicro(input.amount) : total;
+      const weight = Number(l.micro) / Number(whole);
       const planned: RouteChoice = { chain: l.chain, assetId: l.assetId };
       const candidates = [planned, ...(l.options ?? []).filter((o) => o.assetId !== l.assetId)];
       const quoted = await Promise.all(
@@ -418,7 +427,14 @@ export function useJarMinimum(input: {
       //   .then((minimum) => {
       //     if (alive) setState({ key, minimum });
       //   });
-      checkJarLegs({ routes, slippage, payWith, balances, wallet: { id: wallet.id, addresses } })
+      checkJarLegs({
+        routes,
+        slippage,
+        payWith,
+        balances,
+        wallet: { id: wallet.id, addresses },
+        amount,
+      })
         .catch(() => null)
         .then((check) => {
           if (alive) setState({ key, check });
