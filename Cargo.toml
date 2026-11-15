@@ -21,7 +21,7 @@ anyhow = "1.0"
 axum = { version = "0.8", features = ["ws"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
 httpdate = "1"
-prometheus-client = "0.25"
+prometheus-client = "0.26"
 async-trait = "0.1"
 prost = "0.14"
 opentelemetry-proto = { version = "0.33", default-features = false, features = ["gen-tonic-messages", "trace"] }
