@@ -36,7 +36,9 @@ const FAQS = [
     // iPhone beta on TestFlight (14 Nov); Android coming soon.
     // a: 'On iPhone, now: Honey’s beta is on TestFlight. Android is coming soon; join the waitlist and we’ll email you when it’s ready.',
     // Both coming soon (15 Nov), until Apple approves the public beta.
-    a: 'Honey is coming soon to iPhone and Android. Join the waitlist and we’ll email you when it’s ready.',
+    // a: 'Honey is coming soon to iPhone and Android. Join the waitlist and we’ll email you when it’s ready.',
+    // The TestFlight beta is open (16 Nov); Android is still coming.
+    a: 'On iPhone, now: Honey’s beta is on TestFlight. Android is coming soon; join the waitlist and we’ll email you when it’s ready.',
   },
 ] as const;
 
