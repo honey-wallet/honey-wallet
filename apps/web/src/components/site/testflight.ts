@@ -7,7 +7,10 @@
 // Off until Apple approves the external beta (15 Nov): iPhone shows "coming soon" and leads
 // to the waitlist. Set NEXT_PUBLIC_TESTFLIGHT_URL=https://testflight.apple.com/join/5krzqTCR
 // to turn the link back on.
-export const TESTFLIGHT_URL = process.env.NEXT_PUBLIC_TESTFLIGHT_URL ?? '';
+// export const TESTFLIGHT_URL = process.env.NEXT_PUBLIC_TESTFLIGHT_URL ?? '';
+// Apple approved the beta and the link is open (16 Nov): on by default again.
+export const TESTFLIGHT_URL =
+  process.env.NEXT_PUBLIC_TESTFLIGHT_URL ?? 'https://testflight.apple.com/join/5krzqTCR';
 
 /**
  * The Android APK attached to the latest GitHub release (15 Nov). Empty: Android says

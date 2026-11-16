@@ -52,7 +52,10 @@ export function JoinWaitlist({
   // Rendered as the waitlist first (as on the server), then TestFlight once it's an Apple device.
   // const testflight = useApple() && TESTFLIGHT_URL !== '';
   const device = useDevice();
-  const testflight = device === 'apple' && TESTFLIGHT_URL !== '';
+  // const testflight = device === 'apple' && TESTFLIGHT_URL !== '';
+  // Every device but Android opens TestFlight (16 Nov, owner): on a computer the beta's page
+  // shows how to install on an iPhone. Android can't run TestFlight, so it keeps the waitlist.
+  const testflight = device !== 'android' && TESTFLIGHT_URL !== '';
   // An Android phone downloads the APK from GitHub once its link is set (15 Nov).
   const apk = device === 'android' && ANDROID_APK_URL !== '';
   return (
