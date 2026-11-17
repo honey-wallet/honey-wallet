@@ -8,7 +8,7 @@ tokens), share it, let friends copy it, or buy one together from a shared treasu
 
 Built at [NEAR HACKATHON](https://nearhackathon.com/) (1 to 14 Nov 2026). Honey existed
 before as an EVM wallet; the hackathon work is the diff from the baseline commit:
-[pre-hackathon...hackathon-submission](https://github.com/honey-wallet/honey-wallet/compare/pre-hackathon...hackathon-submission).
+[f20e914...hackathon-submission](https://github.com/honey-wallet/honey-wallet/compare/f20e914...hackathon-submission).
 Tracks, a dated list of what was built and the demo script are in [HACKATHON.md](HACKATHON.md).
 
 **Contents:** [The problem](#the-problem) · [How Honey uses NEAR](#how-honey-uses-near) · [Features](#features) · [Run it locally](#run-it-locally) · [Architecture](#architecture) · [Security and privacy](#security-and-privacy) · [Limitations](#limitations)

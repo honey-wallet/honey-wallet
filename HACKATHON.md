@@ -63,7 +63,7 @@ Not used: Chain Signatures.
   We treat it as the baseline (rules Q-002, Q-004). It contains no NEAR Intents, Sputnik
   DAO or NEAR AI code: `git grep -il '1click\|sputnik\|near ai' f20e914` finds nothing.
 - After it (UTC): 5 commits from 20 to 22 Oct, 2 on 7 Nov, then 396 from 8 to 14 Nov; the last at 21:48 on 14 Nov.
-- Full diff: [pre-hackathon...hackathon-submission](https://github.com/honey-wallet/honey-wallet/compare/pre-hackathon...hackathon-submission) (tags on `f20e914` and the submitted commit, rule Q-003).
+- Full diff: [f20e914...hackathon-submission](https://github.com/honey-wallet/honey-wallet/compare/f20e914...hackathon-submission) (rule Q-003). An earlier version linked a `pre-hackathon` tag; that tag was wrong and has been removed.
 
 | Date | Commit | What landed |
 | --- | --- | --- |
